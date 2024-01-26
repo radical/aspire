@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -200,6 +200,12 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CosmosEndToEnd.ApiService", "playground\CosmosEndToEnd\CosmosEndToEnd.ApiService\CosmosEndToEnd.ApiService.csproj", "{EABB20A8-CDA2-4AFE-A5B1-FB631200CD64}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Playground.ServiceDefaults", "playground\Playground.ServiceDefaults\Playground.ServiceDefaults.csproj", "{25208C6F-0A9D-4D60-9EDD-256C9891B1CD}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tasks", "tasks", "{BDD1F71C-F620-4E45-B842-AB6E9346DBCF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WorkloadBuildTasks", "tasks\WorkloadBuildTasks\WorkloadBuildTasks.csproj", "{A0B8B049-4069-43D6-8BEA-0A55696C5CF6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aspire.End2End.Tests", "tests\Aspire.End2End.Tests\Aspire.End2End.Tests.csproj", "{DA79FD50-7479-44E5-9506-89900DAF6FFF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -539,6 +545,14 @@ Global
 		{25208C6F-0A9D-4D60-9EDD-256C9891B1CD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{25208C6F-0A9D-4D60-9EDD-256C9891B1CD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{25208C6F-0A9D-4D60-9EDD-256C9891B1CD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A0B8B049-4069-43D6-8BEA-0A55696C5CF6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0B8B049-4069-43D6-8BEA-0A55696C5CF6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0B8B049-4069-43D6-8BEA-0A55696C5CF6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0B8B049-4069-43D6-8BEA-0A55696C5CF6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA79FD50-7479-44E5-9506-89900DAF6FFF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA79FD50-7479-44E5-9506-89900DAF6FFF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA79FD50-7479-44E5-9506-89900DAF6FFF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA79FD50-7479-44E5-9506-89900DAF6FFF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -633,6 +647,8 @@ Global
 		{51DDD6BC-1D6C-466A-B509-FC49E3BD72E4} = {DBEDDF76-1C33-4943-8CCB-337A7D48AFF5}
 		{EABB20A8-CDA2-4AFE-A5B1-FB631200CD64} = {DBEDDF76-1C33-4943-8CCB-337A7D48AFF5}
 		{25208C6F-0A9D-4D60-9EDD-256C9891B1CD} = {D173887B-AF42-4576-B9C1-96B9E9B3D9C0}
+		{A0B8B049-4069-43D6-8BEA-0A55696C5CF6} = {BDD1F71C-F620-4E45-B842-AB6E9346DBCF}
+		{DA79FD50-7479-44E5-9506-89900DAF6FFF} = {4981B3A5-4AFD-4191-BF7D-8692D9783D60}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {6DCEDFEC-988E-4CB3-B45B-191EB5086E0C}
