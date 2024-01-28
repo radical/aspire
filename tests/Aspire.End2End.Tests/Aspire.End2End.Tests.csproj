@@ -2,7 +2,15 @@
 
   <PropertyGroup>
     <TargetFramework>$(NetCurrent)</TargetFramework>
+    <TestUsingWorkloads>true</TestUsingWorkloads>
   </PropertyGroup>
 
-  <Import Project="$(RepositoryEngineeringDir)testing\workloads-testing.targets" />
+  <ItemGroup>
+    <!--<ProjectReference Include="$(RepoRoot)tasks\WorkloadBuildTasks\WorkloadBuildTasks.csproj" ReferenceOutputAssembly="false" />-->
+
+    <PackageReference Include="Microsoft.NET.Runtime.Internal.WorkloadBuildTasks" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <Import Project="$(PkgMicrosoft_NET_Runtime_Internal_WorkloadBuildTasks)\Sdk\Sdk.props" />
+  <Import Project="$(PkgMicrosoft_NET_Runtime_Internal_WorkloadBuildTasks)\Sdk\Sdk.targets" />
 </Project>
