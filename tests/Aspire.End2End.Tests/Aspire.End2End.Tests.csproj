@@ -8,9 +8,12 @@
     <VersionBandForSdkManifestsDir>8.0.100</VersionBandForSdkManifestsDir>
     <VersionBandForManifestPackages>8.0.100</VersionBandForManifestPackages>
     <BuiltNuGetsDir>$(ArtifactsShippingPackagesDir)</BuiltNuGetsDir>
+    <PackageVersionForWorkloadManifests>8.0.0-dev</PackageVersionForWorkloadManifests>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Runtime.Internal.WorkloadBuildTasks" GeneratePathProperty="true" />
   </ItemGroup>
+
+  <Import Project="workload-def.targets" />
 </Project>
