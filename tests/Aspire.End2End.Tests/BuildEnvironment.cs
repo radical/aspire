@@ -38,6 +38,8 @@ public class BuildEnvironment
             solutionRoot = solutionRoot.Parent;
         }
 
+        // FIXME: determine is local run, in which case auto compute all the paths
+
         string? sdkForWorkloadPath = EnvironmentVariables.SdkForWorkloadTestingPath;
         if (string.IsNullOrEmpty(sdkForWorkloadPath))
         {
@@ -98,9 +100,6 @@ public class BuildEnvironment
             BuiltNuGetsPath = EnvironmentVariables.BuiltNuGetsPath;
         }
 
-        // `runtime` repo's build environment sets these, and they
-        // mess up the build for the test project, which is using a different
-        // dotnet
         EnvVars["DOTNET_ROOT"] = sdkForWorkloadPath;
         EnvVars["DOTNET_INSTALL_DIR"] = sdkForWorkloadPath;
         EnvVars["DOTNET_MULTILEVEL_LOOKUP"] = "0";
