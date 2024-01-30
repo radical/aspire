@@ -30,7 +30,8 @@ public class BasicTests
         // 2. dotnet run - should run the app
         // 3. connect to the webapp, and try hitting other APIs to check that everything is running
 
-        string projectDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        // FIXME: temp path
+        string projectDir = Path.Combine(BuildEnvironment.TmpPath, Path.GetRandomFileName());
         Directory.CreateDirectory(projectDir);
         var res = await new DotNetCommand(s_buildEnv, _output)
                             .WithWorkingDirectory(projectDir)

@@ -1,0 +1,45 @@
+<Project>
+
+  <PropertyGroup>
+    <WorkItemArchiveWildCardE2E>$(TestArchiveTestsDirForE2E)**/*.zip</WorkItemArchiveWildCardE2E>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set PATH=%HELIX_CORRELATION_PAYLOAD%\dotnet-latest;%PATH%" />
+    <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export PATH=$HELIX_CORRELATION_PAYLOAD/dotnet-latest:$PATH" />
+
+    <HelixPreCommand Include="dotnet --info" />
+  </ItemGroup>
+
+  <Target Name="BuildHelixWorkItemsForEnd2EndTests">
+    <!--<Error Condition="'$(RepoTestResultsPath)' == ''" Text="%24(RepoTestResultsPath) is unset" />-->
+
+    <PropertyGroup>
+      <HelixPreCommands>$(HelixPreCommands);@(HelixPreCommand)</HelixPreCommands>
+      <HelixResultsDestinationDir>$(RepoTestResultsPath)</HelixResultsDestinationDir>
+
+      <_TestRunCommand Condition="'$(RunWithCodeCoverage)' == 'true'">@(_TestCoverageCommand, ' ') &quot;@(_TestRunCommandArguments, ' ')&quot;</_TestRunCommand>
+      <_TestRunCommand Condition="'$(RunWithCodeCoverage)' != 'true'">@(_TestRunCommandArguments, ' ')</_TestRunCommand>
+    </PropertyGroup>
+
+    <Error Condition="'$(_DotNetCoverageToolPath)' == '' or !Exists($(_DotNetCoverageToolPath))"
+           Text="Could not find dotnet-coverage tool. %24(_DotNetCoverageToolPath)=$(_DotNetCoverageToolPath)" />
+
+    <ItemGroup>
+      <HelixCorrelationPayload Include="$(ArtifactsBinDir)dotnet-latest" Destination="dotnet-latest" />
+
+      <_DefaultWorkItemsE2E Include="$(WorkItemArchiveWildCardE2E)" />
+
+      <HelixWorkItem Include="@(_DefaultWorkItemsE2E -> '%(FileName)')">
+        <PayloadArchive>%(Identity)</PayloadArchive>
+        <PreCommands Condition="'$(OS)' == 'Windows_NT'">set &quot;TEST_NAME=%(FileName)&quot;</PreCommands>
+        <PreCommands Condition="'$(OS)' != 'Windows_NT'">export &quot;TEST_NAME=%(FileName)&quot;</PreCommands>
+        <Command>$(_TestRunCommand)</Command>
+        <Timeout>$(_workItemTimeout)</Timeout>
+
+        <!-- Download results file so coverage files can be extracted -->
+        <DownloadFilesFromResults>logs/Tests.cobertura.xml</DownloadFilesFromResults>
+      </HelixWorkItem>
+    </ItemGroup>
+  </Target>
+</Project>
