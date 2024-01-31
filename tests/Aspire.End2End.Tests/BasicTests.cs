@@ -6,14 +6,10 @@ using Xunit.Abstractions;
 
 namespace Aspire.End2End.Tests;
 
-public class BasicTests
+public class BasicTests : End2EndTestBase
 {
-    private static readonly BuildEnvironment s_buildEnv = new();
-    private readonly ITestOutputHelper _output;
-
-    public BasicTests(ITestOutputHelper output)
+    public BasicTests(ITestOutputHelper output) : base(output)
     {
-        _output = output;
     }
 
     [Fact]
@@ -31,12 +27,16 @@ public class BasicTests
         // 3. connect to the webapp, and try hitting other APIs to check that everything is running
 
         // FIXME: temp path
-        string projectDir = Path.Combine(BuildEnvironment.TmpPath, Path.GetRandomFileName());
-        Directory.CreateDirectory(projectDir);
-        var res = await new DotNetCommand(s_buildEnv, _output)
-                            .WithWorkingDirectory(projectDir)
-                            .ExecuteAsync("new", "aspire-starter");
-        _output.WriteLine(res.Output);
+        string id = Path.GetRandomFileName();
+        InitPaths(id);
+        InitProjectDir(_projectDir);
+
+        //string projectDir = Path.Combine(BuildEnvironment.TmpPath, Path.GetRandomFileName());
+        //Directory.CreateDirectory(projectDir);
+        var res = await new DotNetCommand(s_buildEnv, TestOutput)
+                            .WithWorkingDirectory(_projectDir)
+                            .ExecuteAsync("new", "aspire-starter", "-v", "diag");
+        TestOutput.WriteLine(res.Output);
     }
 
 }

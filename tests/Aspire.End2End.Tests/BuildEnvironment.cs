@@ -43,6 +43,11 @@ public class BuildEnvironment
         string? sdkForWorkloadPath = EnvironmentVariables.SdkForWorkloadTestingPath;
         if (string.IsNullOrEmpty(sdkForWorkloadPath))
         {
+            if (solutionRoot is null)
+            {
+                throw new ArgumentException($"This seems to be running outside the source repo, but no sdk path is set either");
+            }
+
             // Is this a "local run?
             string sdkDirName = string.IsNullOrEmpty(EnvironmentVariables.SdkDirName) ? "dotnet-latest" : EnvironmentVariables.SdkDirName;
             string probePath = Path.Combine(solutionRoot!.FullName, "artifacts", "bin", sdkDirName);
