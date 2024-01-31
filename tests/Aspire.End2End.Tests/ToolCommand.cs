@@ -134,6 +134,9 @@ public class ToolCommand : IDisposable
         CurrentProcess.BeginOutputReadLine();
         CurrentProcess.BeginErrorReadLine();
         await completionTask;
+        _testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {completionTask.Status}");
+        // FIXME: cancel token
+        await CurrentProcess.WaitForExitAsync().ConfigureAwait(true);
 
         RemoveNullTerminator(output);
 
@@ -157,6 +160,9 @@ public class ToolCommand : IDisposable
 
         psi.Environment["DOTNET_MULTILEVEL_LOOKUP"] = "0";
         psi.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+
+        // runtime repo sets this, which interferes with the tests
+        psi.EnvironmentVariables.Remove("MSBuildSDKsPath");
 
         AddEnvironmentVariablesTo(psi);
         AddWorkingDirectoryTo(psi);

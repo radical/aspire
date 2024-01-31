@@ -35,7 +35,7 @@ public class BasicTests : End2EndTestBase
         //Directory.CreateDirectory(projectDir);
         var res = await new DotNetCommand(s_buildEnv, TestOutput)
                             .WithWorkingDirectory(_projectDir)
-                            .ExecuteAsync("new", "aspire-starter", "-v", "diag");
+                            .ExecuteAsync("new", "aspire-starter");
         res.EnsureSuccessful();
         TestOutput.WriteLine(res.Output);
 
@@ -45,5 +45,4 @@ public class BasicTests : End2EndTestBase
         res.EnsureSuccessful();
         TestOutput.WriteLine(res.Output);
     }
-
 }

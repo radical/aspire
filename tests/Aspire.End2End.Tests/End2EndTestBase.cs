@@ -3,6 +3,8 @@
 
 using System.Diagnostics.CodeAnalysis;
 using Xunit.Abstractions;
+using System.Text;
+using System.Globalization;
 
 namespace Aspire.End2End.Tests;
 
@@ -76,4 +78,39 @@ public class End2EndTestBase
         return contents.Replace(NuGetInsertionTag, $@"<add key=""nuget-local"" value=""{localNuGetsPath}"" />");
     }
 
+    public static string GetRandomId() => FixupSymbolName(Path.GetRandomFileName());
+
+    // FIXME: move to a TestUtils class
+    private static readonly char[] s_charsToReplace = new[] { '.', '-', '+' };
+    public static string FixupSymbolName(string name)
+    {
+        UTF8Encoding utf8 = new();
+        byte[] bytes = utf8.GetBytes(name);
+        StringBuilder sb = new();
+
+        foreach (byte b in bytes)
+        {
+            if ((b >= (byte)'0' && b <= (byte)'9') ||
+                    (b >= (byte)'a' && b <= (byte)'z') ||
+                    (b >= (byte)'A' && b <= (byte)'Z') ||
+                    (b == (byte)'_'))
+            {
+                sb.Append((char)b);
+            }
+            else if (s_charsToReplace.Contains((char)b))
+            {
+                sb.Append('_');
+            }
+            else
+            {
+                sb.Append(CultureInfo.InvariantCulture, $"_{b:X}_");
+            }
+        }
+        if (Char.IsDigit(sb[0]) || s_charsToReplace.Contains(sb[0]))
+        {
+            sb[0] = '_';
+        }
+
+        return sb.ToString();
+    }
 }
