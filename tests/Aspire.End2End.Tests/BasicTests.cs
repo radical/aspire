@@ -44,5 +44,11 @@ public class BasicTests : End2EndTestBase
                             .ExecuteAsync("build", $"-bl:{Path.Combine(_logPath, "build.binlog")}");
         res.EnsureSuccessful();
         TestOutput.WriteLine(res.Output);
+        
+
+        await new RunCommand(s_buildEnv, TestOutput)
+                        .WithWorkingDirectory(Path.Combine(_projectDir, $"{id}.AppHost"))
+                        .WithTimeout(TimeSpan.FromMinutes(1))
+                        .ExecuteAsync("run", "-v", "n");
     }
 }

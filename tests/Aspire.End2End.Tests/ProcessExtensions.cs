@@ -39,6 +39,7 @@ internal static class ProcessExtensions
 
         subject.Exited += (s, a) =>
         {
+            Console.WriteLine ($"-- got exit");
             taskCompletionSource.SetResult(new object());
         };
 

@@ -4,11 +4,14 @@
 using System.Diagnostics;
 using Xunit.Abstractions;
 
+#nullable enable
+
 namespace Aspire.End2End.Tests;
 
 public class ToolCommand : IDisposable
 {
     private readonly string _label;
+    private TimeSpan? _timeout;
     protected ITestOutputHelper _testOutput;
 
     protected string _command;
@@ -66,27 +69,46 @@ public class ToolCommand : IDisposable
         ErrorDataReceived += (_, args) => handler(args.Data);
         return this;
     }
-
-    public virtual CommandResult Execute(params string[] args)
+    
+    public ToolCommand WithTimeout(TimeSpan timeSpan)
     {
-        return Task.Run(async () => await ExecuteAsync(args)).Result;
+        _timeout = timeSpan;
+        return this;
     }
+
+    // public virtual CommandResult Execute(params string[] args)
+    // {
+    //     return Task.Run(async () => await ExecuteAsync(CancellationToken.None, args)).Result;
+    // }
 
     public virtual async Task<CommandResult> ExecuteAsync(params string[] args)
     {
         var resolvedCommand = _command;
         string fullArgs = GetFullArgs(args);
         _testOutput.WriteLine($"[{_label}] Executing - {resolvedCommand} {fullArgs} {WorkingDirectoryInfo()}");
-        return await ExecuteAsyncInternal(resolvedCommand, fullArgs);
+        CancellationTokenSource cts = new();
+        if (_timeout is not null)
+        {
+            cts.CancelAfter((int)_timeout.Value.TotalMilliseconds);
+        }
+        return await ExecuteAsyncInternal(resolvedCommand, fullArgs, cts.Token);
     }
 
-    public virtual CommandResult ExecuteWithCapturedOutput(params string[] args)
+    public virtual async Task<CommandResult> ExecuteAsync(CancellationToken token, params string[] args)
     {
         var resolvedCommand = _command;
         string fullArgs = GetFullArgs(args);
-        _testOutput.WriteLine($"[{_label}] Executing (Captured Output) - {resolvedCommand} {fullArgs} - {WorkingDirectoryInfo()}");
-        return Task.Run(async () => await ExecuteAsyncInternal(resolvedCommand, fullArgs)).Result;
+        _testOutput.WriteLine($"[{_label}] Executing - {resolvedCommand} {fullArgs} {WorkingDirectoryInfo()}");
+        return await ExecuteAsyncInternal(resolvedCommand, fullArgs, token);
     }
+
+    // public virtual CommandResult ExecuteWithCapturedOutput(params string[] args)
+    // {
+    //     var resolvedCommand = _command;
+    //     string fullArgs = GetFullArgs(args);
+    //     _testOutput.WriteLine($"[{_label}] Executing (Captured Output) - {resolvedCommand} {fullArgs} - {WorkingDirectoryInfo()}");
+    //     return Task.Run(async () => await ExecuteAsyncInternal(resolvedCommand, fullArgs)).Result;
+    // }
 
     public virtual void Dispose()
     {
@@ -100,10 +122,11 @@ public class ToolCommand : IDisposable
 
     protected virtual string GetFullArgs(params string[] args) => string.Join(" ", args);
 
-    private async Task<CommandResult> ExecuteAsyncInternal(string executable, string args)
+    private async Task<CommandResult> ExecuteAsyncInternal(string executable, string args, CancellationToken token)
     {
         var output = new List<string>();
         CurrentProcess = CreateProcess(executable, args);
+        // FIXME: lock?
         CurrentProcess.ErrorDataReceived += (s, e) =>
         {
             if (e.Data == null)
@@ -130,20 +153,37 @@ public class ToolCommand : IDisposable
             OutputDataReceived?.Invoke(s, e);
         };
 
-        var completionTask = CurrentProcess.StartAndWaitForExitAsync();
-        CurrentProcess.BeginOutputReadLine();
-        CurrentProcess.BeginErrorReadLine();
-        await completionTask;
-        _testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {completionTask.Status}");
-        // FIXME: cancel token
-        await CurrentProcess.WaitForExitAsync().ConfigureAwait(true);
+        try
+        {
+            var completionTask = CurrentProcess.StartAndWaitForExitAsync();
+            CurrentProcess.BeginOutputReadLine();
+            CurrentProcess.BeginErrorReadLine();
+            await completionTask.WaitAsync(token);
+            _testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {completionTask.Status}");
+            // FIXME: cancel token
+            await CurrentProcess.WaitForExitAsync(token).ConfigureAwait(true);
 
-        RemoveNullTerminator(output);
+            RemoveNullTerminator(output);
 
-        return new CommandResult(
-            CurrentProcess.StartInfo,
-            CurrentProcess.ExitCode,
-            string.Join(System.Environment.NewLine, output));
+            return new CommandResult(
+                CurrentProcess.StartInfo,
+                CurrentProcess.ExitCode,
+                string.Join(System.Environment.NewLine, output));
+        }
+        catch (Exception ex)
+        {
+            _testOutput.WriteLine($"Exception: {ex}");
+            if (!CurrentProcess.HasExited)
+            {
+                _testOutput.WriteLine($"Sending ctrl+c");
+                CurrentProcess.StandardInput.WriteLine("\x3");
+                await CurrentProcess.WaitForExitAsync(CancellationToken.None);
+                _testOutput.WriteLine($"Killing");
+                CurrentProcess.Kill(entireProcessTree: true);
+            }
+            CurrentProcess.Dispose();
+            throw;
+        }
     }
 
     private Process CreateProcess(string executable, string args)

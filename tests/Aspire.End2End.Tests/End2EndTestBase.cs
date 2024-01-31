@@ -24,7 +24,7 @@ public class End2EndTestBase
 
     public End2EndTestBase(ITestOutputHelper testOutput)
     {
-        TestOutput = testOutput;
+        TestOutput = new TestOutputWrapper(testOutput);
     }
 
     [MemberNotNull(nameof(_projectDir), nameof(_logPath))]
