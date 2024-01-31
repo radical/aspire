@@ -36,6 +36,13 @@ public class BasicTests : End2EndTestBase
         var res = await new DotNetCommand(s_buildEnv, TestOutput)
                             .WithWorkingDirectory(_projectDir)
                             .ExecuteAsync("new", "aspire-starter", "-v", "diag");
+        res.EnsureSuccessful();
+        TestOutput.WriteLine(res.Output);
+
+        res = await new DotNetCommand(s_buildEnv, TestOutput)
+                            .WithWorkingDirectory(_projectDir)
+                            .ExecuteAsync("build", $"-bl:{Path.Combine(_logPath, "build.binlog")}");
+        res.EnsureSuccessful();
         TestOutput.WriteLine(res.Output);
     }
 
