@@ -27,7 +27,7 @@ public class BasicTests : End2EndTestBase
         // 3. connect to the webapp, and try hitting other APIs to check that everything is running
 
         // FIXME: temp path
-        string id = Path.GetRandomFileName();
+        string id = GetRandomId();
         InitPaths(id);
         InitProjectDir(_projectDir);
 
