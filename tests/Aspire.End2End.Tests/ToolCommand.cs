@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Xunit.Abstractions;
 
 #nullable enable
@@ -175,9 +176,15 @@ public class ToolCommand : IDisposable
             _testOutput.WriteLine($"Exception: {ex}");
             if (!CurrentProcess.HasExited)
             {
-                _testOutput.WriteLine($"Sending ctrl+c");
+                
+                /*_testOutput.WriteLine($"Sending ctrl+c");
                 CurrentProcess.StandardInput.WriteLine("\x3");
-                await CurrentProcess.WaitForExitAsync(CancellationToken.None);
+                await CurrentProcess.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None);*/
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    CurrentProcess.CloseMainWindow();
+                }
+
                 _testOutput.WriteLine($"Killing");
                 CurrentProcess.Kill(entireProcessTree: true);
             }
