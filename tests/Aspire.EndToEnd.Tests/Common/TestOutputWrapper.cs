@@ -3,8 +3,6 @@
 
 using Xunit.Abstractions;
 
-#nullable enable
-
 namespace Aspire.End2End.Tests;
 
 public class TestOutputWrapper(ITestOutputHelper? baseOutput) : ITestOutputHelper

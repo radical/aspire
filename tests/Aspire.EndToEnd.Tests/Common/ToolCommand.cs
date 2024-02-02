@@ -115,6 +115,10 @@ public class ToolCommand : IDisposable
     {
         if (CurrentProcess is not null && !CurrentProcess.HasExited)
         {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                CurrentProcess.CloseMainWindow();
+            }
             CurrentProcess.Kill(entireProcessTree: true);
             CurrentProcess.Dispose();
             CurrentProcess = null;

@@ -4,4 +4,13 @@
     <TargetFramework>$(NetCurrent)</TargetFramework>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Folder Include="data\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\Aspire.End2End.Tests\data\nuget8.config" Link="data\nuget8.config" />
+    <None Include="..\Aspire.End2End.Tests\data\nuget9.config" Link="data\nuget9.config" />
+  </ItemGroup>
+
 </Project>

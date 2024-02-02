@@ -1,10 +1,10 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Xunit;
+using Aspire.End2End.Tests;
 
 namespace Aspire.EndToEnd.Tests;
 
@@ -13,47 +13,61 @@ namespace Aspire.EndToEnd.Tests;
 /// </summary>
 public abstract class TestProgramFixture : IAsyncLifetime
 {
-    private Process? _appHostProcess;
     private Dictionary<string, ProjectInfo>? _projects;
+    private ToolCommand? _runCommand;
 
     public Dictionary<string, ProjectInfo> Projects => _projects!;
 
     public HttpClient HttpClient { get; } = new HttpClient();
 
+    // FIXME: either make BE a singleton, or make it static
+    public BuildEnvironment BuildEnvironment { get; } = new();
+
     public async Task InitializeAsync()
     {
-        var appHostDirectory = Path.Combine(GetRepoRoot(), "tests", "testproject", "TestProject.AppHost");
+        var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
-        BuildAppHost(appHostDirectory);
+        await BuildAppHostAsync(appHostDirectory);
 
         var appRunning = new TaskCompletionSource();
         var projectsParsed = new TaskCompletionSource();
-        _appHostProcess = new Process();
-        _appHostProcess.StartInfo = new ProcessStartInfo("dotnet", "run --no-build")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = appHostDirectory
-        };
-        _appHostProcess.OutputDataReceived += (sender, e) =>
-        {
-            if (e.Data?.StartsWith("$ENDPOINTS: ") == true)
-            {
-                _projects = ParseProjectInfo(e.Data.Substring("$ENDPOINTS: ".Length));
-                projectsParsed.SetResult();
-            }
 
-            if (e.Data?.Contains("Distributed application started") == true)
-            {
-                appRunning.SetResult();
-            }
-        };
-        _appHostProcess.Start();
-        _appHostProcess.BeginOutputReadLine();
-
+        var _testOutput = new TestOutputWrapper(null);
         var timeout = TimeSpan.FromMinutes(5);
+        _runCommand = new RunCommand(BuildEnvironment, _testOutput)
+                        .WithWorkingDirectory(appHostDirectory)
+                        .WithOutputDataReceived(data =>
+                        {
+                            if (data?.StartsWith("$ENDPOINTS: ") == true)
+                            {
+                                _projects = ParseProjectInfo(data.Substring("$ENDPOINTS: ".Length));
+                                projectsParsed.SetResult();
+                            }
+
+                            if (data?.Contains("Distributed application started") == true)
+                            {
+                                appRunning.SetResult();
+                            }
+                        })
+                        .WithTimeout(TimeSpan.FromMinutes(5));
+
+        CancellationTokenSource cts = new CancellationTokenSource();
+        // FIXME: also watch for run command exiting or failing
+        var cmdTask = _runCommand.ExecuteAsync("run --no-build");
+        _ = cmdTask.ContinueWith(cmdTask =>
+        {
+            if (cmdTask.IsFaulted)
+            {
+                appRunning.SetException(cmdTask.Exception!);
+                projectsParsed.SetException(cmdTask.Exception!);
+            }
+            else if (cmdTask.IsCanceled)
+            {
+                appRunning.SetCanceled();
+                projectsParsed.SetCanceled();
+            }
+        }, TaskScheduler.Default);
+
         await Task.WhenAll(
             appRunning.Task.WaitAsync(timeout),
             projectsParsed.Task.WaitAsync(timeout));
@@ -62,57 +76,39 @@ public abstract class TestProgramFixture : IAsyncLifetime
     private static Dictionary<string, ProjectInfo> ParseProjectInfo(string json) =>
         JsonSerializer.Deserialize<Dictionary<string, ProjectInfo>>(json)!;
 
-    private static void BuildAppHost(string appHostDirectory)
+    private async Task BuildAppHostAsync(string appHostDirectory)
     {
         var output = new StringBuilder();
         var outputDone = new ManualResetEvent(false);
-        var buildProcess = new Process();
-        buildProcess.StartInfo = new ProcessStartInfo("dotnet", "build")
-        {
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = appHostDirectory
-        };
-        buildProcess.OutputDataReceived += (sender, e) =>
-        {
-            if (e.Data == null)
-            {
-                outputDone.Set();
-            }
-            else
-            {
-                output.AppendLine(e.Data);
-            }
-        };
-        buildProcess.Start();
-        buildProcess.BeginOutputReadLine();
 
-        Assert.True(buildProcess.WaitForExit(milliseconds: 180_000), "dotnet build command timed out after 3 minutes.");
-        Assert.True(buildProcess.ExitCode == 0, $"Build failed: {Environment.NewLine}{output}");
+        var _testOutput = new TestOutputWrapper(null);
+        var res = await new DotNetCommand(BuildEnvironment, _testOutput)
+                        .WithWorkingDirectory(appHostDirectory)
+                        .WithOutputDataReceived(data =>
+                        {
+                            if (data == null)
+                            {
+                                outputDone.Set();
+                            }
+                            else
+                            {
+                                output.AppendLine(data);
+                            }
+                        })
+                        .WithTimeout(TimeSpan.FromMilliseconds(180_000))
+                        .ExecuteAsync("build");
 
-        Assert.True(outputDone.WaitOne(millisecondsTimeout: 60_000), "Timed out waiting for output to complete.");
+        res.EnsureSuccessful();
+//        Assert.True(buildProcess.WaitForExit(milliseconds: 180_000), "dotnet build command timed out after 3 minutes.");
+        //Assert.True(buildProcess.ExitCode == 0, $"Build failed: {Environment.NewLine}{output}");
+
+        //Assert.True(outputDone.WaitOne(millisecondsTimeout: 60_000), "Timed out waiting for output to complete.");
     }
 
-    public async Task DisposeAsync()
+    public Task DisposeAsync()
     {
-        if (_appHostProcess is not null)
-        {
-            _appHostProcess.StandardInput.WriteLine("Stop");
-            await _appHostProcess.WaitForExitAsync();
-        }
-    }
-
-    private static string GetRepoRoot()
-    {
-        var directory = AppContext.BaseDirectory;
-
-        while (directory != null && !Directory.Exists(Path.Combine(directory, ".git")))
-        {
-            directory = Directory.GetParent(directory)!.FullName;
-        }
-
-        return directory!;
+        _runCommand?.Dispose();
+        return Task.CompletedTask;
     }
 }
 
