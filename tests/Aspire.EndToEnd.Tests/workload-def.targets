@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <GetWorkloadInputsDependsOn>_GetWorkloadsToInstall;$(GetWorkloadInputsDependsOn)</GetWorkloadInputsDependsOn>
+    <!--<GetNuGetsToBuildForWorkloadTestingDependsOn>_GetNugetsForAOT;$(GetNuGetsToBuildForWorkloadTestingDependsOn)</GetNuGetsToBuildForWorkloadTestingDependsOn>-->
+  </PropertyGroup>
+
+  <Target Name="_GetWorkloadsToInstall" DependsOnTargets="_SetPackageVersionForWorkloadsTesting" Returns="@(WorkloadIdForTesting);@(WorkloadCombinationsToInstall)">
+    <ItemGroup>
+      <WorkloadIdForTesting Include="aspire"
+                            ManifestName="Microsoft.NET.Sdk.Aspire"
+                            Variant="latest"
+                            Version="$(PackageVersionForWorkloadManifests)" />
+
+      <WorkloadCombinationsToInstall Include="latest" Variants="latest" />
+    </ItemGroup>
+  </Target>
+</Project>
+
