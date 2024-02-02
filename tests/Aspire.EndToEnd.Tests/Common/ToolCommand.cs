@@ -70,7 +70,7 @@ public class ToolCommand : IDisposable
         ErrorDataReceived += (_, args) => handler(args.Data);
         return this;
     }
-    
+
     public ToolCommand WithTimeout(TimeSpan timeSpan)
     {
         _timeout = timeSpan;
@@ -160,13 +160,16 @@ public class ToolCommand : IDisposable
 
         try
         {
-            var completionTask = CurrentProcess.StartAndWaitForExitAsync();
+            var exitedTask = CurrentProcess.StartAndWaitForExitAsync();
             CurrentProcess.BeginOutputReadLine();
             CurrentProcess.BeginErrorReadLine();
-            await completionTask.WaitAsync(token);
-            _testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {completionTask.Status}");
+            await exitedTask.WaitAsync(token);
+            _testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {exitedTask.Status}, hasExited: {CurrentProcess.HasExited}");
+            //CurrentProcess.WaitForExit();
             // FIXME: cancel token
-            await CurrentProcess.WaitForExitAsync(token).ConfigureAwait(true);
+            //if (CurrentProcess.HasExited)
+            //await CurrentProcess.WaitForExitAsync(token).ConfigureAwait(true);
+            //_testOutput.WriteLine($"ExecuteAsyncInternal: back from waitforexitasync");
 
             RemoveNullTerminator(output);
 
@@ -180,7 +183,6 @@ public class ToolCommand : IDisposable
             _testOutput.WriteLine($"Exception: {ex}");
             if (!CurrentProcess.HasExited)
             {
-                
                 /*_testOutput.WriteLine($"Sending ctrl+c");
                 CurrentProcess.StandardInput.WriteLine("\x3");
                 await CurrentProcess.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None);*/

@@ -10,7 +10,7 @@
       <Logger friendlyName="html" />
       <Logger friendlyName="console">
         <Configuration>
-          <Verbosity>Minimal</Verbosity>
+          <Verbosity>diagnostic</Verbosity>
         </Configuration>
       </Logger>
     </Loggers>

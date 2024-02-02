@@ -2,15 +2,23 @@
 
   <PropertyGroup>
     <TargetFramework>$(NetCurrent)</TargetFramework>
+    <TestUsingWorkloads>true</TestUsingWorkloads>
+    <InstallWorkloadForTesting>true</InstallWorkloadForTesting>
+
+    <VersionBandForSdkManifestsDir>8.0.100</VersionBandForSdkManifestsDir>
+    <VersionBandForManifestPackages>8.0.100</VersionBandForManifestPackages>
+    <BuiltNuGetsDir>$(ArtifactsShippingPackagesDir)</BuiltNuGetsDir>
+    <PackageVersionForWorkloadManifests>8.0.0-dev</PackageVersionForWorkloadManifests>
   </PropertyGroup>
 
   <ItemGroup>
     <Folder Include="data\" />
+
+    <PackageReference Include="Microsoft.NET.Runtime.Internal.WorkloadBuildTasks" GeneratePathProperty="true" />
+
+    <None Include="..\testproject\**\*" Link="testassets\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="data\**\*" Link="data\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="..\Aspire.End2End.Tests\data\nuget8.config" Link="data\nuget8.config" />
-    <None Include="..\Aspire.End2End.Tests\data\nuget9.config" Link="data\nuget9.config" />
-  </ItemGroup>
-
+  <Import Project="workload-def.targets" />
 </Project>

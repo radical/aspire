@@ -25,6 +25,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        Console.WriteLine ($"-- InitializeAsync direct to Console.WriteLine ");
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
         await BuildAppHostAsync(appHostDirectory);
@@ -34,7 +35,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
 
         var _testOutput = new TestOutputWrapper(null);
         var timeout = TimeSpan.FromMinutes(5);
-        _runCommand = new RunCommand(BuildEnvironment, _testOutput)
+        _runCommand = new RunCommand(BuildEnvironment, _testOutput, "app-run")
                         .WithWorkingDirectory(appHostDirectory)
                         .WithOutputDataReceived(data =>
                         {
@@ -82,7 +83,8 @@ public abstract class TestProgramFixture : IAsyncLifetime
         var outputDone = new ManualResetEvent(false);
 
         var _testOutput = new TestOutputWrapper(null);
-        var res = await new DotNetCommand(BuildEnvironment, _testOutput)
+        _testOutput.WriteLine($"-- BuildAppHostAsync via wrapper");
+        var res = await new DotNetCommand(BuildEnvironment, _testOutput, "build")
                         .WithWorkingDirectory(appHostDirectory)
                         .WithOutputDataReceived(data =>
                         {
@@ -105,10 +107,11 @@ public abstract class TestProgramFixture : IAsyncLifetime
         //Assert.True(outputDone.WaitOne(millisecondsTimeout: 60_000), "Timed out waiting for output to complete.");
     }
 
-    public Task DisposeAsync()
+    public async Task DisposeAsync()
     {
+        Console.WriteLine ($"TestProgramFixture.DisposeAsync");
         _runCommand?.Dispose();
-        return Task.CompletedTask;
+        await Task.CompletedTask;
     }
 }
 

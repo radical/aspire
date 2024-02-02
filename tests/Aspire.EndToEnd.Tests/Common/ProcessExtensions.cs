@@ -35,15 +35,23 @@ internal static class ProcessExtensions
     {
         var taskCompletionSource = new TaskCompletionSource<object>();
 
-        subject.EnableRaisingEvents = true;
-
-        subject.Exited += (s, a) =>
+        try
         {
-            Console.WriteLine ($"-- got exit");
-            taskCompletionSource.SetResult(new object());
-        };
+            subject.EnableRaisingEvents = true;
 
-        subject.Start();
+            subject.Exited += (s, a) =>
+            {
+                Console.WriteLine ($"StartAndWaitForExitAsync: got Exited event");
+                taskCompletionSource.SetResult(new object());
+            };
+
+            subject.Start();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine ($"-- StartAndWaitForExitAsync threw.. setting exception on the tcs");
+            taskCompletionSource.SetException(ex);
+        }
 
         return taskCompletionSource.Task;
     }

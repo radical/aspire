@@ -10,7 +10,7 @@ public class TestOutputWrapper(ITestOutputHelper? baseOutput) : ITestOutputHelpe
     public void WriteLine(string message)
     {
         baseOutput?.WriteLine(message);
-        if (EnvironmentVariables.ShowBuildOutput)
+        //if (EnvironmentVariables.ShowBuildOutput)
         {
             Console.WriteLine(message);
         }
@@ -19,7 +19,7 @@ public class TestOutputWrapper(ITestOutputHelper? baseOutput) : ITestOutputHelpe
     public void WriteLine(string format, params object[] args)
     {
         baseOutput?.WriteLine(format, args);
-        if (EnvironmentVariables.ShowBuildOutput)
+        //if (EnvironmentVariables.ShowBuildOutput)
         {
             Console.WriteLine(format, args);
         }
