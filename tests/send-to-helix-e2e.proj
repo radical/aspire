@@ -26,6 +26,9 @@
     <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set SDK_HAS_WORKLOAD_INSTALLED=true" />
     <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export SDK_HAS_WORKLOAD_INSTALLED=true" />
 
+    <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set TestsRunningOutOfTree=true" />
+    <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export TestsRunningOutOfTree=true" />
+
     <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set SHOW_BUILD_OUTPUT=1" />
     <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export SHOW_BUILD_OUTPUT=1" />
 
