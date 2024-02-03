@@ -1,3 +1,3 @@
 <Project>
-  <Import Project="Directory.Build.Helix.targets" Condition="'$(TestsRunningInTree)' == 'true'" />
+  <Import Project="Directory.Build.Helix.targets" Condition="'$(TestsRunningOutOfTree)' == 'true'" />
 </Project>

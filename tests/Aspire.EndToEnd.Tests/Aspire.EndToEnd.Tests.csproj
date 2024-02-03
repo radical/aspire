@@ -22,20 +22,6 @@
     <None Include="data\**\*" Link="data\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <Target Name="PrepareTestAssetsForHelix" BeforeTargets="ZipTestArchive" Condition="'$(ArchiveTests)' == 'true'">
-    <PropertyGroup>
-      <_TestAssetsOutputDir>$(OutputPath)\testassets\</_TestAssetsOutputDir>
-    </PropertyGroup>
-
-    <Message Text="testassets in $(_TestAssetsOutputDir)" Importance="High" />
-
-    <!--<Copy SourceFiles="..\Directory.Packages.Helix.props" DestinationFiles="$(_TestAssetsOutputDir)\Directory.Packages.props" />-->
-    <!--<Copy SourceFiles="..\Directory.Build.Helix.targets" DestinationFiles="$(_TestAssetsOutputDir)\Directory.Build.targets" />-->
-
-    <!-- <Copy SourceFiles="data\nuget8.config" DestinationFiles="$(_TestAssetsOutputDir)\NuGet.config" /> -->
-    <!-- emit directory.build.props with versions -->
-  </Target>
-
   <Target Name="_AddPackageVersions" AfterTargets="Build">
     <PropertyGroup>
       <_TestAssetsOutputDir>$(OutputPath)\testassets\</_TestAssetsOutputDir>

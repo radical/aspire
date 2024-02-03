@@ -50,7 +50,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
                                 appRunning.SetResult();
                             }
                         })
-                        .WithEnvironmentVariable("TestsRunningOutOfTree", "true")
+                        .WithEnvironmentVariable("TestsRunningOutOfTree", Environment.GetEnvironmentVariable("TestsRunningOutOfTree") ?? "")
                         .WithTimeout(TimeSpan.FromMinutes(5));
 
         var cts = new CancellationTokenSource();
@@ -98,8 +98,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
                                 output.AppendLine(data);
                             }
                         })
-                        .WithEnvironmentVariable("TestsRunningOutOfTree", "true")
-                        .WithEnvironmentVariable("PackageVersion", "8.0.0-dev")
+                        .WithEnvironmentVariable("TestsRunningOutOfTree", Environment.GetEnvironmentVariable("TestsRunningOutOfTree") ?? "")
                         .WithTimeout(TimeSpan.FromMilliseconds(180_000))
                         .ExecuteAsync($"build -bl:{Path.Combine(BuildEnvironment.LogRootPath, "build.binlog")}");
 

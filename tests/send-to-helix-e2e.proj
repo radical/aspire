@@ -14,8 +14,8 @@
     <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set PATH=%HELIX_CORRELATION_PAYLOAD%\dotnet-latest;%PATH%" />
     <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export PATH=$HELIX_CORRELATION_PAYLOAD/dotnet-latest:$PATH" />
 
-    <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set IS_RUNNING_ON_CI=true" />
-    <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export IS_RUNNING_ON_CI=true" />
+    <!--<HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set IS_RUNNING_ON_CI=true" />-->
+    <!--<HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export IS_RUNNING_ON_CI=true" />-->
 
     <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set SDK_DIR_NAME=dotnet-latest" />
     <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export SDK_DIR_NAME=dotnet-latest" />
@@ -32,8 +32,8 @@
     <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set BUILT_NUGETS_PATH=%HELIX_CORRELATION_PAYLOAD%\built-nugets" />
     <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export BUILT_NUGETS_PATH=$HELIX_CORRELATION_PAYLOAD/built-nugets" />
 
-    <HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set TEST_ASSETS_PATH=%HELIX_CORRELATION_PAYLOAD%\testassets" />
-    <HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export TEST_ASSETS_PATH=$HELIX_CORRELATION_PAYLOAD/testassets" />
+    <!--<HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set TEST_ASSETS_PATH=%HELIX_CORRELATION_PAYLOAD%\testassets" />-->
+    <!--<HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export TEST_ASSETS_PATH=$HELIX_CORRELATION_PAYLOAD/testassets" />-->
 
     <HelixPreCommand Include="dotnet --info" />
   </ItemGroup>
@@ -55,7 +55,7 @@
     <ItemGroup>
       <HelixCorrelationPayload Include="$(ArtifactsBinDir)dotnet-latest" Destination="dotnet-latest" />
       <HelixCorrelationPayload Include="$(ArtifactsShippingPackagesDir)" Destination="built-nugets" />
-      <HelixCorrelationPayload Include="$(RepoRoot)tests\testproject" Destination="testassets\testproject" />
+      <!--<HelixCorrelationPayload Include="$(RepoRoot)tests\testproject" Destination="testassets\testproject" />-->
 
       <_DefaultWorkItemsE2E Include="$(WorkItemArchiveWildCardE2E)" />
 
