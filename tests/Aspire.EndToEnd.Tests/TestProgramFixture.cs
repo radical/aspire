@@ -129,63 +129,6 @@ public abstract class TestProgramFixture : IAsyncLifetime
     }
 }
 
-public sealed class ProjectInfo
-{
-    public EndpointInfo[] Endpoints { get; set; } = default!;
-
-    /// <summary>
-    /// Sends a GET request to the specified resource and returns the response message.
-    /// </summary>
-    public Task<HttpResponseMessage> HttpGetAsync(HttpClient client, string bindingName, string path, CancellationToken cancellationToken)
-    {
-        var allocatedEndpoint = Endpoints.Single(e => e.Name == bindingName);
-        var url = $"{allocatedEndpoint.Uri}{path}";
-
-        return client.GetAsync(url, cancellationToken);
-    }
-
-    /// <summary>
-    /// Sends a GET request to the specified resource and returns the response body as a string.
-    /// </summary>
-    public Task<string> HttpGetStringAsync(HttpClient client, string bindingName, string path, CancellationToken cancellationToken)
-    {
-        var allocatedEndpoint = Endpoints.Single(e => e.Name == bindingName);
-        var url = $"{allocatedEndpoint.Uri}{path}";
-
-        return client.GetStringAsync(url, cancellationToken);
-    }
-
-    public async Task WaitForHealthyStatusAsync(HttpClient client, string bindingName, CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            try
-            {
-                await HttpGetStringAsync(client, bindingName, "/health", cancellationToken);
-                return;
-            }
-            catch
-            {
-                await Task.Delay(100, cancellationToken);
-            }
-        }
-    }
-}
-
-public record EndpointInfo(string Name, string Uri);
-
-/// <summary>
-/// TestProgram with integration services but no dashboard or node app.
-/// </summary>
-/// <remarks>
-/// Use <c>[Collection("IntegrationServices")]</c> to inject this fixture in test constructors.
-/// </remarks>
-public class IntegrationServicesFixture : TestProgramFixture
-{
-    public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
-
-}
-
 [CollectionDefinition("IntegrationServices")]
 public class IntegrationServicesCollection : ICollectionFixture<IntegrationServicesFixture>
 {
