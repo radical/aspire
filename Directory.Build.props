@@ -27,6 +27,7 @@
     <SkipAspireWorkloadManifest>true</SkipAspireWorkloadManifest>
 
     <DashboardPublishedArtifactsOutputDir>$([MSBuild]::NormalizeDirectory('$(ArtifactsDir)', 'DashboardArtifacts', '$(Configuration)'))</DashboardPublishedArtifactsOutputDir>
+    <TestsRunningInTree>true</TestsRunningInTree>
   </PropertyGroup>
 
   <!-- OS/Architecture properties for local development resources -->

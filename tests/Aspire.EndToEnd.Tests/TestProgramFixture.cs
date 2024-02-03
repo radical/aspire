@@ -25,7 +25,6 @@ public abstract class TestProgramFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        Console.WriteLine ($"-- InitializeAsync direct to Console.WriteLine ");
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
         await BuildAppHostAsync(appHostDirectory);
@@ -47,6 +46,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
 
                             if (data?.Contains("Distributed application started") == true)
                             {
+                                _testOutput.WriteLine("-------------- Ready to run tests -----------------");
                                 appRunning.SetResult();
                             }
                         })
@@ -97,8 +97,10 @@ public abstract class TestProgramFixture : IAsyncLifetime
                                 output.AppendLine(data);
                             }
                         })
+                        .WithEnvironmentVariable("TestsRunningOutOfTree", "true")
+                        .WithEnvironmentVariable("PackageVersion", "8.0.0-dev")
                         .WithTimeout(TimeSpan.FromMilliseconds(180_000))
-                        .ExecuteAsync("build");
+                        .ExecuteAsync($"build -bl:{Path.Combine(BuildEnvironment.LogRootPath, "build.binlog")}");
 
         res.EnsureSuccessful();
 //        Assert.True(buildProcess.WaitForExit(milliseconds: 180_000), "dotnet build command timed out after 3 minutes.");

@@ -28,6 +28,16 @@ public class BuildEnvironment
     public BuildEnvironment()
     {
         DirectoryInfo? solutionRoot = new(AppContext.BaseDirectory);
+        /*
+         * 1. local run, maybe vs, want to use the projectrefs
+         * 2. CI run
+         *  a. local
+         *      - autocompute everything
+         *  b. helix
+         *      - from vars
+
+
+        */
         while (solutionRoot != null)
         {
             if (Directory.Exists(Path.Combine(solutionRoot.FullName, ".git")))
@@ -38,78 +48,90 @@ public class BuildEnvironment
             solutionRoot = solutionRoot.Parent;
         }
 
+        // bool localRun = true;
+        // if (EnvironmentVariables.ShouldRunOutOfTree && solutionRoot is not null)
+        // {
+        //     localRun = true;
+        // }
+        // else
+        // {
+        //     localRun = false;
+        // }
         // FIXME: determine is local run, in which case auto compute all the paths
-
-        string? sdkForWorkloadPath = EnvironmentVariables.SdkForWorkloadTestingPath;
-        if (string.IsNullOrEmpty(sdkForWorkloadPath))
+        string sdkForWorkloadPath;
+        if (solutionRoot is not null)
         {
-            if (solutionRoot is null)
-            {
-                throw new ArgumentException($"This seems to be running outside the source repo, but no sdk path is set either");
-            }
-
             // Is this a "local run?
-            string sdkDirName = string.IsNullOrEmpty(EnvironmentVariables.SdkDirName) ? "dotnet-latest" : EnvironmentVariables.SdkDirName;
-            string probePath = Path.Combine(solutionRoot!.FullName, "artifacts", "bin", sdkDirName);
-            /* string probePath = Path.Combine(Path.GetDirectoryName(typeof(BuildEnvironment).Assembly.Location)!,
-                                            "..",
-                                            "..",
-                                            "..",
-                                            sdkDirName); */
+            var sdkDirName = string.IsNullOrEmpty(EnvironmentVariables.SdkDirName) ? "dotnet-latest" : EnvironmentVariables.SdkDirName;
+            var probePath = Path.Combine(solutionRoot!.FullName, "artifacts", "bin", sdkDirName);
             if (Directory.Exists(probePath))
             {
                 sdkForWorkloadPath = Path.GetFullPath(probePath);
             }
             else
             {
-                throw new ArgumentException($"Environment variable SDK_FOR_WORKLOAD_TESTING_PATH not set, and could not find it at {probePath}");
+                throw new ArgumentException($"Could not find {probePath} computed from solutionRoot={solutionRoot}");
             }
-        }
-        if (!Directory.Exists(sdkForWorkloadPath))
-        {
-            throw new ArgumentException($"Could not find SDK_FOR_WORKLOAD_TESTING_PATH={sdkForWorkloadPath}");
-        }
+            
+            BuiltNuGetsPath = Path.Combine(solutionRoot.FullName, "artifacts", "packages", EnvironmentVariables.BuildConfiguration, "Shipping");
 
-        sdkForWorkloadPath = Path.GetFullPath(sdkForWorkloadPath);
-
-        DefaultBuildArgs = string.Empty;
-        WorkloadPacksDir = Path.Combine(sdkForWorkloadPath, "packs");
-        EnvVars = new Dictionary<string, string>();
-        // bool workloadInstalled = EnvironmentVariables.SdkHasWorkloadInstalled != null && EnvironmentVariables.SdkHasWorkloadInstalled == "true";
-        // if (workloadInstalled)
-        // {
-        //     DirectoryBuildPropsContents = s_directoryBuildPropsForWorkloads;
-        //     DirectoryBuildTargetsContents = s_directoryBuildTargetsForWorkloads;
-        //     IsWorkload = true;
-        // }
-        // else
-        // {
-        //     DirectoryBuildPropsContents = s_directoryBuildPropsForLocal;
-        //     DirectoryBuildTargetsContents = s_directoryBuildTargetsForLocal;
-        // }
-
-        if (EnvironmentVariables.BuiltNuGetsPath is null || !Directory.Exists(EnvironmentVariables.BuiltNuGetsPath))
-        {
-            // FIXME: try auto-compute
-            if (solutionRoot is not null)
+            // this is the only difference for local run but out-of-tree
+            if (EnvironmentVariables.ShouldRunOutOfTree)
             {
-                BuiltNuGetsPath = Path.Combine(solutionRoot.FullName, "artifacts", "packages", EnvironmentVariables.BuildConfiguration, "Shipping");
+                TestAssetsPath = Path.Combine(AppContext.BaseDirectory, "testassets");
             }
-            if (!Directory.Exists(BuiltNuGetsPath))
+            else
             {
-                throw new ArgumentException($"Cannot find 'BUILT_NUGETS_PATH={EnvironmentVariables.BuiltNuGetsPath} or {BuiltNuGetsPath}");
+                TestAssetsPath = Path.Combine(solutionRoot!.FullName, "tests");
+            }
+            if (!Directory.Exists(TestAssetsPath))
+            {
+                throw new ArgumentException($"Cannot find TestAssetsPath={TestAssetsPath}");
             }
         }
         else
         {
+            // CI
+            // FIXME: extra check empty/exists to a func
+            if (string.IsNullOrEmpty(EnvironmentVariables.SdkForWorkloadTestingPath) || !Directory.Exists(EnvironmentVariables.SdkForWorkloadTestingPath))
+            {
+                throw new ArgumentException($"Cannot find 'SDK_FOR_WORKLOAD_TESTING_PATH={EnvironmentVariables.SdkForWorkloadTestingPath}'");
+            }
+            sdkForWorkloadPath = EnvironmentVariables.SdkForWorkloadTestingPath;
+
+            if (string.IsNullOrEmpty(EnvironmentVariables.BuiltNuGetsPath) || !Directory.Exists(EnvironmentVariables.BuiltNuGetsPath))
+            {
+                throw new ArgumentException($"Cannot find 'BUILT_NUGETS_PATH={EnvironmentVariables.BuiltNuGetsPath}' or {BuiltNuGetsPath}");
+            }
             BuiltNuGetsPath = EnvironmentVariables.BuiltNuGetsPath;
+            
+            if (string.IsNullOrEmpty(EnvironmentVariables.TestAssetsPath) || !Directory.Exists(EnvironmentVariables.TestAssetsPath))
+            {
+                throw new ArgumentException($"Cannot find 'TEST_ASSETS_PATH={EnvironmentVariables.TestAssetsPath}'");
+            }
+            TestAssetsPath = Path.GetFullPath(EnvironmentVariables.TestAssetsPath);
+        }
+        
+
+        if (!string.IsNullOrEmpty(EnvironmentVariables.SdkForWorkloadTestingPath))
+        {
+            // always allow overridding the dotnet used for testing
+            sdkForWorkloadPath = EnvironmentVariables.SdkForWorkloadTestingPath;
         }
 
-        EnvVars["DOTNET_ROOT"] = sdkForWorkloadPath;
-        EnvVars["DOTNET_INSTALL_DIR"] = sdkForWorkloadPath;
-        EnvVars["DOTNET_MULTILEVEL_LOOKUP"] = "0";
-        EnvVars["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
-        EnvVars["PATH"] = $"{sdkForWorkloadPath}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}";
+        sdkForWorkloadPath = Path.GetFullPath(sdkForWorkloadPath);
+        DefaultBuildArgs = string.Empty;
+        WorkloadPacksDir = Path.Combine(sdkForWorkloadPath, "packs");
+        TestProjectPath = Path.Combine(TestAssetsPath, "testproject");
+
+        EnvVars = new Dictionary<string, string>
+        {
+            ["DOTNET_ROOT"] = sdkForWorkloadPath,
+            ["DOTNET_INSTALL_DIR"] = sdkForWorkloadPath,
+            ["DOTNET_MULTILEVEL_LOOKUP"] = "0",
+            ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
+            ["PATH"] = $"{sdkForWorkloadPath}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}"
+        };
 
         DotNet = Path.Combine(sdkForWorkloadPath!, "dotnet");
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -129,16 +151,6 @@ public class BuildEnvironment
         {
             LogRootPath = Environment.CurrentDirectory;
         }
-
-        if (!string.IsNullOrEmpty(EnvironmentVariables.TestAssetsPath))
-        {
-            TestAssetsPath = Path.GetFullPath(EnvironmentVariables.TestAssetsPath);
-        }
-        else
-        {
-            TestAssetsPath = Path.Combine(solutionRoot!.FullName, "tests");
-        }
-        TestProjectPath = Path.Combine(TestAssetsPath, "testproject");
 
         if (Directory.Exists(TmpPath))
         {

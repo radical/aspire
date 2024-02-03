@@ -14,7 +14,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Runtime.Internal.WorkloadBuildTasks" GeneratePathProperty="true" />
 
-    <None Include="..\testassets\**\*" Link="testassets\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\testproject\**\*" Link="X\testproject\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="data\**\*" Link="data\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
