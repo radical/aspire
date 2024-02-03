@@ -11,7 +11,7 @@ namespace Aspire.EndToEnd.Tests;
 
 /// <summary>
 /// This fixture ensures the TestProject.AppHost application is started before a test is executed.
-/// 
+///
 /// Represents the the IntegrationServiceA project in the test application used to send HTTP requests
 /// to the project's endpoints.
 /// </summary>
@@ -29,6 +29,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
+        var testOutput = new TestOutputWrapper(null);
         var output = new StringBuilder();
         var appExited = new TaskCompletionSource();
         var projectsParsed = new TaskCompletionSource();
@@ -54,6 +55,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
+            testOutput.WriteLine(e.Data);
 
             if (e.Data?.StartsWith("$ENDPOINTS: ") == true)
             {
@@ -75,6 +77,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
+            testOutput.WriteLine(e.Data);
         };
 
         EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
