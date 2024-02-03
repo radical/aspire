@@ -16,8 +16,8 @@
 
     <PackageReference Include="Microsoft.NET.Runtime.Internal.WorkloadBuildTasks" GeneratePathProperty="true" />
 
-    <None Include="..\testproject\**\*" Link="testassets\testproject\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="'$(TestsRunningOutOfTree)' == 'true'" />
-    <None Include="..\nuget.helix.config" Link="testassets\testproject\nuget.config" CopyToOutputDirectory="PreserveNewest" Condition="'$(TestsRunningOutOfTree)' == 'true'" />
+    <None Include="..\testproject\**\*" Link="testassets\testproject\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="'$(TestsRunningOutOfTree)' == 'true' or '$(ArchiveTests)' == 'true'" />
+    <None Include="..\nuget.helix.config" Link="testassets\testproject\nuget.config" CopyToOutputDirectory="PreserveNewest" Condition="'$(TestsRunningOutOfTree)' == 'true' or '$(ArchiveTests)' == 'true'" />
 
     <None Include="data\**\*" Link="data\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
@@ -32,7 +32,7 @@
     <!--<Copy SourceFiles="..\Directory.Packages.Helix.props" DestinationFiles="$(_TestAssetsOutputDir)\Directory.Packages.props" />-->
     <!--<Copy SourceFiles="..\Directory.Build.Helix.targets" DestinationFiles="$(_TestAssetsOutputDir)\Directory.Build.targets" />-->
 
-    <Copy SourceFiles="data\nuget8.config" DestinationFiles="$(_TestAssetsOutputDir)\NuGet.config" />
+    <!-- <Copy SourceFiles="data\nuget8.config" DestinationFiles="$(_TestAssetsOutputDir)\NuGet.config" /> -->
     <!-- emit directory.build.props with versions -->
   </Target>
 

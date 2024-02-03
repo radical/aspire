@@ -53,7 +53,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
                         .WithEnvironmentVariable("TestsRunningOutOfTree", "true")
                         .WithTimeout(TimeSpan.FromMinutes(5));
 
-        CancellationTokenSource cts = new CancellationTokenSource();
+        var cts = new CancellationTokenSource();
         // FIXME: also watch for run command exiting or failing
         var cmdTask = _runCommand.ExecuteAsync("run --no-build");
         _ = cmdTask.ContinueWith(cmdTask =>
