@@ -48,16 +48,6 @@ public class BuildEnvironment
             solutionRoot = solutionRoot.Parent;
         }
 
-        // bool localRun = true;
-        // if (EnvironmentVariables.ShouldRunOutOfTree && solutionRoot is not null)
-        // {
-        //     localRun = true;
-        // }
-        // else
-        // {
-        //     localRun = false;
-        // }
-        // FIXME: determine is local run, in which case auto compute all the paths
         string sdkForWorkloadPath;
         if (solutionRoot is not null)
         {
@@ -130,7 +120,8 @@ public class BuildEnvironment
             ["DOTNET_INSTALL_DIR"] = sdkForWorkloadPath,
             ["DOTNET_MULTILEVEL_LOOKUP"] = "0",
             ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
-            ["PATH"] = $"{sdkForWorkloadPath}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}"
+            ["PATH"] = $"{sdkForWorkloadPath}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+            ["BUILT_NUGETS_PATH"] = BuiltNuGetsPath
         };
 
         DotNet = Path.Combine(sdkForWorkloadPath!, "dotnet");

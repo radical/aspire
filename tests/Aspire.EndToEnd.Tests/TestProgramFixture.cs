@@ -50,6 +50,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
                                 appRunning.SetResult();
                             }
                         })
+                        .WithEnvironmentVariable("TestsRunningOutOfTree", "true")
                         .WithTimeout(TimeSpan.FromMinutes(5));
 
         CancellationTokenSource cts = new CancellationTokenSource();

@@ -17,6 +17,8 @@
     <PackageReference Include="Microsoft.NET.Runtime.Internal.WorkloadBuildTasks" GeneratePathProperty="true" />
 
     <None Include="..\testproject\**\*" Link="testassets\testproject\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="'$(TestsRunningOutOfTree)' == 'true'" />
+    <None Include="..\nuget.helix.config" Link="testassets\testproject\nuget.config" CopyToOutputDirectory="PreserveNewest" Condition="'$(TestsRunningOutOfTree)' == 'true'" />
+
     <None Include="data\**\*" Link="data\%(RecursiveDir)%(FileName)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
@@ -32,6 +34,25 @@
 
     <Copy SourceFiles="data\nuget8.config" DestinationFiles="$(_TestAssetsOutputDir)\NuGet.config" />
     <!-- emit directory.build.props with versions -->
+  </Target>
+
+  <Target Name="_AddPackageVersions" AfterTargets="Build">
+    <PropertyGroup>
+      <_TestAssetsOutputDir>$(OutputPath)\testassets\</_TestAssetsOutputDir>
+
+      <_PackagePropsContents>
+<![CDATA[
+      <Project>
+        <PropertyGroup>
+          <PackageVersion>$(PackageVersion)</PackageVersion>
+          <MicrosoftExtensionsHostingAbstractionsPackageVersion>$(MicrosoftExtensionsHostingAbstractionsPackageVersion)</MicrosoftExtensionsHostingAbstractionsPackageVersion>
+        </PropertyGroup>
+      </Project>
+]]>
+      </_PackagePropsContents>
+    </PropertyGroup>
+
+    <WriteLinesToFile Lines="$(_PackagePropsContents)" File="$(_TestAssetsOutputDir)\testproject\Directory.Build.Helix.props" Overwrite="true" />
   </Target>
 
   <Import Project="workload-def.targets" />
