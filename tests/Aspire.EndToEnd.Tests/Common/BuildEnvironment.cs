@@ -95,11 +95,6 @@ public class BuildEnvironment
             }
             BuiltNuGetsPath = EnvironmentVariables.BuiltNuGetsPath;
             
-            if (string.IsNullOrEmpty(EnvironmentVariables.TestAssetsPath) || !Directory.Exists(EnvironmentVariables.TestAssetsPath))
-            {
-                throw new ArgumentException($"Cannot find 'TEST_ASSETS_PATH={EnvironmentVariables.TestAssetsPath}'");
-            }
-            // TestAssetsPath = Path.GetFullPath(EnvironmentVariables.TestAssetsPath);
             TestAssetsPath = Path.Combine(AppContext.BaseDirectory, "testassets");
         }
         
