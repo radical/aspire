@@ -6,7 +6,7 @@ using System.Globalization;
 using System.Text;
 using Xunit.Sdk;
 
-namespace Aspire.End2End.Tests;
+namespace Aspire.EndToEnd.Tests;
 
 // taken from https://github.com/dotnet/arcade/blob/main/src/Common/Microsoft.Arcade.Common/CommandResult.cs
 public struct CommandResult

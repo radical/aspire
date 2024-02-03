@@ -3,7 +3,7 @@
 
 using System.Runtime.InteropServices;
 
-namespace Aspire.End2End.Tests;
+namespace Aspire.EndToEnd.Tests;
 
 public class BuildEnvironment
 {
@@ -69,7 +69,7 @@ public class BuildEnvironment
             {
                  string? dotnetPath = Environment.GetEnvironmentVariable("PATH")!
                     .Split(Path.PathSeparator)
-                    .Select(path => Path.Combine(path, "dotnet.exe"))
+                    .Select(path => Path.Combine(path, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "dotnet.exe" : "dotnet"))
                     .FirstOrDefault(File.Exists);
                 if (dotnetPath is null)
                 {

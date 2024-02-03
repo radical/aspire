@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#if false
 using System.Text;
 using System.Text.Json;
 using Xunit;
@@ -136,3 +137,5 @@ public class IntegrationServicesCollection : ICollectionFixture<IntegrationServi
     // to be the place to apply [CollectionDefinition] and all the
     // ICollectionFixture<> interfaces.
 }
+
+#endif

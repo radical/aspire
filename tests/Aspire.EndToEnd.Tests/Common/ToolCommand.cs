@@ -7,7 +7,7 @@ using Xunit.Abstractions;
 
 #nullable enable
 
-namespace Aspire.End2End.Tests;
+namespace Aspire.EndToEnd.Tests;
 
 public class ToolCommand : IDisposable
 {

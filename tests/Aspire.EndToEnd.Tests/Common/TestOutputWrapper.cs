@@ -3,7 +3,7 @@
 
 using Xunit.Abstractions;
 
-namespace Aspire.End2End.Tests;
+namespace Aspire.EndToEnd.Tests;
 
 public class TestOutputWrapper(ITestOutputHelper? baseOutput) : ITestOutputHelper
 {

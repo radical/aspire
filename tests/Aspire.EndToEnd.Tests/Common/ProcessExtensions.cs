@@ -3,7 +3,7 @@
 
 using System.Diagnostics;
 
-namespace Aspire.End2End.Tests;
+namespace Aspire.EndToEnd.Tests;
 
 internal static class ProcessExtensions
 {

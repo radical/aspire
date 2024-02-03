@@ -22,11 +22,12 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
     public Dictionary<string, ProjectInfo> Projects => _projects!;
 
+    public BuildEnvironment BuildEnvironment { get; } = new();
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
 
     public async Task InitializeAsync()
     {
-        var appHostDirectory = Path.Combine(GetRepoRoot(), "tests", "testproject", "TestProject.AppHost");
+        var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
         var output = new StringBuilder();
         var appExited = new TaskCompletionSource();
@@ -35,7 +36,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var stdoutComplete = new TaskCompletionSource();
         var stderrComplete = new TaskCompletionSource();
         _appHostProcess = new Process();
-        _appHostProcess.StartInfo = new ProcessStartInfo("dotnet", "run -- --disable-dashboard")
+        _appHostProcess.StartInfo = new ProcessStartInfo(BuildEnvironment.DotNet, "run -- --disable-dashboard")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -143,17 +144,5 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
             await _appHostProcess.WaitForExitAsync();
         }
-    }
-
-    private static string GetRepoRoot()
-    {
-        var directory = AppContext.BaseDirectory;
-
-        while (directory != null && !Directory.Exists(Path.Combine(directory, ".git")))
-        {
-            directory = Directory.GetParent(directory)!.FullName;
-        }
-
-        return directory!;
     }
 }
