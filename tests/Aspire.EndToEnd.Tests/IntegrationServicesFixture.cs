@@ -55,7 +55,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
-            testOutput.WriteLine(e.Data);
+            testOutput.WriteLine($"[apphost] {e.Data}");
 
             if (e.Data?.StartsWith("$ENDPOINTS: ") == true)
             {
@@ -77,7 +77,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
-            testOutput.WriteLine(e.Data);
+            testOutput.WriteLine($"[apphost] {e.Data}");
         };
 
         EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
@@ -104,15 +104,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
 
+        testOutput.WriteLine($"Starting the process");
         _appHostProcess.Start();
         _appHostProcess.BeginOutputReadLine();
         _appHostProcess.BeginErrorReadLine();
 
         var successfulTask = Task.WhenAll(appRunning.Task, projectsParsed.Task);
         var failedTask = appExited.Task;
-        var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5));
+        var timeoutTask = Task.Delay(TimeSpan.FromMinutes(2));
 
+        testOutput.WriteLine($"- whenany..");
         var resultTask = await Task.WhenAny(successfulTask, failedTask, timeoutTask);
+        testOutput.WriteLine($"- whenany.. awake");
         if (resultTask == failedTask)
         {
             // wait for all the output to be read

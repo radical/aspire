@@ -13,6 +13,7 @@ public static class CosmosExtensions
 
     private static async Task<IResult> VerifyCosmosAsync(CosmosClient cosmosClient)
     {
+        Console.WriteLine ($"** VerifyCosmosAsync");
         try
         {
             var policy = Policy

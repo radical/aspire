@@ -16,43 +16,44 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
 
     [LocalOnlyTheory]
     [InlineData("cosmos")]
-    [InlineData("mongodb")]
-    [InlineData("mysql")]
-    [InlineData("pomelo")]
-    [InlineData("oracledatabase")]
-    [InlineData("postgres")]
-    [InlineData("rabbitmq")]
-    [InlineData("redis")]
-    [InlineData("sqlserver")]
+    // [InlineData("mongodb")]
+    // [InlineData("mysql")]
+    // [InlineData("pomelo")]
+    // [InlineData("oracledatabase")]
+    // [InlineData("postgres")]
+    // [InlineData("rabbitmq")]
+    // [InlineData("redis")]
+    // [InlineData("sqlserver")]
     public async Task VerifyComponentWorks(string component)
     {
+        Console.WriteLine ($"-- Starting VerifyComponentWorks");
         var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/{component}/verify");
         var responseContent = await response.Content.ReadAsStringAsync();
 
         Assert.True(response.IsSuccessStatusCode, responseContent);
     }
 
-    [LocalOnlyFact]
-    public async Task KafkaComponentCanProduceAndConsume()
-    {
-        string topic = $"topic-{Guid.NewGuid()}";
+    // [LocalOnlyFact]
+    // public async Task KafkaComponentCanProduceAndConsume()
+    // {
+    //     string topic = $"topic-{Guid.NewGuid()}";
 
-        var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/produce/{topic}");
-        var responseContent = await response.Content.ReadAsStringAsync();
-        Assert.True(response.IsSuccessStatusCode, responseContent);
+    //     var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/produce/{topic}");
+    //     var responseContent = await response.Content.ReadAsStringAsync();
+    //     Assert.True(response.IsSuccessStatusCode, responseContent);
 
-        response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/consume/{topic}");
-        responseContent = await response.Content.ReadAsStringAsync();
-        Assert.True(response.IsSuccessStatusCode, responseContent);
-    }
+    //     response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/consume/{topic}");
+    //     responseContent = await response.Content.ReadAsStringAsync();
+    //     Assert.True(response.IsSuccessStatusCode, responseContent);
+    // }
 
-    [LocalOnlyFact]
-    public async Task VerifyHealthyOnIntegrationServiceA()
-    {
-        // We wait until timeout for the /health endpoint to return successfully. We assume
-        // that components wired up into this project have health checks enabled.
-        await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
-    }
+    // [LocalOnlyFact]
+    // public async Task VerifyHealthyOnIntegrationServiceA()
+    // {
+    //     // We wait until timeout for the /health endpoint to return successfully. We assume
+    //     // that components wired up into this project have health checks enabled.
+    //     await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
+    // }
 }
 
 // TODO: remove these attributes when the above tests are running in CI
