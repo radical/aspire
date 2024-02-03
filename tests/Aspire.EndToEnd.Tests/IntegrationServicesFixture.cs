@@ -78,6 +78,26 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         };
 
         EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
+        _ = appExited.Task.ContinueWith(cmdTask =>
+        {
+            Console.WriteLine($"cmdTask.continueWith, status: {cmdTask.Status}");
+            if (cmdTask.IsFaulted)
+            {
+                appRunning.SetException(cmdTask.Exception!);
+                projectsParsed.SetException(cmdTask.Exception!);
+            }
+            else if (cmdTask.IsCanceled)
+            {
+                appRunning.SetCanceled();
+                projectsParsed.SetCanceled();
+            }
+            else
+            {
+                //var res = cmdTask.Result;
+                appRunning.SetException(new ArgumentException($"dotnet run exited: {output}"));
+                projectsParsed.SetException(new ArgumentException($"dotnet run exited: {output}"));
+            }
+        }, TaskScheduler.Default);
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
 
