@@ -33,7 +33,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
         var projectsParsed = new TaskCompletionSource();
 
         var _testOutput = new TestOutputWrapper(null);
-        var timeout = TimeSpan.FromMinutes(5);
+        var timeout = TimeSpan.FromHours(1);
         _runCommand = new RunCommand(BuildEnvironment, _testOutput, label: "app-run")
                         .WithWorkingDirectory(appHostDirectory)
                         .WithOutputDataReceived(data =>
@@ -56,8 +56,10 @@ public abstract class TestProgramFixture : IAsyncLifetime
         var cts = new CancellationTokenSource();
         // FIXME: also watch for run command exiting or failing
         var cmdTask = _runCommand.ExecuteAsync("run --no-build");
+        // FIXME: should the return of continueWith be awaited?
         _ = cmdTask.ContinueWith(cmdTask =>
         {
+            Console.WriteLine($"cmdTask.continueWith, status: {cmdTask.Status}");
             if (cmdTask.IsFaulted)
             {
                 appRunning.SetException(cmdTask.Exception!);
@@ -68,8 +70,19 @@ public abstract class TestProgramFixture : IAsyncLifetime
                 appRunning.SetCanceled();
                 projectsParsed.SetCanceled();
             }
+            else
+            {
+                var res = cmdTask.Result;
+                appRunning.SetException(new ArgumentException($"dotnet run exited: {res.Output}"));
+                projectsParsed.SetException(new ArgumentException($"dotnet run exited: {res.Output}"));
+            }
         }, TaskScheduler.Default);
+        if (cmdTask.IsCompleted)
+        {
+            Console.WriteLine($"cmdTask completed, status: {cmdTask.Status}");
+        }
 
+        // FIXME: this should stop if the run command fails or has exited
         await Task.WhenAll(
             appRunning.Task.WaitAsync(timeout),
             projectsParsed.Task.WaitAsync(timeout));

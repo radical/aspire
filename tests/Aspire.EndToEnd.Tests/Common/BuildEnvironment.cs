@@ -51,16 +51,31 @@ public class BuildEnvironment
         string sdkForWorkloadPath;
         if (solutionRoot is not null)
         {
-            // Is this a "local run?
-            var sdkDirName = string.IsNullOrEmpty(EnvironmentVariables.SdkDirName) ? "dotnet-latest" : EnvironmentVariables.SdkDirName;
-            var probePath = Path.Combine(solutionRoot!.FullName, "artifacts", "bin", sdkDirName);
-            if (Directory.Exists(probePath))
+            if (EnvironmentVariables.TestsRunningOutOfTree)
             {
-                sdkForWorkloadPath = Path.GetFullPath(probePath);
+                // Is this a "local run?
+                var sdkDirName = string.IsNullOrEmpty(EnvironmentVariables.SdkDirName) ? "dotnet-latest" : EnvironmentVariables.SdkDirName;
+                var probePath = Path.Combine(solutionRoot!.FullName, "artifacts", "bin", sdkDirName);
+                if (Directory.Exists(probePath))
+                {
+                    sdkForWorkloadPath = Path.GetFullPath(probePath);
+                }
+                else
+                {
+                    throw new ArgumentException($"Could not find {probePath} computed from solutionRoot={solutionRoot}");
+                }
             }
             else
             {
-                throw new ArgumentException($"Could not find {probePath} computed from solutionRoot={solutionRoot}");
+                 string? dotnetPath = Environment.GetEnvironmentVariable("PATH")!
+                    .Split(Path.PathSeparator)
+                    .Select(path => Path.Combine(path, "dotnet.exe"))
+                    .FirstOrDefault(File.Exists);
+                if (dotnetPath is null)
+                {
+                    throw new ArgumentException($"Could not find dotnet.exe in PATH={Environment.GetEnvironmentVariable("PATH")}");
+                }
+                sdkForWorkloadPath = Path.GetDirectoryName(dotnetPath)!;
             }
             
             BuiltNuGetsPath = Path.Combine(solutionRoot.FullName, "artifacts", "packages", EnvironmentVariables.BuildConfiguration, "Shipping");
