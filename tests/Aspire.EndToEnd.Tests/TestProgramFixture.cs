@@ -33,7 +33,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
         var projectsParsed = new TaskCompletionSource();
 
         var _testOutput = new TestOutputWrapper(null);
-        var timeout = TimeSpan.FromHours(1);
+        var timeout = TimeSpan.FromMinutes(5);
         _runCommand = new RunCommand(BuildEnvironment, _testOutput, label: "app-run")
                         .WithWorkingDirectory(appHostDirectory)
                         .WithOutputDataReceived(data =>
@@ -50,8 +50,7 @@ public abstract class TestProgramFixture : IAsyncLifetime
                                 appRunning.SetResult();
                             }
                         })
-                        .WithEnvironmentVariable("TestsRunningOutOfTree", Environment.GetEnvironmentVariable("TestsRunningOutOfTree") ?? "")
-                        .WithTimeout(TimeSpan.FromMinutes(5));
+                        .WithEnvironmentVariable("TestsRunningOutOfTree", Environment.GetEnvironmentVariable("TestsRunningOutOfTree") ?? "");
 
         var cts = new CancellationTokenSource();
         // FIXME: also watch for run command exiting or failing
