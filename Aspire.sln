@@ -223,6 +223,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aspire.End2End.Tests", "tes
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CatalogModel", "playground\eShopLite\CatalogModel\CatalogModel.csproj", "{83267206-9438-42CD-860C-C92E7DBAA4C3}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Aspire.EndToEnd.Tests", "tests\Aspire.EndToEnd.Tests\Aspire.EndToEnd.Tests.csproj", "{C1483B79-4FE9-47FF-B544-EB5DBB7A0A3E}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ParameterEndToEnd", "ParameterEndToEnd", "{F1387494-34DE-4B31-B587-699B2E9A20CA}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ParameterEndToEnd.AppHost", "playground\ParameterEndToEnd\ParameterEndToEnd.AppHost\ParameterEndToEnd.AppHost.csproj", "{54B66163-016D-4122-9364-409AB61BC36B}"
