@@ -48,8 +48,9 @@ public sealed class ProjectInfo
                     return;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine ($"WaitForHealthyStatusAsync failed: {ex}");
                 await Task.Delay(100, cancellationToken);
             }
         }

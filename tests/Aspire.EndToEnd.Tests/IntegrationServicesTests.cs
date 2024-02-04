@@ -16,17 +16,20 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
 
     [LocalOnlyTheory]
     [InlineData("cosmos")]
-    // [InlineData("mongodb")]
-    // [InlineData("mysql")]
-    // [InlineData("pomelo")]
-    // [InlineData("oracledatabase")]
-    // [InlineData("postgres")]
-    // [InlineData("rabbitmq")]
-    // [InlineData("redis")]
-    // [InlineData("sqlserver")]
+    [InlineData("mongodb")]
+    [InlineData("mysql")]
+    [InlineData("pomelo")]
+    [InlineData("oracledatabase")]
+    [InlineData("postgres")]
+    [InlineData("rabbitmq")]
+    [InlineData("redis")]
+    [InlineData("sqlserver")]
     public async Task VerifyComponentWorks(string component)
     {
         Console.WriteLine ($"-- Starting VerifyComponentWorks");
+        await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
+        Console.WriteLine ($".. integrationservicea is healthy.. let's verify now");
+
         var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/{component}/verify");
         var responseContent = await response.Content.ReadAsStringAsync();
 
