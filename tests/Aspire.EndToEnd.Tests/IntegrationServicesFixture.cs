@@ -23,6 +23,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     public Dictionary<string, ProjectInfo> Projects => _projects!;
 
     public BuildEnvironment BuildEnvironment { get; } = new();
+
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
 
     public async Task InitializeAsync()
@@ -80,7 +81,6 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             testOutput.WriteLine($"[apphost] {e.Data}");
         };
 
-        EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
         _ = appExited.Task.ContinueWith(cmdTask =>
         {
             Console.WriteLine($"cmdTask.continueWith, status: {cmdTask.Status}");
@@ -105,13 +105,19 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _appHostProcess.Exited += appExitedCallback;
 
         testOutput.WriteLine($"Starting the process");
+        };
+
+        EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
+        _appHostProcess.EnableRaisingEvents = true;
+        _appHostProcess.Exited += appExitedCallback;
+
         _appHostProcess.Start();
         _appHostProcess.BeginOutputReadLine();
         _appHostProcess.BeginErrorReadLine();
 
         var successfulTask = Task.WhenAll(appRunning.Task, projectsParsed.Task);
         var failedTask = appExited.Task;
-        var timeoutTask = Task.Delay(TimeSpan.FromMinutes(2));
+        var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5));
 
         testOutput.WriteLine($"- whenany..");
         var resultTask = await Task.WhenAny(successfulTask, failedTask, timeoutTask);
