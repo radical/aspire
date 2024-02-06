@@ -1,7 +1,6 @@
 <Project>
   <PropertyGroup>
     <GetWorkloadInputsDependsOn>_GetWorkloadsToInstall;$(GetWorkloadInputsDependsOn)</GetWorkloadInputsDependsOn>
-    <!--<GetNuGetsToBuildForWorkloadTestingDependsOn>_GetNugetsForAOT;$(GetNuGetsToBuildForWorkloadTestingDependsOn)</GetNuGetsToBuildForWorkloadTestingDependsOn>-->
   </PropertyGroup>
 
   <Target Name="_GetWorkloadsToInstall" DependsOnTargets="_SetPackageVersionForWorkloadsTesting" Returns="@(WorkloadIdForTesting);@(WorkloadCombinationsToInstall)">
