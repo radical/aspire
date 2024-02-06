@@ -217,8 +217,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Mongo.AppHost", "playground
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Mongo.ApiService", "playground\mongo\Mongo.ApiService\Mongo.ApiService.csproj", "{40EC38A2-69DB-4759-81C8-13F31090FEA6}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tasks", "tasks", "{BDD1F71C-F620-4E45-B842-AB6E9346DBCF}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CatalogModel", "playground\eShopLite\CatalogModel\CatalogModel.csproj", "{83267206-9438-42CD-860C-C92E7DBAA4C3}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Aspire.EndToEnd.Tests", "tests\Aspire.EndToEnd.Tests\Aspire.EndToEnd.Tests.csproj", "{C1483B79-4FE9-47FF-B544-EB5DBB7A0A3E}"

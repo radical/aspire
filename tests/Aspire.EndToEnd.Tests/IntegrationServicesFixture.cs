@@ -101,13 +101,12 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 projectsParsed.SetException(new ArgumentException($"dotnet run exited: {output}"));
             }
         }, TaskScheduler.Default);
+        EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
 
         testOutput.WriteLine($"Starting the process");
-        };
 
-        EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
 

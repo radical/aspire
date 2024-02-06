@@ -43,7 +43,6 @@
     <MicrosoftEntityFrameworkCoreCosmosPackageVersion>8.0.1</MicrosoftEntityFrameworkCoreCosmosPackageVersion>
     <MicrosoftEntityFrameworkCoreSqlServerPackageVersion>8.0.1</MicrosoftEntityFrameworkCoreSqlServerPackageVersion>
     <MicrosoftEntityFrameworkCoreToolsPackageVersion>8.0.1</MicrosoftEntityFrameworkCoreToolsPackageVersion>
-    <MicrosoftBuildVersion>17.3.2</MicrosoftBuildVersion>
     <SdkVersionForWorkloadTesting>8.0.101</SdkVersionForWorkloadTesting>
   </PropertyGroup>
 </Project>
