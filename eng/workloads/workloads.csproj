@@ -51,8 +51,7 @@
 
   <ItemGroup Condition="'$(BuildFullWorkload)' != 'true'">
     <!-- Update Aspire.Dashboard.csproj RuntimeIdentifiers if this list changes -->
-    <_PackRuntimes Include="linux-x64" Condition="$([MSBuild]::IsOSPlatform('linux'))" />
-    <_PackRuntimes Include="osx-arm64" Condition="$([MSBuild]::IsOSPlatform('osx'))" />
+    <_PackRuntimes Include="$(NETCoreSdkRuntimeIdentifier)" />
   </ItemGroup>
 
   <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.targets" />
