@@ -47,6 +47,11 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             CreateNoWindow = true,
             WorkingDirectory = appHostDirectory
         };
+        foreach (var item in BuildEnvironment.EnvVars)
+        {
+            testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
+            _appHostProcess.StartInfo.Environment[item.Key] = item.Value;
+        }
         _appHostProcess.OutputDataReceived += (sender, e) =>
         {
             if (e.Data is null)
@@ -81,26 +86,26 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             testOutput.WriteLine($"[apphost] {e.Data}");
         };
 
-        _ = appExited.Task.ContinueWith(cmdTask =>
-        {
-            Console.WriteLine($"cmdTask.continueWith, status: {cmdTask.Status}");
-            if (cmdTask.IsFaulted)
-            {
-                appRunning.SetException(cmdTask.Exception!);
-                projectsParsed.SetException(cmdTask.Exception!);
-            }
-            else if (cmdTask.IsCanceled)
-            {
-                appRunning.SetCanceled();
-                projectsParsed.SetCanceled();
-            }
-            else
-            {
-                //var res = cmdTask.Result;
-                appRunning.SetException(new ArgumentException($"dotnet run exited: {output}"));
-                projectsParsed.SetException(new ArgumentException($"dotnet run exited: {output}"));
-            }
-        }, TaskScheduler.Default);
+        //_ = appExited.Task.ContinueWith(cmdTask =>
+        //{
+            //Console.WriteLine($"cmdTask.continueWith, status: {cmdTask.Status}");
+            //if (cmdTask.IsFaulted)
+            //{
+                //appRunning.SetException(cmdTask.Exception!);
+                //projectsParsed.SetException(cmdTask.Exception!);
+            //}
+            //else if (cmdTask.IsCanceled)
+            //{
+                //appRunning.SetCanceled();
+                //projectsParsed.SetCanceled();
+            //}
+            //else
+            //{
+                ////var res = cmdTask.Result;
+                //appRunning.SetException(new ArgumentException($"dotnet run exited: {output}"));
+                //projectsParsed.SetException(new ArgumentException($"dotnet run exited: {output}"));
+            //}
+        //}, TaskScheduler.Default);
         EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
@@ -108,7 +113,6 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         testOutput.WriteLine($"Starting the process");
 
         _appHostProcess.EnableRaisingEvents = true;
-        _appHostProcess.Exited += appExitedCallback;
 
         _appHostProcess.Start();
         _appHostProcess.BeginOutputReadLine();
@@ -118,9 +122,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var failedTask = appExited.Task;
         var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5));
 
-        testOutput.WriteLine($"- whenany..");
         var resultTask = await Task.WhenAny(successfulTask, failedTask, timeoutTask);
-        testOutput.WriteLine($"- whenany.. awake");
         if (resultTask == failedTask)
         {
             // wait for all the output to be read

@@ -109,10 +109,9 @@ public class BuildEnvironment
                 throw new ArgumentException($"Cannot find 'BUILT_NUGETS_PATH={EnvironmentVariables.BuiltNuGetsPath}' or {BuiltNuGetsPath}");
             }
             BuiltNuGetsPath = EnvironmentVariables.BuiltNuGetsPath;
-            
+
             TestAssetsPath = Path.Combine(AppContext.BaseDirectory, "testassets");
         }
-        
 
         if (!string.IsNullOrEmpty(EnvironmentVariables.SdkForWorkloadTestingPath))
         {
