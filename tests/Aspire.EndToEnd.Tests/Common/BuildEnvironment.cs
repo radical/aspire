@@ -77,7 +77,7 @@ public class BuildEnvironment
                 }
                 sdkForWorkloadPath = Path.GetDirectoryName(dotnetPath)!;
             }
-            
+
             BuiltNuGetsPath = Path.Combine(solutionRoot.FullName, "artifacts", "packages", EnvironmentVariables.BuildConfiguration, "Shipping");
 
             // this is the only difference for local run but out-of-tree
