@@ -2,14 +2,18 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Xunit.Abstractions;
+using Xunit.Sdk;
+using System.Globalization;
 
 namespace Aspire.EndToEnd.Tests;
 
-public class TestOutputWrapper(ITestOutputHelper? baseOutput) : ITestOutputHelper
+public class TestOutputWrapper(ITestOutputHelper? baseOutput, IMessageSink? messageSink) : ITestOutputHelper
 {
     public void WriteLine(string message)
     {
         baseOutput?.WriteLine(message);
+        messageSink?.OnMessage(new DiagnosticMessage(message));
+
         //if (EnvironmentVariables.ShowBuildOutput)
         {
             Console.WriteLine(message);
@@ -19,6 +23,7 @@ public class TestOutputWrapper(ITestOutputHelper? baseOutput) : ITestOutputHelpe
     public void WriteLine(string format, params object[] args)
     {
         baseOutput?.WriteLine(format, args);
+        messageSink?.OnMessage(new DiagnosticMessage(string.Format(CultureInfo.CurrentCulture, format, args)));
         //if (EnvironmentVariables.ShowBuildOutput)
         {
             Console.WriteLine(format, args);

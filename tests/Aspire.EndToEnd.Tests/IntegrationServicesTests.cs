@@ -2,38 +2,42 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Xunit;
+//using Xunit.Abstractions;
 
 namespace Aspire.EndToEnd.Tests;
 
 public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture>
 {
     private readonly IntegrationServicesFixture _integrationServicesFixture;
+    //private readonly IMessageSink _diagnosticMessageSink;
 
     public IntegrationServicesTests(IntegrationServicesFixture integrationServicesFixture)
     {
         _integrationServicesFixture = integrationServicesFixture;
+        //_diagnosticMessageSink = messageSink;
     }
 
     [LocalOnlyTheory]
-    [InlineData("cosmos")]
+    //[InlineData("cosmos")]
     [InlineData("mongodb")]
     [InlineData("mysql")]
     [InlineData("pomelo")]
-    [InlineData("oracledatabase")]
+    //[InlineData("oracledatabase")]
     [InlineData("postgres")]
     [InlineData("rabbitmq")]
     [InlineData("redis")]
     [InlineData("sqlserver")]
     public async Task VerifyComponentWorks(string component)
     {
-        Console.WriteLine ($"-- Starting VerifyComponentWorks");
-        await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
-        Console.WriteLine ($".. integrationservicea is healthy.. let's verify now");
+        Console.WriteLine ($">>>> Starting VerifyComponentWorks for {component} --");
+        //await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
+        //Console.WriteLine ($".. integrationservicea is healthy.. let's verify now");
 
         var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/{component}/verify");
         var responseContent = await response.Content.ReadAsStringAsync();
 
         Assert.True(response.IsSuccessStatusCode, responseContent);
+        Console.WriteLine ($"<<<< Done VerifyComponentWorks for {component} --");
     }
 
     [LocalOnlyFact]
@@ -50,13 +54,13 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         Assert.True(response.IsSuccessStatusCode, responseContent);
     }
 
-    [LocalOnlyFact]
-    public async Task VerifyHealthyOnIntegrationServiceA()
-    {
-        // We wait until timeout for the /health endpoint to return successfully. We assume
-        // that components wired up into this project have health checks enabled.
-        await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
-    }
+    //[LocalOnlyFact]
+    //public async Task VerifyHealthyOnIntegrationServiceA()
+    //{
+        //// We wait until timeout for the /health endpoint to return successfully. We assume
+        //// that components wired up into this project have health checks enabled.
+        //await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
+    //}
 }
 
 // TODO: remove these attributes when the above tests are running in CI

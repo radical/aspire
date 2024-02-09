@@ -124,6 +124,7 @@ public class BuildEnvironment
         WorkloadPacksDir = Path.Combine(sdkForWorkloadPath, "packs");
         TestProjectPath = Path.Combine(TestAssetsPath, "testproject");
 
+        Console.WriteLine ($"*** Using workload path: {sdkForWorkloadPath}");
         EnvVars = new Dictionary<string, string>
         {
             ["DOTNET_ROOT"] = sdkForWorkloadPath,

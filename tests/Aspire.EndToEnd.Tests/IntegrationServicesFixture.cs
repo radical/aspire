@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Aspire.EndToEnd.Tests;
 
@@ -25,12 +26,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     public BuildEnvironment BuildEnvironment { get; } = new();
 
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
+    private readonly IMessageSink _diagnosticMessageSink;
+
+    public IntegrationServicesFixture(IMessageSink messageSink)
+    {
+        _diagnosticMessageSink = messageSink;
+    }
 
     public async Task InitializeAsync()
     {
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
-        var testOutput = new TestOutputWrapper(null);
+        var testOutput = new TestOutputWrapper(null, _diagnosticMessageSink);
         var output = new StringBuilder();
         var appExited = new TaskCompletionSource();
         var projectsParsed = new TaskCompletionSource();
