@@ -1,7 +1,31 @@
 <Project>
   <PropertyGroup>
     <GetWorkloadInputsDependsOn>_GetWorkloadsToInstall;$(GetWorkloadInputsDependsOn)</GetWorkloadInputsDependsOn>
+    <GetNuGetsToBuildForWorkloadTestingDependsOn>_GetNuGetsToBuild;$(GetNuGetsToBuildForWorkloadTestingDependsOn)</GetNuGetsToBuildForWorkloadTestingDependsOn>
   </PropertyGroup>
+
+
+  <Target Name="_GetNuGetsToBuild" Returns="@(NuGetsToBuildForWorkloadTesting)">
+    <Error Condition="'$(NETCoreSdkRuntimeIdentifier)' == ''" Text="%24(NETCoreSdkRuntimeIdentifier) is unset. This is needed to build the Aspire.Hosting.Orchestration nuget" />
+
+    <ItemGroup>
+      <_PropertiesForNuGetBuilds Include="DashboardRuntime=$(NETCoreSdkRuntimeIdentifier)" />
+      <_PropertiesForNuGetBuilds Include="DcpRuntime=$(NETCoreSdkRuntimeIdentifier)" />
+      <_PropertiesForNuGetBuilds Include="PackageOutputPath=$(WorkloadsPackageSource)" />
+
+      <NuGetsToBuildForWorkloadTesting
+                      Include="$(ArtifactsDir)packages/$(Configuration)/Shipping/Aspire.Dashboard.Sdk.$(NETCoreSdkRuntimeIdentifier).nupkg"
+                      Project="$(RepoRoot)eng/dashboardpack/dashboardpack.csproj"
+                      Properties="@(DefaultPropertiesForNuGetBuild, ';');@(_PropertiesForNuGetBuilds, ';')"
+                      Descriptor="Dashboard pack"/>
+
+      <NuGetsToBuildForWorkloadTesting
+                      Include="$(ArtifactsDir)packages/$(Configuration)/Shipping/Aspire.Hosting.Orchestration.$(NETCoreSdkRuntimeIdentifier).nupkg"
+                      Project="$(RepoRoot)eng/dcppack/dcppack.csproj"
+                      Properties="@(DefaultPropertiesForNuGetBuild, ';');@(_PropertiesForNuGetBuilds, ';')"
+                      Descriptor="Dcp pack"/>
+    </ItemGroup>
+  </Target>
 
   <Target Name="_GetWorkloadsToInstall" DependsOnTargets="_SetPackageVersionForWorkloadsTesting" Returns="@(WorkloadIdForTesting);@(WorkloadCombinationsToInstall)">
     <ItemGroup>
