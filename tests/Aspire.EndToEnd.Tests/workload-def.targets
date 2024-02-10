@@ -38,6 +38,9 @@
     <MSBuild Projects="$(RepoRoot)eng/dcppack/dcppack.csproj"
               Properties="$(_CombinedProps)"
               Targets="Restore;Build" />
+    <MSBuild Projects="$(RepoRoot)eng/dashboardpack/dashboardpack.csproj"
+              Properties="$(_CombinedProps)"
+              Targets="Restore;Build" />
   </Target>
 
   <Target Name="_GetWorkloadsToInstall" DependsOnTargets="_SetPackageVersionForWorkloadsTesting" Returns="@(WorkloadIdForTesting);@(WorkloadCombinationsToInstall)">

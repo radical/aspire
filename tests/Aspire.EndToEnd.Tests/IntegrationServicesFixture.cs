@@ -68,7 +68,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
-            testOutput.WriteLine($"[apphost] {e.Data}");
+            testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
 
             if (e.Data?.StartsWith("$ENDPOINTS: ") == true)
             {
@@ -90,7 +90,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
-            testOutput.WriteLine($"[apphost] {e.Data}");
+            testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
         };
 
         //_ = appExited.Task.ContinueWith(cmdTask =>
@@ -132,9 +132,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var resultTask = await Task.WhenAny(successfulTask, failedTask, timeoutTask);
         if (resultTask == failedTask)
         {
+            testOutput.WriteLine($"resultTask == failedTask");
             // wait for all the output to be read
             var allOutputComplete = Task.WhenAll(stdoutComplete.Task, stderrComplete.Task);
-            await Task.WhenAny(allOutputComplete, timeoutTask);
+            var t = await Task.WhenAny(allOutputComplete, timeoutTask);
+            if (t == timeoutTask)
+            {
+                testOutput.WriteLine($"\tand timed out waiting for the full output");
+            }
+            else
+            {
+                testOutput.WriteLine($"\tall output completed");
+            }
         }
         Assert.True(resultTask == successfulTask, $"App run failed: {Environment.NewLine}{output}");
 
