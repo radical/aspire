@@ -48,7 +48,7 @@
       <_workItemTimeout>00:20:00</_workItemTimeout>
 
       <HelixPreCommands>$(HelixPreCommands);@(HelixPreCommand)</HelixPreCommands>
-      <HelixResultsDestinationDir>$(RepoTestResultsPath)</HelixResultsDestinationDir>
+      <!--<HelixResultsDestinationDir>$(RepoTestResultsPath)</HelixResultsDestinationDir>-->
 
       <_TestRunCommand Condition="'$(RunWithCodeCoverage)' == 'true'">@(_TestCoverageCommand, ' ') &quot;@(_TestRunCommandArguments, ' ')&quot;</_TestRunCommand>
       <_TestRunCommand Condition="'$(RunWithCodeCoverage)' != 'true'">@(_TestRunCommandArguments, ' ')</_TestRunCommand>
