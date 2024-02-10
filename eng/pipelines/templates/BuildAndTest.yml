@@ -21,6 +21,7 @@ parameters:
 steps:
   - script: ${{ parameters.buildScript }}
             -restore -build
+            -pack
             -configuration ${{ parameters.buildConfig }}
             /p:ArchiveTests=true
             /bl:${{ parameters.repoLogPath }}/build.binlog
@@ -28,6 +29,12 @@ steps:
     displayName: Build
 
   - ${{ if ne(parameters.skipTests, 'true') }}:
+    - script: ${{ parameters.dotnetScript }}
+              build
+              -p:InstallWorkloadsForTesting=true
+              $(Build.SourcesDirectory)/tests/Aspire.EndToEnd.Tests/Aspire.EndToEnd.Tests.csproj
+      displayName: Install sdk+workload for testing
+
     - script: ${{ parameters.dotnetScript }} dotnet-coverage collect
               --settings $(Build.SourcesDirectory)/eng/CodeCoverage.config
               --output ${{ parameters.repoTestResultsPath }}/NonHelixTests.cobertura.xml
