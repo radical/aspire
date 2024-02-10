@@ -30,7 +30,14 @@
                       Project="$(RepoRoot)eng/dcppack/dcppack.csproj"
                       Properties="@(DefaultPropertiesForNuGetBuild, ';');@(_PropertiesForNuGetBuilds, ';')"
                       Descriptor="Dcp pack"/>
+
     </ItemGroup>
+    <PropertyGroup>
+      <_CombinedProps>@(DefaultPropertiesForNuGetBuild, ';');@(_PropertiesForNuGetBuilds, ';')</_CombinedProps>
+    </PropertyGroup>
+    <MSBuild Projects="$(RepoRoot)eng/dcppack/dcppack.csproj"
+              Properties="$(_CombinedProps)"
+              Targets="Restore;Build" />
   </Target>
 
   <Target Name="_GetWorkloadsToInstall" DependsOnTargets="_SetPackageVersionForWorkloadsTesting" Returns="@(WorkloadIdForTesting);@(WorkloadCombinationsToInstall)">
