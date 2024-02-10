@@ -32,7 +32,7 @@ steps:
     - script: ${{ parameters.dotnetScript }}
               build
               -p:Configuration=${{ parameters.buildConfig }}
-              -t:InstallWorkloadUsingArtifacts=true
+              -t:InstallWorkloadUsingArtifacts
               -bl:${{ parameters.repoLogPath }}/WorkloadInstallForTesting.binlog
               $(Build.SourcesDirectory)/tests/Aspire.EndToEnd.Tests/Aspire.EndToEnd.Tests.csproj
       displayName: Install sdk+workload for testing
