@@ -31,6 +31,8 @@ steps:
   - ${{ if ne(parameters.skipTests, 'true') }}:
     - script: ${{ parameters.dotnetScript }}
               build
+              -restore
+              -p:Configuration=ContinuousIntegrationBuild=true
               -p:Configuration=${{ parameters.buildConfig }}
               -t:InstallWorkloadUsingArtifacts
               -bl:${{ parameters.repoLogPath }}/WorkloadInstallForTesting.binlog
