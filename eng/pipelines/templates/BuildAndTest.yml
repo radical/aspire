@@ -32,7 +32,7 @@ steps:
     - script: ${{ parameters.dotnetScript }}
               build
               -restore
-              -p:Configuration=ContinuousIntegrationBuild=true
+              -p:ContinuousIntegrationBuild=true
               -p:Configuration=${{ parameters.buildConfig }}
               -t:InstallWorkloadUsingArtifacts
               -bl:${{ parameters.repoLogPath }}/WorkloadInstallForTesting.binlog

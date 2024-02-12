@@ -9,7 +9,7 @@
     <VersionBandForSdkManifestsDir>8.0.100</VersionBandForSdkManifestsDir>
     <VersionBandForManifestPackages>8.0.100</VersionBandForManifestPackages>
     <BuiltNuGetsDir>$(ArtifactsShippingPackagesDir)</BuiltNuGetsDir>
-    <PackageVersionForWorkloadManifests>8.0.0-dev</PackageVersionForWorkloadManifests>
+    <PackageVersionForWorkloadManifests>$(PackageVersion)</PackageVersionForWorkloadManifests>
   </PropertyGroup>
 
   <ItemGroup>
