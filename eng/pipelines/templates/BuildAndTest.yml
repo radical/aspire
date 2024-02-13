@@ -46,9 +46,9 @@ steps:
 
         ${{ if eq(parameters.isWindows, 'true') }}:
           ${{ if eq(variables['System.TeamProject'], 'public') }}:
-            HelixTargetQueues: Windows.11.Amd64.Client.Open
+            HelixTargetQueues: Windows.Amd64.Server2022.Open
           ${{ if eq(variables['System.TeamProject'], 'internal') }}:
-            HelixTargetQueues: Windows.11.Amd64.Client
+            HelixTargetQueues: Windows.Amd64.Server2022
         ${{ if ne(parameters.isWindows, 'true') }}:
           ${{ if eq(variables['System.TeamProject'], 'public') }}:
             HelixTargetQueues: Ubuntu.2204.Amd64.Open
