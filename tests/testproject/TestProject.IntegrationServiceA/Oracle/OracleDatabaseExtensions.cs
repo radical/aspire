@@ -16,10 +16,11 @@ public static class OracleDatabaseExtensions
     {
         try
         {
+            Console.WriteLine ($"--- [{DateTime.Now}] VerifyOracleDatabase");
             var policy = Policy
                 .Handle<OracleException>()
                 // retry 60 times with a 1 second delay between retries
-                .WaitAndRetry(60, retryAttempt => TimeSpan.FromSeconds(1));
+                .WaitAndRetry(120, retryAttempt => TimeSpan.FromSeconds(1));
 
             return policy.Execute(() =>
             {
