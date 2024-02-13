@@ -29,7 +29,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [InlineData("cosmos")]
     public async Task VerifyComponentWorks(string component)
     {
-        Console.WriteLine ($">>>> Starting VerifyComponentWorks for {component} --");
+        Console.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
         //await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
         //Console.WriteLine ($".. integrationservicea is healthy.. let's verify now");
 
@@ -37,7 +37,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         var responseContent = await response.Content.ReadAsStringAsync();
 
         Assert.True(response.IsSuccessStatusCode, responseContent);
-        Console.WriteLine ($"<<<< Done VerifyComponentWorks for {component} --");
+        Console.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
     }
 
     [LocalOnlyFact]
