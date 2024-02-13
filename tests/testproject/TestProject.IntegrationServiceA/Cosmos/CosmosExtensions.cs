@@ -17,19 +17,19 @@ public static class CosmosExtensions
         string last = "";
         try
         {
-            var corePolicy = Policy
-                .Handle<HttpRequestException>()
+            Polly.Retry.AsyncRetryPolicy corePolicy = Policy
+                .Handle<CosmosException>()
                 // retry 60 times with a 1 second delay between retries
-                .WaitAndRetryAsync(120, retryAttempt => TimeSpan.FromSeconds(1));
-            var outerTimeout = Policy.TimeoutAsync(TimeSpan.FromMinutes(4));
-            var policy = outerTimeout.WrapAsync(corePolicy);
+                .WaitAndRetryAsync(60, retryAttempt => TimeSpan.FromSeconds(1));
+            Polly.Timeout.AsyncTimeoutPolicy outerTimeout = Policy.TimeoutAsync(TimeSpan.FromMinutes(4));
+            Polly.Wrap.AsyncPolicyWrap policy = outerTimeout.WrapAsync(corePolicy);
 
             last = "calling CreateDatabaseIfNotExistsAsync";
-            var db = await policy.ExecuteAsync(
+            Database db = await policy.ExecuteAsync(
                 async () => (await cosmosClient.CreateDatabaseIfNotExistsAsync("db")).Database);
 
             last = "calling CreateContainerIfNotExistsAsync";
-            var container = (await db.CreateContainerIfNotExistsAsync("todos", "/id")).Container;
+            Container container = (await db.CreateContainerIfNotExistsAsync("todos", "/id")).Container;
 
             var id = Guid.NewGuid().ToString();
             var title = "Do some work.";
