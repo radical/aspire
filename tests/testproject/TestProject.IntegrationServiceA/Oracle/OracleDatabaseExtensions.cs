@@ -30,7 +30,7 @@ public static class OracleDatabaseExtensions
                     return results.Any() ? Results.Ok("Success!") : Results.Problem("Failed");
                 } catch (Exception e)
                 {
-                    Console.WriteLine($"IntegrationServiceA: {e}");
+                    Console.WriteLine($"--- [{DateTime.Now}] IntegrationServiceA: {e}");
                     throw;
                 }
             });

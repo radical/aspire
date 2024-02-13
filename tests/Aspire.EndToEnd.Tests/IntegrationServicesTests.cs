@@ -43,6 +43,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         } catch
         {
             Console.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");
+            throw;
         }
     }
 

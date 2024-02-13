@@ -13,20 +13,31 @@ public static class CosmosExtensions
 
     private static async Task<IResult> VerifyCosmosAsync(CosmosClient cosmosClient)
     {
-        Console.WriteLine ($"---- [{DateTime.Now}] VerifyCosmosAsync");
+        Console.WriteLine ($"---- [{DateTime.Now}] IntegrationServiceA.VerifyCosmosAsync: Let's try to connect now");
         string last = "";
         try
         {
-            Polly.Retry.AsyncRetryPolicy corePolicy = Policy
+            Polly.Retry.AsyncRetryPolicy policy = Policy
                 .Handle<CosmosException>()
                 // retry 60 times with a 1 second delay between retries
                 .WaitAndRetryAsync(60, retryAttempt => TimeSpan.FromSeconds(1));
-            Polly.Timeout.AsyncTimeoutPolicy outerTimeout = Policy.TimeoutAsync(TimeSpan.FromMinutes(4));
-            Polly.Wrap.AsyncPolicyWrap policy = outerTimeout.WrapAsync(corePolicy);
+            // Polly.Timeout.AsyncTimeoutPolicy outerTimeout = Policy.TimeoutAsync(TimeSpan.FromMinutes(4));
+            // Polly.Wrap.AsyncPolicyWrap policy = outerTimeout.WrapAsync(corePolicy);
 
             last = "calling CreateDatabaseIfNotExistsAsync";
-            Database db = await policy.ExecuteAsync(
-                async () => (await cosmosClient.CreateDatabaseIfNotExistsAsync("db")).Database);
+            Database db = (await policy.ExecuteAsync(
+                async () =>
+                {
+                    try
+                    {
+                        return await cosmosClient.CreateDatabaseIfNotExistsAsync("db");
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine($"--- [{DateTime.Now}] IntegrationServiceA.VerifyCosmosAsync: {e}");
+                        throw;
+                    }
+                })).Database;
 
             last = "calling CreateContainerIfNotExistsAsync";
             Container container = (await db.CreateContainerIfNotExistsAsync("todos", "/id")).Container;
@@ -45,7 +56,7 @@ public static class CosmosExtensions
         }
         catch (Exception e)
         {
-            return Results.Problem(e.ToString() + $"****** LAST: {last}");
+            return Results.Problem($"Failed during'{last}'" + e.ToString());
         }
     }
 }
