@@ -43,11 +43,6 @@ public class AzureBicepResource(string name, string? templateFile = null, string
     public Dictionary<string, string?> SecretOutputs { get; } = [];
 
     /// <summary>
-    /// The connection string template that will written to the manifest.
-    /// </summary>
-    public string? ConnectionStringTemplate { get; set; }
-
-    /// <summary>
     /// Gets the path to the bicep file. If the template is a string or embedded resource, it will be written to a temporary file.
     /// </summary>
     /// <param name="directory">The directory where the bicep file will be written to (if it's a temporary file)</param>
@@ -82,15 +77,12 @@ public class AzureBicepResource(string name, string? templateFile = null, string
                     ? path
                     : Path.Combine(directory, $"{TemplateResourceName.ToLowerInvariant()}");
 
-                if (!File.Exists(path))
-                {
-                    // REVIEW: We should allow the user to specify the assembly where the resources reside.
-                    using var resourceStream = GetType().Assembly.GetManifestResourceStream(TemplateResourceName)
-                        ?? throw new InvalidOperationException($"Could not find resource {TemplateResourceName} in assembly {GetType().Assembly}");
+                // REVIEW: We should allow the user to specify the assembly where the resources reside.
+                using var resourceStream = GetType().Assembly.GetManifestResourceStream(TemplateResourceName)
+                    ?? throw new InvalidOperationException($"Could not find resource {TemplateResourceName} in assembly {GetType().Assembly}");
 
-                    using var fs = File.OpenWrite(path);
-                    resourceStream.CopyTo(fs);
-                }
+                using var fs = File.OpenWrite(path);
+                resourceStream.CopyTo(fs);
             }
         }
 
@@ -158,9 +150,10 @@ public class AzureBicepResource(string name, string? templateFile = null, string
         using var template = GetBicepTemplateFile(Path.GetDirectoryName(context.ManifestPath), deleteTemporaryFileOnDispose: false);
         var path = template.Path;
 
-        if (ConnectionStringTemplate is not null)
+        // REVIEW: This should be in the ManifestPublisher
+        if (this is IResourceWithConnectionString c && c.ConnectionStringExpression is string connectionString)
         {
-            context.Writer.WriteString("connectionString", ConnectionStringTemplate);
+            context.Writer.WriteString("connectionString", connectionString);
         }
 
         // REVIEW: Consider multiple files.
@@ -182,7 +175,7 @@ public class AzureBicepResource(string name, string? templateFile = null, string
                 var value = input.Value switch
                 {
                     IResourceBuilder<ParameterResource> p => p.Resource.ValueExpression,
-                    IResourceBuilder<IResourceWithConnectionString> p => p.Resource.ConnectionStringExpression,
+                    IResourceBuilder<IResourceWithConnectionString> p => p.Resource.ConnectionStringReferenceExpression,
                     object obj => obj.ToString(),
                     null => ""
                 };
