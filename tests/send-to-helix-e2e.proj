@@ -72,7 +72,7 @@
         <Timeout>$(_workItemTimeout)</Timeout>
 
         <!-- Download results file so coverage files can be extracted -->
-        <DownloadFilesFromResults>logs/Tests.cobertura.xml</DownloadFilesFromResults>
+        <DownloadFilesFromResults>logs/%(FileName).cobertura.xml</DownloadFilesFromResults>
       </HelixWorkItem>
     </ItemGroup>
   </Target>
