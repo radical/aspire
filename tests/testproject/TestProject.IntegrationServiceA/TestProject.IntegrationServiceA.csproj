@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <Using Include="Confluent.Kafka" />
+
+    <!--<PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="8.1.0" />-->
   </ItemGroup>
 
   <ItemGroup Condition="'$(TestsRunningOutOfTree)' != 'true'">
