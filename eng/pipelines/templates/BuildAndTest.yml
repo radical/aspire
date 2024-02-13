@@ -19,8 +19,9 @@ parameters:
     default: false
 
 steps:
-  - pwsh: Get-ChildItem -Path "$env:ProgramFiles" -Filter docker.exe -Recurse -ErrorAction SilentlyContinue -Force
-    displayName: find docker.exe
+  - if eq(parameters.isWindows, 'true') }}:
+    - pwsh: Get-ChildItem -Path "$env:ProgramFiles" -Filter docker.exe -Recurse -ErrorAction SilentlyContinue -Force
+      displayName: find docker.exe
 
   - script: ${{ parameters.buildScript }}
             -restore -build
