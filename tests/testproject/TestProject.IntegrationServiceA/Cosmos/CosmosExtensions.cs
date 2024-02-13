@@ -2,7 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.Azure.Cosmos;
-using Polly;
+//using Polly;
 
 public static class CosmosExtensions
 {
@@ -16,13 +16,14 @@ public static class CosmosExtensions
         Console.WriteLine ($"** VerifyCosmosAsync");
         try
         {
-            var policy = Policy
-                .Handle<HttpRequestException>()
-                // retry 60 times with a 1 second delay between retries
-                .WaitAndRetryAsync(60, retryAttempt => TimeSpan.FromSeconds(1));
+            //var policy = Policy
+                //.Handle<HttpRequestException>()
+                //// retry 60 times with a 1 second delay between retries
+                //.WaitAndRetryAsync(60, retryAttempt => TimeSpan.FromSeconds(1));
 
-            var db = await policy.ExecuteAsync(
-                async () => (await cosmosClient.CreateDatabaseIfNotExistsAsync("db")).Database);
+            var db = (await cosmosClient.CreateDatabaseIfNotExistsAsync("db")).Database;
+            //var db = await policy.ExecuteAsync(
+                //async () => (await cosmosClient.CreateDatabaseIfNotExistsAsync("db")).Database);
 
             var container = (await db.CreateContainerIfNotExistsAsync("todos", "/id")).Container;
 

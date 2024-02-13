@@ -18,7 +18,6 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     }
 
     [Theory]
-    [InlineData("cosmos")]
     [InlineData("mongodb")]
     [InlineData("mysql")]
     [InlineData("pomelo")]
@@ -27,6 +26,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [InlineData("rabbitmq")]
     [InlineData("redis")]
     [InlineData("sqlserver")]
+    [InlineData("cosmos")]
     public async Task VerifyComponentWorks(string component)
     {
         Console.WriteLine ($">>>> Starting VerifyComponentWorks for {component} --");
