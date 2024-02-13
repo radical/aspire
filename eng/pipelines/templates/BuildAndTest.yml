@@ -19,7 +19,7 @@ parameters:
     default: false
 
 steps:
-  - if eq(parameters.isWindows, 'true') }}:
+  - ${{ if eq(parameters.isWindows, 'true') }}:
     - pwsh: Get-ChildItem -Path "$env:ProgramFiles" -Filter docker.exe -Recurse -ErrorAction SilentlyContinue -Force
       displayName: find docker.exe
 
