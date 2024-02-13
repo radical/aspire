@@ -17,10 +17,12 @@ public static class CosmosExtensions
         string last = "";
         try
         {
-            var policy = Policy
+            var corePolicy = Policy
                 .Handle<HttpRequestException>()
                 // retry 60 times with a 1 second delay between retries
                 .WaitAndRetryAsync(120, retryAttempt => TimeSpan.FromSeconds(1));
+            var outerTimeout = Policy.TimeoutAsync(TimeSpan.FromMinutes(4));
+            var policy = outerTimeout.WrapAsync(corePolicy);
 
             last = "calling CreateDatabaseIfNotExistsAsync";
             var db = await policy.ExecuteAsync(

@@ -20,12 +20,19 @@ public static class OracleDatabaseExtensions
             var policy = Policy
                 .Handle<OracleException>()
                 // retry 60 times with a 1 second delay between retries
-                .WaitAndRetry(120, retryAttempt => TimeSpan.FromSeconds(1));
+                .WaitAndRetry(60, retryAttempt => TimeSpan.FromSeconds(1));
 
             return policy.Execute(() =>
             {
-                var results = context.Database.SqlQueryRaw<int>("SELECT 1 FROM DUAL");
-                return results.Any() ? Results.Ok("Success!") : Results.Problem("Failed");
+                try
+                {
+                    var results = context.Database.SqlQueryRaw<int>("SELECT 1 FROM DUAL");
+                    return results.Any() ? Results.Ok("Success!") : Results.Problem("Failed");
+                } catch (Exception e)
+                {
+                    System.Console.WriteLine($"IntegrationServiceA: {e}");
+                    throw;
+                }
             });
         }
         catch (Exception e)

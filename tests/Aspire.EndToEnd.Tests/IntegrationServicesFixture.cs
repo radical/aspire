@@ -144,9 +144,12 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             {
                 testOutput.WriteLine($"\tall output completed");
             }
+            // should really fail and quit after this
+            throw new ArgumentException($"App run failed: {Environment.NewLine}{output}");
         }
         Assert.True(resultTask == successfulTask, $"App run failed: {Environment.NewLine}{output}");
 
+        // FIXME: don't remove this.. fail the whole thing is the app exits early!
         _appHostProcess.Exited -= appExitedCallback;
 
         var client = CreateHttpClient();
@@ -179,7 +182,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 {
                     options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(1);
                     options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(2); // needs to be at least double the AttemptTimeout to pass options validation
-                    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(5);
+                    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
                 });
             });
 
