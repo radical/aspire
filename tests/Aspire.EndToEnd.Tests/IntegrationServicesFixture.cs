@@ -135,8 +135,9 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             testOutput.WriteLine($"resultTask == failedTask");
             // wait for all the output to be read
             var allOutputComplete = Task.WhenAll(stdoutComplete.Task, stderrComplete.Task);
-            var t = await Task.WhenAny(allOutputComplete, timeoutTask);
-            if (t == timeoutTask)
+            var appExitTimeout = Task.Delay(TimeSpan.FromSeconds(5));
+            var t = await Task.WhenAny(allOutputComplete, appExitTimeout);
+            if (t == appExitTimeout)
             {
                 testOutput.WriteLine($"\tand timed out waiting for the full output");
             }
