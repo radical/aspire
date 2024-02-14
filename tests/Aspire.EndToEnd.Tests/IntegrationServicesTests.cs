@@ -2,7 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Xunit;
-//using Xunit.Abstractions;
+using Xunit.Abstractions;
 
 namespace Aspire.EndToEnd.Tests;
 
@@ -42,7 +42,19 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             Console.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
         } catch
         {
-            Console.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");
+            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");
+
+            var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMinutes(1));
+            using var cmd = new ToolCommand("docker", _testOutput!);
+            var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
+                .EnsureSuccessful();
+            _testOutput.WriteLine($"output: {res.Output}");
+
+            using var cmd2 = new ToolCommand("docker", _testOutput!, label: component);
+            (await cmd2.ExecuteAsync(cts.Token, $"container logs {res.Output}"))
+                    .EnsureSuccessful();
+
             throw;
         }
     }

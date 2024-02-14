@@ -132,6 +132,7 @@ public class ToolCommand : IDisposable
         var output = new List<string>();
         CurrentProcess = CreateProcess(executable, args);
         // FIXME: lock?
+        string msgPrefix = string.IsNullOrEmpty(_label) ? string.Empty : $"[{_label}] ";
         CurrentProcess.ErrorDataReceived += (s, e) =>
         {
             if (e.Data == null)
@@ -139,7 +140,7 @@ public class ToolCommand : IDisposable
                 return;
             }
 
-            string msg = $"[{_label}] {e.Data}";
+            string msg = $"{msgPrefix}{e.Data}";
             output.Add(msg);
             _testOutput.WriteLine(msg);
             ErrorDataReceived?.Invoke(s, e);
@@ -152,7 +153,7 @@ public class ToolCommand : IDisposable
                 return;
             }
 
-            string msg = $"[{_label}] {e.Data}";
+            string msg = $"{msgPrefix}{e.Data}";
             output.Add(msg);
             _testOutput.WriteLine(msg);
             OutputDataReceived?.Invoke(s, e);
@@ -164,7 +165,7 @@ public class ToolCommand : IDisposable
             CurrentProcess.BeginOutputReadLine();
             CurrentProcess.BeginErrorReadLine();
             await exitedTask.WaitAsync(token);
-            _testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {exitedTask.Status}, hasExited: {CurrentProcess.HasExited}");
+            //_testOutput.WriteLine($"ExecuteAsyncInternal: back from completion task: {exitedTask.Status}, hasExited: {CurrentProcess.HasExited}");
             //CurrentProcess.WaitForExit();
             // FIXME: cancel token
             //if (CurrentProcess.HasExited)

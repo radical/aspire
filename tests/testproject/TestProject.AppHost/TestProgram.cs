@@ -6,18 +6,15 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 //using Aspire.Hosting.Dcp;
 using Aspire.Hosting.Lifecycle;
-using Microsoft.Extensions.DependencyInjection;
-//using Microsoft.Extensions.DependencyInjection;
-//using Microsoft.Extensions.DependencyInjection;
 
 public class TestProgram
 {
     private TestProgram(string[] args, Assembly assembly, bool includeIntegrationServices, bool includeNodeApp, bool disableDashboard)
     {
-        //if (args.Contains("--disable-dashboard"))
-        //{
-        //    disableDashboard = true;
-        //}
+        if (args.Contains("--disable-dashboard"))
+        {
+            disableDashboard = true;
+        }
 
         AppBuilder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = args, DisableDashboard = disableDashboard, AssemblyName = assembly.FullName });
 
@@ -80,9 +77,6 @@ public class TestProgram
         }
 
         AppBuilder.Services.AddLifecycleHook<EndPointWriterHook>();
-        AppBuilder.Services.AddSingleton<DashboardClientHostedService>();
-        AppBuilder.Services.AddHostedService<DashboardClientHostedService>();
-        //AppBuilder.Services.Configure<IDashboardEndpointProvider>(o => o.GetResourceServiceUriAsync(CancellationToken.None));
     }
 
     public static TestProgram Create<T>(string[]? args = null, bool includeIntegrationServices = false, bool includeNodeApp = false, bool disableDashboard = true) =>

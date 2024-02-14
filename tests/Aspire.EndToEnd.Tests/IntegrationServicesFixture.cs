@@ -27,6 +27,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
     private readonly IMessageSink _diagnosticMessageSink;
+    private TestOutputWrapper? _testOutput;
 
     public IntegrationServicesFixture(IMessageSink messageSink)
     {
@@ -37,7 +38,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
-        var testOutput = new TestOutputWrapper(null, _diagnosticMessageSink);
+        _testOutput = new TestOutputWrapper(null, _diagnosticMessageSink);
         var output = new StringBuilder();
         var appExited = new TaskCompletionSource();
         var projectsParsed = new TaskCompletionSource();
@@ -56,10 +57,10 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         };
         foreach (var item in BuildEnvironment.EnvVars)
         {
-            testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
+            _testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
             _appHostProcess.StartInfo.Environment[item.Key] = item.Value;
         }
-        testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} run -v n -- --disable-dashboard in {_appHostProcess.StartInfo.WorkingDirectory}");
+        _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} run -v n -- --disable-dashboard in {_appHostProcess.StartInfo.WorkingDirectory}");
         _appHostProcess.OutputDataReceived += (sender, e) =>
         {
             if (e.Data is null)
@@ -69,7 +70,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
-            testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
+            _testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
 
             if (e.Data?.StartsWith("$ENDPOINTS: ") == true)
             {
@@ -91,7 +92,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
 
             output.AppendLine(e.Data);
-            testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
+            _testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
         };
 
         //_ = appExited.Task.ContinueWith(cmdTask =>
@@ -131,18 +132,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var resultTask = await Task.WhenAny(successfulTask, failedTask, timeoutTask);
         if (resultTask == failedTask)
         {
-            testOutput.WriteLine($"resultTask == failedTask");
+            _testOutput.WriteLine($"resultTask == failedTask");
             // wait for all the output to be read
             var allOutputComplete = Task.WhenAll(stdoutComplete.Task, stderrComplete.Task);
             var appExitTimeout = Task.Delay(TimeSpan.FromSeconds(5));
             var t = await Task.WhenAny(allOutputComplete, appExitTimeout);
             if (t == appExitTimeout)
             {
-                testOutput.WriteLine($"\tand timed out waiting for the full output");
+                _testOutput.WriteLine($"\tand timed out waiting for the full output");
             }
             else
             {
-                testOutput.WriteLine($"\tall output completed");
+                _testOutput.WriteLine($"\tall output completed");
             }
 
             string outputMessage = output.ToString();
@@ -189,7 +190,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 {
                     options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(1);
                     options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(2); // needs to be at least double the AttemptTimeout to pass options validation
-                    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
+                    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(2);
                 });
             });
 
@@ -203,6 +204,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         if (_appHostProcess is not null)
         {
+
             if (!_appHostProcess.HasExited)
             {
                 _appHostProcess.StandardInput.WriteLine("Stop");
