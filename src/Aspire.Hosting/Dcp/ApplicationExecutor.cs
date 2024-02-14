@@ -128,6 +128,7 @@ internal sealed class ApplicationExecutor(ILogger<ApplicationExecutor> logger,
 
         // Get resource endpoint URL.
         var grpcEndpointUrl = await _dashboardEndpointProvider.GetResourceServiceUriAsync(cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"resource uri: {grpcEndpointUrl}");
 
         dashboardResource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
         {

@@ -54,7 +54,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Aspire.Hosting.Tests" />
-    <InternalsVisibleTo Include="TestProject.AppHost" />
+    <!--<InternalsVisibleTo Include="TestProject.AppHost" />-->
 
   </ItemGroup>
 

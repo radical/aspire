@@ -6,9 +6,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 //using Aspire.Hosting.Dcp;
 using Aspire.Hosting.Lifecycle;
-using Microsoft.Extensions.DependencyInjection;
-//using Microsoft.Extensions.DependencyInjection;
-//using Microsoft.Extensions.DependencyInjection;
 
 public class TestProgram
 {
@@ -80,8 +77,8 @@ public class TestProgram
         }
 
         AppBuilder.Services.AddLifecycleHook<EndPointWriterHook>();
-        AppBuilder.Services.AddSingleton<DashboardClientHostedService>();
-        AppBuilder.Services.AddHostedService<DashboardClientHostedService>();
+        //AppBuilder.Services.AddSingleton<DashboardClientHostedService>();
+        //AppBuilder.Services.AddHostedService<DashboardClientHostedService>();
         //AppBuilder.Services.Configure<IDashboardEndpointProvider>(o => o.GetResourceServiceUriAsync(CancellationToken.None));
     }
 
@@ -149,24 +146,6 @@ public class TestProgram
 
             // write the whole json in a single line so it's easier to parse by the external process
             await Console.Out.WriteLineAsync("$ENDPOINTS: " + JsonSerializer.Serialize(root, JsonSerializerOptions.Default));
-
-            // Find the DashboardServiceHost endpoint
-            var dashboardEndpoint = appModel.Resources
-                .OfType<ProjectResource>()
-                .FirstOrDefault(resource => resource.Name == "DashboardServiceHost")
-                ?.Annotations
-                .OfType<AllocatedEndpointAnnotation>()
-                .FirstOrDefault();
-
-            if (dashboardEndpoint != null)
-            {
-                // Access the endpoint information
-                var endpointName = dashboardEndpoint.Name;
-                var endpointUri = dashboardEndpoint.UriString;
-
-                // Do something with the endpoint information
-                Console.WriteLine($"DashboardServiceHost endpoint: {endpointName} - {endpointUri}");
-            }
         }
     }
 }

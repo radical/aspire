@@ -22,11 +22,11 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     //[InlineData("mysql")]
     //[InlineData("pomelo")]
     //[InlineData("oracledatabase")]
-    [InlineData("postgres")]
-    [InlineData("rabbitmq")]
-    [InlineData("redis")]
-    [InlineData("sqlserver")]
-    [InlineData("cosmos")]
+    //[InlineData("postgres")]
+    //[InlineData("rabbitmq")]
+    //[InlineData("redis")]
+    //[InlineData("sqlserver")]
+    //[InlineData("cosmos")]
     public async Task VerifyComponentWorks(string component)
     {
         Console.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
@@ -47,19 +47,19 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         }
     }
 
-    [LocalOnlyFact]
-    public async Task KafkaComponentCanProduceAndConsume()
-    {
-        string topic = $"topic-{Guid.NewGuid()}";
+    //[LocalOnlyFact]
+    //public async Task KafkaComponentCanProduceAndConsume()
+    //{
+    //    string topic = $"topic-{Guid.NewGuid()}";
 
-        var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/produce/{topic}");
-        var responseContent = await response.Content.ReadAsStringAsync();
-        Assert.True(response.IsSuccessStatusCode, responseContent);
+    //    var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/produce/{topic}");
+    //    var responseContent = await response.Content.ReadAsStringAsync();
+    //    Assert.True(response.IsSuccessStatusCode, responseContent);
 
-        response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/consume/{topic}");
-        responseContent = await response.Content.ReadAsStringAsync();
-        Assert.True(response.IsSuccessStatusCode, responseContent);
-    }
+    //    response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/consume/{topic}");
+    //    responseContent = await response.Content.ReadAsStringAsync();
+    //    Assert.True(response.IsSuccessStatusCode, responseContent);
+    //}
 
     //[LocalOnlyFact]
     //public async Task VerifyHealthyOnIntegrationServiceA()

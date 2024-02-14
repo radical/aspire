@@ -2,9 +2,16 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using Aspire.V1;
+using Grpc.Core;
+using Grpc.Net.Client;
+using Grpc.Net.Client.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -27,10 +34,23 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
     private readonly IMessageSink _diagnosticMessageSink;
+    private GrpcChannel? _channel;
+    private readonly ILoggerFactory _loggerFactory;
+    private DashboardService.DashboardServiceClient? _client;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly Regex _resourceUriRegex = new("^resource uri: (?<resourceUri>.*)");
 
     public IntegrationServicesFixture(IMessageSink messageSink)
     {
         _diagnosticMessageSink = messageSink;
+        _loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddSimpleConsole(options =>
+            {
+                options.SingleLine = true;
+                options.TimestampFormat = "[hh:mm:ss] ";
+            });
+        });
     }
 
     public async Task InitializeAsync()
@@ -42,6 +62,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var appExited = new TaskCompletionSource();
         var projectsParsed = new TaskCompletionSource();
         var appRunning = new TaskCompletionSource();
+        var resourceUriReceived = new TaskCompletionSource<string>();
         var stdoutComplete = new TaskCompletionSource();
         var stderrComplete = new TaskCompletionSource();
         _appHostProcess = new Process();
@@ -80,6 +101,12 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             if (e.Data?.Contains("Distributed application started") == true)
             {
                 appRunning.SetResult();
+            }
+
+            if (e.Data is not null && _resourceUriRegex.Match(e.Data) is Match match && match.Success)
+            {
+                testOutput.WriteLine($"ResourceUri: {match.Groups["resourceUri"].Value}");
+                resourceUriReceived.SetResult(match.Groups["resourceUri"].Value);
             }
         };
         _appHostProcess.ErrorDataReceived += (sender, e) =>
@@ -124,7 +151,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _appHostProcess.BeginOutputReadLine();
         _appHostProcess.BeginErrorReadLine();
 
-        var successfulTask = Task.WhenAll(appRunning.Task, projectsParsed.Task);
+        var successfulTask = Task.WhenAll(appRunning.Task, projectsParsed.Task, resourceUriReceived.Task);
         var failedTask = appExited.Task;
         var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5));
 
@@ -164,6 +191,23 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         {
             project.Client = client;
         }
+
+        _ = Task.Run(() => ExecuteAsync(resourceUriReceived.Task.Result, _cts.Token))
+                .ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        testOutput.WriteLine($"ExecuteAsync faulted: {t.Exception}");
+                    }
+                    else if (t.IsCanceled)
+                    {
+                        testOutput.WriteLine($"ExecuteAsync canceled");
+                    }
+                    else
+                    {
+                        testOutput.WriteLine($"ExecuteAsync completed");
+                    }
+                }, TaskScheduler.Default);
     }
 
     private static HttpClient CreateHttpClient()
@@ -194,6 +238,84 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             });
 
         return services.BuildServiceProvider().GetRequiredService<IHttpClientFactory>().CreateClient();
+    }
+
+    private async Task ExecuteAsync(string uri, CancellationToken cancellationToken)
+    {
+        Console.WriteLine($"-- DashboardService startasync with {uri}");
+        //var address = new Uri(await _dashboardEndpointProvider.GetResourceServiceUriAsync(cancellationToken));
+        var address = new Uri(uri);// """configuration.GetUri(ResourceServiceUrlVariableName);
+
+        _channel = CreateChannel(address);
+        //_client = new DashboardServiceForTests.DashboardServiceForTestsClient(_channel);
+        _client = new DashboardService.DashboardServiceClient(_channel);
+
+        GrpcChannel CreateChannel(Uri address)
+        {
+            var httpHandler = new SocketsHttpHandler
+            {
+                EnableMultipleHttp2Connections = true,
+                KeepAlivePingDelay = TimeSpan.FromSeconds(20),
+                KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+                KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests
+            };
+
+            // https://learn.microsoft.com/aspnet/core/grpc/retries
+
+            var methodConfig = new MethodConfig
+            {
+                Names = { MethodName.Default },
+                RetryPolicy = new RetryPolicy
+                {
+                    MaxAttempts = 5,
+                    InitialBackoff = TimeSpan.FromSeconds(1),
+                    MaxBackoff = TimeSpan.FromSeconds(5),
+                    BackoffMultiplier = 1.5,
+                    RetryableStatusCodes = { StatusCode.Unavailable }
+                }
+            };
+
+            // https://learn.microsoft.com/aspnet/core/grpc/diagnostics#grpc-client-logging
+
+            return GrpcChannel.ForAddress(
+                address,
+                channelOptions: new()
+                {
+                    HttpHandler = httpHandler,
+                    ServiceConfig = new() { MethodConfigs = { methodConfig } },
+                    LoggerFactory = _loggerFactory,
+                    ThrowOperationCanceledOnCancellation = true
+                });
+        }
+        //await base.StartAsync(cancellationToken);
+
+        await foreach (var x in SubscribeConsoleLogs("integrationservicea", cancellationToken)!)
+        {
+            Console.WriteLine($"-- {x}");
+        }
+    }
+
+    async IAsyncEnumerable<IReadOnlyList<(string Content, bool IsErrorMessage)>>? SubscribeConsoleLogs(string resourceName, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        //EnsureInitialized();
+
+        using var combinedTokens = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken);
+
+        var call = _client!.WatchResourceConsoleLogs(
+            new WatchResourceConsoleLogsRequest() { ResourceName = resourceName },
+            cancellationToken: combinedTokens.Token);
+
+        await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken: combinedTokens.Token))
+        {
+            var logLines = new (string Content, bool IsErrorMessage)[response.LogLines.Count];
+
+            for (var i = 0; i < logLines.Length; i++)
+            {
+                logLines[i] = (response.LogLines[i].Text, response.LogLines[i].IsStdErr);
+            }
+
+            yield return logLines;
+        }
     }
 
     private static Dictionary<string, ProjectInfo> ParseProjectInfo(string json) =>

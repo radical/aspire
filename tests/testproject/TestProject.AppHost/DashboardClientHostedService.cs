@@ -3,36 +3,41 @@ using Grpc.Net.Client;
 using Grpc.Net.Client.Configuration;
 using Grpc.Core;
 //using Grpc.Net.Client;
-using Microsoft.Extensions.Logging;
 //using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
-using Aspire.Hosting.Dcp;
-using Aspire.Tests.Client;
+//using Aspire.Hosting.Dcp;
+//using Aspire.Tests.Client;
+using Aspire.V1;
+using System.Runtime.CompilerServices;
 
 internal sealed class DashboardClientHostedService : BackgroundService
 {
     //private const string ResourceServiceUrlVariableName = "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL";
     private GrpcChannel? _channel;
-    private DashboardServiceForTests.DashboardServiceForTestsClient? _client;
+    //private DashboardServiceForTests.DashboardServiceForTestsClient? _client;
+    private DashboardService.DashboardServiceClient? _client;
+            
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DashboardClientHostedService> _logger;
-    private readonly IDashboardEndpointProvider _dashboardEndpointProvider;
+    //private readonly IDashboardEndpointProvider _dashboardEndpointProvider;
+    private readonly CancellationTokenSource _cts = new();
 
-    public DashboardClientHostedService(ILoggerFactory loggerFactory, IDashboardEndpointProvider dashboardEndpointProvider)
+    public DashboardClientHostedService(ILoggerFactory loggerFactory)
 	{
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<DashboardClientHostedService>();
-        _dashboardEndpointProvider = dashboardEndpointProvider;
-
+        //_dashboardEndpointProvider = dashboardEndpointProvider;
 	}
 
-    public override async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken cancellationToken)
     {
         Console.WriteLine($"-- DashboardService startasync");
-        var address = new Uri(await _dashboardEndpointProvider.GetResourceServiceUriAsync(cancellationToken));
-        //var address = new Uri("");// """configuration.GetUri(ResourceServiceUrlVariableName);
+        //var address = new Uri(await _dashboardEndpointProvider.GetResourceServiceUriAsync(cancellationToken));
+        var address = new Uri("");// """configuration.GetUri(ResourceServiceUrlVariableName);
+
         _channel = CreateChannel(address);
-        _client = new DashboardServiceForTests.DashboardServiceForTestsClient(_channel);
+        //_client = new DashboardServiceForTests.DashboardServiceForTestsClient(_channel);
+        _client = new DashboardService.DashboardServiceClient(_channel);
 
         GrpcChannel CreateChannel(Uri address)
         {
@@ -71,14 +76,217 @@ internal sealed class DashboardClientHostedService : BackgroundService
                     ThrowOperationCanceledOnCancellation = true
                 });
         }
-       await base.StartAsync(cancellationToken);
+        //await base.StartAsync(cancellationToken);
+
+        await foreach (var x in SubscribeConsoleLogs("servicea", cancellationToken)!)
+        {
+            Console.WriteLine($"-- {x}");
+        }
+    }
+
+    async IAsyncEnumerable<IReadOnlyList<(string Content, bool IsErrorMessage)>>? SubscribeConsoleLogs(string resourceName, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        //EnsureInitialized();
+
+        using var combinedTokens = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken);
+
+        var call = _client!.WatchResourceConsoleLogs(
+            new WatchResourceConsoleLogsRequest() { ResourceName = resourceName },
+            cancellationToken: combinedTokens.Token);
+
+        await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken: combinedTokens.Token))
+        {
+            var logLines = new (string Content, bool IsErrorMessage)[response.LogLines.Count];
+
+            for (var i = 0; i < logLines.Length; i++)
+            {
+                logLines[i] = (response.LogLines[i].Text, response.LogLines[i].IsStdErr);
+            }
+
+            yield return logLines;
+        }
     }
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
         Console.WriteLine($"-- DashboardService stopasync");
         return base.StopAsync(cancellationToken);
-    }   
+    }
+
+#if false
+    private const int StateDisabled = -1;
+    private const int StateNone = 0;
+    private const int StateInitialized = 1;
+    private const int StateDisposed = 2;
+    private int _state = StateNone;
+    private Task? _connection;
+    private readonly CancellationTokenSource _cts = new();
+    private void EnsureInitialized()
+    {
+        var priorState = Interlocked.CompareExchange(ref _state, value: StateInitialized, comparand: StateNone);
+
+        //if (priorState is StateDisabled)
+        //{
+        //    throw new InvalidOperationException($"{nameof(DashboardClient)} is disabled. Check the {nameof(IsEnabled)} property before calling this.");
+        //}
+
+        //if (priorState is not StateNone)
+        //{
+        //    ObjectDisposedException.ThrowIf(priorState is StateDisposed, this);
+        //    return;
+        //}
+
+        _connection = Task.Run(() => ConnectAndWatchResourcesAsync(_cts.Token), _cts.Token);
+
+        return;
+
+        async Task ConnectAndWatchResourcesAsync(CancellationToken cancellationToken)
+        {
+            //await ConnectAsync().ConfigureAwait(false);
+
+            await WatchResourcesWithRecoveryAsync().ConfigureAwait(false);
+
+            ////async Task ConnectAsync()
+            //{
+            //    try
+            //    {
+            //        var response = await _client!.GetApplicationInformationAsync(new(), cancellationToken: cancellationToken);
+
+            //        _applicationName = response.ApplicationName;
+
+            //        _whenConnected.TrySetResult();
+            //    }
+            //    catch (Exception ex)
+            //    {
+            //        _whenConnected.TrySetException(ex);
+            //    }
+            //}
+
+            async Task WatchResourcesWithRecoveryAsync()
+            {
+                // Track the number of errors we've seen since the last successfully received message.
+                // As this number climbs, we extend the amount of time between reconnection attempts, in
+                // order to avoid flooding the server with requests. This value is reset to zero whenever
+                // a message is successfully received.
+                var errorCount = 0;
+
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (errorCount > 0)
+                    {
+                        // The most recent attempt failed. There may be more than one failure.
+                        // We wait for a period of time determined by the number of errors,
+                        // where the time grows exponentially, until a threshold.
+                        var delay = ExponentialBackOff(errorCount, maxSeconds: 15);
+
+                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    try
+                    {
+                        await WatchResourcesAsync().ConfigureAwait(false);
+                    }
+                    catch (RpcException ex)
+                    {
+                        errorCount++;
+
+                        _logger.LogError(ex, "Error #{ErrorCount} watching resources.", errorCount);
+                    }
+                }
+
+                static TimeSpan ExponentialBackOff(int errorCount, double maxSeconds)
+                {
+                    return TimeSpan.FromSeconds(Math.Min(Math.Pow(2, errorCount - 1), maxSeconds));
+                }
+
+                async Task WatchResourcesAsync()
+                {
+                    var call = _client!.WatchResources(new WatchResourcesRequest { IsReconnect = errorCount != 0 }, cancellationToken: cancellationToken);
+
+                    await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken: cancellationToken))
+                    {
+                        List<ResourceViewModelChange>? changes = null;
+
+                        lock (_lock)
+                        {
+                            // We received a message, which means we are connected. Clear the error count.
+                            errorCount = 0;
+
+                            if (response.KindCase == WatchResourcesUpdate.KindOneofCase.InitialData)
+                            {
+                                // Populate our map using the initial data.
+                                _resourceByName.Clear();
+
+                                // TODO send a "clear" event via outgoing channels, in case consumers have extra items to be removed
+
+                                foreach (var resource in response.InitialData.Resources)
+                                {
+                                    // Add to map.
+                                    var viewModel = resource.ToViewModel();
+                                    _resourceByName[resource.Name] = viewModel;
+
+                                    // Send this update to any subscribers too.
+                                    changes ??= [];
+                                    changes.Add(new(ResourceViewModelChangeType.Upsert, viewModel));
+                                }
+                            }
+                            else if (response.KindCase == WatchResourcesUpdate.KindOneofCase.Changes)
+                            {
+                                // Apply changes to the model.
+                                foreach (var change in response.Changes.Value)
+                                {
+                                    changes ??= [];
+
+                                    if (change.KindCase == WatchResourcesChange.KindOneofCase.Upsert)
+                                    {
+                                        // Upsert (i.e. add or replace)
+                                        var viewModel = change.Upsert.ToViewModel();
+                                        _resourceByName[change.Upsert.Name] = viewModel;
+                                        changes.Add(new(ResourceViewModelChangeType.Upsert, viewModel));
+                                    }
+                                    else if (change.KindCase == WatchResourcesChange.KindOneofCase.Delete)
+                                    {
+                                        // Remove
+                                        if (_resourceByName.Remove(change.Delete.ResourceName, out var removed))
+                                        {
+                                            changes.Add(new(ResourceViewModelChangeType.Delete, removed));
+                                        }
+                                        else
+                                        {
+                                            Debug.Fail("Attempt to remove an unknown resource view model.");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        throw new FormatException($"Unexpected {nameof(WatchResourcesChange)} kind: {change.KindCase}");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                throw new FormatException($"Unexpected {nameof(WatchResourcesUpdate)} kind: {response.KindCase}");
+                            }
+                        }
+
+                        if (changes is not null)
+                        {
+                            foreach (var channel in _outgoingChannels)
+                            {
+                                // TODO send batches over the channel instead of individual items? They are batched downstream however
+                                foreach (var change in changes)
+                                {
+                                    await channel.Writer.WriteAsync(change, cancellationToken).ConfigureAwait(false);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
 
     //protected override Task ExecuteAsync(CancellationToken stoppingToken)
     //{
