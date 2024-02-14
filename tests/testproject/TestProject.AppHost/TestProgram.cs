@@ -4,17 +4,20 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+//using Aspire.Hosting.Dcp;
 using Aspire.Hosting.Lifecycle;
-using Aspire.Dashboard.Model;
+using Microsoft.Extensions.DependencyInjection;
+//using Microsoft.Extensions.DependencyInjection;
+//using Microsoft.Extensions.DependencyInjection;
 
 public class TestProgram
 {
     private TestProgram(string[] args, Assembly assembly, bool includeIntegrationServices, bool includeNodeApp, bool disableDashboard)
     {
-        if (args.Contains("--disable-dashboard"))
-        {
-            disableDashboard = true;
-        }
+        //if (args.Contains("--disable-dashboard"))
+        //{
+        //    disableDashboard = true;
+        //}
 
         AppBuilder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = args, DisableDashboard = disableDashboard, AssemblyName = assembly.FullName });
 
@@ -77,6 +80,9 @@ public class TestProgram
         }
 
         AppBuilder.Services.AddLifecycleHook<EndPointWriterHook>();
+        AppBuilder.Services.AddSingleton<DashboardClientHostedService>();
+        AppBuilder.Services.AddHostedService<DashboardClientHostedService>();
+        //AppBuilder.Services.Configure<IDashboardEndpointProvider>(o => o.GetResourceServiceUriAsync(CancellationToken.None));
     }
 
     public static TestProgram Create<T>(string[]? args = null, bool includeIntegrationServices = false, bool includeNodeApp = false, bool disableDashboard = true) =>
@@ -121,7 +127,7 @@ public class TestProgram
     /// </summary>
     private sealed class EndPointWriterHook : IDistributedApplicationLifecycleHook
     {
-        public async Task AfterEndpointsAllocatedAsync(DistributedApplicationModel appModel, CancellationToken cancellationToken)
+        public async Task AfterEndpointsAllocatedAsync(DistributedApplicationModel appModel,  CancellationToken cancellationToken)
         {
             var root = new JsonObject();
             foreach (var project in appModel.Resources.OfType<ProjectResource>())
@@ -143,6 +149,24 @@ public class TestProgram
 
             // write the whole json in a single line so it's easier to parse by the external process
             await Console.Out.WriteLineAsync("$ENDPOINTS: " + JsonSerializer.Serialize(root, JsonSerializerOptions.Default));
+
+            // Find the DashboardServiceHost endpoint
+            var dashboardEndpoint = appModel.Resources
+                .OfType<ProjectResource>()
+                .FirstOrDefault(resource => resource.Name == "DashboardServiceHost")
+                ?.Annotations
+                .OfType<AllocatedEndpointAnnotation>()
+                .FirstOrDefault();
+
+            if (dashboardEndpoint != null)
+            {
+                // Access the endpoint information
+                var endpointName = dashboardEndpoint.Name;
+                var endpointUri = dashboardEndpoint.UriString;
+
+                // Do something with the endpoint information
+                Console.WriteLine($"DashboardServiceHost endpoint: {endpointName} - {endpointUri}");
+            }
         }
     }
 }

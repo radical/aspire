@@ -159,6 +159,7 @@ internal sealed class DashboardServiceHost : IHostedService
         {
             _logger.LogWarning("Unexpectedly long wait for resource service URI ({Elapsed}).", elapsed);
         }
+        Console.WriteLine($"resource uri: {uri}");
 
         return uri;
     }

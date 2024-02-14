@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-package aspire.v1;
+package aspire.tests.client;
 
 //import "google/protobuf/struct.proto";
 //import "google/protobuf/timestamp.proto";
@@ -48,6 +48,6 @@ message WatchResourceConsoleLogsUpdate {
 
 ////////////////////////////////////////////
 
-service DashboardService {
+service DashboardServiceForTests {
     rpc WatchResourceConsoleLogs(WatchResourceConsoleLogsRequest) returns (stream WatchResourceConsoleLogsUpdate);
 }

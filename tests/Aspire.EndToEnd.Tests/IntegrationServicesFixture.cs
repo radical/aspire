@@ -144,8 +144,15 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             {
                 testOutput.WriteLine($"\tall output completed");
             }
+
+            string outputMessage = output.ToString();
+            string exceptionMessage = $"App run failed: {Environment.NewLine}{outputMessage}";
+            if (outputMessage.Contains("docker was found but appears to be unhealthy", StringComparison.OrdinalIgnoreCase))
+            {
+                exceptionMessage = "Docker was found but appears to be unhealthy. " + exceptionMessage;
+            }
             // should really fail and quit after this
-            throw new ArgumentException($"App run failed: {Environment.NewLine}{output}");
+            throw new ArgumentException(exceptionMessage);
         }
         Assert.True(resultTask == successfulTask, $"App run failed: {Environment.NewLine}{output}");
 

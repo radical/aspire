@@ -24,7 +24,6 @@
     <ProjectReference Include="..\TestProject.ServiceC\TestProject.ServiceC.csproj" AspireProjectMetadataTypeName="ServiceC" />
     <ProjectReference Include="..\TestProject.WorkerA\TestProject.WorkerA.csproj" AspireProjectMetadataTypeName="WorkerA" />
 
-
     <PackageReference Include="Grpc.AspNetCore" />
 
     <!--<Compile Include="/workspaces/aspire/src\Aspire.Dashboard\Model\**\*.cs" />-->
