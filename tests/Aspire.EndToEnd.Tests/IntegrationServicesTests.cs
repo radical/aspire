@@ -45,7 +45,12 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");
 
             var cts = new CancellationTokenSource();
-            cts.CancelAfter(TimeSpan.FromMinutes(1));
+            //cts.CancelAfter(TimeSpan.FromMinutes(1));
+
+            using var cmd3 = new ToolCommand("docker", _testOutput!, "list-all");
+            (await cmd3.ExecuteAsync(cts.Token, $"container list --all"))
+                .EnsureSuccessful();
+
             using var cmd = new ToolCommand("docker", _testOutput!);
             var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
                 .EnsureSuccessful();
@@ -54,10 +59,6 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             if (string.IsNullOrEmpty(res.Output))
             {
                 _testOutput.WriteLine($"No container found for {component}");
-                using var cmd3 = new ToolCommand("docker", _testOutput!, "list-all");
-                (await cmd3.ExecuteAsync(cts.Token, $"container list --all"))
-                    .EnsureSuccessful();
-
                 using var cmd4 = new ToolCommand("docker", _testOutput!, "list-all");
                 (await cmd4.ExecuteAsync(cts.Token, $"image ls"))
                     .EnsureSuccessful();
