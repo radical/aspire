@@ -41,7 +41,7 @@ internal static class ProcessExtensions
 
             subject.Exited += (s, a) =>
             {
-                Console.WriteLine ($"StartAndWaitForExitAsync: got Exited event");
+                //Console.WriteLine ($"StartAndWaitForExitAsync: got Exited event");
                 taskCompletionSource.SetResult(new object());
             };
 
@@ -49,7 +49,7 @@ internal static class ProcessExtensions
         }
         catch (Exception ex)
         {
-            Console.WriteLine ($"-- StartAndWaitForExitAsync threw.. setting exception on the tcs");
+            //Console.WriteLine ($"-- StartAndWaitForExitAsync threw.. setting exception on the tcs");
             taskCompletionSource.SetException(ex);
         }
 

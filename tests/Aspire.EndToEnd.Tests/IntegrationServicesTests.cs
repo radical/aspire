@@ -21,9 +21,9 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
 
     [Theory]
     [InlineData("mongodb")]
-    //[InlineData("mysql")]
-    //[InlineData("pomelo")]
-    //[InlineData("oracledatabase")]
+    [InlineData("mysql")]
+    [InlineData("pomelo")]
+    [InlineData("oracledatabase")]
     [InlineData("postgres")]
     [InlineData("rabbitmq")]
     [InlineData("redis")]

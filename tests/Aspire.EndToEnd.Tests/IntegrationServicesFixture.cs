@@ -204,6 +204,13 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         if (_appHostProcess is not null)
         {
+            var cts = new CancellationTokenSource();
+            //cts.CancelAfter(TimeSpan.FromMinutes(1));
+
+            using var cmd = new ToolCommand("docker", _testOutput!, "list-all");
+            (await cmd.ExecuteAsync(cts.Token, $"container list --all"))
+                .EnsureSuccessful();
+
             if (!_appHostProcess.HasExited)
             {
                 _appHostProcess.StandardInput.WriteLine("Stop");
