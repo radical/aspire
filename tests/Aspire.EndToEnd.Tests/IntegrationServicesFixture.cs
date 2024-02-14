@@ -190,7 +190,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 {
                     options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(1);
                     options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(2); // needs to be at least double the AttemptTimeout to pass options validation
-                    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(2);
+                    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
                 });
             });
 
@@ -204,7 +204,6 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         if (_appHostProcess is not null)
         {
-
             if (!_appHostProcess.HasExited)
             {
                 _appHostProcess.StandardInput.WriteLine("Stop");

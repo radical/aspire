@@ -51,9 +51,23 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
                 .EnsureSuccessful();
             _testOutput.WriteLine($"output: {res.Output}");
 
-            using var cmd2 = new ToolCommand("docker", _testOutput!, label: component);
-            (await cmd2.ExecuteAsync(cts.Token, $"container logs {res.Output}"))
+            if (string.IsNullOrEmpty(res.Output))
+            {
+                _testOutput.WriteLine($"No container found for {component}");
+                using var cmd3 = new ToolCommand("docker", _testOutput!, "list-all");
+                (await cmd3.ExecuteAsync(cts.Token, $"container list --all"))
                     .EnsureSuccessful();
+
+                using var cmd4 = new ToolCommand("docker", _testOutput!, "list-all");
+                (await cmd4.ExecuteAsync(cts.Token, $"image ls"))
+                    .EnsureSuccessful();
+            }
+            else
+            {
+                using var cmd2 = new ToolCommand("docker", _testOutput!, label: component);
+                (await cmd2.ExecuteAsync(cts.Token, $"container logs {res.Output}"))
+                        .EnsureSuccessful();
+            }
 
             throw;
         }
