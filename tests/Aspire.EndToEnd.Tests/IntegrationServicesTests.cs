@@ -10,10 +10,12 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
 {
     private readonly IntegrationServicesFixture _integrationServicesFixture;
     //private readonly IMessageSink _diagnosticMessageSink;
+    private readonly TestOutputWrapper _testOutput;
 
-    public IntegrationServicesTests(IntegrationServicesFixture integrationServicesFixture)
+    public IntegrationServicesTests(ITestOutputHelper testOutput, IntegrationServicesFixture integrationServicesFixture)
     {
         _integrationServicesFixture = integrationServicesFixture;
+        _testOutput = new TestOutputWrapper(testOutput, null);
         //_diagnosticMessageSink = messageSink;
     }
 
@@ -30,8 +32,6 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     public async Task VerifyComponentWorks(string component)
     {
         Console.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
-        //await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
-        //Console.WriteLine ($".. integrationservicea is healthy.. let's verify now");
 
         try
         {
