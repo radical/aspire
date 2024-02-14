@@ -23,6 +23,15 @@
     <ProjectReference Include="..\TestProject.ServiceB\TestProject.ServiceB.csproj" AspireProjectMetadataTypeName="ServiceB" />
     <ProjectReference Include="..\TestProject.ServiceC\TestProject.ServiceC.csproj" AspireProjectMetadataTypeName="ServiceC" />
     <ProjectReference Include="..\TestProject.WorkerA\TestProject.WorkerA.csproj" AspireProjectMetadataTypeName="WorkerA" />
+
+
+    <PackageReference Include="Grpc.AspNetCore" />
+
+    <!--<Compile Include="/workspaces/aspire/src\Aspire.Dashboard\Model\**\*.cs" />-->
+
+    <Protobuf Include="resource_service.proto" GrpcServices="Client" Access="Internal">
+      <Link>Protos\resource_service.proto</Link>
+    </Protobuf>
   </ItemGroup>
 
 </Project>

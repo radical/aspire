@@ -59,6 +59,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
             _appHostProcess.StartInfo.Environment[item.Key] = item.Value;
         }
+        testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} run -v n -- --disable-dashboard in {_appHostProcess.StartInfo.WorkingDirectory}");
         _appHostProcess.OutputDataReceived += (sender, e) =>
         {
             if (e.Data is null)
@@ -116,8 +117,6 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
-
-        testOutput.WriteLine($"Starting the process");
 
         _appHostProcess.EnableRaisingEvents = true;
 
