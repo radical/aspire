@@ -15,13 +15,7 @@
     <PackageVersion Include="Aspire.StackExchange.Redis" Version="$(PackageVersion)" />
     <PackageVersion Include="Aspire.Hosting.Azure" Version="$(PackageVersion)" />
     <PackageVersion Include="Aspire.Hosting" Version="$(PackageVersion)" />
-    <PackageVersion Include="Aspire.Dashboard" Version="$(PackageVersion)" />
-    <PackageVersion Include="Aspire.Dashboard.Sdk.linux-x64" Version="$(PackageVersion)" />
 
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftExtensionsHostingAbstractionsPackageVersion)" />
-
-    <PackageVersion Include="Grpc.AspNetCore" Version="2.60.0" />
-    <PackageVersion Include="Grpc.Net.ClientFactory" Version="2.60.0" />
-    <PackageVersion Include="Grpc.Tools" Version="2.61.0" />
   </ItemGroup>
 </Project>
