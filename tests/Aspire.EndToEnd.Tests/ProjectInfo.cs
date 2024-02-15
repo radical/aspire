@@ -20,7 +20,7 @@ public sealed class ProjectInfo
         var allocatedEndpoint = Endpoints.Single(e => e.Name == bindingName);
         var url = $"{allocatedEndpoint.Uri}{path}";
 
-        // Console.WriteLine ($"[{DateTime.Now}] ProjectInfo.HttpGetAsync: Calling GetAsync for {url}");
+        Console.WriteLine ($"[{DateTime.Now}] ProjectInfo.HttpGetAsync: Calling GetAsync for {url}");
         return Client.GetAsync(url, cancellationToken);
     }
 
@@ -32,7 +32,7 @@ public sealed class ProjectInfo
         var allocatedEndpoint = Endpoints.Single(e => e.Name == bindingName);
         var url = $"{allocatedEndpoint.Uri}{path}";
 
-        // Console.WriteLine ($"ProjectInfo.HttpGetStringAsync: Calling GetStringAsync for {url}");
+        Console.WriteLine ($"ProjectInfo.HttpGetStringAsync: Calling GetStringAsync for {url}");
         return Client.GetStringAsync(url, cancellationToken);
     }
 

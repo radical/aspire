@@ -187,7 +187,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                     options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
                     options.Retry.OnRetry = async (args) =>
                     {
-                        Console.WriteLine($"IntegrationServicesFixture: ################## [{DateTime.Now}] Retry {args.AttemptNumber+1} due to outcome: {args.Outcome} {args.Outcome.Exception}");
+                        Console.WriteLine($"IntegrationServicesFixture: ################## [{DateTime.Now}] Retry {args.AttemptNumber+1} due to outcome: {args.Outcome} {args.Outcome.Exception?.Message}");
                         await Task.CompletedTask;
                     };
                     options.Retry.MaxRetryAttempts = 20;
