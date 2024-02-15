@@ -45,7 +45,7 @@
     <!--<Error Condition="'$(RepoTestResultsPath)' == ''" Text="%24(RepoTestResultsPath) is unset" />-->
 
     <PropertyGroup>
-      <_workItemTimeout>00:40:00</_workItemTimeout>
+      <_workItemTimeout>00:55:00</_workItemTimeout>
 
       <HelixPreCommands>$(HelixPreCommands);@(HelixPreCommand)</HelixPreCommands>
       <!--<HelixResultsDestinationDir>$(RepoTestResultsPath)</HelixResultsDestinationDir>-->
