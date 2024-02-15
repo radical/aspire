@@ -52,28 +52,35 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             _testOutput.WriteLine($"response for {component}: {responseContent}");
             Assert.True(response.IsSuccessStatusCode, responseContent);
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
-        } catch
+        }
+        catch
         {
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");
 
             var cts = new CancellationTokenSource();
             //cts.CancelAfter(TimeSpan.FromMinutes(1));
 
-            using var cmd = new ToolCommand("docker", _testOutput!);
-            var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
-                .EnsureSuccessful();
-            _testOutput.WriteLine($"output: {res.Output}");
+            string containerName;
+            {
+                using var cmd = new ToolCommand("docker", _testOutput!);
+                var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
+                    .EnsureSuccessful();
+                // _testOutput.WriteLine($"output: {res.Output}");
+                containerName = res.Output;
+            }
 
-            if (string.IsNullOrEmpty(res.Output))
+            if (string.IsNullOrEmpty(containerName))
             {
                 _testOutput.WriteLine($"No container found for {component}");
             }
             else
             {
                 using var cmd2 = new ToolCommand("docker", _testOutput!, label: component);
-                (await cmd2.ExecuteAsync(cts.Token, $"container logs {res.Output}"))
+                (await cmd2.ExecuteAsync(cts.Token, $"container logs {containerName}"))
                         .EnsureSuccessful();
             }
+
+            await _integrationServicesFixture.DumpDockerInfo();
 
             throw;
         }
@@ -82,7 +89,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [LocalOnlyFact]
     public async Task KafkaComponentCanProduceAndConsume()
     {
-        _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting KafkaComponentCanProduceAndConsume --");
+        _testOutput.WriteLine($"[{DateTime.Now}] >>>> Starting KafkaComponentCanProduceAndConsume --");
         try
         {
             _integrationServicesFixture.EnsureAppHostRunning();
@@ -99,7 +106,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         }
         catch
         {
-            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED KafkaComponentCanProduceAndConsume --");
+            _testOutput.WriteLine($"[{DateTime.Now}] <<<< FAILED KafkaComponentCanProduceAndConsume --");
             throw;
         }
     }
@@ -124,18 +131,9 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         }
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public Task InitializeAsync() => _integrationServicesFixture.DumpDockerInfo();
 
-    public async Task DisposeAsync()
-    {
-        using var cmd3 = new ToolCommand("docker", _testOutput!, "list-all");
-        (await cmd3.ExecuteAsync(CancellationToken.None, $"container list --all"))
-            .EnsureSuccessful();
-
-        using var cmd4 = new ToolCommand("docker", _testOutput!, "list-all");
-        (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
-            .EnsureSuccessful();
-    }
+    public Task DisposeAsync() => Task.CompletedTask;
 }
 
 // TODO: remove these attributes when the above tests are running in CI

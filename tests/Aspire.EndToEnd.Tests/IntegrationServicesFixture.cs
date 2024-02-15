@@ -187,7 +187,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                     options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
                     options.Retry.OnRetry = async (args) =>
                     {
-                        Console.WriteLine($"IntegrationServicesFixture: ################## [{DateTime.Now}] Retry {args.AttemptNumber+1} due to outcome: {args.Outcome} {args.Outcome.Exception?.Message}");
+                        Console.WriteLine($"[{DateTime.Now}] IntegrationServicesFixture: Retry #{args.AttemptNumber+1} due to outcome: {args.Outcome} {args.Outcome.Exception?.Message}");
                         await Task.CompletedTask;
                     };
                     options.Retry.MaxRetryAttempts = 20;
@@ -199,6 +199,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
     private static Dictionary<string, ProjectInfo> ParseProjectInfo(string json) =>
         JsonSerializer.Deserialize<Dictionary<string, ProjectInfo>>(json)!;
+
+    public async Task DumpDockerInfo()
+    {
+        var testOutput = new TestOutputWrapper(null, null);
+        using var cmd3 = new ToolCommand("docker", testOutput!, "container-list");
+        (await cmd3.ExecuteAsync(CancellationToken.None, $"container list --all"))
+            .EnsureSuccessful();
+
+        using var cmd4 = new ToolCommand("docker", testOutput!, "image-ls");
+        (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
+            .EnsureSuccessful();
+    }
 
     public async Task DisposeAsync()
     {
