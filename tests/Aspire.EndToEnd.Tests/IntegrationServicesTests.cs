@@ -15,7 +15,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     private readonly TestOutputWrapper _testOutput;
 
     // BUILD_BUILDID is defined by Azure Dev Ops
-    public static bool CanRunTestsOnCI { get; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.GetEnvironmentVariable("BUILD_BUILDID") != null;
+    public static bool CanRunTestsOnCI { get; } = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.GetEnvironmentVariable("BUILD_BUILDID") == null;
 
     public IntegrationServicesTests(ITestOutputHelper testOutput, IntegrationServicesFixture integrationServicesFixture)
     {
