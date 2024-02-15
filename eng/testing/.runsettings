@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RunSettings>
   <RunConfiguration>
-    <!-- Timeout in ms, 5 minutes -->
+    <!-- Timeout in ms, 33 minutes -->
     <TestSessionTimeout>2000000</TestSessionTimeout>
     <!-- Filter out failing (wrong framework, platform, runtime or activeissue) tests -->
     <TestCaseFilter>category!=failing</TestCaseFilter>
