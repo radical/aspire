@@ -8,7 +8,7 @@ using Xunit.Sdk;
 
 namespace Aspire.EndToEnd.Tests;
 
-public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture>
+public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture>, IAsyncLifetime
 {
     private readonly IntegrationServicesFixture _integrationServicesFixture;
     //private readonly IMessageSink _diagnosticMessageSink;
@@ -59,10 +59,6 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             var cts = new CancellationTokenSource();
             //cts.CancelAfter(TimeSpan.FromMinutes(1));
 
-            using var cmd3 = new ToolCommand("docker", _testOutput!, "list-all");
-            (await cmd3.ExecuteAsync(cts.Token, $"container list --all"))
-                .EnsureSuccessful();
-
             using var cmd = new ToolCommand("docker", _testOutput!);
             var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
                 .EnsureSuccessful();
@@ -71,9 +67,6 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             if (string.IsNullOrEmpty(res.Output))
             {
                 _testOutput.WriteLine($"No container found for {component}");
-                using var cmd4 = new ToolCommand("docker", _testOutput!, "list-all");
-                (await cmd4.ExecuteAsync(cts.Token, $"image ls"))
-                    .EnsureSuccessful();
             }
             else
             {
@@ -129,6 +122,19 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyHealthyOnIntegrationServiceA --");
             throw;
         }
+    }
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        using var cmd3 = new ToolCommand("docker", _testOutput!, "list-all");
+        (await cmd3.ExecuteAsync(CancellationToken.None, $"container list --all"))
+            .EnsureSuccessful();
+
+        using var cmd4 = new ToolCommand("docker", _testOutput!, "list-all");
+        (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
+            .EnsureSuccessful();
     }
 }
 
