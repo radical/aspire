@@ -34,6 +34,14 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _diagnosticMessageSink = messageSink;
     }
 
+    public void EnsureAppHostRunning()
+    {
+        if (_appHostProcess is null || _appHostProcess.HasExited)
+        {
+            throw new InvalidOperationException("The app host process is not running.");
+        }
+    }
+
     public async Task InitializeAsync()
     {
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
@@ -95,26 +103,6 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             _testOutput.WriteLine($"[{DateTime.Now}][apphost] {e.Data}");
         };
 
-        //_ = appExited.Task.ContinueWith(cmdTask =>
-        //{
-            //Console.WriteLine($"cmdTask.continueWith, status: {cmdTask.Status}");
-            //if (cmdTask.IsFaulted)
-            //{
-                //appRunning.SetException(cmdTask.Exception!);
-                //projectsParsed.SetException(cmdTask.Exception!);
-            //}
-            //else if (cmdTask.IsCanceled)
-            //{
-                //appRunning.SetCanceled();
-                //projectsParsed.SetCanceled();
-            //}
-            //else
-            //{
-                ////var res = cmdTask.Result;
-                //appRunning.SetException(new ArgumentException($"dotnet run exited: {output}"));
-                //projectsParsed.SetException(new ArgumentException($"dotnet run exited: {output}"));
-            //}
-        //}, TaskScheduler.Default);
         EventHandler appExitedCallback = (sender, e) =>
         {
             _testOutput.WriteLine($"[{DateTime.Now}] ");

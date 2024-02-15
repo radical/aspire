@@ -31,6 +31,8 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [InlineData("cosmos")]
     public async Task VerifyComponentWorks(string component)
     {
+        _integrationServicesFixture.EnsureAppHostRunning();
+
         _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
         try
         {
@@ -77,6 +79,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [LocalOnlyFact]
     public async Task KafkaComponentCanProduceAndConsume()
     {
+        _integrationServicesFixture.EnsureAppHostRunning();
         string topic = $"topic-{Guid.NewGuid()}";
 
         var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/produce/{topic}");
@@ -91,6 +94,8 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [LocalOnlyFact]
     public async Task VerifyHealthyOnIntegrationServiceA()
     {
+        _integrationServicesFixture.EnsureAppHostRunning();
+
         // We wait until timeout for the /health endpoint to return successfully. We assume
         // that components wired up into this project have health checks enabled.
         await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
