@@ -38,20 +38,22 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     {
         if (component == "cosmos" && RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
         {
-            throw new SkipException("Skipping 'cosmos' test on macOS ARM64 because as the emulator isn't supported");
+            throw new SkipException("Skipping 'cosmos' test because the emulator isn't supported on macOS ARM64.");
         }
 
         _integrationServicesFixture.EnsureAppHostRunning();
 
+        _testOutput.WriteLine ($"[{DateTime.Now}] ----------------------------------------------------------------");
         _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
         try
         {
             var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/{component}/verify");
             var responseContent = await response.Content.ReadAsStringAsync();
 
-            _testOutput.WriteLine($"response for {component}: {responseContent}");
+            // _testOutput.WriteLine($"response for {component}: {responseContent}");
             Assert.True(response.IsSuccessStatusCode, responseContent);
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
+            _testOutput.WriteLine ($"[{DateTime.Now}] ----------------------------------------------------------------");
         }
         catch
         {

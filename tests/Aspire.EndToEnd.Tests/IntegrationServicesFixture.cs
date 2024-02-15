@@ -203,6 +203,8 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     public async Task DumpDockerInfo()
     {
         var testOutput = new TestOutputWrapper(null, null);
+        testOutput.WriteLine("--------------------------- Docker info ---------------------------");
+
         using var cmd3 = new ToolCommand("docker", testOutput!, "container-list");
         (await cmd3.ExecuteAsync(CancellationToken.None, $"container list --all"))
             .EnsureSuccessful();
@@ -210,6 +212,8 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         using var cmd4 = new ToolCommand("docker", testOutput!, "image-ls");
         (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
             .EnsureSuccessful();
+
+        testOutput.WriteLine("--------------------------- Docker info (end) ---------------------------");
     }
 
     public async Task DisposeAsync()
