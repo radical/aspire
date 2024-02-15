@@ -3,10 +3,8 @@
 
 using Microsoft.Azure.Cosmos;
 using System.Text;
-// using Polly;
 using System.Globalization;
 using Polly;
-using System.Dynamic;
 
 public static class CosmosExtensions
 {
