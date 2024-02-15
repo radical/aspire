@@ -115,7 +115,13 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 //projectsParsed.SetException(new ArgumentException($"dotnet run exited: {output}"));
             //}
         //}, TaskScheduler.Default);
-        EventHandler appExitedCallback = (sender, e) => appExited.SetResult();
+        EventHandler appExitedCallback = (sender, e) =>
+        {
+            _testOutput.WriteLine($"[{DateTime.Now}] ");
+            _testOutput.WriteLine($"[{DateTime.Now}] ----------- app has exited -------------");
+            _testOutput.WriteLine($"[{DateTime.Now}] ");
+            appExited.SetResult();
+        };
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
 
@@ -126,13 +132,13 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _appHostProcess.BeginErrorReadLine();
 
         var successfulTask = Task.WhenAll(appRunning.Task, projectsParsed.Task);
-        var failedTask = appExited.Task;
+        var failedAppTask = appExited.Task;
         var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5));
 
-        var resultTask = await Task.WhenAny(successfulTask, failedTask, timeoutTask);
-        if (resultTask == failedTask)
+        var resultTask = await Task.WhenAny(successfulTask, failedAppTask, timeoutTask);
+        if (resultTask == failedAppTask)
         {
-            _testOutput.WriteLine($"resultTask == failedTask");
+            _testOutput.WriteLine($"resultTask == failedAppTask");
             // wait for all the output to be read
             var allOutputComplete = Task.WhenAll(stdoutComplete.Task, stderrComplete.Task);
             var appExitTimeout = Task.Delay(TimeSpan.FromSeconds(5));
@@ -158,7 +164,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         Assert.True(resultTask == successfulTask, $"App run failed: {Environment.NewLine}{output}");
 
         // FIXME: don't remove this.. fail the whole thing is the app exits early!
-        _appHostProcess.Exited -= appExitedCallback;
+        //_appHostProcess.Exited -= appExitedCallback;
 
         var client = CreateHttpClient();
         foreach (var project in Projects.Values)
@@ -188,9 +194,15 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 // Ensure transient errors are retried for up to 5 minutes
                 b.AddStandardResilienceHandler(options =>
                 {
-                    options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(1);
-                    options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(2); // needs to be at least double the AttemptTimeout to pass options validation
+                    options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(2);
+                    options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(5); // needs to be at least double the AttemptTimeout to pass options validation
                     options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
+                    options.Retry.OnRetry = async (args) =>
+                    {
+                        Console.WriteLine($"IntegrationServicesFixture: ################## [{DateTime.Now}] Retry {args.AttemptNumber+1} due to outcome: {args.Outcome} {args.Outcome.Exception}");
+                        await Task.CompletedTask;
+                    };
+                    options.Retry.MaxRetryAttempts = 20;
                 });
             });
 

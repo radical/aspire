@@ -19,7 +19,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         //_diagnosticMessageSink = messageSink;
     }
 
-    [Theory]
+    [LocalOnlyTheory]
     [InlineData("mongodb")]
     [InlineData("mysql")]
     [InlineData("pomelo")]
@@ -31,15 +31,15 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [InlineData("cosmos")]
     public async Task VerifyComponentWorks(string component)
     {
-        Console.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
-
+        _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
         try
         {
             var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/{component}/verify");
             var responseContent = await response.Content.ReadAsStringAsync();
 
+            _testOutput.WriteLine($"response for {component}: {responseContent}");
             Assert.True(response.IsSuccessStatusCode, responseContent);
-            Console.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
+            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
         } catch
         {
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");

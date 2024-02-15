@@ -143,24 +143,6 @@ public class TestProgram
 
             // write the whole json in a single line so it's easier to parse by the external process
             await Console.Out.WriteLineAsync("$ENDPOINTS: " + JsonSerializer.Serialize(root, JsonSerializerOptions.Default));
-
-            // Find the DashboardServiceHost endpoint
-            var dashboardEndpoint = appModel.Resources
-                .OfType<ProjectResource>()
-                .FirstOrDefault(resource => resource.Name == "DashboardServiceHost")
-                ?.Annotations
-                .OfType<AllocatedEndpointAnnotation>()
-                .FirstOrDefault();
-
-            if (dashboardEndpoint != null)
-            {
-                // Access the endpoint information
-                var endpointName = dashboardEndpoint.Name;
-                var endpointUri = dashboardEndpoint.UriString;
-
-                // Do something with the endpoint information
-                Console.WriteLine($"DashboardServiceHost endpoint: {endpointName} - {endpointUri}");
-            }
         }
     }
 }
