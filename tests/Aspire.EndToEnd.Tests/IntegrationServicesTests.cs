@@ -88,13 +88,13 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         Assert.True(response.IsSuccessStatusCode, responseContent);
     }
 
-    //[LocalOnlyFact]
-    //public async Task VerifyHealthyOnIntegrationServiceA()
-    //{
-        //// We wait until timeout for the /health endpoint to return successfully. We assume
-        //// that components wired up into this project have health checks enabled.
-        //await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
-    //}
+    [LocalOnlyFact]
+    public async Task VerifyHealthyOnIntegrationServiceA()
+    {
+        // We wait until timeout for the /health endpoint to return successfully. We assume
+        // that components wired up into this project have health checks enabled.
+        await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
+    }
 }
 
 // TODO: remove these attributes when the above tests are running in CI
