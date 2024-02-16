@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+// using Polly;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -185,10 +186,11 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                     options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(2);
                     options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(5); // needs to be at least double the AttemptTimeout to pass options validation
                     options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
-                    options.Retry.OnRetry = async (args) =>
+                    options.Retry.OnRetry = (args) =>
                     {
-                        Console.WriteLine($"[{DateTime.Now}] IntegrationServicesFixture: Retry #{args.AttemptNumber+1} due to outcome: {args.Outcome} {args.Outcome.Exception?.Message}");
-                        await Task.CompletedTask;
+                        Console.WriteLine($"[{DateTime.Now}] Retry #{args.AttemptNumber+1} for {args.Outcome.Result?.RequestMessage?.RequestUri} due to StatusCode: {(int?)args.Outcome.Result?.StatusCode} ReasonPhrase: '{args.Outcome.Result?.ReasonPhrase}'"
+                                        + ((args.Outcome.Exception is not null) ? $" Exception: {args.Outcome.Exception.Message}" : ""));
+                        return ValueTask.CompletedTask;
                     };
                     options.Retry.MaxRetryAttempts = 20;
                 });

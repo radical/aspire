@@ -4,7 +4,7 @@
 using System.Runtime.InteropServices;
 using Xunit;
 using Xunit.Abstractions;
-using Xunit.Sdk;
+// using Xunit.Sdk;
 
 namespace Aspire.EndToEnd.Tests;
 
@@ -43,17 +43,14 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
 
         _integrationServicesFixture.EnsureAppHostRunning();
 
-        _testOutput.WriteLine ($"[{DateTime.Now}] ----------------------------------------------------------------");
         _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
         try
         {
             var response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/{component}/verify");
             var responseContent = await response.Content.ReadAsStringAsync();
 
-            // _testOutput.WriteLine($"response for {component}: {responseContent}");
             Assert.True(response.IsSuccessStatusCode, responseContent);
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyComponentWorks for {component} --");
-            _testOutput.WriteLine ($"[{DateTime.Now}] ----------------------------------------------------------------");
         }
         catch
         {
@@ -78,8 +75,8 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             else
             {
                 using var cmd2 = new ToolCommand("docker", _testOutput!, label: component);
-                (await cmd2.ExecuteAsync(cts.Token, $"container logs {containerName}"))
-                        .EnsureSuccessful();
+                (await cmd2.ExecuteAsync(cts.Token, $"container logs {containerName} -n 50"))
+                    .EnsureSuccessful();
             }
 
             await _integrationServicesFixture.DumpDockerInfo();

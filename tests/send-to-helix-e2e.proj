@@ -38,7 +38,10 @@
     <!--<HelixPreCommand Condition="'$(OS)' == 'Windows_NT'" Include="set TEST_ASSETS_PATH=%HELIX_CORRELATION_PAYLOAD%\testassets" />-->
     <!--<HelixPreCommand Condition="'$(OS)' != 'Windows_NT'" Include="export TEST_ASSETS_PATH=$HELIX_CORRELATION_PAYLOAD/testassets" />-->
 
-    <HelixPreCommand Include="dotnet --info" />
+    <HelixPreCommand Include="docker info" />
+    <HelixPreCommand Include="docker ps" />
+    <HelixPreCommand Include="docker container ls --all" />
+    <HelixPreCommand Include="docker prune -f" />
   </ItemGroup>
 
   <Target Name="BuildHelixWorkItemsForEnd2EndTests">
@@ -67,7 +70,7 @@
       <HelixWorkItem Include="@(_DefaultWorkItemsE2E -> '%(FileName)')">
         <PayloadArchive>%(Identity)</PayloadArchive>
         <PreCommands Condition="'$(OS)' == 'Windows_NT'">set &quot;TEST_NAME=%(FileName)&quot;</PreCommands>
-        <PreCommands Condition="'$(OS)' != 'Windows_NT'">export &quot;TEST_NAME=%(FileName)&quot; %3B docker info %3B docker ps</PreCommands>
+        <PreCommands Condition="'$(OS)' != 'Windows_NT'">export &quot;TEST_NAME=%(FileName)&quot;</PreCommands>
         <Command>$(_TestRunCommand)</Command>
         <Timeout>$(_workItemTimeout)</Timeout>
 
