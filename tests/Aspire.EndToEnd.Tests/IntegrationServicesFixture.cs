@@ -37,14 +37,6 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _diagnosticMessageSink = messageSink;
     }
 
-    public void EnsureAppHostRunning()
-    {
-        if (_appHostProcess is null || _appHostProcess.HasExited)
-        {
-            throw new InvalidOperationException("The app host process is not running.");
-        }
-    }
-
     public async Task InitializeAsync()
     {
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
@@ -214,7 +206,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     private static Dictionary<string, ProjectInfo> ParseProjectInfo(string json) =>
         JsonSerializer.Deserialize<Dictionary<string, ProjectInfo>>(json)!;
 
-    public async Task DumpDockerInfo()
+    public async Task DumpDockerInfoAsync()
     {
         var testOutput = new TestOutputWrapper(null, null);
         testOutput.WriteLine("--------------------------- Docker info ---------------------------");
@@ -234,18 +226,21 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         if (_appHostProcess is not null)
         {
-            var cts = new CancellationTokenSource();
-            //cts.CancelAfter(TimeSpan.FromMinutes(1));
-
-            using var cmd = new ToolCommand("docker", _testOutput!, "list-all");
-            (await cmd.ExecuteAsync(cts.Token, $"container list --all"))
-                .EnsureSuccessful();
+            await DumpDockerInfoAsync();
 
             if (!_appHostProcess.HasExited)
             {
                 _appHostProcess.StandardInput.WriteLine("Stop");
             }
             await _appHostProcess.WaitForExitAsync();
+        }
+    }
+
+    public void EnsureAppHostRunning()
+    {
+        if (_appHostProcess is null || _appHostProcess.HasExited)
+        {
+            throw new InvalidOperationException("The app host process is not running.");
         }
     }
 

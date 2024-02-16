@@ -79,7 +79,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
                     .EnsureSuccessful();
             }
 
-            await _integrationServicesFixture.DumpDockerInfo();
+            await _integrationServicesFixture.DumpDockerInfoAsync();
 
             throw;
         }
@@ -130,7 +130,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         }
     }
 
-    public Task InitializeAsync() => _integrationServicesFixture.DumpDockerInfo();
+    public Task InitializeAsync() => _integrationServicesFixture.DumpDockerInfoAsync();
 
     public Task DisposeAsync() => Task.CompletedTask;
 }
