@@ -20,15 +20,15 @@ namespace Aspire.EndToEnd.Tests;
 /// </summary>
 public sealed class IntegrationServicesFixture : IAsyncLifetime
 {
-    private Process? _appHostProcess;
-    private Dictionary<string, ProjectInfo>? _projects;
+    /* Set to true to force the testproject to run out-of-tree with the workload */
+    public static bool ForceOutOfTree;// = false;
 
     public Dictionary<string, ProjectInfo> Projects => _projects!;
-    public const bool ForceOutOfTree = true;
-
     public BuildEnvironment BuildEnvironment { get; } = new(ForceOutOfTree);
-
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
+
+    private Process? _appHostProcess;
+    private Dictionary<string, ProjectInfo>? _projects;
     private readonly IMessageSink _diagnosticMessageSink;
     private TestOutputWrapper? _testOutput;
 
