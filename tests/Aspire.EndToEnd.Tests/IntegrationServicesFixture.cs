@@ -49,7 +49,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var stdoutComplete = new TaskCompletionSource();
         var stderrComplete = new TaskCompletionSource();
         _appHostProcess = new Process();
-        string processArguments = $"run -- {string.Join(',', GetComponentsToSkip())}";
+        string processArguments = $"run -- {GetComponentsToSkipArgument()}";
         _appHostProcess.StartInfo = new ProcessStartInfo(BuildEnvironment.DotNet, processArguments)
         {
             RedirectStandardOutput = true,
@@ -215,9 +215,9 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         (await cmd3.ExecuteAsync(CancellationToken.None, $"container list --all"))
             .EnsureSuccessful();
 
-        using var cmd4 = new ToolCommand("docker", testOutput!, "image-ls");
-        (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
-            .EnsureSuccessful();
+        // using var cmd4 = new ToolCommand("docker", testOutput!, "image-ls");
+        // (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
+        //     .EnsureSuccessful();
 
         testOutput.WriteLine("--------------------------- Docker info (end) ---------------------------");
     }
@@ -244,7 +244,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         }
     }
 
-    private static List<string> GetComponentsToSkip()
+    private static string GetComponentsToSkipArgument()
     {
         List<string> componentsToSkip = new();
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
@@ -253,6 +253,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             componentsToSkip.Add("oracledatabase");
         }
         componentsToSkip.Add("dashboard");
-        return componentsToSkip;
+
+        return componentsToSkip.Count > 0 ? $"--skip-components {string.Join(',', componentsToSkip)}" : string.Empty;
     }
 }

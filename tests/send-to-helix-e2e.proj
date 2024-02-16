@@ -41,7 +41,7 @@
     <HelixPreCommand Include="docker info" />
     <HelixPreCommand Include="docker ps" />
     <HelixPreCommand Include="docker container ls --all" />
-    <HelixPreCommand Include="docker prune -f" />
+    <HelixPreCommand Include="docker container prune -f" />
   </ItemGroup>
 
   <Target Name="BuildHelixWorkItemsForEnd2EndTests">
