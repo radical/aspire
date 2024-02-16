@@ -25,7 +25,7 @@ public class BuildEnvironment
     public static readonly string           TestDataPath = Path.Combine(AppContext.BaseDirectory, "data");
     public static readonly string           TmpPath = Path.Combine(Path.GetTempPath(), "testroot");
 
-    public BuildEnvironment()
+    public BuildEnvironment(bool forceOutOfTree = false)
     {
         DirectoryInfo? solutionRoot = new(AppContext.BaseDirectory);
         /*
@@ -51,7 +51,7 @@ public class BuildEnvironment
         string sdkForWorkloadPath;
         if (solutionRoot is not null)
         {
-            if (EnvironmentVariables.TestsRunningOutOfTree)
+            if (EnvironmentVariables.TestsRunningOutOfTree || forceOutOfTree)
             {
                 // Is this a "local run?
                 var sdkDirName = string.IsNullOrEmpty(EnvironmentVariables.SdkDirName) ? "dotnet-latest" : EnvironmentVariables.SdkDirName;
@@ -62,7 +62,8 @@ public class BuildEnvironment
                 }
                 else
                 {
-                    throw new ArgumentException($"Could not find {probePath} computed from solutionRoot={solutionRoot}");
+                    // FIXME: message
+                    throw new ArgumentException($"Running out-of-tree: Could not find {probePath} computed from solutionRoot={solutionRoot}. Make sure Install the sdk+workload from command line");
                 }
             }
             else

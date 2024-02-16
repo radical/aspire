@@ -24,8 +24,9 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     private Dictionary<string, ProjectInfo>? _projects;
 
     public Dictionary<string, ProjectInfo> Projects => _projects!;
+    public const bool ForceOutOfTree = true;
 
-    public BuildEnvironment BuildEnvironment { get; } = new();
+    public BuildEnvironment BuildEnvironment { get; } = new(ForceOutOfTree);
 
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
     private readonly IMessageSink _diagnosticMessageSink;
@@ -68,9 +69,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         };
         foreach (var item in BuildEnvironment.EnvVars)
         {
-            _testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
             _appHostProcess.StartInfo.Environment[item.Key] = item.Value;
         }
+        if (ForceOutOfTree)
+        {
+            _appHostProcess.StartInfo.Environment["TestsRuningOutOfTree"] = "true";
+        }
+
+        foreach (var item in _appHostProcess.StartInfo.Environment)
+        {
+            _testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
+        }
+
         _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} {processArguments} {_appHostProcess.StartInfo.WorkingDirectory}");
         _appHostProcess.OutputDataReceived += (sender, e) =>
         {
