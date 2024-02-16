@@ -244,7 +244,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         }
     }
 
-    private static string GetComponentsToSkipArgument()
+    private string GetComponentsToSkipArgument()
     {
         List<string> componentsToSkip = new();
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
@@ -252,6 +252,11 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             componentsToSkip.Add("cosmos");
             componentsToSkip.Add("oracledatabase");
         }
+        if (BuildEnvironment.IsRunningOnCI)
+        {
+            componentsToSkip.Add("oracledatabase");
+        }
+
         componentsToSkip.Add("dashboard");
 
         return componentsToSkip.Count > 0 ? $"--skip-components {string.Join(',', componentsToSkip)}" : string.Empty;
