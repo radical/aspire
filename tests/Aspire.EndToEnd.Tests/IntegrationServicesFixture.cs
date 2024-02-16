@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,7 +56,8 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         var stdoutComplete = new TaskCompletionSource();
         var stderrComplete = new TaskCompletionSource();
         _appHostProcess = new Process();
-        _appHostProcess.StartInfo = new ProcessStartInfo(BuildEnvironment.DotNet, "run -- --disable-dashboard")
+        string processArguments = $"run -- {string.Join(',', GetComponentsToSkip())}";
+        _appHostProcess.StartInfo = new ProcessStartInfo(BuildEnvironment.DotNet, processArguments)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -69,7 +71,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             _testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
             _appHostProcess.StartInfo.Environment[item.Key] = item.Value;
         }
-        _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} run -v n -- --disable-dashboard in {_appHostProcess.StartInfo.WorkingDirectory}");
+        _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} {processArguments} {_appHostProcess.StartInfo.WorkingDirectory}");
         _appHostProcess.OutputDataReceived += (sender, e) =>
         {
             if (e.Data is null)
@@ -235,5 +237,17 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             }
             await _appHostProcess.WaitForExitAsync();
         }
+    }
+
+    private static List<string> GetComponentsToSkip()
+    {
+        List<string> componentsToSkip = new();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            componentsToSkip.Add("cosmos");
+            componentsToSkip.Add("oracledatabase");
+        }
+        componentsToSkip.Add("dashboard");
+        return componentsToSkip;
     }
 }

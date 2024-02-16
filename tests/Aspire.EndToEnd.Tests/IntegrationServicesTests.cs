@@ -4,7 +4,7 @@
 using System.Runtime.InteropServices;
 using Xunit;
 using Xunit.Abstractions;
-// using Xunit.Sdk;
+using Xunit.Sdk;
 
 namespace Aspire.EndToEnd.Tests;
 
@@ -149,4 +149,19 @@ public class LocalOnlyTheoryAttribute : TheoryAttribute
     public override string Skip => IntegrationServicesTests.CanRunTestsOnCI
                                     ? null!
                                     : $"{nameof(LocalOnlyTheoryAttribute)} tests are not run as part of CI.";
+}
+
+public static class TestComponents
+{
+    public static string Cosmos => "cosmos";
+    public static string Mongodb => "mongodb";
+    public static string Mysql => "mysql";
+    public static string Pomelo => "pomelo";
+    public static string Oracledatabase => "oracledatabase";
+    public static string Postgres => "postgres";
+    public static string Rabbitmq => "rabbitmq";
+    public static string Redis => "redis";
+    public static string Sqlserver => "sqlserver";
+    public static string Kafka => "kafka";
+
 }
