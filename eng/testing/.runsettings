@@ -2,7 +2,7 @@
 <RunSettings>
   <RunConfiguration>
     <!-- Timeout in ms, 33 minutes -->
-    <TestSessionTimeout>1000000</TestSessionTimeout>
+    <TestSessionTimeout>600000</TestSessionTimeout>
     <!-- Filter out failing (wrong framework, platform, runtime or activeissue) tests -->
     <TestCaseFilter>category!=failing</TestCaseFilter>
   </RunConfiguration>
