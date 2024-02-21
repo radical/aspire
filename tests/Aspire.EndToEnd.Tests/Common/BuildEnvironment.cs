@@ -11,14 +11,14 @@ public class BuildEnvironment
     public bool                             IsWorkload                    { get; init; }
     public string                           DefaultBuildArgs              { get; init; }
     public IDictionary<string, string>      EnvVars                       { get; init; }
-    // public string                           DirectoryBuildPropsContents   { get; init; }
-    // public string                           DirectoryBuildTargetsContents { get; init; }
     public string                           LogRootPath                   { get; init; }
 
     public string                           WorkloadPacksDir              { get; init; }
     public string                           BuiltNuGetsPath               { get; init; }
 
-    public bool IsRunningOnCI => EnvironmentVariables.IsRunningOnCI;
+    public static bool IsRunningOnHelix => Environment.GetEnvironmentVariable("HELIX_WORKITEM_ROOT") is not null;
+    public static bool IsRunningOnCIBuildMachine => Environment.GetEnvironmentVariable("BUILD_BUILDID") is not null;
+    public static bool IsRunningOnCI => IsRunningOnHelix || IsRunningOnCIBuildMachine;
 
     public string           TestAssetsPath { get; init; }
     public string TestProjectPath { get; init; }
@@ -28,16 +28,6 @@ public class BuildEnvironment
     public BuildEnvironment(bool forceOutOfTree = false)
     {
         DirectoryInfo? solutionRoot = new(AppContext.BaseDirectory);
-        /*
-         * 1. local run, maybe vs, want to use the projectrefs
-         * 2. CI run
-         *  a. local
-         *      - autocompute everything
-         *  b. helix
-         *      - from vars
-
-
-        */
         while (solutionRoot != null)
         {
             if (Directory.Exists(Path.Combine(solutionRoot.FullName, ".git")))
@@ -62,8 +52,7 @@ public class BuildEnvironment
                 }
                 else
                 {
-                    // FIXME: message
-                    throw new ArgumentException($"Running out-of-tree: Could not find {probePath} computed from solutionRoot={solutionRoot}. Make sure Install the sdk+workload from command line");
+                    throw new ArgumentException($"Running out-of-tree: Could not find {probePath} computed from solutionRoot={solutionRoot}. Build all the packages with `./build -pack`. And install the sdk+workload 'dotnet tests/Aspire.EndToEnd.Tests/Aspire.EndToEnd.csproj /t:InstallWorkloadUsingArtifacts /p:Configuration=<config>");
                 }
             }
             else
@@ -162,10 +151,4 @@ public class BuildEnvironment
 
         Directory.CreateDirectory(TmpPath);
     }
-
-    // protected static readonly string s_directoryBuildPropsForWorkloads = File.ReadAllText(Path.Combine(TestDataPath, "Workloads.Directory.Build.props"));
-    // protected static readonly string s_directoryBuildTargetsForWorkloads = File.ReadAllText(Path.Combine(TestDataPath, "Workloads.Directory.Build.targets"));
-
-    // protected static readonly string s_directoryBuildPropsForLocal = File.ReadAllText(Path.Combine(TestDataPath, "Local.Directory.Build.props"));
-    // protected static readonly string s_directoryBuildTargetsForLocal = File.ReadAllText(Path.Combine(TestDataPath, "Local.Directory.Build.targets"));
 }

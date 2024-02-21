@@ -11,36 +11,24 @@ namespace Aspire.EndToEnd.Tests;
 public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture>, IAsyncLifetime
 {
     private readonly IntegrationServicesFixture _integrationServicesFixture;
-    //private readonly IMessageSink _diagnosticMessageSink;
     private readonly TestOutputWrapper _testOutput;
-
-    // BUILD_BUILDID is defined by Azure Dev Ops
-    public static bool CanRunTestsOnCI { get; } = !RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.GetEnvironmentVariable("BUILD_BUILDID") == null;
 
     public IntegrationServicesTests(ITestOutputHelper testOutput, IntegrationServicesFixture integrationServicesFixture)
     {
         _integrationServicesFixture = integrationServicesFixture;
         _testOutput = new TestOutputWrapper(testOutput, null);
-        //_diagnosticMessageSink = messageSink;
     }
 
-    [LocalOnlyTheory]
+    [Theory]
     [InlineData("mongodb")]
     [InlineData("mysql")]
     [InlineData("pomelo")]
-    // [InlineData("oracledatabase")]
     [InlineData("postgres")]
     [InlineData("rabbitmq")]
     [InlineData("redis")]
     [InlineData("sqlserver")]
-    [InlineData("cosmos")]
     public async Task VerifyComponentWorks(string component)
     {
-        if (component == "cosmos" && RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-        {
-            throw new SkipException("Skipping 'cosmos' test because the emulator isn't supported on macOS ARM64.");
-        }
-
         _integrationServicesFixture.EnsureAppHostRunning();
 
         _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyComponentWorks for {component} --");
@@ -55,34 +43,29 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         catch
         {
             _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyComponentWorks for {component} --");
-
-            var cts = new CancellationTokenSource();
-            //cts.CancelAfter(TimeSpan.FromMinutes(1));
-
-            string containerName;
-            {
-                using var cmd = new ToolCommand("docker", _testOutput!);
-                var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
-                    .EnsureSuccessful();
-                // _testOutput.WriteLine($"output: {res.Output}");
-                containerName = res.Output;
-            }
-
-            if (string.IsNullOrEmpty(containerName))
-            {
-                _testOutput.WriteLine($"No container found for {component}");
-            }
-            else
-            {
-                using var cmd2 = new ToolCommand("docker", _testOutput!, label: component);
-                (await cmd2.ExecuteAsync(cts.Token, $"container logs {containerName} -n 50"))
-                    .EnsureSuccessful();
-            }
-
+            await _integrationServicesFixture.DumpComponentLogsAsync(component, _testOutput);
             await _integrationServicesFixture.DumpDockerInfoAsync();
 
             throw;
         }
+    }
+
+    [Fact]
+    [SkipOnCI("oracledatabase test disabled on CI")]
+    public Task VerifyComponentWorksOracle() => VerifyComponentWorks("oracledatabase");
+
+    [ConditionalTheory]
+    [SkipOnCI("cosmos test disabled on CI")]
+    [InlineData("cosmos")]
+    [InlineData("oracledatabase")]
+    public Task VerifyComponentWorksCosmos(string component)
+    {
+        if (component == "cosmos" && RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            throw new SkipException("Skipping 'cosmos' test because the emulator isn't supported on macOS ARM64.");
+        }
+
+        return VerifyComponentWorks(component);
     }
 
     [LocalOnlyFact]
@@ -102,6 +85,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             response = await _integrationServicesFixture.IntegrationServiceA.HttpGetAsync("http", $"/kafka/consume/{topic}");
             responseContent = await response.Content.ReadAsStringAsync();
             Assert.True(response.IsSuccessStatusCode, responseContent);
+            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done KafkaComponentCanProduceAndConsume --");
         }
         catch
         {
@@ -113,7 +97,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     [LocalOnlyFact]
     public async Task VerifyHealthyOnIntegrationServiceA()
     {
-        _testOutput.WriteLine ($"[{DateTime.Now}] >>>> Starting VerifyHealthyOnIntegrationServiceA --");
+        _testOutput.WriteLine($"[{DateTime.Now}] >>>> Starting VerifyHealthyOnIntegrationServiceA --");
 
         try
         {
@@ -122,6 +106,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             // We wait until timeout for the /health endpoint to return successfully. We assume
             // that components wired up into this project have health checks enabled.
             await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
+            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyHealthyOnIntegrationServiceA --");
         }
         catch
         {
@@ -139,16 +124,16 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
 
 public class LocalOnlyFactAttribute : FactAttribute
 {
-    public override string Skip => IntegrationServicesTests.CanRunTestsOnCI
-                                    ? null!
-                                    : $"{nameof(LocalOnlyFactAttribute)} tests are not run as part of CI.";
+    public override string Skip => BuildEnvironment.IsRunningOnCI
+                                    ? $"{nameof(LocalOnlyFactAttribute)} tests are not run as part of CI."
+                                    : null!;
 }
 
 public class LocalOnlyTheoryAttribute : TheoryAttribute
 {
-    public override string Skip => IntegrationServicesTests.CanRunTestsOnCI
-                                    ? null!
-                                    : $"{nameof(LocalOnlyTheoryAttribute)} tests are not run as part of CI.";
+    public override string Skip => BuildEnvironment.IsRunningOnCI
+                                    ? $"{nameof(LocalOnlyTheoryAttribute)} tests are not run as part of CI."
+                                    : null!;
 }
 
 public static class TestComponents

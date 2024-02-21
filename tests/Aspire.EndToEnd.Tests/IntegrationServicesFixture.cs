@@ -192,7 +192,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                     options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
                     options.Retry.OnRetry = (args) =>
                     {
-                        Console.WriteLine($"[{DateTime.Now}] Retry #{args.AttemptNumber+1} for {args.Outcome.Result?.RequestMessage?.RequestUri} due to StatusCode: {(int?)args.Outcome.Result?.StatusCode} ReasonPhrase: '{args.Outcome.Result?.ReasonPhrase}'"
+                        Console.WriteLine($"[{DateTime.Now}] Retry #{args.AttemptNumber+1} for '{args.Outcome.Result?.RequestMessage?.RequestUri}' due to StatusCode: {(int?)args.Outcome.Result?.StatusCode} ReasonPhrase: '{args.Outcome.Result?.ReasonPhrase}'"
                                         + ((args.Outcome.Exception is not null) ? $" Exception: {args.Outcome.Exception.Message}" : ""));
                         return ValueTask.CompletedTask;
                     };
@@ -206,27 +206,48 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     private static Dictionary<string, ProjectInfo> ParseProjectInfo(string json) =>
         JsonSerializer.Deserialize<Dictionary<string, ProjectInfo>>(json)!;
 
-    public async Task DumpDockerInfoAsync()
+    public async Task DumpDockerInfoAsync(ITestOutputHelper? testOutputArg = null)
     {
-        var testOutput = new TestOutputWrapper(null, null);
+        var testOutput = testOutputArg ?? _testOutput!;
         testOutput.WriteLine("--------------------------- Docker info ---------------------------");
 
-        using var cmd3 = new ToolCommand("docker", testOutput!, "container-list");
-        (await cmd3.ExecuteAsync(CancellationToken.None, $"container list --all"))
+        using var cmd = new ToolCommand("docker", testOutput!, "container-list");
+        (await cmd.ExecuteAsync(CancellationToken.None, $"container list --all"))
             .EnsureSuccessful();
 
-        // using var cmd4 = new ToolCommand("docker", testOutput!, "image-ls");
-        // (await cmd4.ExecuteAsync(CancellationToken.None, $"image ls"))
-        //     .EnsureSuccessful();
-
         testOutput.WriteLine("--------------------------- Docker info (end) ---------------------------");
+    }
+
+    public async Task DumpComponentLogsAsync(string component, ITestOutputHelper? testOutputArg = null)
+    {
+        var testOutput = testOutputArg ?? _testOutput!;
+        var cts = new CancellationTokenSource();
+
+        string containerName;
+        {
+            using var cmd = new ToolCommand("docker", testOutput);
+            var res = (await cmd.ExecuteAsync(cts.Token, $"container list --all --filter name={component} --format {{{{.Names}}}}"))
+                .EnsureSuccessful();
+            containerName = res.Output;
+        }
+
+        if (string.IsNullOrEmpty(containerName))
+        {
+            testOutput.WriteLine($"No container found for {component}");
+        }
+        else
+        {
+            using var cmd = new ToolCommand("docker", testOutput, label: component);
+            (await cmd.ExecuteAsync(cts.Token, $"container logs {containerName} -n 50"))
+                .EnsureSuccessful();
+        }
     }
 
     public async Task DisposeAsync()
     {
         if (_appHostProcess is not null)
         {
-            await DumpDockerInfoAsync();
+            await DumpDockerInfoAsync(new TestOutputWrapper(null, null));
 
             if (!_appHostProcess.HasExited)
             {
@@ -244,16 +265,16 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         }
     }
 
-    private string GetComponentsToSkipArgument()
+    private static string GetComponentsToSkipArgument()
     {
         List<string> componentsToSkip = new();
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
         {
             componentsToSkip.Add("cosmos");
-            componentsToSkip.Add("oracledatabase");
         }
         if (BuildEnvironment.IsRunningOnCI)
         {
+            componentsToSkip.Add("cosmos");
             componentsToSkip.Add("oracledatabase");
         }
 
