@@ -50,15 +50,12 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         }
     }
 
-    [Fact]
-    [SkipOnCI("oracledatabase test disabled on CI")]
-    public Task VerifyComponentWorksOracle() => VerifyComponentWorks("oracledatabase");
-
+    // FIXME: open issue
     [ConditionalTheory]
-    [SkipOnCI("cosmos test disabled on CI")]
+    [SkipOnCI("not working on CI yet")]
     [InlineData("cosmos")]
     [InlineData("oracledatabase")]
-    public Task VerifyComponentWorksCosmos(string component)
+    public Task VerifyComponentWorksDisabledOnCI(string component)
     {
         if (component == "cosmos" && RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
         {
