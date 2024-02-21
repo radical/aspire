@@ -59,18 +59,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             CreateNoWindow = true,
             WorkingDirectory = appHostDirectory
         };
+
         foreach (var item in BuildEnvironment.EnvVars)
         {
-            _appHostProcess.StartInfo.Environment[item.Key] = item.Value;
+            AddEnvironmentVariable(item.Key, item.Value);
         }
         if (ForceOutOfTree)
         {
-            _appHostProcess.StartInfo.Environment["TestsRuningOutOfTree"] = "true";
+            AddEnvironmentVariable("TestsRuningOutOfTree", "true");
         }
 
         foreach (var item in _appHostProcess.StartInfo.Environment)
         {
-            _testOutput.WriteLine($"\t[{item.Key}] = {item.Value}");
         }
 
         _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} {processArguments} {_appHostProcess.StartInfo.WorkingDirectory}");
@@ -163,6 +163,15 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         foreach (var project in Projects.Values)
         {
             project.Client = client;
+        }
+
+        void AddEnvironmentVariable(string key, string? value)
+        {
+            if (value is not null)
+            {
+                _appHostProcess.StartInfo.Environment[key] = value;
+                _testOutput.WriteLine($"\t[{key}] = {value}");
+            }
         }
     }
 
