@@ -68,7 +68,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         return VerifyComponentWorks(component);
     }
 
-    [LocalOnlyFact]
+    [Fact]
     public async Task KafkaComponentCanProduceAndConsume()
     {
         _testOutput.WriteLine($"[{DateTime.Now}] >>>> Starting KafkaComponentCanProduceAndConsume --");
@@ -94,7 +94,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         }
     }
 
-    [LocalOnlyFact]
+    [Fact]
     public async Task VerifyHealthyOnIntegrationServiceA()
     {
         _testOutput.WriteLine($"[{DateTime.Now}] >>>> Starting VerifyHealthyOnIntegrationServiceA --");
@@ -120,22 +120,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     public Task DisposeAsync() => Task.CompletedTask;
 }
 
-// TODO: remove these attributes when the above tests are running in CI
-
-public class LocalOnlyFactAttribute : FactAttribute
-{
-    public override string Skip => BuildEnvironment.IsRunningOnCI
-                                    ? $"{nameof(LocalOnlyFactAttribute)} tests are not run as part of CI."
-                                    : null!;
-}
-
-public class LocalOnlyTheoryAttribute : TheoryAttribute
-{
-    public override string Skip => BuildEnvironment.IsRunningOnCI
-                                    ? $"{nameof(LocalOnlyTheoryAttribute)} tests are not run as part of CI."
-                                    : null!;
-}
-
+// FIXME: remove?
 public static class TestComponents
 {
     public static string Cosmos => "cosmos";
