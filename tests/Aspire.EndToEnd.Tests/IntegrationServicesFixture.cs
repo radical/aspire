@@ -28,6 +28,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     public ProjectInfo IntegrationServiceA => Projects["integrationservicea"];
 
     private Process? _appHostProcess;
+    private readonly TaskCompletionSource _appExited = new();
     private Dictionary<string, ProjectInfo>? _projects;
     private readonly IMessageSink _diagnosticMessageSink;
     private TestOutputWrapper? _testOutput;
@@ -43,13 +44,17 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
         _testOutput = new TestOutputWrapper(null, _diagnosticMessageSink);
         var output = new StringBuilder();
-        var appExited = new TaskCompletionSource();
         var projectsParsed = new TaskCompletionSource();
         var appRunning = new TaskCompletionSource();
         var stdoutComplete = new TaskCompletionSource();
         var stderrComplete = new TaskCompletionSource();
         _appHostProcess = new Process();
-        string processArguments = $"run -- {GetComponentsToSkipArgument()}";
+
+        string processArguments = $"run -- ";
+        if (GetComponentsToSkipArgument() is var componentsToSkip && componentsToSkip.Count > 0)
+        {
+            processArguments += $"--skip-components {string.Join(',', componentsToSkip)}";
+        }
         _appHostProcess.StartInfo = new ProcessStartInfo(BuildEnvironment.DotNet, processArguments)
         {
             RedirectStandardOutput = true,
@@ -69,11 +74,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             AddEnvironmentVariable("TestsRuningOutOfTree", "true");
         }
 
-        foreach (var item in _appHostProcess.StartInfo.Environment)
-        {
-        }
-
-        _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} {processArguments} {_appHostProcess.StartInfo.WorkingDirectory}");
+        _testOutput.WriteLine($"Starting the process: {BuildEnvironment.DotNet} {processArguments} in {_appHostProcess.StartInfo.WorkingDirectory}");
         _appHostProcess.OutputDataReceived += (sender, e) =>
         {
             if (e.Data is null)
@@ -113,7 +114,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             _testOutput.WriteLine($"[{DateTime.Now}] ");
             _testOutput.WriteLine($"[{DateTime.Now}] ----------- app has exited -------------");
             _testOutput.WriteLine($"[{DateTime.Now}] ");
-            appExited.SetResult();
+            _appExited.SetResult();
         };
         _appHostProcess.EnableRaisingEvents = true;
         _appHostProcess.Exited += appExitedCallback;
@@ -125,13 +126,13 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         _appHostProcess.BeginErrorReadLine();
 
         var successfulTask = Task.WhenAll(appRunning.Task, projectsParsed.Task);
-        var failedAppTask = appExited.Task;
+        var failedAppTask = _appExited.Task;
         var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5));
 
         var resultTask = await Task.WhenAny(successfulTask, failedAppTask, timeoutTask);
         if (resultTask == failedAppTask)
         {
-            _testOutput.WriteLine($"resultTask == failedAppTask");
+            // _testOutput.WriteLine($"resultTask == failedAppTask");
             // wait for all the output to be read
             var allOutputComplete = Task.WhenAll(stdoutComplete.Task, stderrComplete.Task);
             var appExitTimeout = Task.Delay(TimeSpan.FromSeconds(5));
@@ -151,6 +152,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
             {
                 exceptionMessage = "Docker was found but appears to be unhealthy. " + exceptionMessage;
             }
+
             // should really fail and quit after this
             throw new ArgumentException(exceptionMessage);
         }
@@ -202,7 +204,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                     options.Retry.OnRetry = (args) =>
                     {
                         Console.WriteLine($"[{DateTime.Now}] Retry #{args.AttemptNumber+1} for '{args.Outcome.Result?.RequestMessage?.RequestUri}' due to StatusCode: {(int?)args.Outcome.Result?.StatusCode} ReasonPhrase: '{args.Outcome.Result?.ReasonPhrase}'"
-                                        + ((args.Outcome.Exception is not null) ? $" Exception: {args.Outcome.Exception.Message}" : ""));
+                                        + ((args.Outcome.Exception is not null) ? $" Exception: {args.Outcome.Exception.Message} . {args.Outcome}" : ""));
                         return ValueTask.CompletedTask;
                     };
                     options.Retry.MaxRetryAttempts = 20;
@@ -268,13 +270,13 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
     public void EnsureAppHostRunning()
     {
-        if (_appHostProcess is null || _appHostProcess.HasExited)
+        if (_appHostProcess is null || _appHostProcess.HasExited || _appExited.Task.IsCompleted)
         {
             throw new InvalidOperationException("The app host process is not running.");
         }
     }
 
-    private static string GetComponentsToSkipArgument()
+    private static IList<string> GetComponentsToSkipArgument()
     {
         List<string> componentsToSkip = new();
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
@@ -289,6 +291,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
 
         componentsToSkip.Add("dashboard");
 
-        return componentsToSkip.Count > 0 ? $"--skip-components {string.Join(',', componentsToSkip)}" : string.Empty;
+        return componentsToSkip;
     }
+
 }
