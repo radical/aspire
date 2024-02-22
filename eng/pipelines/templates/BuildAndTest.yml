@@ -29,6 +29,12 @@ steps:
     displayName: Build
 
   - ${{ if ne(parameters.skipTests, 'true') }}:
+    - script: ${{ parameters.dotnetScript }} dotnet-coverage collect
+              --settings $(Build.SourcesDirectory)/eng/CodeCoverage.config
+              --output ${{ parameters.repoTestResultsPath }}/NonHelixTests.cobertura.xml
+              "${{ parameters.buildScript }} -testnobuild -test -configuration ${{ parameters.buildConfig }} /bl:${{ parameters.repoLogPath }}/tests.binlog $(_OfficialBuildIdArgs)"
+      displayName: Run non-helix tests
+
     - script: ${{ parameters.dotnetScript }}
               build
               -restore
@@ -46,9 +52,9 @@ steps:
 
         ${{ if eq(parameters.isWindows, 'true') }}:
           ${{ if eq(variables['System.TeamProject'], 'public') }}:
-            HelixTargetQueues: Windows.10.Amd64.ServerRS5.Open
+            HelixTargetQueues: Windows.10.Amd64.Client.Open
           ${{ if eq(variables['System.TeamProject'], 'internal') }}:
-            HelixTargetQueues: Windows.10.Amd64.ServerRS5
+            HelixTargetQueues: Windows.10.Amd64.Client
         ${{ if ne(parameters.isWindows, 'true') }}:
           ${{ if eq(variables['System.TeamProject'], 'public') }}:
             HelixTargetQueues: Ubuntu.2204.Amd64.Open
@@ -60,12 +66,6 @@ steps:
           Creator: $(Build.DefinitionName)
         HelixBuild: $(Build.BuildNumber)
         HelixAccessToken: $(HelixApiAccessToken)
-
-    - script: ${{ parameters.dotnetScript }} dotnet-coverage collect
-              --settings $(Build.SourcesDirectory)/eng/CodeCoverage.config
-              --output ${{ parameters.repoTestResultsPath }}/NonHelixTests.cobertura.xml
-              "${{ parameters.buildScript }} -testnobuild -test -configuration ${{ parameters.buildConfig }} /bl:${{ parameters.repoLogPath }}/tests.binlog $(_OfficialBuildIdArgs)"
-      displayName: Run non-helix tests
 
     - task: CopyFiles@2
       inputs:
