@@ -42,7 +42,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         var appHostDirectory = Path.Combine(BuildEnvironment.TestProjectPath, "TestProject.AppHost");
 
-        _testOutput = new TestOutputWrapper(null, _diagnosticMessageSink);
+        _testOutput = new TestOutputWrapper(messageSink: _diagnosticMessageSink);
         var output = new StringBuilder();
         var projectsParsed = new TaskCompletionSource();
         var appRunning = new TaskCompletionSource();
@@ -146,8 +146,8 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                 _testOutput.WriteLine($"\tall output completed");
             }
 
-            string outputMessage = output.ToString();
-            string exceptionMessage = $"App run failed: {Environment.NewLine}{outputMessage}";
+            var outputMessage = output.ToString();
+            var exceptionMessage = $"App run failed: {Environment.NewLine}{outputMessage}";
             if (outputMessage.Contains("docker was found but appears to be unhealthy", StringComparison.OrdinalIgnoreCase))
             {
                 exceptionMessage = "Docker was found but appears to be unhealthy. " + exceptionMessage;
@@ -265,7 +265,7 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
     {
         if (_appHostProcess is not null)
         {
-            await DumpDockerInfoAsync(new TestOutputWrapper(null, null));
+            await DumpDockerInfoAsync(new TestOutputWrapper(null));
 
             if (!_appHostProcess.HasExited)
             {

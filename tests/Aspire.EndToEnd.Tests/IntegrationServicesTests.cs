@@ -8,7 +8,7 @@ using Xunit.Sdk;
 
 namespace Aspire.EndToEnd.Tests;
 
-public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture>, IAsyncLifetime
+public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture>
 {
     private readonly IntegrationServicesFixture _integrationServicesFixture;
     private readonly TestOutputWrapper _testOutput;
@@ -16,7 +16,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
     public IntegrationServicesTests(ITestOutputHelper testOutput, IntegrationServicesFixture integrationServicesFixture)
     {
         _integrationServicesFixture = integrationServicesFixture;
-        _testOutput = new TestOutputWrapper(testOutput, null);
+        _testOutput = new TestOutputWrapper(testOutput);
     }
 
     [Theory]
@@ -87,6 +87,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
         catch
         {
             _testOutput.WriteLine($"[{DateTime.Now}] <<<< FAILED KafkaComponentCanProduceAndConsume --");
+            await _integrationServicesFixture.DumpDockerInfoAsync();
             throw;
         }
     }
@@ -103,18 +104,15 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             // We wait until timeout for the /health endpoint to return successfully. We assume
             // that components wired up into this project have health checks enabled.
             await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http");
-            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< Done VerifyHealthyOnIntegrationServiceA --");
+            _testOutput.WriteLine($"[{DateTime.Now}] <<<< Done VerifyHealthyOnIntegrationServiceA --");
         }
         catch
         {
-            _testOutput.WriteLine ($"[{DateTime.Now}] <<<< FAILED VerifyHealthyOnIntegrationServiceA --");
+            _testOutput.WriteLine($"[{DateTime.Now}] <<<< FAILED VerifyHealthyOnIntegrationServiceA --");
+            await _integrationServicesFixture.DumpDockerInfoAsync();
             throw;
         }
     }
-
-    public Task InitializeAsync() => _integrationServicesFixture.DumpDockerInfoAsync();
-
-    public Task DisposeAsync() => Task.CompletedTask;
 }
 
 // FIXME: remove?
