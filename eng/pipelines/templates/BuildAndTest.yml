@@ -33,6 +33,8 @@ steps:
               --settings $(Build.SourcesDirectory)/eng/CodeCoverage.config
               --output ${{ parameters.repoTestResultsPath }}/NonHelixTests.cobertura.xml
               "${{ parameters.buildScript }} -testnobuild -test -configuration ${{ parameters.buildConfig }} /bl:${{ parameters.repoLogPath }}/tests.binlog $(_OfficialBuildIdArgs)"
+      env:
+        DOTNET_USE_POLLING_FILE_WATCHER=true
       displayName: Run non-helix tests
 
     - script: ${{ parameters.dotnetScript }}
