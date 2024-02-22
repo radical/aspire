@@ -16,7 +16,6 @@ public static class OracleDatabaseExtensions
     {
         try
         {
-            Console.WriteLine ($"--- [{DateTime.Now}] VerifyOracleDatabase");
             var policy = Policy
                 .Handle<OracleException>()
                 // retry 60 times with a 1 second delay between retries
@@ -24,15 +23,8 @@ public static class OracleDatabaseExtensions
 
             return policy.Execute(() =>
             {
-                try
-                {
-                    var results = context.Database.SqlQueryRaw<int>("SELECT 1 FROM DUAL");
-                    return results.Any() ? Results.Ok("Success!") : Results.Problem("Failed");
-                } catch (Exception e)
-                {
-                    Console.WriteLine($"--- [{DateTime.Now}] IntegrationServiceA: {e}");
-                    throw;
-                }
+                var results = context.Database.SqlQueryRaw<int>("SELECT 1 FROM DUAL");
+                return results.Any() ? Results.Ok("Success!") : Results.Problem("Failed");
             });
         }
         catch (Exception e)
