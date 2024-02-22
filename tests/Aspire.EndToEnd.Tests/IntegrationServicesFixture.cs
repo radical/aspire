@@ -201,11 +201,18 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                     options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(2);
                     options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(5); // needs to be at least double the AttemptTimeout to pass options validation
                     options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(10);
-                    options.Retry.OnRetry = (args) =>
+                    options.Retry.OnRetry = async (args) =>
                     {
-                        Console.WriteLine($"[{DateTime.Now}] Retry #{args.AttemptNumber+1} for '{args.Outcome.Result?.RequestMessage?.RequestUri}' due to StatusCode: {(int?)args.Outcome.Result?.StatusCode} ReasonPhrase: '{args.Outcome.Result?.ReasonPhrase}'"
-                                        + ((args.Outcome.Exception is not null) ? $" Exception: {args.Outcome.Exception.Message} . {args.Outcome}" : ""));
-                        return ValueTask.CompletedTask;
+                        string msg = $"[{DateTime.Now}] Retry #{args.AttemptNumber+1} for '{args.Outcome.Result?.RequestMessage?.RequestUri}'" +
+                                        $" due to StatusCode: {(int?)args.Outcome.Result?.StatusCode} ReasonPhrase: '{args.Outcome.Result?.ReasonPhrase}'";
+
+                        msg += (args.Outcome.Exception is not null) ? $" Exception: {args.Outcome.Exception.Message} " : "";
+                        if (args.Outcome.Result?.Content is HttpContent content && (await content.ReadAsStringAsync()) is string contentStr)
+                        {
+                            msg += $" Content:{Environment.NewLine}{contentStr}";
+                        }
+
+                        Console.WriteLine(msg);
                     };
                     options.Retry.MaxRetryAttempts = 20;
                 });

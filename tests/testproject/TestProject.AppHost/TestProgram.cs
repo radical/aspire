@@ -57,6 +57,7 @@ public class TestProgram
         if (includeIntegrationServices)
         {
             IntegrationServiceABuilder = AppBuilder.AddProject<Projects.IntegrationServiceA>("integrationservicea");
+            IntegrationServiceABuilder = IntegrationServiceABuilder.WithEnvironment("SKIP_COMPONENTS", string.Join(',', componentsToSkip));
 
             if (!componentsToSkip.Contains("sqlserver", StringComparer.OrdinalIgnoreCase))
             {
