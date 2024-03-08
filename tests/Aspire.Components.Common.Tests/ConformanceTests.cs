@@ -318,7 +318,18 @@ public abstract class ConformanceTests<TService, TOptions>
 
         HealthReport healthReport = await healthCheckService.CheckHealthAsync().ConfigureAwait(false);
 
-        HealthStatus expected = GetHealthStatus();
+        HealthStatus expected;
+        while (true)
+        {
+            expected = GetHealthStatus();
+            if (expected == HealthStatus.Healthy)
+            {
+                break;
+            }
+
+            Console.WriteLine ($"Waiting for the server to be available to check health status. Current status: {expected}");
+            await Task.Delay(10000);
+        }
 
         Assert.Equal(expected, healthReport.Status);
         Assert.NotEmpty(healthReport.Entries);

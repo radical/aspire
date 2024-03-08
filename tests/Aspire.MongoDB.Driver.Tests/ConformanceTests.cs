@@ -104,7 +104,7 @@ public class ConformanceTests : ConformanceTests<IMongoClient, MongoDBSettings>,
         service.ListDatabases(source.Token);
     }
 
-    protected override HealthStatus GetHealthStatus()
+    protected override HealthStatus GetHealthStatus()// => HealthStatus.Healthy;
         => _containerFixture.Container?.Health == TestcontainersHealthStatus.Healthy
             ? HealthStatus.Healthy
             : HealthStatus.Unhealthy;
