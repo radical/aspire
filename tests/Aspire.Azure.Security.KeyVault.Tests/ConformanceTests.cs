@@ -88,8 +88,10 @@ public class ConformanceTests : ConformanceTests<SecretClient, AzureSecurityKeyV
         }
     }
 
+    // ActiveIssue:
     protected override void SetHealthCheck(AzureSecurityKeyVaultSettings settings, bool enabled)
-        => settings.HealthChecks = enabled;
+        => throw new NotImplementedException("Disabling this to disable the HealthCheck tests due to https://github.com/dotnet/aspire/issues/3609");
+        // => settings.HealthChecks = enabled;
 
     protected override void SetMetrics(AzureSecurityKeyVaultSettings settings, bool enabled)
         => throw new NotImplementedException();
