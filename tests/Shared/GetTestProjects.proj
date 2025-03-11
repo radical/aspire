@@ -34,12 +34,15 @@
     <ItemGroup>
       <ProjectRunTestsOnGithubActions Remove="@(ProjectRunTestsOnGithubActions)" Condition="'%(RunTestsOnGithubActions)' != 'true'" />
       <ProjectRunTestsOnGithubActions ShortName="$([System.IO.Path]::GetFileNameWithoutExtension('%(Identity)').Replace('Aspire.', '').Replace('.Tests', ''))" />
+
+      <Foo Include="Azure.AI.OpenAI" ShortName="Azure.AI.OpenAI" />
+      <Foo Include="Cli" ShortName="Cli" />
     </ItemGroup>
 
     <Error Condition="@(ProjectRunTestsOnGithubActions->Count()) == 0" Text="Could not find any test projects" />
 
     <WriteLinesToFile File="$(TestsListOutputPath)"
-                      Lines="@(ProjectRunTestsOnGithubActions->'%(ShortName)')"
+                      Lines="@(Foo->'%(ShortName)')"
                       Overwrite="true" />
   </Target>
 
