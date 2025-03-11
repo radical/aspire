@@ -27,6 +27,9 @@ public static class AzureStorageExtensions
     /// <returns></returns>
     public static IResourceBuilder<AzureStorageResource> AddAzureStorage(this IDistributedApplicationBuilder builder, [ResourceName] string name)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
         builder.AddAzureProvisioning();
 
         var configureInfrastructure = (AzureResourceInfrastructure infrastructure) =>
@@ -80,8 +83,7 @@ public static class AzureStorageExtensions
         };
 
         var resource = new AzureStorageResource(name, configureInfrastructure);
-        return builder.AddResource(resource)
-                      .WithManifestPublishingCallback(resource.WriteToManifest);
+        return builder.AddResource(resource);
     }
 
     /// <summary>
@@ -95,6 +97,8 @@ public static class AzureStorageExtensions
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     public static IResourceBuilder<AzureStorageResource> RunAsEmulator(this IResourceBuilder<AzureStorageResource> builder, Action<IResourceBuilder<AzureStorageEmulatorResource>>? configureContainer = null)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+
         if (builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
         {
             return builder;
@@ -166,7 +170,11 @@ public static class AzureStorageExtensions
     /// <param name="isReadOnly">A flag that indicates if this is a read-only mount.</param>
     /// <returns>A builder for the <see cref="AzureStorageEmulatorResource"/>.</returns>
     public static IResourceBuilder<AzureStorageEmulatorResource> WithDataBindMount(this IResourceBuilder<AzureStorageEmulatorResource> builder, string? path = null, bool isReadOnly = false)
-        => builder.WithBindMount(path ?? $".azurite/{builder.Resource.Name}", "/data", isReadOnly);
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return builder.WithBindMount(path ?? $".azurite/{builder.Resource.Name}", "/data", isReadOnly);
+    }
 
     /// <summary>
     /// Adds a named volume for the data folder to an Azure Storage emulator resource.
@@ -176,7 +184,11 @@ public static class AzureStorageExtensions
     /// <param name="isReadOnly">A flag that indicates if this is a read-only volume.</param>
     /// <returns>A builder for the <see cref="AzureStorageEmulatorResource"/>.</returns>
     public static IResourceBuilder<AzureStorageEmulatorResource> WithDataVolume(this IResourceBuilder<AzureStorageEmulatorResource> builder, string? name = null, bool isReadOnly = false)
-        => builder.WithVolume(name ?? VolumeNameGenerator.Generate(builder, "data"), "/data", isReadOnly);
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return builder.WithVolume(name ?? VolumeNameGenerator.Generate(builder, "data"), "/data", isReadOnly);
+    }
 
     /// <summary>
     /// Modifies the host port that the storage emulator listens on for blob requests.
@@ -186,6 +198,8 @@ public static class AzureStorageExtensions
     /// <returns></returns>
     public static IResourceBuilder<AzureStorageEmulatorResource> WithBlobPort(this IResourceBuilder<AzureStorageEmulatorResource> builder, int port)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+
         return builder.WithEndpoint("blob", endpoint =>
         {
             endpoint.Port = port;
@@ -200,6 +214,8 @@ public static class AzureStorageExtensions
     /// <returns></returns>
     public static IResourceBuilder<AzureStorageEmulatorResource> WithQueuePort(this IResourceBuilder<AzureStorageEmulatorResource> builder, int port)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+
         return builder.WithEndpoint("queue", endpoint =>
         {
             endpoint.Port = port;
@@ -214,6 +230,8 @@ public static class AzureStorageExtensions
     /// <returns>An <see cref="IResourceBuilder{T}"/> for the <see cref="AzureStorageEmulatorResource"/>.</returns>
     public static IResourceBuilder<AzureStorageEmulatorResource> WithTablePort(this IResourceBuilder<AzureStorageEmulatorResource> builder, int port)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+
         return builder.WithEndpoint("table", endpoint =>
         {
             endpoint.Port = port;
@@ -252,6 +270,9 @@ public static class AzureStorageExtensions
     /// <returns>An <see cref="IResourceBuilder{T}"/> for the <see cref="AzureBlobStorageResource"/>.</returns>
     public static IResourceBuilder<AzureBlobStorageResource> AddBlobs(this IResourceBuilder<AzureStorageResource> builder, [ResourceName] string name)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
         var resource = new AzureBlobStorageResource(name, builder.Resource);
         return builder.ApplicationBuilder.AddResource(resource);
     }
@@ -264,6 +285,9 @@ public static class AzureStorageExtensions
     /// <returns>An <see cref="IResourceBuilder{T}"/> for the <see cref="AzureTableStorageResource"/>.</returns>
     public static IResourceBuilder<AzureTableStorageResource> AddTables(this IResourceBuilder<AzureStorageResource> builder, [ResourceName] string name)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
         var resource = new AzureTableStorageResource(name, builder.Resource);
         return builder.ApplicationBuilder.AddResource(resource);
     }
@@ -276,6 +300,9 @@ public static class AzureStorageExtensions
     /// <returns>An <see cref="IResourceBuilder{T}"/> for the <see cref="AzureQueueStorageResource"/>.</returns>
     public static IResourceBuilder<AzureQueueStorageResource> AddQueues(this IResourceBuilder<AzureStorageResource> builder, [ResourceName] string name)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
         var resource = new AzureQueueStorageResource(name, builder.Resource);
         return builder.ApplicationBuilder.AddResource(resource);
     }

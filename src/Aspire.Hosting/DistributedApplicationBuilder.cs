@@ -22,6 +22,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Aspire.Hosting.Devcontainers;
 using Aspire.Hosting.Orchestrator;
+using Aspire.Hosting.Cli;
 
 namespace Aspire.Hosting;
 
@@ -171,7 +172,7 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
 
         _executionContextOptions = _innerBuilder.Configuration["Publishing:Publisher"] switch
         {
-            "manifest" => new DistributedApplicationExecutionContextOptions(DistributedApplicationOperation.Publish),
+            { } publisher => new DistributedApplicationExecutionContextOptions(DistributedApplicationOperation.Publish, publisher),
             _ => new DistributedApplicationExecutionContextOptions(DistributedApplicationOperation.Run)
         };
 
@@ -224,6 +225,9 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
 
             return new AspireStore(Path.Combine(aspireDir, ".aspire"));
         });
+
+        // Aspire CLI support
+        _innerBuilder.Services.AddHostedService<CliOrphanDetector>();
 
         ConfigureHealthChecks();
 
@@ -416,7 +420,7 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
             { "--dcp-cli-path", "DcpPublisher:CliPath" },
             { "--dcp-container-runtime", "DcpPublisher:ContainerRuntime" },
             { "--dcp-dependency-check-timeout", "DcpPublisher:DependencyCheckTimeout" },
-            { "--dcp-dashboard-path", "DcpPublisher:DashboardPath" },
+            { "--dcp-dashboard-path", "DcpPublisher:DashboardPath" }
         };
         _innerBuilder.Configuration.AddCommandLine(options.Args ?? [], switchMappings);
         _innerBuilder.Services.Configure<PublishingOptions>(_innerBuilder.Configuration.GetSection(PublishingOptions.Publishing));
@@ -531,5 +535,4 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
     /// <returns>The metadata value if found; otherwise, null.</returns>
     private static string? GetMetadataValue(IEnumerable<AssemblyMetadataAttribute>? assemblyMetadata, string key) =>
         assemblyMetadata?.FirstOrDefault(a => string.Equals(a.Key, key, StringComparison.OrdinalIgnoreCase))?.Value;
-
 }

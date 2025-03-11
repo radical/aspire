@@ -10,10 +10,8 @@ namespace Aspire.Hosting.Azure;
 /// </summary>
 /// <param name="name">The name of the resource.</param>
 /// <param name="configureInfrastructure">Callback to configure the Azure resources.</param>
-public class AzureStorageResource(string name, Action<AzureResourceInfrastructure> configureInfrastructure) :
-    AzureProvisioningResource(name, configureInfrastructure),
-    IResourceWithEndpoints,
-    IResourceWithAzureFunctionsConfig
+public class AzureStorageResource(string name, Action<AzureResourceInfrastructure> configureInfrastructure)
+    : AzureProvisioningResource(name, configureInfrastructure), IResourceWithEndpoints, IResourceWithAzureFunctionsConfig
 {
     private EndpointReference EmulatorBlobEndpoint => new(this, "blob");
     private EndpointReference EmulatorQueueEndpoint => new(this, "queue");
@@ -21,6 +19,7 @@ public class AzureStorageResource(string name, Action<AzureResourceInfrastructur
 
     internal const string BlobsConnectionKeyPrefix = "Aspire__Azure__Storage__Blobs";
     internal const string QueuesConnectionKeyPrefix = "Aspire__Azure__Storage__Queues";
+    internal const string TablesConnectionKeyPrefix = "Aspire__Azure__Storage__Tables";
 
     /// <summary>
     /// Gets the "blobEndpoint" output reference from the bicep template for the Azure Storage resource.
@@ -72,15 +71,18 @@ public class AzureStorageResource(string name, Action<AzureResourceInfrastructur
             // Injected to support Aspire client integration for Azure Storage.
             target[$"{BlobsConnectionKeyPrefix}__{connectionName}__ConnectionString"] = connectionString;
             target[$"{QueuesConnectionKeyPrefix}__{connectionName}__ConnectionString"] = connectionString;
+            target[$"{TablesConnectionKeyPrefix}__{connectionName}__ConnectionString"] = connectionString;
         }
         else
         {
             // Injected to support Azure Functions listener initialization.
             target[$"{connectionName}__blobServiceUri"] = BlobEndpoint;
             target[$"{connectionName}__queueServiceUri"] = QueueEndpoint;
+            target[$"{connectionName}__tableServiceUri"] = TableEndpoint;
             // Injected to support Aspire client integration for Azure Storage.
             target[$"{BlobsConnectionKeyPrefix}__{connectionName}__ServiceUri"] = BlobEndpoint;
             target[$"{QueuesConnectionKeyPrefix}__{connectionName}__ServiceUri"] = QueueEndpoint;
+            target[$"{TablesConnectionKeyPrefix}__{connectionName}__ServiceUri"] = TableEndpoint;
         }
     }
 }
