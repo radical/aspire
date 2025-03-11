@@ -92,7 +92,7 @@ jobs:
           path: testresults
 
       - name: Test Summary
+        if: always()
         uses: test-summary/action@v2
         with:
           paths: "testresults/**/*.trx'
-        if: always()
