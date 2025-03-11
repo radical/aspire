@@ -137,6 +137,8 @@ jobs:
           ${{ env.DOTNET_SCRIPT }} test ${{ env.TEST_PROJECT_PATH }}
           /p:ContinuousIntegrationBuild=true
           -s eng/testing/.runsettings
+          -l "console;verbosity=normal"
+          -l "trx;LogFileName=${{ inputs.testShortName }}-TestResults.trx"
           -l "GitHubActions;summary.includePassedTests=true;summary.includeSkippedTests=true"
           "--blame"
           --blame-hang-timeout ${{ inputs.testHangTimeout }}
