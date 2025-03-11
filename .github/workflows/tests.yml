@@ -78,3 +78,21 @@ jobs:
       - name: Compute result
         run: |
           [ 0 -eq $(find test-job-result -name 'result-failed-*' | wc -l) ]
+
+  summary:
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    name: Summary
+    needs: [test_linux, test_windows]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: logs-*
+          merge-multiple: true
+          path: testresults
+
+      - name: Test Summary
+        uses: test-summary/action@v2
+        with:
+          paths: "testresults/**/*.trx'
+        if: always()
