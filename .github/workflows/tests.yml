@@ -89,8 +89,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Integration-combined-logs
-          path: testresults/**/*
+          name: Integration-TestResults
+          path: testresults/**/*.trx
 
   summary:
     if: ${{ always() }}
