@@ -21,24 +21,3 @@ body:
     validations:
       required: true
     value: "Build: "
-  - type: input
-    attributes:
-      label: Build error leg or test failing
-      description: Name of the build job, or name of the failing test
-    validations:
-      required: false
-    value: "Build error leg or test failing:"
-  - type: input
-    attributes:
-      label: Pull Request
-      description: Pull Request url (if any)
-    validations:
-      required: false
-    value: "Pull Request:"
-  - type: textarea
-    attributes:
-      label: Other info
-      description: Any other useful information about the failure
-      placeholder:
-    validations:
-      required: false
