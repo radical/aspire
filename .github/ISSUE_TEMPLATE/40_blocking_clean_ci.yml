@@ -1,4 +1,4 @@
-name: 🐞Failing test on CI
+name: Failing test on CI
 description: Create a report about a failing test
 title: "[Failing test]: "
 labels: [ 'blocking-clean-ci' ]
@@ -7,6 +7,7 @@ body:
     attributes:
       value: |
         Test(s) failing on a Azdo CI run. This issue will track the failures on Azdo using the [Known Issues infrastructure](https://github.com/dotnet/arcade/blob/main/Documentation/Projects/Build%20Analysis/KnownIssues.md).
+        Fill in the `Build information` block. And `Error message template` needs to be filled in by using either `ErrorMessage` or `ErrorPattern` to enable automatic tracking of failing builds.
   - type: checkboxes
     attributes:
       label: Is there an existing issue for this?
@@ -16,12 +17,11 @@ body:
           required: true
   - type: textarea
     attributes:
-      label: Build url
-      description: Url for the failing build
+      label: Build information
       value: |
         Build:
         Build error leg or test failing:
-        Pull Request:
+        Pull Request: N/A
     validations:
       required: true
   - type: textarea
@@ -49,6 +49,5 @@ body:
     attributes:
       label: Other info
       description: Any other useful information about the failure
-      placeholder:
     validations:
       required: false
