@@ -21,3 +21,45 @@ body:
     validations:
       required: true
     value: "Build: "
+  - type: input
+    attributes:
+      label: Build error leg or test failing
+      description: Name of the build job, or name of the failing test
+    validations:
+      required: false
+    value: "Build error leg or test failing:"
+  - type: input
+    attributes:
+      label: Pull Request
+      description: Pull Request url (if any)
+    validations:
+      required: false
+    value: "Pull Request:"
+  - type: textarea
+    attributes:
+      label: Fill in the error message template
+      value: |
+        <!-- Error message template  -->
+        ## Error Message
+
+        Fill the error message using [step by step known issues guidance](https://github.com/dotnet/arcade/blob/main/Documentation/Projects/Build%20Analysis/KnownIssueJsonStepByStep.md).
+
+        <!-- Use ErrorMessage for String.Contains matches. Use ErrorPattern for regex matches (single line/no backtracking). Set BuildRetry to `true` to retry builds with this error. Set ExcludeConsoleLog to `true` to skip helix logs analysis. -->
+
+        ```json
+        {
+          "ErrorMessage": "",
+          "ErrorPattern": "",
+          "BuildRetry": false,
+          "ExcludeConsoleLog": false
+        }
+        ```
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Other info
+      description: Any other useful information about the failure
+      placeholder:
+    validations:
+      required: false
