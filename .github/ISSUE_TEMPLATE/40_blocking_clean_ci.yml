@@ -28,7 +28,7 @@ body:
     validations:
       required: false
     value: "Build error leg or test failing:"
-  - type: inputs
+  - type: input
     attributes:
       label: Pull Request
       description: Pull Request url (if any)
