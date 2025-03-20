@@ -14,27 +14,16 @@ body:
       options:
         - label: I have searched the existing issues
           required: true
-  - type: input
+  - type: textarea
     attributes:
       label: Build url
       description: Url for the failing build
-      value: "Build: "
+      value: |
+        Build:
+        Build error leg or test failing:
+        Pull Request:
     validations:
       required: true
-  - type: input
-    attributes:
-      label: Build error leg or test failing
-      description: Name of the build job, or name of the failing test
-      value: "Build error leg or test failing:"
-    validations:
-      required: false
-  - type: input
-    attributes:
-      label: Pull Request
-      description: Pull Request url (if any)
-      value: "Pull Request:"
-    validations:
-      required: false
   - type: textarea
     attributes:
       label: Fill in the error message template
