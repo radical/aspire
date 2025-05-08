@@ -8,6 +8,7 @@
 
     <!-- Only run on Linux; no docker support on Windows yet -->
     <RunOnGithubActionsWindows>false</RunOnGithubActionsWindows>
+    <RunOnGithubActionsMacOS>false</RunOnGithubActionsMacOS>
     <RunOnAzdoCIWindows>false</RunOnAzdoCIWindows>
     <RunOnAzdoHelixWindows>false</RunOnAzdoHelixWindows>
 
@@ -31,6 +32,10 @@
       gets built independently on helix.
     -->
     <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+
+    <!-- https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-exit-codes -->
+    <!-- Exit code 8 is "zero tests ran" -->
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --ignore-exit-code 8</TestingPlatformCommandLineArguments>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(SkipUnstableEmulators)' == 'true'">
