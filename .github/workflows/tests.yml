@@ -233,18 +233,18 @@ jobs:
               $skippedTestCount += [int]($trx.TestRun.ResultSummary.Counters.executed - $trx.TestRun.ResultSummary.Counters.passed - $trx.TestRun.ResultSummary.Counters.failed)
               $overallSkippedTestCount += [int]($trx.TestRun.ResultSummary.Counters.executed - $trx.TestRun.ResultSummary.Counters.passed - $trx.TestRun.ResultSummary.Counters.failed)
 
-              $markdown += "<th width=`"99999"">✓&nbsp;&nbsp;Passed</th>"
-              $markdown += "<th width=`"99999"">✘&nbsp;&nbsp;Failed</th>"
-              $markdown += "<th width=`"99999"">↷&nbsp;&nbsp;Skipped</th>"
-              $markdown += "<th width=`"99999"">∑&nbsp;&nbsp;Total</th>"
-              $markdown += "<th width=`"99999"">⧗&nbsp;&nbsp;Elapsed</th>"
+              $markdown += "<th width=`"99999`">✓&nbsp;&nbsp;Passed</th>"
+              $markdown += "<th width=`"99999`">✘&nbsp;&nbsp;Failed</th>"
+              $markdown += "<th width=`"99999`">↷&nbsp;&nbsp;Skipped</th>"
+              $markdown += "<th width=`"99999`">∑&nbsp;&nbsp;Total</th>"
+              $markdown += "<th width=`"99999`">⧗&nbsp;&nbsp;Elapsed</th>"
               $markdown += "<tr>"
-              $markdown += "<td align=`"center"">$passedTestCount</td>"
-              $markdown += "<td align=`"center"">$failedTestCount</td>"
-              $markdown += "<td align=`"center"">$skippedTestCount</td>"
-              $markdown += "<td align=`"center"">$totalTestCount</td>"
-              $markdown += "<td align=`"center"">$elapsedTimeFormatted</td>"
-              $markdown += "</tr>""
+              $markdown += "<td align=`"center`">$passedTestCount</td>"
+              $markdown += "<td align=`"center`">$failedTestCount</td>"
+              $markdown += "<td align=`"center`">$skippedTestCount</td>"
+              $markdown += "<td align=`"center`">$totalTestCount</td>"
+              $markdown += "<td align=`"center`">$elapsedTimeFormatted</td>"
+              $markdown += "</tr>"
             } catch {
               Write-Warning "Failed to process file: $_.FullName"
             }
@@ -258,15 +258,15 @@ jobs:
 
           $overallSummary = "# Overall Summary`n"
           $overallSummary += "<table>"
-          $overallSummary += "<th width=`"99999"">✓&nbsp;&nbsp;Passed</th>"
-          $overallSummary += "<th width=`"99999"">✘&nbsp;&nbsp;Failed</th>"
-          $overallSummary += "<th width=`"99999"">↷&nbsp;&nbsp;Skipped</th>"
-          $overallSummary += "<th width=`"99999"">∑&nbsp;&nbsp;Total</th>"
+          $overallSummary += "<th width=`"99999`">✓&nbsp;&nbsp;Passed</th>"
+          $overallSummary += "<th width=`"99999`">✘&nbsp;&nbsp;Failed</th>"
+          $overallSummary += "<th width=`"99999`">↷&nbsp;&nbsp;Skipped</th>"
+          $overallSummary += "<th width=`"99999`">∑&nbsp;&nbsp;Total</th>"
           $overallSummary += "<tr>"
-          $overallSummary += "<td align=`"center"">$overallPassedTestCount</td>"
-          $overallSummary += "<td align=`"center"">$overallFailedTestCount</td>"
-          $overallSummary += "<td align=`"center"">$overallSkippedTestCount</td>"
-          $overallSummary += "<td align=`"center"">$overallTotalTestCount</td>"
+          $overallSummary += "<td align=`"center`">$overallPassedTestCount</td>"
+          $overallSummary += "<td align=`"center`">$overallFailedTestCount</td>"
+          $overallSummary += "<td align=`"center`">$overallSkippedTestCount</td>"
+          $overallSummary += "<td align=`"center`">$overallTotalTestCount</td>"
           $overallSummary += "</tr></table>`n"
 
           Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value $markdown
