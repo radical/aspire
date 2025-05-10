@@ -19,6 +19,11 @@ $passedTestCount = $trx.TestRun.ResultSummary.Counters.passed
 $failedTestCount = $trx.TestRun.ResultSummary.Counters.failed
 $skippedTestCount = $trx.TestRun.ResultSummary.Counters.executed - $passedTestCount - $failedTestCount
 
+if ($failedTestCount == 0) {
+    Set-Content -Path $OutputFilePath -Value ""
+    exit 0
+}
+
 # Parse start and finish times as DateTime
 $startTime = [DateTime]::Parse($trx.TestRun.Times.start)
 $finishTime = [DateTime]::Parse($trx.TestRun.Times.finish)

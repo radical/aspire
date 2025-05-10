@@ -258,12 +258,12 @@ jobs:
           ${{ inputs.extraTestArgs }}
 
       - name: Generate test summaries for all trx files
+        if: always()
         shell: pwsh
         run: |
           $trxFiles = Get-ChildItem -Path "${{ github.workspace }}/testresults/" -Filter "*.trx" -Recurse
           foreach ($trxFile in $trxFiles) {
-              echo "Generating test summary for $($trxFile.FullName)" >> $env:GITHUB_STEP_SUMMARY
-              pwsh ${{ github.workspace }}/.github/workflows/generate-test-summary.ps1 $trxFile.FullName
+              pwsh ${{ github.workspace }}/.github/workflows/generate-test-summary.ps1 $trxFile.FullName &&
               echo test-summary.md >> $env:GITHUB_STEP_SUMMARY
           }
 
