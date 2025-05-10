@@ -257,6 +257,13 @@ jobs:
           --timeout ${{ inputs.testSessionTimeout }}
           ${{ inputs.extraTestArgs }}
 
+      - name: Generate test summary
+        shell: pwsh
+        run: |
+          pwsh ${{ github.workspace }}/.github/workflows/generate-test-summary.ps1 ${{ github.workspace }}/testresults/${{ inputs.testShortName }}.trx &&
+          ehco test-summary.md >> $GITHUB_STEP_SUMMARY
+
+
       # Save the result of the previous steps - success or failure
       # in the form of a file result-success/result-failure -{name}.rst
       - name: Store result - success
