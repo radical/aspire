@@ -62,4 +62,4 @@ foreach ($result in $failedResults) {
 # Write the markdown to the output file
 Set-Content -Path $OutputFilePath -Value $markdown
 
-Write-Output "Test summary generated at: $OutputFilePath"
+Write-Output "Test summary generated at: $OutputFilePath for $TrxFilePath"
