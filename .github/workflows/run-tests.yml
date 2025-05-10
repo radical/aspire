@@ -257,12 +257,14 @@ jobs:
           --timeout ${{ inputs.testSessionTimeout }}
           ${{ inputs.extraTestArgs }}
 
-      - name: Generate test summary
+      - name: Generate test summaries for all trx files
         shell: pwsh
         run: |
-          pwsh ${{ github.workspace }}/.github/workflows/generate-test-summary.ps1 ${{ github.workspace }}/testresults/${{ inputs.testShortName }}.trx &&
-          ehco test-summary.md >> $GITHUB_STEP_SUMMARY
-
+          $trxFiles = Get-ChildItem -Path "${{ github.workspace }}/testresults/" -Filter "*.trx" -Recurse
+          foreach ($trxFile in $trxFiles) {
+              pwsh ${{ github.workspace }}/.github/workflows/generate-test-summary.ps1 $trxFile.FullName
+              echo test-summary.md >> $GITHUB_STEP_SUMMARY
+          }
 
       # Save the result of the previous steps - success or failure
       # in the form of a file result-success/result-failure -{name}.rst
