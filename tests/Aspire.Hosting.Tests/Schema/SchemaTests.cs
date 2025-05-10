@@ -20,7 +20,7 @@ public class SchemaTests
         {
             var data = new TheoryData<string, Action<IDistributedApplicationBuilder>>
             {
-                { "BasicParameter", (IDistributedApplicationBuilder builder) =>
+                { "BicParameter", (IDistributedApplicationBuilder builder) =>
                     {
                         builder.AddParameter("foo");
                     }
@@ -243,7 +243,7 @@ public class SchemaTests
         var manifestText = """
             {
               "resources": {
-                "aresource": {
+                "areurce": {
                   "type": "not.a.valid.resource"
                 }
               }
@@ -297,7 +297,7 @@ public class SchemaTests
         var manifestText = """
             {
               "resources": {
-                "invalidbicepresource": {
+                "invidbicepresource": {
                   "type": "azure.bicep.v0",
                   "invalidproperty": "invalidvalue"
                 }

@@ -26,7 +26,7 @@ public class AnsiParserTests
     [InlineData("\x1B[2A", "")]
     [InlineData("\x1B[u", "")]
     [InlineData("\x1B[2@", "")]
-    [InlineData("\x1B[2~", "")]
+    [InlineData("\x1B[2~", "asd")]
     [InlineData("\x1B[?25h", "")]
     [InlineData("\x1B[?25l", "")]
     [InlineData("\x1B[23m", "")]
