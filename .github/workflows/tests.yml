@@ -159,26 +159,26 @@ jobs:
         with:
           pattern: logs-*-ubuntu-latest
           merge-multiple: true
-          path: testresults/ubuntu-latest
+          path: ${{ github.workspace }}/testresults/ubuntu-latest
 
       - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
         with:
           pattern: logs-*-windows-latest
           merge-multiple: true
-          path: testresults/windows-latest
+          path: ${{ github.workspace }}/testresults/windows-latest
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: All-TestResults
-          path: testresults/**/*.trx
+          path: ${{ github.workspace }}/testresults/**/*.trx
 
       - name: Generate test results summary
         if: always()
         shell: pwsh
         run: |
-          $testResults = Get-ChildItem -Path testresults/**/*.trx
+          $testResults = Get-ChildItem -Path ${{ github.workspace }}/testresults/**/*.trx
           $totalTestCount = 0
           $passedTestCount = 0
           $failedTestCount = 0
