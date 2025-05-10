@@ -185,14 +185,18 @@ jobs:
           $skippedTestCount = 0
 
           $testResults | ForEach-Object {
-            # Load the .trx file as XML
-            [xml]$trx = Get-Content $_.FullName
+            try {
+              # Load the .trx file as XML
+              [xml]$trx = Get-Content $_.FullName
 
-            # Extract test run summary
-            $totalTestCount += [int]$trx.TestRun.ResultSummary.Counters.total
-            $passedTestCount += [int]$trx.TestRun.ResultSummary.Counters.passed
-            $failedTestCount += [int]$trx.TestRun.ResultSummary.Counters.failed
-            $skippedTestCount += [int]($trx.TestRun.ResultSummary.Counters.executed - $trx.TestRun.ResultSummary.Counters.passed - $trx.TestRun.ResultSummary.Counters.failed)
+              # Extract test run summary
+              $totalTestCount += [int]$trx.TestRun.ResultSummary.Counters.total
+              $passedTestCount += [int]$trx.TestRun.ResultSummary.Counters.passed
+              $failedTestCount += [int]$trx.TestRun.ResultSummary.Counters.failed
+              $skippedTestCount += [int]($trx.TestRun.ResultSummary.Counters.executed - $trx.TestRun.ResultSummary.Counters.passed - $trx.TestRun.ResultSummary.Counters.failed)
+            } catch {
+              Write-Warning "Failed to process file: $_.FullName"
+            }
           }
 
           Write-Output "Total Tests: $totalTestCount"
