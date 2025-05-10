@@ -19,48 +19,50 @@ $passedTestCount = $trx.TestRun.ResultSummary.Counters.passed
 $failedTestCount = $trx.TestRun.ResultSummary.Counters.failed
 $skippedTestCount = $trx.TestRun.ResultSummary.Counters.executed - $passedTestCount - $failedTestCount
 
-if ($failedTestCount -gt 0) {
-    # Parse start and finish times as DateTime
-    $startTime = [DateTime]::Parse($trx.TestRun.Times.start)
-    $finishTime = [DateTime]::Parse($trx.TestRun.Times.finish)
-    $elapsedTime = $finishTime - $startTime
+if ($failedTestCount -lt 0) {
+    exit 0
+}
 
-    # Format elapsed time as a human-readable string
-    $elapsedTimeFormatted = $elapsedTime.ToString("hh\:mm\:ss")
+# Parse start and finish times as DateTime
+$startTime = [DateTime]::Parse($trx.TestRun.Times.start)
+$finishTime = [DateTime]::Parse($trx.TestRun.Times.finish)
+$elapsedTime = $finishTime - $startTime
 
-    $markdown = ""
+# Format elapsed time as a human-readable string
+$elapsedTimeFormatted = $elapsedTime.ToString("hh\:mm\:ss")
 
-    # Start building the markdown summary
-    $markdown += "## Test Summary`n`n"
+$markdown = ""
 
-    $markdown += "<table><th width=`"99999`">✓&nbsp;&nbsp;Passed</th><th width=`"99999`">✘&nbsp;&nbsp;Failed</th><th width=`"99999`">↷&nbsp;&nbsp;Skipped</th><th width=`"99999`">∑&nbsp;&nbsp;Total</th><th width=`"99999`">⧗&nbsp;&nbsp;Elapsed</th><tr><td align=`"center`">$passedTestCount</td><td align=`"center`">$failedTestCount</td><td align=`"center`">$skippedTestCount</td><td align=`"center`">$totalTestCount</td><td align=`"center`">$elapsedTimeFormatted</td></tr></table>`n"
+# Start building the markdown summary
+$markdown += "## Test Summary`n`n"
 
-    $markdown += "`n## Failed Tests`n`n"
+$markdown += "<table><th width=`"99999`">✓&nbsp;&nbsp;Passed</th><th width=`"99999`">✘&nbsp;&nbsp;Failed</th><th width=`"99999`">↷&nbsp;&nbsp;Skipped</th><th width=`"99999`">∑&nbsp;&nbsp;Total</th><th width=`"99999`">⧗&nbsp;&nbsp;Elapsed</th><tr><td align=`"center`">$passedTestCount</td><td align=`"center`">$failedTestCount</td><td align=`"center`">$skippedTestCount</td><td align=`"center`">$totalTestCount</td><td align=`"center`">$elapsedTimeFormatted</td></tr></table>`n"
 
-    $failedResults = $trx.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq "Failed" }
+$markdown += "`n## Failed Tests`n`n"
 
-    $markdown += "<ul>"
-    foreach ($result in $failedResults) {
-        $testName = $result.testName
+$failedResults = $trx.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq "Failed" }
 
-        $markdown += "<li>
-    <details><summary><b>
-    🔴 <a href=`"foobar`">$testName</a> </summary>`n`n"
+$markdown += "<ul>"
+foreach ($result in $failedResults) {
+    $testName = $result.testName
 
-        $errorMsg = $result.Output.ErrorInfo.Message# -replace "\r?\n", " "
+    $markdown += "<li>
+<details><summary><b>
+🔴 <a href=`"foobar`">$testName</a> </summary>`n`n"
 
-        $fullMsg = $errorMsg + $result.Output.ErrorInfo.StackTrace
+    $errorMsg = $result.Output.ErrorInfo.Message# -replace "\r?\n", " "
 
-        # Truncate long error messages for readability
-        if ($fullMsg.Length -gt 50000) {
-            $fullMsg = $fullMsg.Substring(0, 50000) + "..."
-        }
+    $fullMsg = $errorMsg + "`n" + $result.Output.ErrorInfo.StackTrace
 
-        $markdown += "``````yml`n$fullMsg`n```````n`n"
-        $markdown += "</li>"
+    # Truncate long error messages for readability
+    if ($fullMsg.Length -gt 50000) {
+        $fullMsg = $fullMsg.Substring(0, 50000) + "..."
     }
 
-    # Write the markdown to the GitHub step summary
-    Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value $markdown
-    Write-Output "Test summary written to GitHub step summary for $TrxFilePath"
+    $markdown += "``````yml`n$fullMsg`n```````n`n"
+    $markdown += "</li>"
 }
+
+# Write the markdown to the GitHub step summary
+Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value $markdown
+Write-Output "Test summary written to GitHub step summary for $TrxFilePath"

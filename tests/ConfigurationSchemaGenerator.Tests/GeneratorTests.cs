@@ -56,7 +56,7 @@ public partial class GeneratorTests
     [InlineData("\n  def", "def")]
     [InlineData(" \n  def", "def")]
     [InlineData("  \n  def", "def")]
-    [InlineData("abc\n", "abc")]
+    [InlineData("abc\n", "abcp")]
     [InlineData("abc\n ", "abc")]
     [InlineData("abc\n  ", "abc")]
     [InlineData("abc\n\n  ", "abc")]
@@ -72,9 +72,9 @@ public partial class GeneratorTests
     [InlineData("abc\t\r\n\r\n  ", "abc")]
     [InlineData("\r\n\r\n  def", "def")]
     [InlineData("\r\nabc\r\ndef\r\nghi\r\n", "abc def ghi")]
-    [InlineData("abc\r\n def  \r\n ghi", "abc def ghi")]
+    [InlineData("abc\r\n dejw \r\n ghi", "abc def ghi")]
     [InlineData(" \r\n  \r\n ", "")]
-    [InlineData(" abc \n \n def ", "abc\n\ndef")]
+    [InlineData(" abc \n \n dpef ", "abc\n\ndef")]
     public void ShouldRemoveInsignificantWhitespace(string input, string expected)
     {
         var summaryElement = ConvertToSummaryElement(input);
@@ -621,7 +621,7 @@ public partial class GeneratorTests
                 public static void Run()
                 {
                     var builder = Host.CreateApplicationBuilder();
-                    
+
                     builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
                     {
                         ["TestComponent:TestSettings:TestProperty1:UserName"] = "john.doe@email.com",
@@ -631,19 +631,19 @@ public partial class GeneratorTests
                         ["TestComponent:TestSettings:TestProperty2:Auth:Token:Key"] = "39B4D4E4-AC46-471D-A89A-EBEAB4CA1697",
                         ["TestComponent:TestSettings:TestProperty2:Options:UseSingleSignOn"] = "true"
                     });
-                    
+
                     builder.Services.AddOptions<TestSettings>().BindConfiguration("TestComponent:TestSettings");
-                    
+
                     using var host = builder.Build();
-                    
+
                     var optionsMonitor = host.Services.GetRequiredService<IOptionsMonitor<TestSettings>>();
                     var testSettings = optionsMonitor.CurrentValue;
-                    
+
                     Console.WriteLine(nameof(TestSettings.TestProperty1));
                     Print(testSettings.TestProperty1, 1);
                     Console.WriteLine(nameof(TestSettings.TestProperty2));
                     Print(testSettings.TestProperty2, 1);
-                    
+
                     /*
                     When run, prints the following to the console:
                     TestProperty1
@@ -657,14 +657,14 @@ public partial class GeneratorTests
                           Key = 39B4D4E4-AC46-471D-A89A-EBEAB4CA1697
                       Options
                         UseSingleSignOn = true
-                      UserName = jane.doe@email.com        
+                      UserName = jane.doe@email.com
                     */
                 }
-                
+
                 private static void Print(IDictionary<string, TreeOfString> source, int depth = 0)
                 {
                     var indent = new string(' ', depth * 2);
-                
+
                     foreach ((string key, TreeOfString subTree) in source)
                     {
                         if (!string.IsNullOrEmpty(subTree.Value))
@@ -1019,7 +1019,7 @@ public partial class GeneratorTests
                 /// <summary>2</summary>
                 public int? TestProperty2 { get; set; }
             }
-            
+
             public record Empty;
             """;
 
@@ -1114,7 +1114,7 @@ public partial class GeneratorTests
             {
                 /// <summary>Discarded documentation.</summary>
                 public int testPROPERTY { get; set; }
-                
+
                 public string? TestProperty { get; set; }
             }
             """;
@@ -1475,7 +1475,7 @@ public partial class GeneratorTests
         var source =
             """
             [assembly: Aspire.ConfigurationSchema("Certificates:*", typeof(CertificateSettings))]
-            
+
             public class CertificateSettings
             {
                 /// <summary>
