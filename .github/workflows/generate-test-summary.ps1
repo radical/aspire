@@ -31,7 +31,7 @@ if ($failedTestCount -gt 0) {
     $markdown = ""
 
     # Start building the markdown summary
-    $markdown += "# Test Summary`n`n"
+    $markdown += "## Test Summary`n`n"
 
     $markdown += "<table><th width=`"99999`">✓&nbsp;&nbsp;Passed</th><th width=`"99999`">✘&nbsp;&nbsp;Failed</th><th width=`"99999`">↷&nbsp;&nbsp;Skipped</th><th width=`"99999`">∑&nbsp;&nbsp;Total</th><th width=`"99999`">⧗&nbsp;&nbsp;Elapsed</th><tr><td align=`"center`">$passedTestCount</td><td align=`"center`">$failedTestCount</td><td align=`"center`">$skippedTestCount</td><td align=`"center`">$totalTestCount</td><td align=`"center`">$elapsedTimeFormatted</td></tr></table>`n"
 
