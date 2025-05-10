@@ -59,8 +59,8 @@ if ($failedTestCount -gt 0) {
         $markdown += "``````yml`n$fullMsg`n```````n`n"
         $markdown += "</li>"
     }
-}
 
-# Write the markdown to the output file
-Set-Content -Path $OutputFilePath -Value $markdown
-Write-Output "Test summary generated at: $OutputFilePath for $TrxFilePath"
+    # Write the markdown to the GitHub step summary
+    Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value $markdown
+    Write-Output "Test summary written to GitHub step summary for $TrxFilePath"
+}
