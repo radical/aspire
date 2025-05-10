@@ -19,7 +19,7 @@ $passedTestCount = $trx.TestRun.ResultSummary.Counters.passed
 $failedTestCount = $trx.TestRun.ResultSummary.Counters.failed
 $skippedTestCount = $trx.TestRun.ResultSummary.Counters.executed - $passedTestCount - $failedTestCount
 
-if ($failedTestCount -lt 0) {
+if ($failedTestCount -eq 0) {
     exit 0
 }
 
