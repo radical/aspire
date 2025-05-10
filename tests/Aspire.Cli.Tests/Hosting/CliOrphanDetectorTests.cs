@@ -34,7 +34,7 @@ public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
     public async Task CliOrphanDetectorCallsStopIfEnvironmentVariablePresentAndProcessNotRunning()
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { { "ASPIRE_CLI_PID", "1111" } })    
+            .AddInMemoryCollection(new Dictionary<string, string?> { { "ASPIRE_CLI_PID", "1111" } })
             .Build();
 
         var stopSignalChannel = Channel.CreateUnbounded<bool>();
@@ -54,7 +54,7 @@ public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
     public async Task CliOrphanDetectorAfterTheProcessWasRunningForAWhileThenStops()
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { { "ASPIRE_CLI_PID", "1111" } })    
+            .AddInMemoryCollection(new Dictionary<string, string?> { { "ASPIRE_CLI_PID", "1111" } })
             .Build();
         var fakeTimeProvider = new FakeTimeProvider(DateTimeOffset.Now);
 
@@ -63,7 +63,7 @@ public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
 
         var lifetime = new HostLifetimeStub(() => stopSignalChannel.Writer.TryWrite(true));
         var detector = new CliOrphanDetector(configuration, lifetime, fakeTimeProvider);
-        
+
         var processRunningCallCounter = 0;
         detector.IsProcessRunning = pid => {
             Assert.True(processRunningChannel.Writer.TryWrite(++processRunningCallCounter));
@@ -93,17 +93,17 @@ public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/7920")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/7920")]
     public async Task AppHostExitsWhenCliProcessPidDies()
     {
         using var fakeCliProcess = RemoteExecutor.Invoke(
             static () => Thread.Sleep(Timeout.Infinite),
             new RemoteInvokeOptions { CheckExitCode = false }
             );
-            
+
         using var builder = TestDistributedApplicationBuilder.Create().WithTestAndResourceLogging(testOutputHelper);
         builder.Configuration["ASPIRE_CLI_PID"] = fakeCliProcess.Process.Id.ToString();
-        
+
         var resourcesCreatedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         builder.Eventing.Subscribe<AfterResourcesCreatedEvent>((e, ct) => {
             resourcesCreatedTcs.SetResult();

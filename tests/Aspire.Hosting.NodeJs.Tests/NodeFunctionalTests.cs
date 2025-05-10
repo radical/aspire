@@ -20,7 +20,7 @@ public class NodeFunctionalTests : IClassFixture<NodeAppFixture>
     [Fact]
     [RequiresTools(["node"])]
     [ActiveIssue("https://github.com/dotnet/aspire/issues/4508", typeof(PlatformDetection), nameof(PlatformDetection.IsRunningFromAzdo))]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/8920")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/8920")]
     public async Task VerifyNodeAppWorks()
     {
         using var cts = new CancellationTokenSource(TestConstants.LongTimeoutDuration);
@@ -33,7 +33,7 @@ public class NodeFunctionalTests : IClassFixture<NodeAppFixture>
     [Fact]
     [RequiresTools(["npm"])]
     [ActiveIssue("https://github.com/dotnet/aspire/issues/4508", typeof(PlatformDetection), nameof(PlatformDetection.IsRunningFromAzdo))]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/8870")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/8870")]
     public async Task VerifyNpmAppWorks()
     {
         using var cts = new CancellationTokenSource(TestConstants.LongTimeoutDuration);

@@ -16,7 +16,7 @@ namespace Aspire.Playground.Tests;
 public class ProjectSpecificTests(ITestOutputHelper _testOutput)
 {
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/9171")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/9171")]
     public async Task WithDockerfileTest()
     {
         var appHost = await DistributedApplicationTestFactory.CreateAsync(typeof(Projects.WithDockerfile_AppHost), _testOutput);
@@ -33,7 +33,7 @@ public class ProjectSpecificTests(ITestOutputHelper _testOutput)
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/6867")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/6867")]
     public async Task KafkaTest()
     {
         var appHost = await DistributedApplicationTestFactory.CreateAsync(typeof(Projects.KafkaBasic_AppHost), _testOutput);

@@ -559,7 +559,7 @@ public class DistributedApplicationTests
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/4651")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/4651")]
     public async Task VerifyExecutableStopStartWorks()
     {
         const string testName = "executable-start-stop";
@@ -690,7 +690,7 @@ public class DistributedApplicationTests
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/4651")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/4651")]
     public async Task StartAsync_UnsecuredAllowAnonymous_PassedToDashboardProcess()
     {
         const string testName = "dashboard-allow-anonymous";
@@ -938,7 +938,7 @@ public class DistributedApplicationTests
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/8728")]
+    //[QuarantinedTest("https://github.com/dotnet/aspire/issues/8728")]
     public async Task ProxylessEndpointWorks()
     {
         const string testName = "proxyless-endpoint-works";
