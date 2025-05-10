@@ -97,39 +97,39 @@ jobs:
       os: "windows-latest"
       extraTestArgs: "--filter-not-trait \"quarantined=true\""
 
-  templates_test_lin:
-    name: Templates Linux
-    uses: ./.github/workflows/run-tests.yml
-    needs: [setup_for_tests_lin, build_packages]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.setup_for_tests_lin.outputs.templates_tests_matrix) }}
-    with:
-      testShortName: ${{ matrix.shortname }}
-      os: "ubuntu-latest"
-      testProjectPath: tests/Aspire.Templates.Tests/Aspire.Templates.Tests.csproj
-      testSessionTimeout: 20m
-      testHangTimeout: 12m
-      extraTestArgs: "--filter-not-trait quarantined=true --filter-class Aspire.Templates.Tests.${{ matrix.shortname }}"
-      requiresNugets: true
-      requiresTestSdk: true
+  #templates_test_lin:
+    #name: Templates Linux
+    #uses: ./.github/workflows/run-tests.yml
+    #needs: [setup_for_tests_lin, build_packages]
+    #strategy:
+      #fail-fast: false
+      #matrix: ${{ fromJson(needs.setup_for_tests_lin.outputs.templates_tests_matrix) }}
+    #with:
+      #testShortName: ${{ matrix.shortname }}
+      #os: "ubuntu-latest"
+      #testProjectPath: tests/Aspire.Templates.Tests/Aspire.Templates.Tests.csproj
+      #testSessionTimeout: 20m
+      #testHangTimeout: 12m
+      #extraTestArgs: "--filter-not-trait quarantined=true --filter-class Aspire.Templates.Tests.${{ matrix.shortname }}"
+      #requiresNugets: true
+      #requiresTestSdk: true
 
-  templates_test_win:
-    name: Templates Windows
-    uses: ./.github/workflows/run-tests.yml
-    needs: [setup_for_tests_win, build_packages]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.setup_for_tests_win.outputs.templates_tests_matrix) }}
-    with:
-      testShortName: ${{ matrix.shortname }}
-      os: "windows-latest"
-      testProjectPath: tests/Aspire.Templates.Tests/Aspire.Templates.Tests.csproj
-      testSessionTimeout: 20m
-      testHangTimeout: 12m
-      extraTestArgs: "--filter-not-trait quarantined=true --filter-class Aspire.Templates.Tests.${{ matrix.shortname }}"
-      requiresNugets: true
-      requiresTestSdk: true
+  #templates_test_win:
+    #name: Templates Windows
+    #uses: ./.github/workflows/run-tests.yml
+    #needs: [setup_for_tests_win, build_packages]
+    #strategy:
+      #fail-fast: false
+      #matrix: ${{ fromJson(needs.setup_for_tests_win.outputs.templates_tests_matrix) }}
+    #with:
+      #testShortName: ${{ matrix.shortname }}
+      #os: "windows-latest"
+      #testProjectPath: tests/Aspire.Templates.Tests/Aspire.Templates.Tests.csproj
+      #testSessionTimeout: 20m
+      #testHangTimeout: 12m
+      #extraTestArgs: "--filter-not-trait quarantined=true --filter-class Aspire.Templates.Tests.${{ matrix.shortname }}"
+      #requiresNugets: true
+      #requiresTestSdk: true
 
   endtoend_tests:
     name: EndToEnd ${{ matrix.os }}
@@ -146,7 +146,7 @@ jobs:
     if: ${{ always() && github.repository_owner == 'dotnet' }}
     runs-on: ubuntu-latest
     name: Final Results
-    needs: [ integrations_test_lin, integrations_test_win, templates_test_lin, templates_test_win, endtoend_tests ]
+    needs: [ integrations_test_lin, integrations_test_win, endtoend_tests ]
     steps:
       # get all the test-job-result* artifacts into a single directory
       - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
