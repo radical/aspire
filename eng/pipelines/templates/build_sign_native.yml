@@ -76,8 +76,8 @@ jobs:
           - task: PowerShell@2
             displayName: Generate Release
             inputs:
-              filePath: $(Build.SourcesDirectory)\eng\scripts\GenerateGithubRelease.ps1
-              arguments: -ManifestPath $(Build.SourcesDirectory)\eng\manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ignore-test-version
+w             filePath: $(Build.SourcesDirectory)/eng/scripts/GenerateGithubRelease.ps1
+              arguments: -ManifestPath $(Build.SourcesDirectory)/eng/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ignore-test-version
               workingDirectory: $(Build.SourcesDirectory)
             env:
               GITHUB_TOKEN: $(BotAccount-dotnet-bot-repo-PAT)
