@@ -76,7 +76,7 @@ jobs:
           - task: PowerShell@2
             displayName: Generate Release
             inputs:
-w             filePath: $(Build.SourcesDirectory)/eng/scripts/GenerateGithubRelease.ps1
+              filePath: $(Build.SourcesDirectory)/eng/scripts/GenerateGithubRelease.ps1
               arguments: -ManifestPath $(Build.SourcesDirectory)/eng/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ignore-test-version
               workingDirectory: $(Build.SourcesDirectory)
             env:
