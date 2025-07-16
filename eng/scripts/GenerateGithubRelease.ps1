@@ -195,12 +195,22 @@ function Publish-GithubRelease($manifest, [string]$releaseBody)
     }
 
     $releaseNotes = $(Get-ChildItem $releaseNotes).FullName
-    & $ghTool release create $TagName `
-        --repo "`"$GhOrganization/$GhRepository`"" `
-        --title "`"Aspire Release - $TagName`"" `
-        --notes-file "`"$releaseNotes`"" `
-        --target $manifest.Commit `
-        ($extraParameters -join ' ')
+
+    # Build the command arguments array
+    $ghArgs = @(
+        'release', 'create', $TagName,
+        '--repo', "$GhOrganization/$GhRepository",
+        '--title', "Aspire Release - $TagName",
+        '--notes-file', $releaseNotes,
+        '--target', $manifest.Commit
+    )
+
+    # Add extra parameters if any
+    if ($extraParameters.Count -gt 0) {
+        $ghArgs += $extraParameters
+    }
+
+    & $ghTool $ghArgs
 
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
@@ -241,5 +251,4 @@ $manifestJson = Get-Content -Raw -Path $ManifestPath | ConvertFrom-Json
 $releaseNotesText = Get-ReleaseNotes
 $releaseNotesText += Get-ReleasedPackages $manifestJson
 
-Publish-GithubRelease -manifest $manifestJson `
-                -releaseBody $releaseNotesText `
+Publish-GithubRelease -manifest $manifestJson -releaseBody $releaseNotesText
