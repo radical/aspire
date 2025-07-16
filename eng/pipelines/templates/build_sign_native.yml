@@ -94,7 +94,7 @@ jobs:
 
                 if ($aspireCliFiles.Count -eq 0) {
                     Write-Host "##vso[task.logissue type=error]No aspire-cli-* files found in $packagesPath"
-                    Write-Host "Listing all files recursively under $packagesPath:"
+                    Write-Host "Listing all files recursively under ${packagesPath}:"
                     if (Test-Path $packagesPath) {
                         gci -Path $packagesPath -Recurse | % {
                             Write-Host "  $_.FullName"
