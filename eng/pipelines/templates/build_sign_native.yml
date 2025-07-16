@@ -81,8 +81,32 @@ jobs:
                 $commit = "$(Build.SourceVersion)"
                 $packagesPath = "$(Build.Arcade.ArtifactsPath)packages"
 
+                Write-Host "Searching for aspire-cli-* files in: $packagesPath"
+
+                # Check if packages directory exists
+                if (-not (Test-Path $packagesPath)) {
+                    Write-Host "##vso[task.logissue type=error]Packages directory does not exist: $packagesPath"
+                    exit 1
+                }
+
                 # Find all aspire-cli-* files
                 $aspireCliFiles = Get-ChildItem -Path $packagesPath -Name "aspire-cli-*" -ErrorAction SilentlyContinue
+
+                if ($aspireCliFiles.Count -eq 0) {
+                    Write-Host "##vso[task.logissue type=error]No aspire-cli-* files found in $packagesPath"
+                    Write-Host "Listing all files recursively under $packagesPath:"
+                    if (Test-Path $packagesPath) {
+                        gci -Path $packagesPath -Recurse | % {
+                            Write-Host "  $_.FullName"
+                        }
+                    }
+                    exit 1
+                }
+
+                Write-Host "Found $($aspireCliFiles.Count) aspire-cli-* files:"
+                foreach ($file in $aspireCliFiles) {
+                    Write-Host "  $file"
+                }
 
                 # Create NugetAssets array
                 $nugetAssets = @()
