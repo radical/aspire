@@ -78,7 +78,7 @@ jobs:
             inputs:
               targetType: 'inline'
               script: |
-                $commit = "$(Build.SourceVersion)"
+                $commit = "main"
                 $packagesPath = "$(Build.Arcade.ArtifactsPath)packages"
 
                 Write-Host "Searching for aspire-cli-* files in: $packagesPath"
