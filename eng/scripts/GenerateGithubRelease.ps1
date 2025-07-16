@@ -56,15 +56,22 @@ function Get-PlatformSpecificGhCliLink()
     }
 }
 
-function Get-PlatformSpecificGhExecutable([string]$extractionPath)
+function Get-PlatformSpecificGhExecutable([string]$extractionPath, [string]$archiveUrl)
 {
+    # Extract the archive name without extension to get the parent directory
+    $archiveName = [IO.Path]::GetFileNameWithoutExtension($archiveUrl)
+    if ($archiveName.EndsWith(".tar"))
+    {
+        $archiveName = [IO.Path]::GetFileNameWithoutExtension($archiveName)
+    }
+
     if ($IsWindows -or $env:OS -eq "Windows_NT")
     {
-        return [IO.Path]::Combine($extractionPath, "bin", "gh.exe")
+        return [IO.Path]::Combine($extractionPath, $archiveName, "bin", "gh.exe")
     }
     else
     {
-        return [IO.Path]::Combine($extractionPath, "bin", "gh")
+        return [IO.Path]::Combine($extractionPath, $archiveName, "bin", "gh")
     }
 }
 
@@ -120,7 +127,7 @@ function Publish-GithubRelease($manifest, [string]$releaseBody)
         $archivePath = Join-Path $extractionPath "ghcli.tar.gz"
     }
 
-    $ghTool = Get-PlatformSpecificGhExecutable $extractionPath
+    $ghTool = Get-PlatformSpecificGhExecutable $extractionPath $platformGhCliLink
 
     Write-Host "Downloading GitHub CLI from $platformGhCliLink."
     try
