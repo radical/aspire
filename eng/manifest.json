@@ -1,0 +1,8 @@
+{
+  "Commit": "bar",
+  "NugetAssets": [
+    {
+      "PublishRelativePath": "foo"
+    }
+  ]
+}
