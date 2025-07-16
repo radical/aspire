@@ -77,8 +77,13 @@ jobs:
             displayName: Generate Release
             inputs:
               filePath: $(Build.SourcesDirectory)/eng/scripts/GenerateGithubRelease.ps1
-              arguments: -ManifestPath $(Build.SourcesDirectory)/eng/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ignore-test-version
+              arguments: -ManifestPath $(Build.SourcesDirectory)/eng/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ignore-test-version -Verbose
               workingDirectory: $(Build.SourcesDirectory)
+              verbosePreference: Continue
+              debugPreference: Continue
+              informationPreference: Continue
+              warningPreference: Continue
+              errorActionPreference: Stop
             env:
               GITHUB_TOKEN: $(BotAccount-dotnet-bot-repo-PAT)
 
