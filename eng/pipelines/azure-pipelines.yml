@@ -129,18 +129,18 @@ extends:
             $(_SignArgs)
             $(_OfficialBuildIdArgs)
 
-      - template: /eng/pipelines/templates/build_sign_native.yml@self
-        parameters:
-          agentOs: linux
-          targetRidsForSameOS:
-            - linux-x64
-          # no need to sign ELF binaries on linux
-          codeSign: false
-          teamName: $(_TeamName)
-          extraBuildArgs: >-
-            /p:Configuration=$(_BuildConfig)
-            $(_SignArgs)
-            $(_OfficialBuildIdArgs)
+      #- template: /eng/pipelines/templates/build_sign_native.yml@self
+        #parameters:
+          #agentOs: linux
+          #targetRidsForSameOS:
+            #- linux-x64
+          ## no need to sign ELF binaries on linux
+          #codeSign: false
+          #teamName: $(_TeamName)
+          #extraBuildArgs: >-
+            #/p:Configuration=$(_BuildConfig)
+            #$(_SignArgs)
+            #$(_OfficialBuildIdArgs)
 
     # ----------------------------------------------------------------
     # This stage performs build, test, packaging
