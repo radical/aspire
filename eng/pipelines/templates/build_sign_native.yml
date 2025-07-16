@@ -90,14 +90,14 @@ jobs:
                 }
 
                 # Find all aspire-cli-* files
-                $aspireCliFiles = Get-ChildItem -Path $packagesPath -Name "aspire-cli-*" -ErrorAction SilentlyContinue
+                $aspireCliFiles = Get-ChildItem -Path $packagesPath -Name "aspire-cli-*" -Recurse -ErrorAction SilentlyContinue
 
                 if ($aspireCliFiles.Count -eq 0) {
                     Write-Host "##vso[task.logissue type=error]No aspire-cli-* files found in $packagesPath"
                     Write-Host "Listing all files recursively under ${packagesPath}:"
                     if (Test-Path $packagesPath) {
-                        gci -Path $packagesPath -Recurse | % {
-                            Write-Host "  $_.FullName"
+                        Get-ChildItem -Path $packagesPath -Recurse | ForEach-Object {
+                            Write-Host "  $($_.FullName)"
                         }
                     }
                     exit 1
