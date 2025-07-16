@@ -137,7 +137,7 @@ jobs:
             displayName: Generate Release
             inputs:
               filePath: $(Build.SourcesDirectory)/eng/scripts/GenerateGithubRelease.ps1
-              arguments: -ManifestPath $(Build.Arcade.ArtifactsPath)packages/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName $(Build.SourceBranchName) -DraftRelease true -Verbose
+              arguments: -ManifestPath $(Build.Arcade.ArtifactsPath)packages/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName $(Build.SourceBranchName) -DraftRelease $True -Verbose
               workingDirectory: $(Build.SourcesDirectory)
               verbosePreference: Continue
               debugPreference: Continue
