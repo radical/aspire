@@ -74,10 +74,44 @@ jobs:
             displayName: 🟣Build native packages
 
           - task: PowerShell@2
+            displayName: Generate Manifest JSON
+            inputs:
+              targetType: 'inline'
+              script: |
+                $commit = "$(Build.SourceVersion)"
+                $packagesPath = "$(Build.Arcade.ArtifactsPath)packages"
+
+                # Find all aspire-cli-* files
+                $aspireCliFiles = Get-ChildItem -Path $packagesPath -Name "aspire-cli-*" -ErrorAction SilentlyContinue
+
+                # Create NugetAssets array
+                $nugetAssets = @()
+                foreach ($file in $aspireCliFiles) {
+                    $nugetAssets += @{
+                        PublishRelativePath = $file
+                    }
+                }
+
+                # Create manifest object
+                $manifest = @{
+                    Commit = $commit
+                    NugetAssets = $nugetAssets
+                }
+
+                # Convert to JSON and save
+                $manifestJson = $manifest | ConvertTo-Json -Depth 10
+                $manifestPath = Join-Path $packagesPath "manifest.json"
+                Write-Host "Writing manifest to: $manifestPath"
+                Write-Host "Manifest content:"
+                Write-Host $manifestJson
+                $manifestJson | Out-File -FilePath $manifestPath -Encoding utf8
+              workingDirectory: $(Build.SourcesDirectory)
+
+          - task: PowerShell@2
             displayName: Generate Release
             inputs:
               filePath: $(Build.SourcesDirectory)/eng/scripts/GenerateGithubRelease.ps1
-              arguments: -ManifestPath $(Build.SourcesDirectory)/eng/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ignore-test-version -Verbose
+              arguments: -ManifestPath $(Build.Arcade.ArtifactsPath)packages/manifest.json -GhRepository aspire -GhOrganization dotnet -TagName ankj-test-release -Verbose
               workingDirectory: $(Build.SourcesDirectory)
               verbosePreference: Continue
               debugPreference: Continue
