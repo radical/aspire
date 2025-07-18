@@ -116,7 +116,7 @@ EXAMPLES:
     if ($InvokedFromFile) { exit 0 } else { return }
 }
 
-# Consolidated output function with fallback for platforms that don"t support Write-Host
+# Consolidated output function with fallback for platforms that don't support Write-Host
 function Write-Message {
     [CmdletBinding()]
     param(
@@ -124,8 +124,8 @@ function Write-Message {
         [string]$Message,
 
         [Parameter()]
-        [ValidateSet('Verbose', 'Info', 'Success', 'Warning', 'Error')]
-        [string]$Level = 'Info'
+        [ValidateSet("Verbose", "Info", "Success", "Warning", "Error")]
+        [string]$Level = "Info"
     )
 
     $hasWriteHost = Get-Command Write-Host -ErrorAction SilentlyContinue
@@ -321,11 +321,11 @@ function Get-CLIArchitectureFromArchitecture {
         { $_ -eq "x86" } {
             return "x86"
         }
-        { $_ -eq "arm64" } {
-            return "arm64"
-        }
+        # { $_ -eq "arm64" } {
+            # return "arm64"
+        # }
         default {
-            throw "Architecture "$Architecture" not supported. If you think this is a bug, report it at https://github.com/dotnet/aspire/issues"
+            throw "Architecture '$Architecture' not supported. If you think this is a bug, report it at https://github.com/dotnet/aspire/issues"
         }
     }
 }
@@ -476,7 +476,7 @@ function Invoke-FileDownload {
     # Validate content type via HEAD request
     Write-Message "Validating content type for $Uri" -Level Verbose
     $contentType = Get-ContentTypeFromUri -Uri $Uri -TimeoutSec 60 -OperationTimeoutSec $OperationTimeoutSec -MaxRetries $MaxRetries
-    Write-Message "Detected content type: "$contentType"" -Level Verbose
+    Write-Message "Detected content type: $contentType" -Level Verbose
 
     if ($contentType -and $contentType.ToLowerInvariant().StartsWith("text/html")) {
         throw "Server returned HTML content instead of expected file. Make sure the URL is correct: $Uri"
@@ -550,7 +550,7 @@ function Expand-AspireCliArchive {
     Write-Message "Unpacking archive to: $DestinationPath" -Level Verbose
 
     try {
-        # Create destination directory if it doesn"t exist
+        # Create destination directory if it doesn't exist
         if (-not (Test-Path $DestinationPath)) {
             Write-Message "Creating destination directory: $DestinationPath" -Level Verbose
             New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
@@ -684,7 +684,7 @@ function Update-PathEnvironment {
         }
         catch {
             Write-Message "Failed to update persistent PATH environment variable: $($_.Exception.Message)" -Level Warning
-            Write-Message "You may need to manually add "$InstallPath" to your PATH environment variable" -Level Info
+            Write-Message "You may need to manually add $InstallPath to your PATH environment variable" -Level Info
         }
     }
 
@@ -724,7 +724,7 @@ function Get-AspireCliUrl {
 
     # Validate quality against supported values
     if ($Quality -notin $Script:Config.SupportedQualities) {
-        throw "Unsupported quality "$Quality". Supported values are: $($Script:Config.SupportedQualities -join ", ")."
+        throw "Unsupported quality '$Quality'. Supported values are: $($Script:Config.SupportedQualities -join ", ")."
     }
 
     if ([string]::IsNullOrWhiteSpace($Version)) {
@@ -873,11 +873,11 @@ function Start-AspireCliInstallation {
 
         # Additional parameter validation
         if (-not [string]::IsNullOrWhiteSpace($OS) -and $OS -notin $Script:Config.SupportedOperatingSystems) {
-            throw "Unsupported OS "$OS". Supported values are: $($Script:Config.SupportedOperatingSystems -join ", ")"
+            throw "Unsupported OS '$OS'. Supported values are: $($Script:Config.SupportedOperatingSystems -join ', '))"
         }
 
         if (-not [string]::IsNullOrWhiteSpace($Architecture) -and $Architecture -notin $Script:Config.SupportedArchitectures) {
-            throw "Unsupported Architecture "$Architecture". Supported values are: $($Script:Config.SupportedArchitectures -join ", ")"
+            throw "Unsupported Architecture $Architecture. Supported values are: $($Script:Config.SupportedArchitectures -join ", ")"
         }
 
         # Determine the installation path
@@ -917,7 +917,7 @@ function Start-AspireCliInstallation {
 
 # Run main function and handle exit code
 try {
-    # Ensure we"re not in strict mode which can cause issues in PowerShell 5.1
+    # Ensure we're not in strict mode which can cause issues in PowerShell 5.1
     if (-not $Script:IsModernPowerShell) {
         Set-StrictMode -Off
     }
