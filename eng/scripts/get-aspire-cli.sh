@@ -18,11 +18,13 @@ readonly RESET='\033[0m'
 # Default values
 INSTALL_PATH=""
 VERSION=""
+QUALITY=""
 OS=""
 ARCH=""
 SHOW_HELP=false
 VERBOSE=false
 KEEP_ARCHIVE=false
+DRY_RUN=false
 
 # Function to show help
 show_help() {
@@ -47,6 +49,7 @@ USAGE:
     --os OS                     Operating system (default: auto-detect)
     --arch ARCH                 Architecture (default: auto-detect)
     -k, --keep-archive          Keep downloaded archive files and temporary directory after installation
+    --dry-run                   Show what would be done without actually performing any actions
     -v, --verbose               Enable verbose output
     -h, --help                  Show this help message
 
@@ -57,6 +60,7 @@ EXAMPLES:
     ./get-aspire-cli.sh --version "9.5.0-preview.1.25366.3"
     ./get-aspire-cli.sh --os "linux" --arch "x64"
     ./get-aspire-cli.sh --keep-archive
+    ./get-aspire-cli.sh --dry-run
     ./get-aspire-cli.sh --help
 
     # Piped execution (like wget <url> | bash or curl <url> | bash):
@@ -119,6 +123,10 @@ parse_args() {
                 KEEP_ARCHIVE=true
                 shift
                 ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -153,6 +161,158 @@ say_warn() {
 
 say_info() {
     echo -e "$1" >&2
+}
+
+# Function to show dry-run information
+show_dry_run_info() {
+    local temp_dir="$1"
+    local os arch runtimeIdentifier url checksum_url extension
+    local bin_path_unexpanded config_file shell_name
+    local xdg_config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+    # Detect OS and architecture if not provided
+    if [[ -z "$OS" ]]; then
+        if ! os=$(detect_os); then
+            say_error "Unsupported operating system. Current platform: $(uname -s)"
+            return 1
+        fi
+    else
+        os="$OS"
+    fi
+
+    if [[ -z "$ARCH" ]]; then
+        if ! arch=$(get_cli_architecture_from_architecture "<auto>"); then
+            return 1
+        fi
+    else
+        if ! arch=$(get_cli_architecture_from_architecture "$ARCH"); then
+            return 1
+        fi
+    fi
+
+    # Construct the runtime identifier
+    runtimeIdentifier="${os}-${arch}"
+
+    # Determine file extension based on OS
+    if [[ "$os" == "win" ]]; then
+        extension="zip"
+    else
+        extension="tar.gz"
+    fi
+
+    # Construct the URLs
+    if ! url=$(construct_aspire_cli_url "$VERSION" "$QUALITY" "$runtimeIdentifier" "$extension"); then
+        return 1
+    fi
+    if ! checksum_url=$(construct_aspire_cli_url "$VERSION" "$QUALITY" "$runtimeIdentifier" "$extension" "true"); then
+        return 1
+    fi
+
+    # Determine shell profile info
+    if [[ -n "${SHELL:-}" ]]; then
+        shell_name=$(basename "$SHELL")
+    else
+        shell_name=$(ps -p $$ -o comm= 2>/dev/null || echo "sh")
+    fi
+
+    case "$shell_name" in
+        bash|zsh|fish)
+            ;;
+        sh|dash|ash)
+            shell_name="sh"
+            ;;
+        *)
+            shell_name="bash"
+            ;;
+    esac
+
+    local config_files
+    case "$shell_name" in
+        bash)
+            config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile $xdg_config_home/bash/.bashrc $xdg_config_home/bash/.bash_profile"
+            ;;
+        zsh)
+            config_files="$HOME/.zshrc $HOME/.zshenv $xdg_config_home/zsh/.zshrc $xdg_config_home/zsh/.zshenv"
+            ;;
+        fish)
+            config_files="$HOME/.config/fish/config.fish"
+            ;;
+        sh)
+            config_files="$HOME/.profile /etc/profile"
+            ;;
+        *)
+            config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile"
+            ;;
+    esac
+
+    # Find the first existing config file or use the first in the list
+    for file in $config_files; do
+        if [[ -f "$file" ]]; then
+            config_file="$file"
+            break
+        fi
+    done
+
+    if [[ -z $config_file ]]; then
+        # Use the first file in the list if none exist
+        config_file=$(echo $config_files | cut -d' ' -f1)
+    fi
+
+    # Set path variables
+    if [[ -z "$INSTALL_PATH_UNEXPANDED" ]]; then
+        bin_path_unexpanded="\$HOME/.aspire/bin"
+    else
+        bin_path_unexpanded="$INSTALL_PATH_UNEXPANDED"
+    fi
+
+    echo -e "${GREEN}=== DRY RUN MODE ===${RESET}"
+    echo -e "${YELLOW}The following actions would be performed:${RESET}\n"
+
+    echo -e "${GREEN}1. URLs that would be downloaded:${RESET}"
+    echo -e "   Archive: $url"
+    echo -e "   Checksum: $checksum_url\n"
+
+    echo -e "${GREEN}2. PATH additions that would be made:${RESET}"
+    echo -e "   Install path: $INSTALL_PATH"
+    echo -e "   Unexpanded path: $bin_path_unexpanded\n"
+
+    echo -e "${GREEN}3. Profile file that would be patched:${RESET}"
+    echo -e "   Shell: $shell_name"
+    echo -e "   Config file: $config_file"
+    case "$shell_name" in
+        bash|zsh|sh)
+            echo -e "   Command to add: export PATH=\"$bin_path_unexpanded:\$PATH\""
+            ;;
+        fish)
+            echo -e "   Command to add: fish_add_path $bin_path_unexpanded"
+            ;;
+    esac
+    echo ""
+
+    echo -e "${GREEN}4. GITHUB_PATH environment variable:${RESET}"
+    if [[ -n "${GITHUB_ACTIONS:-}" ]] && [[ "${GITHUB_ACTIONS}" == "true" ]]; then
+        if [[ -n "${GITHUB_PATH:-}" ]]; then
+            echo -e "   Would append '$INSTALL_PATH' to: $GITHUB_PATH"
+        else
+            echo -e "   GITHUB_PATH is not set"
+        fi
+    else
+        echo -e "   Not running in GitHub Actions environment"
+    fi
+    echo ""
+
+    echo -e "${GREEN}5. Additional actions:${RESET}"
+    echo -e "   Would create temporary directory: $temp_dir"
+    echo -e "   Would create install directory: $INSTALL_PATH"
+    echo -e "   Would download and extract archive to: $INSTALL_PATH"
+    echo -e "   Would validate checksum of downloaded archive"
+    if [[ "$KEEP_ARCHIVE" == true ]]; then
+        echo -e "   Would keep archive files in: $temp_dir"
+    else
+        echo -e "   Would clean up temporary files from: $temp_dir"
+    fi
+
+    echo -e "\n${YELLOW}No actual files or directories would be created, modified, or downloaded.${RESET}"
 }
 
 # Function to detect OS
@@ -300,6 +460,11 @@ download_file() {
     local validate_content_type="${5:-true}"
     local use_temp_file="${6:-true}"
 
+    if [[ "$DRY_RUN" == true ]]; then
+        say_info "[DRY RUN] Would download $url"
+        return 0
+    fi
+
     local target_file="$output_path"
     if [[ "$use_temp_file" == true ]]; then
         target_file="${output_path}.tmp"
@@ -325,7 +490,7 @@ download_file() {
         say_verbose "Successfully downloaded file to: $output_path"
         return 0
     else
-        say_error "Failed to download $url to $output_path"
+        say_error "Failed to download $url"
         return 1
     fi
 }
@@ -334,6 +499,11 @@ download_file() {
 validate_checksum() {
     local archive_file="$1"
     local checksum_file="$2"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        say_info "[DRY RUN] Would validate checksum of $archive_file using $checksum_file"
+        return 0
+    fi
 
     # Determine the checksum command to use
     local checksum_cmd=""
@@ -378,6 +548,11 @@ install_archive() {
     local archive_file="$1"
     local destination_path="$2"
     local os="$3"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        say_info "[DRY RUN] Would install archive $archive_file to $destination_path"
+        return 0
+    fi
 
     say_verbose "Installing archive to: $destination_path"
 
@@ -424,6 +599,12 @@ add_to_path()
     local config_file="$1"
     local bin_path="$2"
     local command="$3"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        say_info "[DRY RUN] Would check if $bin_path is already in \$PATH"
+        say_info "[DRY RUN] Would add '$command' to $config_file if not already present"
+        return 0
+    fi
 
     if [[ ":$PATH:" == *":$bin_path:"* ]]; then
         say_info "Path $bin_path already exists in \$PATH, skipping addition"
@@ -640,7 +821,9 @@ download_and_install_archive() {
         return 1
     fi
 
-    say_verbose "Successfully downloaded and validated: $filename"
+    if [[ "$DRY_RUN" != true ]]; then
+        say_verbose "Successfully downloaded and validated: $filename"
+    fi
 
     # Install the archive
     if ! install_archive "$filename" "$INSTALL_PATH" "$os"; then
@@ -687,12 +870,21 @@ else
 fi
 
 # Create a temporary directory for downloads
-temp_dir=$(mktemp -d -t aspire-cli-download-XXXXXXXX)
-say_verbose "Creating temporary directory: $temp_dir"
+if [[ "$DRY_RUN" == true ]]; then
+    temp_dir="/tmp/aspire-cli-dry-run"
+else
+    temp_dir=$(mktemp -d -t aspire-cli-download-XXXXXXXX)
+    say_verbose "Creating temporary directory: $temp_dir"
+fi
 
 # Cleanup function for temporary directory
 cleanup() {
     # shellcheck disable=SC2317  # Function is called via trap
+    if [[ "$DRY_RUN" == true ]]; then
+        # No cleanup needed in dry-run mode
+        return 0
+    fi
+
     if [[ -n "${temp_dir:-}" ]] && [[ -d "$temp_dir" ]]; then
         if [[ "$KEEP_ARCHIVE" != true ]]; then
             say_verbose "Cleaning up temporary files..."
@@ -714,8 +906,12 @@ fi
 # Handle GitHub Actions environment
 if [[ -n "${GITHUB_ACTIONS:-}" ]] && [[ "${GITHUB_ACTIONS}" == "true" ]]; then
     if [[ -n "${GITHUB_PATH:-}" ]]; then
-        echo "$INSTALL_PATH" >> "$GITHUB_PATH"
-        say_verbose "Added $INSTALL_PATH to \$GITHUB_PATH"
+        if [[ "$DRY_RUN" == true ]]; then
+            say_info "[DRY RUN] Would add $INSTALL_PATH to \$GITHUB_PATH"
+        else
+            echo "$INSTALL_PATH" >> "$GITHUB_PATH"
+            say_verbose "Added $INSTALL_PATH to \$GITHUB_PATH"
+        fi
     fi
 fi
 
@@ -724,5 +920,9 @@ add_to_shell_profile "$INSTALL_PATH" "$INSTALL_PATH_UNEXPANDED"
 
 # Add to current session PATH, if the path is not already in PATH
 if [[ ":$PATH:" != *":$INSTALL_PATH:"* ]]; then
-    export PATH="$INSTALL_PATH:$PATH"
+    if [[ "$DRY_RUN" == true ]]; then
+        say_info "[DRY RUN] Would add $INSTALL_PATH to PATH"
+    else
+        export PATH="$INSTALL_PATH:$PATH"
+    fi
 fi
