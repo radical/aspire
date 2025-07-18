@@ -655,9 +655,6 @@ function Update-PathEnvironment {
             $env:PATH = (@($InstallPath) + $currentPathArray) -join $pathSeparator
             Write-Message "Added $InstallPath to PATH for current session" -Level Info
         }
-        else {
-            Write-Message "Would add $InstallPath to PATH for current session" -Level Info
-        }
     }
 
     # Update persistent PATH for Windows
@@ -671,9 +668,6 @@ function Update-PathEnvironment {
                     $newUserPath = (@($InstallPath) + $userPathArray) -join $pathSeparator
                     [Environment]::SetEnvironmentVariable("PATH", $newUserPath, [EnvironmentVariableTarget]::User)
                     Write-Message "Added $InstallPath to user PATH environment variable" -Level Info
-                }
-                else {
-                    Write-Message "Would add $InstallPath to user PATH environment variable" -Level Info
                 }
             }
 
