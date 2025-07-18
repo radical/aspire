@@ -734,6 +734,158 @@ Write-Output "INSTALLATION_COMPLETED"
         }
     } 0 "Runtime identifier validation" ""
 
+    Write-ColoredOutput "=== Comprehensive Quality/OS/Architecture Combination Tests ===" -Color 'Yellow'
+
+    # Test all combinations of Quality/OS/Architecture using -WhatIf to verify URL construction
+    $qualities = @("staging", "ga", "dev")
+    $operatingSystems = @("win", "linux", "linux-musl", "osx")
+    $architectures = @("x64", "x86", "arm64")
+
+    $expectedUrls = @{
+        "staging" = "https://aka.ms/dotnet/9/aspire/rc/daily"
+        "ga" = "https://aka.ms/dotnet/9/aspire/ga/daily"
+        "dev" = "https://aka.ms/dotnet/9/aspire/daily"
+    }
+
+    $testNumber = 31
+    foreach ($quality in $qualities) {
+        foreach ($os in $operatingSystems) {
+            foreach ($arch in $architectures) {
+                $testName = "WhatIf Quality($quality) OS($os) Arch($arch)"
+                $expectedUrl = $expectedUrls[$quality]
+                $extension = if ($os -eq "win") { "zip" } else { "tar.gz" }
+                $expectedFilename = "aspire-cli-$os-$arch.$extension"
+
+                Run-Test $testName {
+                    try {
+                        $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality '$quality' -OS '$os' -Architecture '$arch' -InstallPath 'test-combo-$quality-$os-$arch' -WhatIf -Verbose" 2>&1
+                        $output = $result -join "`n"
+
+                        # Check for expected URL pattern in the output
+                        if ($output -like "*$expectedUrl*$expectedFilename*") {
+                            return "URL construction correct for $quality/$os/$arch combination"
+                        } else {
+                            throw "Expected URL '$expectedUrl/$expectedFilename' not found in output: $($output.Substring(0, [Math]::Min(300, $output.Length)))"
+                        }
+                    }
+                    catch {
+                        throw "Failed to test $quality/$os/$arch combination: $($_.Exception.Message)"
+                    }
+                } 0 "URL construction correct" ""
+
+                $testNumber++
+            }
+        }
+    }
+
+    Write-ColoredOutput "=== Versioned URL Combination Tests ===" -Color 'Yellow'
+
+    # Test versioned URLs with different OS/Architecture combinations
+    $testVersion = "9.5.0-preview.1.25366.3"
+    $versionedBaseUrl = "https://ci.dot.net/public/aspire"
+    
+    # Test a subset of combinations for versioned URLs to keep test time reasonable
+    $versionTestCombos = @(
+        @{ OS = "win"; Arch = "x64" },
+        @{ OS = "linux"; Arch = "x64" },
+        @{ OS = "osx"; Arch = "arm64" },
+        @{ OS = "linux-musl"; Arch = "x64" }
+    )
+
+    foreach ($combo in $versionTestCombos) {
+        $testName = "Versioned URL OS($($combo.OS)) Arch($($combo.Arch))"
+        $extension = if ($combo.OS -eq "win") { "zip" } else { "tar.gz" }
+        $expectedFilename = "aspire-cli-$($combo.OS)-$($combo.Arch)-$testVersion.$extension"
+
+        Run-Test $testName {
+            try {
+                $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '$testVersion' -Quality 'ga' -OS '$($combo.OS)' -Architecture '$($combo.Arch)' -InstallPath 'test-version-$($combo.OS)-$($combo.Arch)' -WhatIf -Verbose" 2>&1
+                $output = $result -join "`n"
+
+                # Check for expected versioned URL pattern in the output
+                if ($output -like "*$versionedBaseUrl/$testVersion/$expectedFilename*") {
+                    return "Versioned URL construction correct for $($combo.OS)/$($combo.Arch) combination"
+                } else {
+                    throw "Expected versioned URL '$versionedBaseUrl/$testVersion/$expectedFilename' not found in output: $($output.Substring(0, [Math]::Min(300, $output.Length)))"
+                }
+            }
+            catch {
+                throw "Failed to test versioned URL for $($combo.OS)/$($combo.Arch) combination: $($_.Exception.Message)"
+            }
+        } 0 "Versioned URL construction correct" ""
+    }
+
+    Write-ColoredOutput "=== Edge Case URL Construction Tests ===" -Color 'Yellow'
+
+    # Test 44: Test URL construction with linux-musl specifically
+    Run-Test "Linux-musl URL construction" {
+        try {
+            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality 'staging' -OS 'linux-musl' -Architecture 'x64' -InstallPath 'test-linux-musl' -WhatIf -Verbose" 2>&1
+            $output = $result -join "`n"
+
+            if ($output -like "*aspire-cli-linux-musl-x64.tar.gz*") {
+                return "Linux-musl URL construction correct"
+            } else {
+                throw "Linux-musl URL pattern not found in output: $output"
+            }
+        }
+        catch {
+            throw "Failed to test Linux-musl URL construction: $($_.Exception.Message)"
+        }
+    } 0 "Linux-musl URL construction correct" ""
+
+    # Test 45: Test URL construction with different extension types
+    Run-Test "Extension type validation" {
+        try {
+            # Test Windows (should use .zip)
+            $winResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -OS 'win' -Architecture 'x64' -InstallPath 'test-win-ext' -WhatIf -Verbose" 2>&1
+            $winOutput = $winResult -join "`n"
+
+            # Test Linux (should use .tar.gz)
+            $linuxResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -OS 'linux' -Architecture 'x64' -InstallPath 'test-linux-ext' -WhatIf -Verbose" 2>&1
+            $linuxOutput = $linuxResult -join "`n"
+
+            $winExtCorrect = $winOutput -like "*aspire-cli-win-x64.zip*"
+            $linuxExtCorrect = $linuxOutput -like "*aspire-cli-linux-x64.tar.gz*"
+
+            if ($winExtCorrect -and $linuxExtCorrect) {
+                return "Extension type validation successful: Windows uses .zip, Linux uses .tar.gz"
+            } else {
+                throw "Extension validation failed: Windows=$winExtCorrect, Linux=$linuxExtCorrect"
+            }
+        }
+        catch {
+            throw "Failed to test extension type validation: $($_.Exception.Message)"
+        }
+    } 0 "Extension type validation successful" ""
+
+    # Test 46: Test checksum URL construction for different combinations
+    Run-Test "Checksum URL construction validation" {
+        try {
+            # Test staging quality checksum URL
+            $stagingResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality 'staging' -OS 'win' -Architecture 'x64' -InstallPath 'test-checksum-staging' -WhatIf -Verbose" 2>&1
+            $stagingOutput = $stagingResult -join "`n"
+
+            # Test versioned checksum URL
+            $versionResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.5.0-preview.1.25366.3' -Quality 'ga' -OS 'linux' -Architecture 'x64' -InstallPath 'test-checksum-version' -WhatIf -Verbose" 2>&1
+            $versionOutput = $versionResult -join "`n"
+
+            $stagingChecksumCorrect = $stagingOutput -like "*aspire-cli-win-x64.zip.sha512*"
+            $versionChecksumCorrect = $versionOutput -like "*aspire-cli-linux-x64-9.5.0-preview.1.25366.3.tar.gz.sha512*"
+
+            if ($stagingChecksumCorrect -and $versionChecksumCorrect) {
+                return "Checksum URL construction validation successful for both staging and versioned URLs"
+            } else {
+                throw "Checksum URL validation failed: Staging=$stagingChecksumCorrect, Version=$versionChecksumCorrect"
+            }
+        }
+        catch {
+            throw "Failed to test checksum URL construction: $($_.Exception.Message)"
+        }
+    } 0 "Checksum URL construction validation successful" ""
+
+    Write-ColoredOutput "=== Additional Architecture and URL Validation Tests ===" -Color 'Yellow'
+
     # Test 31: Test architecture conversion function using -WhatIf calls
     Run-Test "Architecture conversion function" {
         try {
@@ -964,8 +1116,35 @@ Write-Output "INSTALLATION_COMPLETED"
     # Clean up WhatIf test directories
     $whatIfDirs = @(
         "test-whatif-basic", "test-whatif-staging", "test-whatif-ga", "test-whatif-dev",
-        "test-whatif-version", "test-url-staging", "test-empty-version", "test path with spaces"
+        "test-whatif-version", "test-url-staging", "test-empty-version", "test path with spaces",
+        "test-linux-musl", "test-win-ext", "test-linux-ext", "test-checksum-staging", "test-checksum-version"
     )
+    
+    # Clean up combination test directories
+    $qualities = @("staging", "ga", "dev")
+    $operatingSystems = @("win", "linux", "linux-musl", "osx")
+    $architectures = @("x64", "x86", "arm64")
+    
+    foreach ($quality in $qualities) {
+        foreach ($os in $operatingSystems) {
+            foreach ($arch in $architectures) {
+                $whatIfDirs += "test-combo-$quality-$os-$arch"
+            }
+        }
+    }
+    
+    # Clean up versioned test directories
+    $versionTestCombos = @(
+        @{ OS = "win"; Arch = "x64" },
+        @{ OS = "linux"; Arch = "x64" },
+        @{ OS = "osx"; Arch = "arm64" },
+        @{ OS = "linux-musl"; Arch = "x64" }
+    )
+    
+    foreach ($combo in $versionTestCombos) {
+        $whatIfDirs += "test-version-$($combo.OS)-$($combo.Arch)"
+    }
+    
     foreach ($dir in $whatIfDirs) {
         if (Test-Path $dir) {
             Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue

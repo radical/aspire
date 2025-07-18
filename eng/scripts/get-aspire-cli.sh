@@ -15,7 +15,7 @@ readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly RESET='\033[0m'
 
-# Default values
+# Variables (defaults set after parsing arguments)
 INSTALL_PATH=""
 VERSION=""
 QUALITY=""
@@ -843,10 +843,15 @@ download_and_install_archive() {
 # Parse command line arguments
 parse_args "$@"
 
-# Show help if requested
 if [[ "$SHOW_HELP" == true ]]; then
     show_help
     exit 0
+fi
+
+# Initialize default values after parsing arguments
+if [[ -z "$QUALITY" ]]; then
+    # Default quality to "staging" if not provided
+    QUALITY="staging"
 fi
 
 # Validate that both Version and Quality are not provided
@@ -854,11 +859,6 @@ if [[ -n "$VERSION" && -n "$QUALITY" ]]; then
     say_error "Cannot specify both --version and --quality. Use --version for a specific version or --quality for a quality level."
     say_info "Use --help for usage information."
     exit 1
-fi
-
-if [[ -z "$QUALITY" ]]; then
-    # Default quality to "staging" if not provided
-    QUALITY="staging"
 fi
 
 # Set default install path if not provided
