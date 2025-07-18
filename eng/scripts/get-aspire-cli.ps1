@@ -119,6 +119,7 @@ function Write-Message {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Message,
 
         [Parameter()]
