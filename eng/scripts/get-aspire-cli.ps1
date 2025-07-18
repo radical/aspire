@@ -9,8 +9,8 @@ param(
     [string]$Version = "",
 
     [Parameter(HelpMessage = "Quality to download")]
-    [ValidateSet("ga", "prerelease", "daily")]
-    [string]$Quality = "ga",
+    [ValidateSet("ga", "staging", "dev")]
+    [string]$Quality = "staging",
 
     [Parameter(HelpMessage = "Operating system")]
     [ValidateSet("", "win", "linux", "linux-musl", "osx")]
@@ -36,12 +36,12 @@ $Script:ChecksumDownloadTimeoutSec = 120
 # Configuration constants
 $Script:Config = @{
     MinimumPowerShellVersion = 4
-    SupportedQualities = @("ga", "prerelease", "daily")
+    SupportedQualities = @("ga", "staging", "dev")
     SupportedOperatingSystems = @("win", "linux", "linux-musl", "osx")
     SupportedArchitectures = @("x64", "x86", "arm64")
     BaseUrls = @{
-        "daily" = "https://aka.ms/dotnet/9/aspire/daily"
-        "prerelease" = "https://aka.ms/dotnet/9/aspire/rc/daily"
+        "dev" = "https://aka.ms/dotnet/9/aspire/daily"
+        "staging" = "https://aka.ms/dotnet/9/aspire/rc/daily"
         "ga" = "https://aka.ms/dotnet/9/aspire/ga/daily"
         "versioned" = "https://ci.dot.net/public/aspire"
         "versioned-checksums" = "https://ci.dot.net/public-checksums/aspire"
@@ -72,14 +72,14 @@ DESCRIPTION:
     Automatically updates the current session's PATH environment variable and supports GitHub Actions.
 
     Running this without any arguments will download the latest stable version of the Aspire CLI for your platform and architecture.
-    Running with `-Quality prerelease` will download the latest prerelease version, or the GA version if no prerelease is available.
-    Running with `-Quality daily` will download the latest daily build from `main`.
+    Running with `-Quality staging` will download the latest staging version, or the GA version if no staging is available.
+    Running with `-Quality dev` will download the latest dev build from `main`.
 
     Pass a specific version to get CLI for that version.
 
 PARAMETERS:
     -InstallPath <string>       Directory to install the CLI (default: %USERPROFILE%\.aspire\bin on Windows, $HOME/.aspire/bin on Unix)
-    -Quality <string>           Quality to download (default: ga)
+    -Quality <string>           Quality to download (default: staging)
     -Version <string>           Version of the Aspire CLI to download (default: unset)
     -OS <string>                Operating system (default: auto-detect)
     -Architecture <string>      Architecture (default: auto-detect)
@@ -100,7 +100,7 @@ ENVIRONMENT:
 EXAMPLES:
     .\get-aspire-cli.ps1
     .\get-aspire-cli.ps1 -InstallPath "C:\tools\aspire"
-    .\get-aspire-cli.ps1 -Quality "prerelease"
+    .\get-aspire-cli.ps1 -Quality "staging"
     .\get-aspire-cli.ps1 -Version "9.5.0-preview.1.25366.3"
     .\get-aspire-cli.ps1 -OS "linux" -Architecture "x64"
     .\get-aspire-cli.ps1 -KeepArchive
@@ -715,9 +715,9 @@ function Get-AspireCliUrl {
         [string]$Extension
     )
 
-    # Default quality to "ga" if empty
+    # Default quality to "staging" if empty
     if ([string]::IsNullOrWhiteSpace($Quality)) {
-        $Quality = "ga"
+        $Quality = "staging"
     }
 
     # Validate quality against supported values
