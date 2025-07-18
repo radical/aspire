@@ -626,7 +626,7 @@ Write-Output "INSTALLATION_COMPLETED"
             # Run the script with -WhatIf to test URL construction without downloading
             $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality staging -InstallPath 'test-url-staging' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
-            
+
             if ($output -like "*aka.ms/dotnet/9/aspire/rc/daily*") {
                 return "Staging URL construction correct (found staging URL in WhatIf output)"
             } else {
@@ -643,7 +643,7 @@ Write-Output "INSTALLATION_COMPLETED"
         try {
             $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality ga -InstallPath 'test-url-ga' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
-            
+
             if ($output -like "*aka.ms/dotnet/9/aspire/ga/daily*") {
                 return "GA URL construction correct (found GA URL in WhatIf output)"
             } else {
@@ -660,7 +660,7 @@ Write-Output "INSTALLATION_COMPLETED"
         try {
             $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality dev -InstallPath 'test-url-dev' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
-            
+
             if ($output -like "*aka.ms/dotnet/9/aspire/daily*") {
                 return "Dev URL construction correct (found dev URL in WhatIf output)"
             } else {
@@ -677,7 +677,7 @@ Write-Output "INSTALLATION_COMPLETED"
         try {
             $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.5.0-preview.1.25366.3' -Quality ga -InstallPath 'test-url-version' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
-            
+
             if ($output -like "*ci.dot.net/public/aspire/9.5.0-preview.1.25366.3*") {
                 return "Versioned URL construction correct (found versioned URL in WhatIf output)"
             } else {
@@ -714,13 +714,13 @@ Write-Output "INSTALLATION_COMPLETED"
             if ($winRid -match "^(win|linux|linux-musl|osx)-(x64|x86|arm64)$") {
                 $winResult = "Windows RID valid"
             }
-            
+
             # Test Linux
             $linuxRid = "linux-x64"
             if ($linuxRid -match "^(win|linux|linux-musl|osx)-(x64|x86|arm64)$") {
                 $linuxResult = "Linux RID valid"
             }
-            
+
             # Test macOS
             $osxRid = "osx-arm64"
             if ($osxRid -match "^(win|linux|linux-musl|osx)-(x64|x86|arm64)$") {
@@ -743,7 +743,7 @@ Write-Output "INSTALLATION_COMPLETED"
                 @{ Arch = "x86"; Expected = "x86" },
                 @{ Arch = "arm64"; Expected = "arm64" }
             )
-            
+
             $results = @()
             foreach ($case in $testCases) {
                 try {
@@ -758,7 +758,7 @@ Write-Output "INSTALLATION_COMPLETED"
                     $results += "$($case.Arch)->error"
                 }
             }
-            
+
             return "Architecture conversion test results: $($results -join ', ')"
         }
         catch {
@@ -771,7 +771,7 @@ Write-Output "INSTALLATION_COMPLETED"
         try {
             $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Architecture 'invalid-arch' -InstallPath 'test-invalid-arch' -WhatIf" 2>&1
             $output = $result -join "`n"
-            
+
             if ($LASTEXITCODE -ne 0 -and $output -like "*does not belong to the set*") {
                 return "Invalid architecture correctly rejected with parameter validation"
             } else {
@@ -860,13 +860,13 @@ Write-Output "INSTALLATION_COMPLETED"
             $isModernPS = $PSVersionTable.PSVersion.Major -ge 6 -and $PSVersionTable.PSEdition -eq "Core"
             if (-not $isModernPS) {
                 $originalProtocol = [Net.ServicePointManager]::SecurityProtocol
-                
+
                 # Test setting TLS 1.2
                 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                
+
                 # Restore original
                 [Net.ServicePointManager]::SecurityProtocol = $originalProtocol
-                
+
                 return "TLS configuration test successful for PowerShell 5.1"
             } else {
                 return "TLS configuration test skipped for modern PowerShell"
@@ -884,7 +884,7 @@ Write-Output "INSTALLATION_COMPLETED"
             # by using an invalid version that should fail checksum validation
             $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.99.99-invalid' -Quality ga -InstallPath 'test-checksum-fail' -WhatIf" 2>&1
             $output = $result -join "`n"
-            
+
             # The test passes if WhatIf shows the intended operations
             if ($output -like "*What if:*") {
                 return "Checksum validation test completed (WhatIf shows intended operations)"
@@ -918,10 +918,10 @@ Write-Output "INSTALLATION_COMPLETED"
             # Test valid and default path handling through WhatIf
             & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath '/tmp/test-valid-path' -WhatIf" 2>&1 | Out-Null
             $validResult = $LASTEXITCODE
-            
+
             & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -WhatIf" 2>&1 | Out-Null
             $defaultResult = $LASTEXITCODE
-            
+
             if ($validResult -eq 0 -and $defaultResult -eq 0) {
                 return "Installation path validation successful: valid path and default path both work"
             } else {
@@ -960,10 +960,10 @@ Write-Output "INSTALLATION_COMPLETED"
 
     # Clean up test directories including new test directories
     Cleanup-TestDirectories
-    
+
     # Clean up WhatIf test directories
     $whatIfDirs = @(
-        "test-whatif-basic", "test-whatif-staging", "test-whatif-ga", "test-whatif-dev", 
+        "test-whatif-basic", "test-whatif-staging", "test-whatif-ga", "test-whatif-dev",
         "test-whatif-version", "test-url-staging", "test-empty-version", "test path with spaces"
     )
     foreach ($dir in $whatIfDirs) {
