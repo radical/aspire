@@ -481,11 +481,11 @@ function Main {
 
             # Create a temporary PowerShell script to test PATH update
             $testScript = @"
-param([string]${'$'}InstallPath)
-${'$'}originalPath = ${'$'}env:PATH
-& "$scriptPath" -InstallPath ${'$'}InstallPath
-${'$'}newPath = ${'$'}env:PATH
-if (${'$'}newPath.Contains(${'$'}InstallPath) -and -not ${'$'}originalPath.Contains(${'$'}InstallPath)) {
+param([string]`$InstallPath)
+`$originalPath = `$env:PATH
+& "$scriptPath" -InstallPath `$InstallPath
+`$newPath = `$env:PATH
+if (`$newPath.Contains(`$InstallPath) -and -not `$originalPath.Contains(`$InstallPath)) {
     Write-Output "PATH_UPDATE_SUCCESS"
 } else {
     Write-Output "PATH_UPDATE_FAILED"
@@ -527,11 +527,11 @@ if (${'$'}newPath.Contains(${'$'}InstallPath) -and -not ${'$'}originalPath.Conta
 
             # Create a temporary PowerShell script to test PATH skipping
             $testScript = @"
-param([string]${'$'}InstallPath)
+param([string]`$InstallPath)
 # Pre-add the absolute install path to PATH (since the script uses absolute paths)
-${'$'}absoluteInstallPath = [System.IO.Path]::GetFullPath(${'$'}InstallPath)
-${'$'}env:PATH = "${'$'}absoluteInstallPath${'$'}([System.IO.Path]::PathSeparator)${'$'}env:PATH"
-& "$scriptPath" -InstallPath ${'$'}InstallPath
+`$absoluteInstallPath = [System.IO.Path]::GetFullPath(`$InstallPath)
+`$env:PATH = "`$absoluteInstallPath`$([System.IO.Path]::PathSeparator)`$env:PATH"
+& "$scriptPath" -InstallPath `$InstallPath
 Write-Output "INSTALLATION_COMPLETED"
 "@
 
@@ -573,28 +573,28 @@ Write-Output "INSTALLATION_COMPLETED"
 
         # Create a test script that simulates GitHub Actions environment
         $testScript = @"
-param([string]${'$'}InstallPath)
-${'$'}env:GITHUB_ACTIONS = "true"
-${'$'}tempGitHubPath = "test-github-path.txt"
-${'$'}env:GITHUB_PATH = ${'$'}tempGitHubPath
+param([string]`$InstallPath)
+`$env:GITHUB_ACTIONS = "true"
+`$tempGitHubPath = "test-github-path.txt"
+`$env:GITHUB_PATH = `$tempGitHubPath
 
 try {
-    & "$scriptPath" -InstallPath ${'$'}InstallPath
+    & "$scriptPath" -InstallPath `$InstallPath
 
-    if (Test-Path ${'$'}tempGitHubPath) {
-        ${'$'}githubPathContent = Get-Content ${'$'}tempGitHubPath -Raw
-        ${'$'}expectedPath = [System.IO.Path]::GetFullPath(${'$'}InstallPath)
-        if (${'$'}githubPathContent.Trim() -eq ${'$'}expectedPath) {
+    if (Test-Path `$tempGitHubPath) {
+        `$githubPathContent = Get-Content `$tempGitHubPath -Raw
+        `$expectedPath = [System.IO.Path]::GetFullPath(`$InstallPath)
+        if (`$githubPathContent.Trim() -eq `$expectedPath) {
             Write-Output "GITHUB_PATH_SUCCESS"
         } else {
-            Write-Output "GITHUB_PATH_CONTENT_MISMATCH: Expected '${'$'}expectedPath', got '${'$'}(${'$'}githubPathContent.Trim())'"
+            Write-Output "GITHUB_PATH_CONTENT_MISMATCH: Expected '`$expectedPath', got '`$(`$githubPathContent.Trim())'"
         }
     } else {
         Write-Output "GITHUB_PATH_FILE_NOT_CREATED"
     }
 }
 finally {
-    Remove-Item ${'$'}tempGitHubPath -ErrorAction SilentlyContinue
+    Remove-Item `$tempGitHubPath -ErrorAction SilentlyContinue
 }
 "@
 
@@ -629,11 +629,11 @@ finally {
 
         # Create a test script that simulates GitHub Actions without GITHUB_PATH
         $testScript = @"
-param([string]${'$'}InstallPath)
-${'$'}env:GITHUB_ACTIONS = "true"
+param([string]`$InstallPath)
+`$env:GITHUB_ACTIONS = "true"
 # Deliberately not setting GITHUB_PATH
 
-& "$scriptPath" -InstallPath ${'$'}InstallPath
+& "$scriptPath" -InstallPath `$InstallPath
 Write-Output "INSTALLATION_COMPLETED"
 "@
 
