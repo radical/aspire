@@ -57,7 +57,7 @@ $InvokedFromFile = -not [string]::IsNullOrEmpty($PSCommandPath)
 
 # Ensure minimum PowerShell version
 if ($PSVersionTable.PSVersion.Major -lt $Script:Config.MinimumPowerShellVersion) {
-    Write-Host "Error: This script requires PowerShell $($Script:Config.MinimumPowerShellVersion).0 or later. Current version: $($PSVersionTable.PSVersion)" -ForegroundColor Red
+    Write-Message "Error: This script requires PowerShell $($Script:Config.MinimumPowerShellVersion).0 or later. Current version: $($PSVersionTable.PSVersion)" -Level Error
     if ($InvokedFromFile) {
         exit 1
     }
@@ -67,7 +67,7 @@ if ($PSVersionTable.PSVersion.Major -lt $Script:Config.MinimumPowerShellVersion)
 }
 
 if ($Help) {
-    Write-Host @"
+    Write-Message @"
 Aspire CLI Download Script
 
 DESCRIPTION:
@@ -679,8 +679,8 @@ function Update-PathEnvironment {
                 }
             }
 
-            Write-Host ""
-            Write-Host "The aspire cli is now available for use in this and new sessions." -ForegroundColor Green
+            Write-Message "" -Level Info
+            Write-Message "The aspire cli is now available for use in this and new sessions." -Level Success
         }
         catch {
             Write-Message "Failed to update persistent PATH environment variable: $($_.Exception.Message)" -Level Warning
@@ -902,11 +902,7 @@ function Start-AspireCliInstallation {
     }
     catch {
         # Display clean error message without stack trace
-        if (Get-Command Write-Host -ErrorAction SilentlyContinue) {
-            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-        } else {
-            Write-Output "Error: $($_.Exception.Message)"
-        }
+        Write-Message "Error: $($_.Exception.Message)" -Level Error
         if ($InvokedFromFile) {
             exit 1
         } else {
@@ -927,11 +923,7 @@ try {
 }
 catch {
     # Display clean error message without stack trace
-    if (Get-Command Write-Host -ErrorAction SilentlyContinue) {
-        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-    } else {
-        Write-Output "Error: $($_.Exception.Message)"
-    }
+    Write-Message "Error: $($_.Exception.Message)" -Level Error
     $exitCode = 1
 }
 
