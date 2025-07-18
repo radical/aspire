@@ -25,6 +25,10 @@
     - Tests use isolated PowerShell processes to avoid state pollution
     - Cross-platform compatibility is tested using PowerShell's built-in variables
 
+    PowerShell 5.1 Compatibility:
+    - This script is compatible with both PowerShell 5.1 and PowerShell 6+
+    - Platform detection is automatically handled for both versions
+
 .EXAMPLE
     .\test-get-aspire-cli.ps1
 
@@ -34,19 +38,71 @@
 [CmdletBinding()]
 param()
 
+# Platform detection functions for PowerShell 5.1 compatibility
+function Test-IsWindows {
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return $IsWindows
+    } else {
+        return [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+    }
+}
+
+function Test-IsLinux {
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return $IsLinux
+    } else {
+        try {
+            return [System.Environment]::OSVersion.Platform -eq 'Unix' -and 
+                   [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
+        } catch {
+            # Fallback for environments where RuntimeInformation is not available
+            return $false
+        }
+    }
+}
+
+function Test-IsMacOS {
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return $IsMacOS
+    } else {
+        try {
+            return [System.Environment]::OSVersion.Platform -eq 'Unix' -and 
+                   [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)
+        } catch {
+            # Fallback for environments where RuntimeInformation is not available  
+            return $false
+        }
+    }
+}
+
+# Get the appropriate PowerShell executable name
+function Get-PowerShellExecutable {
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return "pwsh"
+    } else {
+        return "powershell"
+    }
+}
+
 # Test counters
 $Script:TotalTests = 0
 $Script:PassedTests = 0
 $Script:FailedTests = 0
 $Script:TestResults = @()
 
+# Platform detection variables for compatibility
+$Script:IsWindowsCompat = Test-IsWindows
+$Script:IsLinuxCompat = Test-IsLinux
+$Script:IsMacOSCompat = Test-IsMacOS
+$Script:PowerShellExe = Get-PowerShellExecutable
+
 # Colors for output (cross-platform compatible)
 $Script:Colors = @{
-    Red = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { 'Red' } else { "`e[31m" }
-    Green = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { 'Green' } else { "`e[32m" }
-    Yellow = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { 'Yellow' } else { "`e[33m" }
-    Blue = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { 'Blue' } else { "`e[34m" }
-    Reset = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { 'White' } else { "`e[0m" }
+    Red = if ($Script:IsWindowsCompat -or $PSVersionTable.PSVersion.Major -lt 6) { 'Red' } else { "`e[31m" }
+    Green = if ($Script:IsWindowsCompat -or $PSVersionTable.PSVersion.Major -lt 6) { 'Green' } else { "`e[32m" }
+    Yellow = if ($Script:IsWindowsCompat -or $PSVersionTable.PSVersion.Major -lt 6) { 'Yellow' } else { "`e[33m" }
+    Blue = if ($Script:IsWindowsCompat -or $PSVersionTable.PSVersion.Major -lt 6) { 'Blue' } else { "`e[34m" }
+    Reset = if ($Script:IsWindowsCompat -or $PSVersionTable.PSVersion.Major -lt 6) { 'White' } else { "`e[0m" }
 }
 
 function Write-ColoredOutput {
@@ -55,7 +111,7 @@ function Write-ColoredOutput {
         [string]$Color = 'White'
     )
 
-    if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
+    if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $Script:IsWindowsCompat) {
         # Use ANSI colors on PowerShell 6+ on non-Windows
         $colorCode = $Script:Colors[$Color]
         $resetCode = $Script:Colors['Reset']
@@ -164,7 +220,7 @@ function Run-PowerShellTest {
         $tempErr = "test-err-$tempGuid.txt"
 
         # Run the PowerShell script in a separate process
-        $process = Start-Process -FilePath "pwsh" `
+        $process = Start-Process -FilePath $Script:PowerShellExe `
             -ArgumentList (@("-File", $scriptPath) + $Arguments) `
             -Wait -PassThru `
             -RedirectStandardOutput $tempOut `
@@ -261,7 +317,7 @@ function Main {
     # Test 1: Help functionality (check for synopsis via Get-Help)
     Run-Test "Help display" {
         try {
-            $helpOutput = & pwsh -Command "Get-Help $(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')" 2>&1 | Out-String
+            $helpOutput = & $Script:PowerShellExe -Command "Get-Help $(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')" 2>&1 | Out-String
             if ($helpOutput -and $helpOutput.Length -gt 0) {
                 Write-Output "Help functionality works: $helpOutput"
                 return $helpOutput
@@ -283,11 +339,11 @@ function Main {
     Run-Test "Platform detection" {
         $os = ""
 
-        if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) {
+        if ($Script:IsWindowsCompat) {
             $os = "win"
-        } elseif ($IsLinux) {
+        } elseif ($Script:IsLinuxCompat) {
             $os = "linux"
-        } elseif ($IsMacOS) {
+        } elseif ($Script:IsMacOSCompat) {
             $os = "osx"
         }
 
@@ -301,7 +357,7 @@ function Main {
     Run-PowerShellTest "Custom installation path" @("-InstallPath", "test-custom-output") 0 "successfully installed" "Error"
 
     # Verify custom path was used
-    $customCliFile = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { "test-custom-output/aspire.exe" } else { "test-custom-output/aspire" }
+    $customCliFile = if ($Script:IsWindowsCompat) { "test-custom-output/aspire.exe" } else { "test-custom-output/aspire" }
     if (Test-Path $customCliFile) {
         Log-TestResult "Custom path verification" "PASS" "aspire installed to test-custom-output"
     } else {
@@ -328,7 +384,7 @@ function Main {
     Write-ColoredOutput "=== Manual Override Tests ===" -Color 'Yellow'
 
     # Test 8: Manual OS override
-    $currentOS = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { "win" } elseif ($IsLinux) { "linux" } elseif ($IsMacOS) { "osx" } else { "win" }
+    $currentOS = if ($Script:IsWindowsCompat) { "win" } elseif ($Script:IsLinuxCompat) { "linux" } elseif ($Script:IsMacOSCompat) { "osx" } else { "win" }
     Run-PowerShellTest "Manual OS override" @("-InstallPath", "test-output-manual", "-OS", $currentOS, "-Architecture", "x64") 0 "successfully installed" "Error"
 
     # Test 9: Invalid architecture (should fail with parameter validation error)
@@ -348,7 +404,7 @@ function Main {
     Write-ColoredOutput "=== File Validation Tests ===" -Color 'Yellow'
 
     # Test 12: Check if downloaded CLI is executable
-    $cliFile = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { "test-output-1/aspire.exe" } else { "test-output-1/aspire" }
+    $cliFile = if ($Script:IsWindowsCompat) { "test-output-1/aspire.exe" } else { "test-output-1/aspire" }
     if (Test-Path $cliFile) {
         Run-Test "CLI file exists and is executable" {
             $file = Get-Item $cliFile
@@ -401,9 +457,9 @@ function Main {
     Run-Test "Cross-platform variables" {
         $isModern = $PSVersionTable.PSVersion.Major -ge 6
         $platform = if ($isModern) {
-            if ($IsWindows) { "Windows" }
-            elseif ($IsLinux) { "Linux" }
-            elseif ($IsMacOS) { "macOS" }
+            if ($Script:IsWindowsCompat) { "Windows" }
+            elseif ($Script:IsLinuxCompat) { "Linux" }
+            elseif ($Script:IsMacOSCompat) { "macOS" }
             else { "Unknown" }
         } else {
             "Windows (PS 5.1)"
@@ -440,7 +496,7 @@ if (`$newPath.Contains(`$InstallPath) -and -not `$originalPath.Contains(`$Instal
             Set-Content -Path $testScriptPath -Value $testScript
 
             $testInstallPath = "test-path-env"
-            $process = Start-Process -FilePath "pwsh" -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "path-test-out.txt" -RedirectStandardError "path-test-err.txt" -NoNewWindow
+            $process = Start-Process -FilePath $Script:PowerShellExe -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "path-test-out.txt" -RedirectStandardError "path-test-err.txt" -NoNewWindow
 
             $output = if (Test-Path "path-test-out.txt") { Get-Content "path-test-out.txt" -Raw } else { "" }
             $error_output = if (Test-Path "path-test-err.txt") { Get-Content "path-test-err.txt" -Raw } else { "" }
@@ -483,7 +539,7 @@ Write-Output "INSTALLATION_COMPLETED"
             Set-Content -Path $testScriptPath -Value $testScript
 
             $testInstallPath = "test-path-skip-env"
-            $process = Start-Process -FilePath "pwsh" -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "path-skip-out.txt" -RedirectStandardError "path-skip-err.txt" -NoNewWindow
+            $process = Start-Process -FilePath $Script:PowerShellExe -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "path-skip-out.txt" -RedirectStandardError "path-skip-err.txt" -NoNewWindow
 
             $output = if (Test-Path "path-skip-out.txt") { Get-Content "path-skip-out.txt" -Raw } else { "" }
             $error_output = if (Test-Path "path-skip-err.txt") { Get-Content "path-skip-err.txt" -Raw } else { "" }
@@ -546,7 +602,7 @@ finally {
         Set-Content -Path $testScriptPath -Value $testScript
 
         $testInstallPath = "test-output-ga"
-        $process = Start-Process -FilePath "pwsh" -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "ga-test-out.txt" -RedirectStandardError "ga-test-err.txt" -NoNewWindow
+        $process = Start-Process -FilePath $Script:PowerShellExe -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "ga-test-out.txt" -RedirectStandardError "ga-test-err.txt" -NoNewWindow
 
         $output = if (Test-Path "ga-test-out.txt") { Get-Content "ga-test-out.txt" -Raw } else { "" }
         $error_output = if (Test-Path "ga-test-err.txt") { Get-Content "ga-test-err.txt" -Raw } else { "" }
@@ -585,7 +641,7 @@ Write-Output "INSTALLATION_COMPLETED"
         Set-Content -Path $testScriptPath -Value $testScript
 
         $testInstallPath = "test-output-ga-nopath"
-        $process = Start-Process -FilePath "pwsh" -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "ga-nopath-out.txt" -RedirectStandardError "ga-nopath-err.txt" -NoNewWindow
+        $process = Start-Process -FilePath $Script:PowerShellExe -ArgumentList @("-File", $testScriptPath, $testInstallPath) -Wait -PassThru -RedirectStandardOutput "ga-nopath-out.txt" -RedirectStandardError "ga-nopath-err.txt" -NoNewWindow
 
         $output = if (Test-Path "ga-nopath-out.txt") { Get-Content "ga-nopath-out.txt" -Raw } else { "" }
         $error_output = if (Test-Path "ga-nopath-err.txt") { Get-Content "ga-nopath-err.txt" -Raw } else { "" }
@@ -624,7 +680,7 @@ Write-Output "INSTALLATION_COMPLETED"
     Run-Test "URL construction staging quality" {
         try {
             # Run the script with -WhatIf to test URL construction without downloading
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality staging -InstallPath 'test-url-staging' -WhatIf -Verbose" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality staging -InstallPath 'test-url-staging' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
 
             if ($output -like "*aka.ms/dotnet/9/aspire/rc/daily*") {
@@ -641,7 +697,7 @@ Write-Output "INSTALLATION_COMPLETED"
     # Test 26: Test URL construction for GA quality using -WhatIf
     Run-Test "URL construction GA quality" {
         try {
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality ga -InstallPath 'test-url-ga' -WhatIf -Verbose" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality ga -InstallPath 'test-url-ga' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
 
             if ($output -like "*aka.ms/dotnet/9/aspire/ga/daily*") {
@@ -658,7 +714,7 @@ Write-Output "INSTALLATION_COMPLETED"
     # Test 27: Test URL construction for dev quality using -WhatIf
     Run-Test "URL construction dev quality" {
         try {
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality dev -InstallPath 'test-url-dev' -WhatIf -Verbose" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality dev -InstallPath 'test-url-dev' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
 
             if ($output -like "*aka.ms/dotnet/9/aspire/daily*") {
@@ -675,7 +731,7 @@ Write-Output "INSTALLATION_COMPLETED"
     # Test 28: Test URL construction for versioned releases using -WhatIf
     Run-Test "URL construction versioned release" {
         try {
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.5.0-preview.1.25366.3' -Quality ga -InstallPath 'test-url-version' -WhatIf -Verbose" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.5.0-preview.1.25366.3' -Quality ga -InstallPath 'test-url-version' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
 
             if ($output -like "*ci.dot.net/public/aspire/9.5.0-preview.1.25366.3*") {
@@ -758,7 +814,7 @@ Write-Output "INSTALLATION_COMPLETED"
 
                 Run-Test $testName {
                     try {
-                        $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality '$quality' -OS '$os' -Architecture '$arch' -InstallPath 'test-combo-$quality-$os-$arch' -WhatIf -Verbose" 2>&1
+                        $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality '$quality' -OS '$os' -Architecture '$arch' -InstallPath 'test-combo-$quality-$os-$arch' -WhatIf -Verbose" 2>&1
                         $output = $result -join "`n"
 
                         # Check for expected URL pattern in the output
@@ -799,7 +855,7 @@ Write-Output "INSTALLATION_COMPLETED"
 
         Run-Test $testName {
             try {
-                $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '$testVersion' -Quality 'ga' -OS '$($combo.OS)' -Architecture '$($combo.Arch)' -InstallPath 'test-version-$($combo.OS)-$($combo.Arch)' -WhatIf -Verbose" 2>&1
+                $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '$testVersion' -Quality 'ga' -OS '$($combo.OS)' -Architecture '$($combo.Arch)' -InstallPath 'test-version-$($combo.OS)-$($combo.Arch)' -WhatIf -Verbose" 2>&1
                 $output = $result -join "`n"
 
                 # Check for expected versioned URL pattern in the output
@@ -820,7 +876,7 @@ Write-Output "INSTALLATION_COMPLETED"
     # Test 44: Test URL construction with linux-musl specifically
     Run-Test "Linux-musl URL construction" {
         try {
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality 'staging' -OS 'linux-musl' -Architecture 'x64' -InstallPath 'test-linux-musl' -WhatIf -Verbose" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality 'staging' -OS 'linux-musl' -Architecture 'x64' -InstallPath 'test-linux-musl' -WhatIf -Verbose" 2>&1
             $output = $result -join "`n"
 
             if ($output -like "*aspire-cli-linux-musl-x64.tar.gz*") {
@@ -838,11 +894,11 @@ Write-Output "INSTALLATION_COMPLETED"
     Run-Test "Extension type validation" {
         try {
             # Test Windows (should use .zip)
-            $winResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -OS 'win' -Architecture 'x64' -InstallPath 'test-win-ext' -WhatIf -Verbose" 2>&1
+            $winResult = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -OS 'win' -Architecture 'x64' -InstallPath 'test-win-ext' -WhatIf -Verbose" 2>&1
             $winOutput = $winResult -join "`n"
 
             # Test Linux (should use .tar.gz)
-            $linuxResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -OS 'linux' -Architecture 'x64' -InstallPath 'test-linux-ext' -WhatIf -Verbose" 2>&1
+            $linuxResult = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -OS 'linux' -Architecture 'x64' -InstallPath 'test-linux-ext' -WhatIf -Verbose" 2>&1
             $linuxOutput = $linuxResult -join "`n"
 
             $winExtCorrect = $winOutput -like "*aspire-cli-win-x64.zip*"
@@ -863,11 +919,11 @@ Write-Output "INSTALLATION_COMPLETED"
     Run-Test "Checksum URL construction validation" {
         try {
             # Test staging quality checksum URL
-            $stagingResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality 'staging' -OS 'win' -Architecture 'x64' -InstallPath 'test-checksum-staging' -WhatIf -Verbose" 2>&1
+            $stagingResult = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Quality 'staging' -OS 'win' -Architecture 'x64' -InstallPath 'test-checksum-staging' -WhatIf -Verbose" 2>&1
             $stagingOutput = $stagingResult -join "`n"
 
             # Test versioned checksum URL
-            $versionResult = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.5.0-preview.1.25366.3' -Quality 'ga' -OS 'linux' -Architecture 'x64' -InstallPath 'test-checksum-version' -WhatIf -Verbose" 2>&1
+            $versionResult = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.5.0-preview.1.25366.3' -Quality 'ga' -OS 'linux' -Architecture 'x64' -InstallPath 'test-checksum-version' -WhatIf -Verbose" 2>&1
             $versionOutput = $versionResult -join "`n"
 
             $stagingChecksumCorrect = $stagingOutput -like "*aspire-cli-win-x64.zip.sha512*"
@@ -899,7 +955,7 @@ Write-Output "INSTALLATION_COMPLETED"
             $results = @()
             foreach ($case in $testCases) {
                 try {
-                    & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Architecture '$($case.Arch)' -InstallPath 'test-arch-$($case.Arch)' -WhatIf" 2>&1 | Out-Null
+                    & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Architecture '$($case.Arch)' -InstallPath 'test-arch-$($case.Arch)' -WhatIf" 2>&1 | Out-Null
                     if ($LASTEXITCODE -eq 0) {
                         $results += "$($case.Arch)->valid"
                     } else {
@@ -921,7 +977,7 @@ Write-Output "INSTALLATION_COMPLETED"
     # Test 32: Test invalid architecture handling
     Run-Test "Invalid architecture handling" {
         try {
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Architecture 'invalid-arch' -InstallPath 'test-invalid-arch' -WhatIf" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Architecture 'invalid-arch' -InstallPath 'test-invalid-arch' -WhatIf" 2>&1
             $output = $result -join "`n"
 
             if ($LASTEXITCODE -ne 0 -and $output -like "*does not belong to the set*") {
@@ -976,7 +1032,7 @@ Write-Output "INSTALLATION_COMPLETED"
     Run-Test "Empty version parameter handling" {
         try {
             # Test that empty string parameters are handled correctly
-            & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath 'test-empty-version' -WhatIf" 2>&1 | Out-Null
+            & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath 'test-empty-version' -WhatIf" 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 return "Empty version parameter handled correctly (uses default staging)"
             } else {
@@ -992,7 +1048,7 @@ Write-Output "INSTALLATION_COMPLETED"
     Run-Test "Installation path validation test" {
         try {
             # Test that paths are properly validated using WhatIf
-            & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath 'valid-test-path' -WhatIf" 2>&1 | Out-Null
+            & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath 'valid-test-path' -WhatIf" 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 return "Installation path validation successful"
             } else {
@@ -1034,7 +1090,7 @@ Write-Output "INSTALLATION_COMPLETED"
         try {
             # Since we can't access internal functions, test the overall error handling
             # by using an invalid version that should fail checksum validation
-            $result = & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.99.99-invalid' -Quality ga -InstallPath 'test-checksum-fail' -WhatIf" 2>&1
+            $result = & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -Version '9.99.99-invalid' -Quality ga -InstallPath 'test-checksum-fail' -WhatIf" 2>&1
             $output = $result -join "`n"
 
             # The test passes if WhatIf shows the intended operations
@@ -1068,10 +1124,10 @@ Write-Output "INSTALLATION_COMPLETED"
     Run-Test "Installation path validation" {
         try {
             # Test valid and default path handling through WhatIf
-            & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath '/tmp/test-valid-path' -WhatIf" 2>&1 | Out-Null
+            & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -InstallPath '/tmp/test-valid-path' -WhatIf" 2>&1 | Out-Null
             $validResult = $LASTEXITCODE
 
-            & pwsh -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -WhatIf" 2>&1 | Out-Null
+            & $Script:PowerShellExe -Command "& '$(Join-Path $PSScriptRoot 'get-aspire-cli.ps1')' -WhatIf" 2>&1 | Out-Null
             $defaultResult = $LASTEXITCODE
 
             if ($validResult -eq 0 -and $defaultResult -eq 0) {
@@ -1094,7 +1150,7 @@ Write-Output "INSTALLATION_COMPLETED"
         New-Item -ItemType Directory -Path $tempTestDir -Force | Out-Null
 
         # Run installation without KeepArchive
-        $process = Start-Process -FilePath "pwsh" -ArgumentList @("-File", "get-aspire-cli.ps1", "-InstallPath", $tempTestDir) -Wait -PassThru -RedirectStandardOutput "cleanup-out.txt" -RedirectStandardError "cleanup-err.txt" -NoNewWindow
+        $process = Start-Process -FilePath $Script:PowerShellExe -ArgumentList @("-File", "get-aspire-cli.ps1", "-InstallPath", $tempTestDir) -Wait -PassThru -RedirectStandardOutput "cleanup-out.txt" -RedirectStandardError "cleanup-err.txt" -NoNewWindow
 
         $output = if (Test-Path "cleanup-out.txt") { Get-Content "cleanup-out.txt" -Raw } else { "" }
         Remove-Item "cleanup-out.txt" -ErrorAction SilentlyContinue
