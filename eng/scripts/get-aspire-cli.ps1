@@ -688,8 +688,10 @@ function Update-PathEnvironment {
     # GitHub Actions support
     if ($env:GITHUB_ACTIONS -eq "true" -and $env:GITHUB_PATH) {
         try {
-            Add-Content -Path $env:GITHUB_PATH -Value $InstallPath
-            Write-Message "Added $InstallPath to GITHUB_PATH for GitHub Actions" -Level Success
+            if ($PSCmdlet.ShouldProcess("GITHUB_PATH environment variable", "Add $InstallPath to GITHUB_PATH")) {
+                Add-Content -Path $env:GITHUB_PATH -Value $InstallPath
+                Write-Message "Added $InstallPath to GITHUB_PATH for GitHub Actions" -Level Success
+            }
         }
         catch {
             Write-Message "Failed to update GITHUB_PATH: $($_.Exception.Message)" -Level Warning
