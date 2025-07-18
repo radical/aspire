@@ -52,7 +52,7 @@ function Test-IsLinux {
         return $IsLinux
     } else {
         try {
-            return [System.Environment]::OSVersion.Platform -eq 'Unix' -and 
+            return [System.Environment]::OSVersion.Platform -eq 'Unix' -and
                    [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
         } catch {
             # Fallback for environments where RuntimeInformation is not available
@@ -66,10 +66,10 @@ function Test-IsMacOS {
         return $IsMacOS
     } else {
         try {
-            return [System.Environment]::OSVersion.Platform -eq 'Unix' -and 
+            return [System.Environment]::OSVersion.Platform -eq 'Unix' -and
                    [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)
         } catch {
-            # Fallback for environments where RuntimeInformation is not available  
+            # Fallback for environments where RuntimeInformation is not available
             return $false
         }
     }
@@ -481,11 +481,11 @@ function Main {
 
             # Create a temporary PowerShell script to test PATH update
             $testScript = @"
-param([string]`$InstallPath)
-`$originalPath = `$env:PATH
-& "$scriptPath" -InstallPath `$InstallPath
-`$newPath = `$env:PATH
-if (`$newPath.Contains(`$InstallPath) -and -not `$originalPath.Contains(`$InstallPath)) {
+param([string]${'$'}InstallPath)
+${'$'}originalPath = ${'$'}env:PATH
+& "$scriptPath" -InstallPath ${'$'}InstallPath
+${'$'}newPath = ${'$'}env:PATH
+if (${'$'}newPath.Contains(${'$'}InstallPath) -and -not ${'$'}originalPath.Contains(${'$'}InstallPath)) {
     Write-Output "PATH_UPDATE_SUCCESS"
 } else {
     Write-Output "PATH_UPDATE_FAILED"
@@ -527,11 +527,11 @@ if (`$newPath.Contains(`$InstallPath) -and -not `$originalPath.Contains(`$Instal
 
             # Create a temporary PowerShell script to test PATH skipping
             $testScript = @"
-param([string]`$InstallPath)
+param([string]${'$'}InstallPath)
 # Pre-add the absolute install path to PATH (since the script uses absolute paths)
-`$absoluteInstallPath = [System.IO.Path]::GetFullPath(`$InstallPath)
-`$env:PATH = "`$absoluteInstallPath`$([System.IO.Path]::PathSeparator)`$env:PATH"
-& "$scriptPath" -InstallPath `$InstallPath
+${'$'}absoluteInstallPath = [System.IO.Path]::GetFullPath(${'$'}InstallPath)
+${'$'}env:PATH = "${'$'}absoluteInstallPath${'$'}([System.IO.Path]::PathSeparator)${'$'}env:PATH"
+& "$scriptPath" -InstallPath ${'$'}InstallPath
 Write-Output "INSTALLATION_COMPLETED"
 "@
 
@@ -573,28 +573,28 @@ Write-Output "INSTALLATION_COMPLETED"
 
         # Create a test script that simulates GitHub Actions environment
         $testScript = @"
-param([string]`$InstallPath)
-`$env:GITHUB_ACTIONS = "true"
-`$tempGitHubPath = "test-github-path.txt"
-`$env:GITHUB_PATH = `$tempGitHubPath
+param([string]${'$'}InstallPath)
+${'$'}env:GITHUB_ACTIONS = "true"
+${'$'}tempGitHubPath = "test-github-path.txt"
+${'$'}env:GITHUB_PATH = ${'$'}tempGitHubPath
 
 try {
-    & "$scriptPath" -InstallPath `$InstallPath
+    & "$scriptPath" -InstallPath ${'$'}InstallPath
 
-    if (Test-Path `$tempGitHubPath) {
-        `$githubPathContent = Get-Content `$tempGitHubPath -Raw
-        `$expectedPath = [System.IO.Path]::GetFullPath(`$InstallPath)
-        if (`$githubPathContent.Trim() -eq `$expectedPath) {
+    if (Test-Path ${'$'}tempGitHubPath) {
+        ${'$'}githubPathContent = Get-Content ${'$'}tempGitHubPath -Raw
+        ${'$'}expectedPath = [System.IO.Path]::GetFullPath(${'$'}InstallPath)
+        if (${'$'}githubPathContent.Trim() -eq ${'$'}expectedPath) {
             Write-Output "GITHUB_PATH_SUCCESS"
         } else {
-            Write-Output "GITHUB_PATH_CONTENT_MISMATCH: Expected '`$expectedPath', got '`$(`$githubPathContent.Trim())'"
+            Write-Output "GITHUB_PATH_CONTENT_MISMATCH: Expected '${'$'}expectedPath', got '${'$'}(${'$'}githubPathContent.Trim())'"
         }
     } else {
         Write-Output "GITHUB_PATH_FILE_NOT_CREATED"
     }
 }
 finally {
-    Remove-Item `$tempGitHubPath -ErrorAction SilentlyContinue
+    Remove-Item ${'$'}tempGitHubPath -ErrorAction SilentlyContinue
 }
 "@
 
@@ -629,11 +629,11 @@ finally {
 
         # Create a test script that simulates GitHub Actions without GITHUB_PATH
         $testScript = @"
-param([string]`$InstallPath)
-`$env:GITHUB_ACTIONS = "true"
+param([string]${'$'}InstallPath)
+${'$'}env:GITHUB_ACTIONS = "true"
 # Deliberately not setting GITHUB_PATH
 
-& "$scriptPath" -InstallPath `$InstallPath
+& "$scriptPath" -InstallPath ${'$'}InstallPath
 Write-Output "INSTALLATION_COMPLETED"
 "@
 
@@ -839,7 +839,7 @@ Write-Output "INSTALLATION_COMPLETED"
     # Test versioned URLs with different OS/Architecture combinations
     $testVersion = "9.5.0-preview.1.25366.3"
     $versionedBaseUrl = "https://ci.dot.net/public/aspire"
-    
+
     # Test a subset of combinations for versioned URLs to keep test time reasonable
     $versionTestCombos = @(
         @{ OS = "win"; Arch = "x64" },
@@ -1175,12 +1175,12 @@ Write-Output "INSTALLATION_COMPLETED"
         "test-whatif-version", "test-url-staging", "test-empty-version", "test path with spaces",
         "test-linux-musl", "test-win-ext", "test-linux-ext", "test-checksum-staging", "test-checksum-version"
     )
-    
+
     # Clean up combination test directories
     $qualities = @("staging", "ga", "dev")
     $operatingSystems = @("win", "linux", "linux-musl", "osx")
     $architectures = @("x64", "x86", "arm64")
-    
+
     foreach ($quality in $qualities) {
         foreach ($os in $operatingSystems) {
             foreach ($arch in $architectures) {
@@ -1188,7 +1188,7 @@ Write-Output "INSTALLATION_COMPLETED"
             }
         }
     }
-    
+
     # Clean up versioned test directories
     $versionTestCombos = @(
         @{ OS = "win"; Arch = "x64" },
@@ -1196,11 +1196,11 @@ Write-Output "INSTALLATION_COMPLETED"
         @{ OS = "osx"; Arch = "arm64" },
         @{ OS = "linux-musl"; Arch = "x64" }
     )
-    
+
     foreach ($combo in $versionTestCombos) {
         $whatIfDirs += "test-version-$($combo.OS)-$($combo.Arch)"
     }
-    
+
     foreach ($dir in $whatIfDirs) {
         if (Test-Path $dir) {
             Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
