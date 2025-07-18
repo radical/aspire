@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(HelpMessage = "Directory to install the CLI")]
     [string]$InstallPath = "",
@@ -22,9 +22,6 @@ param(
 
     [Parameter(HelpMessage = "Keep downloaded archive files and temporary directory after installation")]
     [switch]$KeepArchive,
-
-    [Parameter(HelpMessage = "Show what would be downloaded without actually downloading")]
-    [switch]$Dryrun,
 
     [Parameter(HelpMessage = "Show help message")]
     [switch]$Help
@@ -107,6 +104,7 @@ EXAMPLES:
     .\get-aspire-cli.ps1 -Version "9.5.0-preview.1.25366.3"
     .\get-aspire-cli.ps1 -OS "linux" -Architecture "x64"
     .\get-aspire-cli.ps1 -KeepArchive
+    .\get-aspire-cli.ps1 -WhatIf
     .\get-aspire-cli.ps1 -Help
 
     # Piped execution
@@ -321,9 +319,9 @@ function Get-CLIArchitectureFromArchitecture {
         { $_ -eq "x86" } {
             return "x86"
         }
-        # { $_ -eq "arm64" } {
-            # return "arm64"
-        # }
+        { $_ -eq "arm64" } {
+            return "arm64"
+        }
         default {
             throw "Architecture '$Architecture' not supported. If you think this is a bug, report it at https://github.com/dotnet/aspire/issues"
         }
@@ -637,7 +635,7 @@ function Get-InstallPath {
 
 # Simplified PATH environment update
 function Update-PathEnvironment {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -653,7 +651,7 @@ function Update-PathEnvironment {
     # Update current session PATH
     $currentPathArray = $env:PATH.Split($pathSeparator, [StringSplitOptions]::RemoveEmptyEntries)
     if ($currentPathArray -notcontains $InstallPath) {
-        if (-not $DryRun) {
+        if ($PSCmdlet.ShouldProcess("PATH environment variable", "Add $InstallPath to current session")) {
             $env:PATH = (@($InstallPath) + $currentPathArray) -join $pathSeparator
             Write-Message "Added $InstallPath to PATH for current session" -Level Info
         }
@@ -669,7 +667,7 @@ function Update-PathEnvironment {
             if (-not $userPath) { $userPath = "" }
             $userPathArray = if ($userPath) { $userPath.Split($pathSeparator, [StringSplitOptions]::RemoveEmptyEntries) } else { @() }
             if ($userPathArray -notcontains $InstallPath) {
-                if (-not $DryRun) {
+                if ($PSCmdlet.ShouldProcess("User PATH environment variable", "Add $InstallPath")) {
                     $newUserPath = (@($InstallPath) + $userPathArray) -join $pathSeparator
                     [Environment]::SetEnvironmentVariable("PATH", $newUserPath, [EnvironmentVariableTarget]::User)
                     Write-Message "Added $InstallPath to user PATH environment variable" -Level Info
@@ -760,7 +758,7 @@ function Get-AspireCliUrl {
 
 # Function to download and install the Aspire CLI
 function Install-AspireCli {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $true)]
         [string]$InstallPath,
@@ -784,7 +782,7 @@ function Install-AspireCli {
         }
     }
 
-    if (-not $DryRun) {
+    if ($PSCmdlet.ShouldProcess($InstallPath, "Create temporary directory")) {
         Write-Message "Creating temporary directory: $tempDir" -Level Verbose
         try {
             New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -810,20 +808,24 @@ function Install-AspireCli {
         $extension = if ($targetOS -eq "win") { "zip" } else { "tar.gz" }
         $urls = Get-AspireCliUrl -Version $Version -Quality $Quality -RuntimeIdentifier $runtimeIdentifier -Extension $extension
 
-        if (-not $DryRun) {
+        $archivePath = Join-Path $tempDir $urls.ArchiveFilename
+        $checksumPath = Join-Path $tempDir $urls.ChecksumFilename
+
+        if ($PSCmdlet.ShouldProcess($urls.ArchiveUrl, "Download CLI archive")) {
             # Download the Aspire CLI archive
             Write-Message "Downloading from: $($urls.ArchiveUrl)" -Level Info
-            $archivePath = Join-Path $tempDir $urls.ArchiveFilename
-            $checksumPath = Join-Path $tempDir $urls.ChecksumFilename
-
             Invoke-FileDownload -Uri $urls.ArchiveUrl -TimeoutSec $Script:ArchiveDownloadTimeoutSec -OutputPath $archivePath
+        }
 
+        if ($PSCmdlet.ShouldProcess($urls.ChecksumUrl, "Download CLI archive checksum")) {
             # Download and test the checksum
             Invoke-FileDownload -Uri $urls.ChecksumUrl -TimeoutSec $Script:ChecksumDownloadTimeoutSec -OutputPath $checksumPath
             Test-FileChecksum -ArchiveFile $archivePath -ChecksumFile $checksumPath
 
             Write-Message "Successfully downloaded and validated: $($urls.ArchiveFilename)" -Level Verbose
+        }
 
+        if ($PSCmdlet.ShouldProcess($InstallPath, "Install CLI")) {
             # Unpack the archive
             Expand-AspireCliArchive -ArchiveFile $archivePath -DestinationPath $InstallPath -OS $targetOS
 
@@ -831,11 +833,6 @@ function Install-AspireCli {
             $cliPath = Join-Path $InstallPath $cliExe
 
             Write-Message "Aspire CLI successfully installed to: $cliPath" -Level Success
-        }
-        else {
-            # print out the urls
-            Write-Message "Would download Archive URL: $($urls.ArchiveUrl)" -Level Info
-            Write-Message "Would download Checksum URL: $($urls.ChecksumUrl)" -Level Info
         }
 
         # Return the target OS for the caller to use
@@ -862,7 +859,7 @@ function Install-AspireCli {
 
 # Main function with enhanced error handling and validation
 function Start-AspireCliInstallation {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param()
 
     try {
@@ -886,11 +883,13 @@ function Start-AspireCliInstallation {
         # Ensure the installation directory exists
         if (-not (Test-Path $resolvedInstallPath)) {
             Write-Message "Creating installation directory: $resolvedInstallPath" -Level Info
-            try {
-                New-Item -ItemType Directory -Path $resolvedInstallPath -Force | Out-Null
-            }
-            catch {
-                throw "Failed to create installation directory: $resolvedInstallPath - $($_.Exception.Message)"
+            if ($PSCmdlet.ShouldProcess($resolvedInstallPath, "Create installation directory")) {
+                try {
+                    New-Item -ItemType Directory -Path $resolvedInstallPath -Force | Out-Null
+                }
+                catch {
+                    throw "Failed to create installation directory: $resolvedInstallPath - $($_.Exception.Message)"
+                }
             }
         }
 
