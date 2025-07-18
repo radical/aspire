@@ -178,6 +178,7 @@ function Invoke-WithPowerShellVersion {
 # Function to detect OS
 function Get-OperatingSystem {
     [CmdletBinding()]
+    [OutputType([string])]
     param()
 
     try {
@@ -221,6 +222,7 @@ function Get-OperatingSystem {
 # Enhanced function for cross-platform architecture detection
 function Get-MachineArchitecture {
     [CmdletBinding()]
+    [OutputType([string])]
     param()
 
     Write-Message "Detecting machine architecture" -Level Verbose
@@ -299,6 +301,7 @@ function Get-MachineArchitecture {
 # Convert architecture to CLI architecture format
 function Get-CLIArchitectureFromArchitecture {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -330,6 +333,7 @@ function Get-CLIArchitectureFromArchitecture {
 
 function Get-ContentTypeFromUri {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]
         [string]$Uri,
@@ -588,6 +592,7 @@ function Expand-AspireCliArchive {
 # Simplified installation path determination
 function Get-InstallPath {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()]
         [string]$InstallPath
@@ -695,6 +700,7 @@ function Update-PathEnvironment {
 # Enhanced URL construction function with configuration-based URLs
 function Get-AspireCliUrl {
     [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     param(
         [Parameter()]
         [string]$Version,
@@ -753,6 +759,7 @@ function Get-AspireCliUrl {
 # Function to download and install the Aspire CLI
 function Install-AspireCli {
     [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]
         [string]$InstallPath,
@@ -854,6 +861,7 @@ function Install-AspireCli {
 # Main function with enhanced error handling and validation
 function Start-AspireCliInstallation {
     [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([int])]
     param()
 
     try {
