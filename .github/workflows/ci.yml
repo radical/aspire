@@ -65,7 +65,7 @@ jobs:
         # 'skipped'. For example, one of setup_* jobs failing and the Integration test jobs getting
         # 'skipped'
         if: >-
-          ${{ always() &&
+          ${{ github.repository_owner == 'dotnet' &&
               needs.check_changes.outputs.skip_workflow != 'true' &&
               (contains(needs.*.result, 'failure') ||
                contains(needs.*.result, 'cancelled') ||
