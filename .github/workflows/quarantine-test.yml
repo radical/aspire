@@ -12,7 +12,6 @@ permissions:
 jobs:
   quarantine_test:
     if: >-
-      github.repository_owner == 'dotnet' &&
       (
         contains(github.event.comment.body, '/quarantine-test') ||
         contains(github.event.comment.body, '/unquarantine-test') ||
@@ -255,9 +254,7 @@ jobs:
           // Create PR description
           const testListFormatted = testNames.map(t => `- \`${t}\``).join('\n');
           const issueRef = issueUrl ? `\n\nRelated issue: ${issueUrl}` : '';
-          const triggerRef = isWorkflowDispatch
-            ? `\n\nTriggered by: workflow_dispatch (by @${comment_user})`
-            : `\n\nTriggered by: #${issue_number} (comment by @${comment_user})`;
+          const triggerRef = `\n\nTriggered by: #${issue_number} (comment by @${comment_user})`;
           const attributeType = mode === 'quarantine' ? 'QuarantinedTest' : 'ActiveIssue';
 
           const prBody = `## ${actionVerb} Test(s)
@@ -294,27 +291,17 @@ jobs:
             console.log(`Note: Could not add label: ${labelError.message}`);
           }
 
-          // Post success comment (only for issue_comment events)
-          if (!isWorkflowDispatch) {
-            const successBody = `✅ ${actionVerb} operation completed! Created PR #${pr.number}: ${pr.html_url}`;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: successBody
-            });
-          }
-
-    - name: Dry run - show changes
-      if: steps.check-changes.outputs.has_changes == 'true' && inputs.dry_run == true
-      run: |
-        echo "=== DRY RUN - Changes that would be made ==="
-        git diff
-        echo "============================================="
-        echo "Dry run complete. No PR was created."
+          // Post success comment
+          const successBody = `✅ ${actionVerb} operation completed! Created PR #${pr.number}: ${pr.html_url}`;
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: successBody
+          });
 
     - name: Post no-changes comment
-      if: github.event_name == 'issue_comment' && steps.check-changes.outputs.has_changes == 'false'
+      if: steps.check-changes.outputs.has_changes == 'false'
       uses: actions/github-script@v7
       with:
         script: |
@@ -329,7 +316,7 @@ jobs:
           });
 
     - name: Post failure comment
-      if: failure() && github.event_name == 'issue_comment'
+      if: failure()
       uses: actions/github-script@v7
       with:
         script: |
