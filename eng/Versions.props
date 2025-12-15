@@ -1,4 +1,5 @@
 <Project>
+  <!--dummy -->
   <PropertyGroup>
     <!-- This repo version -->
     <MajorVersion>13</MajorVersion>
