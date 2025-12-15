@@ -183,8 +183,6 @@ jobs:
         TEST_NAMES: ${{ steps.extract-command.outputs.test_names }}
         ISSUE_URL: ${{ steps.extract-command.outputs.issue_url }}
       run: |
-        set -e
-
         # Build the command
         if [ "$ACTION" = "quarantine" ]; then
           FLAG="-q"
@@ -192,14 +190,27 @@ jobs:
           FLAG="-u"
         fi
 
-        # Run the tool
+        # Run the tool and capture output
         echo "Running: dotnet run --project tools/QuarantineTools -- $FLAG -m $MODE -i \"$ISSUE_URL\" $TEST_NAMES"
 
+        set +e
         if [ "$ACTION" = "quarantine" ]; then
-          dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" -i "$ISSUE_URL" $TEST_NAMES
+          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" -i "$ISSUE_URL" $TEST_NAMES 2>&1)
         else
-          dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" $TEST_NAMES
+          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" $TEST_NAMES 2>&1)
         fi
+        EXIT_CODE=$?
+        set -e
+
+        echo "$OUTPUT"
+
+        # Save output for failure comment (escape for GitHub Actions)
+        EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+        echo "tool_output<<$EOF" >> $GITHUB_OUTPUT
+        echo "$OUTPUT" >> $GITHUB_OUTPUT
+        echo "$EOF" >> $GITHUB_OUTPUT
+
+        exit $EXIT_CODE
 
     - name: Check for changes
       id: check-changes
@@ -321,7 +332,28 @@ jobs:
       with:
         script: |
           const workflow_run_url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-          const body = `❌ ${process.env.ACTION_VERB || 'Operation'} failed. See the [workflow run](${workflow_run_url}) for details.`;
+          const actionVerb = process.env.ACTION_VERB || 'Operation';
+          const toolOutput = process.env.TOOL_OUTPUT || '';
+
+          let body = `❌ ${actionVerb} failed.\n\n`;
+
+          if (toolOutput) {
+            // Extract just the error lines (skip build output)
+            const lines = toolOutput.split('\n');
+            const errorLines = lines.filter(line =>
+              line.includes('Error') ||
+              line.includes('error') ||
+              line.includes('No method found') ||
+              line.includes('failed') ||
+              line.includes('Invalid')
+            ).slice(0, 10);  // Limit to 10 error lines
+
+            if (errorLines.length > 0) {
+              body += `**Error:**\n\`\`\`\n${errorLines.join('\n')}\n\`\`\`\n\n`;
+            }
+          }
+
+          body += `See the [workflow run](${workflow_run_url}) for full details.`;
 
           await github.rest.issues.createComment({
             issue_number: context.issue.number,
@@ -331,3 +363,4 @@ jobs:
           });
       env:
         ACTION_VERB: ${{ steps.extract-command.outputs.action_verb }}
+        TOOL_OUTPUT: ${{ steps.run-tool.outputs.tool_output }}
