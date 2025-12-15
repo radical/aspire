@@ -28,6 +28,12 @@ jobs:
         script: |
           const body = context.payload.comment.body;
 
+          // Helper to fail with an error message that can be captured
+          function failWithError(message) {
+            core.setOutput('error_message', message);
+            core.setFailed(message);
+          }
+
           // Define command patterns with their configurations
           const commands = [
             { pattern: /^\/quarantine-test\s+(.+)$/m, action: 'quarantine', mode: 'quarantine', requiresUrl: true },
@@ -49,7 +55,7 @@ jobs:
           }
 
           if (!matched) {
-            core.setFailed('No valid command found. Use /quarantine-test, /unquarantine-test, /disable-test, or /enable-test');
+            failWithError('No valid command found. Use /quarantine-test, /unquarantine-test, /disable-test, or /enable-test');
             return;
           }
 
@@ -57,7 +63,7 @@ jobs:
           const parts = args.split(/\s+/).filter(p => p.length > 0);
 
           if (parts.length === 0) {
-            core.setFailed('No test name(s) provided.');
+            failWithError('No test name(s) provided.');
             return;
           }
 
@@ -66,7 +72,7 @@ jobs:
 
           if (matched.requiresUrl) {
             if (parts.length < 2) {
-              core.setFailed(`${matched.action === 'quarantine' && matched.mode === 'quarantine' ? '/quarantine-test' : '/disable-test'} requires at least one test name and an issue URL.`);
+              failWithError(`${matched.action === 'quarantine' && matched.mode === 'quarantine' ? '/quarantine-test' : '/disable-test'} requires at least one test name and an issue URL.`);
               return;
             }
 
@@ -76,7 +82,7 @@ jobs:
             // Validate URL
             const urlPattern = /^https?:\/\/.+/i;
             if (!urlPattern.test(potentialUrl)) {
-              core.setFailed(`Invalid issue URL: "${potentialUrl}". Must be a valid http/https URL.`);
+              failWithError(`Invalid issue URL: "${potentialUrl}". Must be a valid http/https URL.`);
               return;
             }
 
@@ -90,7 +96,7 @@ jobs:
           const testNamePattern = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*(\+[A-Za-z_][A-Za-z0-9_]*)*(\.[A-Za-z_][A-Za-z0-9_]*)+$/;
           for (const testName of testNames) {
             if (!testNamePattern.test(testName)) {
-              core.setFailed(`Invalid test name format: "${testName}". Expected format: Namespace.Type.Method`);
+              failWithError(`Invalid test name format: "${testName}". Expected format: Namespace.Type.Method`);
               return;
             }
           }
@@ -334,10 +340,14 @@ jobs:
           const workflow_run_url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
           const actionVerb = process.env.ACTION_VERB || 'Operation';
           const toolOutput = process.env.TOOL_OUTPUT || '';
+          const extractError = process.env.EXTRACT_ERROR || '';
 
           let body = `❌ ${actionVerb} failed.\n\n`;
 
-          if (toolOutput) {
+          // Check for extract step error first
+          if (extractError) {
+            body += `**Error:** ${extractError}\n\n`;
+          } else if (toolOutput) {
             // Extract just the error lines (skip build output)
             const lines = toolOutput.split('\n');
             const errorLines = lines.filter(line =>
@@ -364,3 +374,4 @@ jobs:
       env:
         ACTION_VERB: ${{ steps.extract-command.outputs.action_verb }}
         TOOL_OUTPUT: ${{ steps.run-tool.outputs.tool_output }}
+        EXTRACT_ERROR: ${{ steps.extract-command.outputs.error_message }}
