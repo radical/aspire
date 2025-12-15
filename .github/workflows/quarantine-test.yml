@@ -84,6 +84,13 @@ jobs:
 
           const parts = remainingArgs.split(/\s+/).filter(p => p.length > 0);
 
+          // Check for unknown arguments (anything starting with - or --)
+          const unknownArgs = parts.filter(p => p.startsWith('-'));
+          if (unknownArgs.length > 0) {
+            failWithError(`Unknown argument(s): ${unknownArgs.join(', ')}. Only --target-pr is supported.`);
+            return;
+          }
+
           if (parts.length === 0) {
             failWithError('No test name(s) provided.');
             return;
