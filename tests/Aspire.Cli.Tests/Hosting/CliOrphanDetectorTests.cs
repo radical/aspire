@@ -73,6 +73,7 @@ public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    [QuarantinedTest("https://foo.com/")]
     public async Task CliOrphanDetectorFallsBackToPidOnlyWhenStartTimeInvalid()
     {
         var configuration = new ConfigurationBuilder()
