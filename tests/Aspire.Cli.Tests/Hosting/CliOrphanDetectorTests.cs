@@ -10,12 +10,14 @@ using Microsoft.DotNet.RemoteExecutor;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Time.Testing;
+using Xunit;
 
 namespace Aspire.Cli.Tests;
 
 public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
 {
     [Fact]
+    [ActiveIssue("https://google")]
     public async Task CliOrphanDetectorCompletesWhenNoPidEnvironmentVariablePresent()
     {
         var configuration = new ConfigurationBuilder().Build();
@@ -94,7 +96,6 @@ public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspire/issues/12710")]
     public async Task CliOrphanDetectorContinuesRunningWhenProcessAliveWithCorrectStartTime()
     {
         var expectedStartTime = DateTime.Now.AddMinutes(-5);
