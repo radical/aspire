@@ -9,9 +9,10 @@ permissions:
   issues: write
   pull-requests: write
 
-# Prevent concurrent runs on the same issue to avoid race conditions
+# Prevent concurrent runs on the same issue/PR to avoid race conditions
+# Use issue/pr prefix to distinguish between issue comments and PR comments
 concurrency:
-  group: quarantine-test-${{ github.event.issue.number }}
+  group: quarantine-test-${{ github.event.issue.pull_request && 'pr' || 'issue' }}-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
