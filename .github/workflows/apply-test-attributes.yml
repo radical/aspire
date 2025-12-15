@@ -4,11 +4,6 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 # Prevent concurrent runs on the same issue/PR to avoid race conditions
 # Use issue/pr prefix to distinguish between issue comments and PR comments
 concurrency:
@@ -26,6 +21,10 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     steps:
     - name: Extract command and arguments
       uses: actions/github-script@v7
@@ -249,11 +248,15 @@ jobs:
       if: success()
       id: determine-target
       uses: actions/github-script@v7
+      env:
+        TARGET_PR_URL: ${{ steps.extract-command.outputs.target_pr_url }}
+        IS_COMMENT_ON_PR: ${{ steps.extract-command.outputs.is_comment_on_pr }}
+        COMMENT_PR_NUMBER: ${{ steps.extract-command.outputs.comment_pr_number }}
       with:
         script: |
-          const targetPrUrl = '${{ steps.extract-command.outputs.target_pr_url }}';
-          const isCommentOnPr = '${{ steps.extract-command.outputs.is_comment_on_pr }}' === 'true';
-          const commentPrNumber = '${{ steps.extract-command.outputs.comment_pr_number }}';
+          const targetPrUrl = process.env.TARGET_PR_URL || '';
+          const isCommentOnPr = process.env.IS_COMMENT_ON_PR === 'true';
+          const commentPrNumber = process.env.COMMENT_PR_NUMBER || '';
 
           // Determine target PR number (from URL or from comment context)
           let targetPrNumber = null;
@@ -317,12 +320,16 @@ jobs:
     - name: Post started comment
       if: success()
       uses: actions/github-script@v7
+      env:
+        ACTION_VERB: ${{ steps.extract-command.outputs.action_verb }}
+        TEST_NAMES: ${{ steps.extract-command.outputs.test_names }}
+        TARGET_PR_NUMBER: ${{ steps.determine-target.outputs.target_pr_number }}
       with:
         script: |
-          const actionVerb = '${{ steps.extract-command.outputs.action_verb }}';
-          const testNames = '${{ steps.extract-command.outputs.test_names }}'.split(' ');
+          const actionVerb = process.env.ACTION_VERB;
+          const testNames = (process.env.TEST_NAMES || '').split(' ');
           const workflow_run_url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-          const targetPrNumber = '${{ steps.determine-target.outputs.target_pr_number }}';
+          const targetPrNumber = process.env.TARGET_PR_NUMBER || '';
 
           const testList = testNames.map(t => `\`${t}\``).join(', ');
           let body = `⏳ Started ${actionVerb.toLowerCase()} operation for ${testList}`;
@@ -344,6 +351,7 @@ jobs:
       with:
         ref: ${{ steps.determine-target.outputs.checkout_ref }}
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Setup .NET
       if: success()
@@ -559,9 +567,11 @@ jobs:
     - name: Post no-changes comment
       if: steps.check-changes.outputs.has_changes == 'false'
       uses: actions/github-script@v7
+      env:
+        ACTION_VERB: ${{ steps.extract-command.outputs.action_verb }}
       with:
         script: |
-          const actionVerb = '${{ steps.extract-command.outputs.action_verb }}';
+          const actionVerb = process.env.ACTION_VERB;
           const body = `ℹ️ No changes were needed. The test(s) may already be in the desired state.`;
 
           await github.rest.issues.createComment({
