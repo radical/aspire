@@ -355,13 +355,13 @@ jobs:
         IFS=' ' read -ra TEST_ARRAY <<< "$TEST_NAMES"
 
         # Run the tool and capture output
-        echo "Running: dotnet run --project tools/QuarantineTools -- $FLAG -m $MODE -i \"$ISSUE_URL\" ${TEST_ARRAY[*]}"
+        echo "Running: dotnet run --project tools/QuarantineTools/QuarantineTools.csproj -- $FLAG -m $MODE -i \"$ISSUE_URL\" ${TEST_ARRAY[*]}"
 
         set +e
         if [ "$ACTION" = "quarantine" ]; then
-          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" -i "$ISSUE_URL" "${TEST_ARRAY[@]}" 2>&1)
+          OUTPUT=$(dotnet run --project tools/QuarantineTools/QuarantineTools.csproj -- $FLAG -m "$MODE" -i "$ISSUE_URL" "${TEST_ARRAY[@]}" 2>&1)
         else
-          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" "${TEST_ARRAY[@]}" 2>&1)
+          OUTPUT=$(dotnet run --project tools/QuarantineTools/QuarantineTools.csproj -- $FLAG -m "$MODE" "${TEST_ARRAY[@]}" 2>&1)
         fi
         EXIT_CODE=$?
         set -e
