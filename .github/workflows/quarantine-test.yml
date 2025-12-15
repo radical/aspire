@@ -9,6 +9,11 @@ permissions:
   issues: write
   pull-requests: write
 
+# Prevent concurrent runs on the same issue to avoid race conditions
+concurrency:
+  group: quarantine-test-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   quarantine_test:
     if: >-
@@ -19,6 +24,7 @@ jobs:
         contains(github.event.comment.body, '/enable-test')
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Extract command and arguments
       uses: actions/github-script@v7
@@ -59,7 +65,7 @@ jobs:
             return;
           }
 
-          // Parse arguments: for quarantine/disable, last argument should be URL
+          // Parse arguments
           const parts = args.split(/\s+/).filter(p => p.length > 0);
 
           if (parts.length === 0) {
@@ -69,35 +75,65 @@ jobs:
 
           let testNames = [];
           let issueUrl = '';
+          let targetPrUrl = '';
+
+          // URL pattern for validation
+          const urlPattern = /^https?:\/\/.+/i;
+          // GitHub PR URL pattern to extract owner/repo/pr_number
+          const prUrlPattern = /^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/;
 
           if (matched.requiresUrl) {
+            // For quarantine/disable: need at least test name + issue URL
+            // Optional 3rd param: PR URL to push to
             if (parts.length < 2) {
               failWithError(`${matched.action === 'quarantine' && matched.mode === 'quarantine' ? '/quarantine-test' : '/disable-test'} requires at least one test name and an issue URL.`);
               return;
             }
 
-            // Last part should be the URL
-            const potentialUrl = parts[parts.length - 1];
+            // Check if last part is a PR URL (optional 3rd param)
+            const lastPart = parts[parts.length - 1];
+            const secondLastPart = parts.length >= 2 ? parts[parts.length - 2] : null;
 
-            // Validate URL
-            const urlPattern = /^https?:\/\/.+/i;
-            if (!urlPattern.test(potentialUrl)) {
-              failWithError(`Invalid issue URL: "${potentialUrl}". Must be a valid http/https URL.`);
+            if (parts.length >= 3 && prUrlPattern.test(lastPart) && urlPattern.test(secondLastPart)) {
+              // Last is PR URL, second-to-last is issue URL
+              targetPrUrl = lastPart;
+              issueUrl = secondLastPart;
+              testNames = parts.slice(0, -2);
+            } else if (urlPattern.test(lastPart)) {
+              // Last is issue URL, no PR URL specified
+              issueUrl = lastPart;
+              testNames = parts.slice(0, -1);
+            } else {
+              failWithError(`Invalid issue URL: "${lastPart}". Must be a valid http/https URL.`);
               return;
             }
 
-            issueUrl = potentialUrl;
-            testNames = parts.slice(0, -1);
+            if (testNames.length === 0) {
+              failWithError('No test name(s) provided.');
+              return;
+            }
           } else {
-            testNames = parts;
+            // For unquarantine/enable: test names only, but optional PR URL at end
+            const lastPart = parts[parts.length - 1];
+
+            if (parts.length >= 2 && prUrlPattern.test(lastPart)) {
+              // Last is PR URL
+              targetPrUrl = lastPart;
+              testNames = parts.slice(0, -1);
+            } else {
+              testNames = parts;
+            }
           }
 
-          // Validate test names (should look like Namespace.Type.Method)
-          const testNamePattern = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*(\+[A-Za-z_][A-Za-z0-9_]*)*(\.[A-Za-z_][A-Za-z0-9_]*)+$/;
-          for (const testName of testNames) {
-            if (!testNamePattern.test(testName)) {
-              failWithError(`Invalid test name format: "${testName}". Expected format: Namespace.Type.Method`);
-              return;
+          // Validate target PR URL is from the same repo if provided
+          if (targetPrUrl) {
+            const prMatch = prUrlPattern.exec(targetPrUrl);
+            if (prMatch) {
+              const [, prOwner, prRepo] = prMatch;
+              if (prOwner !== context.repo.owner || prRepo !== context.repo.repo) {
+                failWithError(`Target PR must be from the same repository (${context.repo.owner}/${context.repo.repo}). Got: ${prOwner}/${prRepo}`);
+                return;
+              }
             }
           }
 
@@ -109,12 +145,22 @@ jobs:
             actionVerb = matched.mode === 'quarantine' ? 'Unquarantine' : 'Enable';
           }
 
+          // Determine if comment is on a PR (to use as target if no PR URL specified)
+          const isCommentOnPr = !!context.payload.issue.pull_request;
+          let commentPrNumber = '';
+          if (isCommentOnPr && !targetPrUrl) {
+            commentPrNumber = context.issue.number.toString();
+          }
+
           const result = {
             action: matched.action,
             mode: matched.mode,
             testNames: testNames,
             issueUrl: issueUrl,
-            actionVerb: actionVerb
+            targetPrUrl: targetPrUrl,
+            actionVerb: actionVerb,
+            isCommentOnPr: isCommentOnPr,
+            commentPrNumber: commentPrNumber
           };
 
           console.log('Parsed command:', JSON.stringify(result, null, 2));
@@ -124,6 +170,9 @@ jobs:
           core.setOutput('test_names', testNames.join(' '));
           core.setOutput('issue_url', issueUrl);
           core.setOutput('action_verb', actionVerb);
+          core.setOutput('target_pr_url', targetPrUrl);
+          core.setOutput('is_comment_on_pr', isCommentOnPr.toString());
+          core.setOutput('comment_pr_number', commentPrNumber);
 
           return 'success';
 
@@ -150,6 +199,17 @@ jobs:
           } catch (error) {
             core.setFailed(`Error checking permissions for @${comment_user}: ${error.message}`);
           }
+
+    - name: Add reaction to indicate processing
+      uses: actions/github-script@v7
+      with:
+        script: |
+          await github.rest.reactions.createForIssueComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: context.payload.comment.id,
+            content: 'eyes'
+          });
 
     - name: Post started comment
       uses: actions/github-script@v7
@@ -196,14 +256,17 @@ jobs:
           FLAG="-u"
         fi
 
+        # Convert space-separated test names to array for proper quoting
+        IFS=' ' read -ra TEST_ARRAY <<< "$TEST_NAMES"
+
         # Run the tool and capture output
-        echo "Running: dotnet run --project tools/QuarantineTools -- $FLAG -m $MODE -i \"$ISSUE_URL\" $TEST_NAMES"
+        echo "Running: dotnet run --project tools/QuarantineTools -- $FLAG -m $MODE -i \"$ISSUE_URL\" ${TEST_ARRAY[*]}"
 
         set +e
         if [ "$ACTION" = "quarantine" ]; then
-          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" -i "$ISSUE_URL" $TEST_NAMES 2>&1)
+          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" -i "$ISSUE_URL" "${TEST_ARRAY[@]}" 2>&1)
         else
-          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" $TEST_NAMES 2>&1)
+          OUTPUT=$(dotnet run --project tools/QuarantineTools -- $FLAG -m "$MODE" "${TEST_ARRAY[@]}" 2>&1)
         fi
         EXIT_CODE=$?
         set -e
@@ -228,7 +291,7 @@ jobs:
           git diff --name-only
         fi
 
-    - name: Create Pull Request
+    - name: Create or Update Pull Request
       if: steps.check-changes.outputs.has_changes == 'true'
       uses: actions/github-script@v7
       env:
@@ -236,6 +299,9 @@ jobs:
         TEST_NAMES: ${{ steps.extract-command.outputs.test_names }}
         ISSUE_URL: ${{ steps.extract-command.outputs.issue_url }}
         MODE: ${{ steps.extract-command.outputs.mode }}
+        TARGET_PR_URL: ${{ steps.extract-command.outputs.target_pr_url }}
+        IS_COMMENT_ON_PR: ${{ steps.extract-command.outputs.is_comment_on_pr }}
+        COMMENT_PR_NUMBER: ${{ steps.extract-command.outputs.comment_pr_number }}
       with:
         script: |
           const { execSync } = require('child_process');
@@ -244,37 +310,145 @@ jobs:
           const testNames = process.env.TEST_NAMES.split(' ');
           const issueUrl = process.env.ISSUE_URL;
           const mode = process.env.MODE;
+          const targetPrUrl = process.env.TARGET_PR_URL;
+          const isCommentOnPr = process.env.IS_COMMENT_ON_PR === 'true';
+          const commentPrNumber = process.env.COMMENT_PR_NUMBER;
           const comment_user = context.payload.comment.user.login;
           const issue_number = context.issue.number;
-
-          // Create branch name
-          const timestamp = Date.now();
-          const branchName = `automated/${actionVerb.toLowerCase()}-test-${timestamp}`;
 
           // Configure git
           execSync('git config user.name "github-actions"');
           execSync('git config user.email "github-actions@github.com"');
 
-          // Create and checkout branch
-          execSync(`git checkout -b ${branchName}`);
-
-          // Stage and commit changes
-          execSync('git add -A');
-
           const testList = testNames.length === 1 ? testNames[0] : `${testNames.length} tests`;
           const commitMessage = `[automated] ${actionVerb} ${testList}`;
-          execSync(`git commit -m "${commitMessage}"`);
 
-          // Push branch
-          execSync(`git push origin ${branchName}`);
+          // Determine target PR number (from URL or from comment context)
+          let targetPrNumber = null;
+          if (targetPrUrl) {
+            const prUrlPattern = /\/pull\/(\d+)/;
+            const match = prUrlPattern.exec(targetPrUrl);
+            if (match) {
+              targetPrNumber = parseInt(match[1], 10);
+            }
+          } else if (isCommentOnPr && commentPrNumber) {
+            targetPrNumber = parseInt(commentPrNumber, 10);
+          }
 
-          // Create PR description
-          const testListFormatted = testNames.map(t => `- \`${t}\``).join('\n');
-          const issueRef = issueUrl ? `\n\nRelated issue: ${issueUrl}` : '';
-          const triggerRef = `\n\nTriggered by: #${issue_number} (comment by @${comment_user})`;
-          const attributeType = mode === 'quarantine' ? 'QuarantinedTest' : 'ActiveIssue';
+          let prUrl = '';
+          let prNumber = null;
+          let createdNewPr = false;
 
-          const prBody = `## ${actionVerb} Test(s)
+          if (targetPrNumber) {
+            // Push to existing PR
+            console.log(`Pushing to existing PR #${targetPrNumber}`);
+
+            // Get the PR details to find the head branch
+            let pr;
+            try {
+              const { data } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: targetPrNumber
+              });
+              pr = data;
+            } catch (prError) {
+              core.setFailed(`Failed to get PR #${targetPrNumber}: ${prError.message}. The PR may have been closed or deleted.`);
+              return;
+            }
+
+            // Check if PR is still open
+            if (pr.state !== 'open') {
+              core.setFailed(`PR #${targetPrNumber} is ${pr.state}. Can only push to open PRs.`);
+              return;
+            }
+
+            // Check if PR is from a fork (not supported)
+            if (pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.setFailed(`PR #${targetPrNumber} is from a fork. Cannot push to fork branches.`);
+              return;
+            }
+
+            const headBranch = pr.head.ref;
+            const headSha = pr.head.sha;
+            prUrl = pr.html_url;
+            prNumber = pr.number;
+
+            console.log(`PR head branch: ${headBranch}, SHA: ${headSha}`);
+
+            // Fetch the PR branch
+            try {
+              execSync(`git fetch origin ${headBranch}`);
+            } catch (fetchError) {
+              core.setFailed(`Failed to fetch branch '${headBranch}': ${fetchError.message}. The branch may have been deleted.`);
+              return;
+            }
+
+            // Create a temporary branch from main with our changes
+            // Then cherry-pick or rebase onto the PR branch
+            // Simpler approach: stash changes, checkout PR branch, apply changes
+
+            // First, stash our changes (we're currently on main with uncommitted changes)
+            execSync('git stash');
+
+            // Checkout the PR branch
+            try {
+              execSync(`git checkout -b pr-${targetPrNumber} origin/${headBranch}`);
+            } catch (checkoutError) {
+              core.setFailed(`Failed to checkout PR branch '${headBranch}': ${checkoutError.message}`);
+              return;
+            }
+
+            // Apply the stashed changes
+            try {
+              execSync('git stash pop');
+            } catch (stashError) {
+              // If there are conflicts, abort and fail
+              core.setFailed(`Merge conflict when applying changes to PR #${targetPrNumber}. The PR branch may have diverged from main. Please resolve manually or create a new PR.`);
+              return;
+            }
+
+            // Stage and commit
+            execSync('git add -A');
+            execSync(`git commit -m "${commitMessage}"`);
+
+            // Push to the PR branch
+            try {
+              execSync(`git push origin pr-${targetPrNumber}:${headBranch}`);
+            } catch (pushError) {
+              core.setFailed(`Failed to push to PR #${targetPrNumber}: ${pushError.message}. The branch may be protected or have been force-pushed.`);
+              return;
+            }
+
+            console.log(`Pushed new commit to PR #${prNumber}`);
+          } else {
+            // Create a new PR
+            createdNewPr = true;
+            const timestamp = Date.now();
+            const branchName = `automated/${actionVerb.toLowerCase()}-test-${timestamp}`;
+
+            // Create and checkout branch
+            execSync(`git checkout -b ${branchName}`);
+
+            // Stage and commit changes
+            execSync('git add -A');
+            execSync(`git commit -m "${commitMessage}"`);
+
+            // Push branch
+            try {
+              execSync(`git push origin ${branchName}`);
+            } catch (pushError) {
+              core.setFailed(`Failed to push branch '${branchName}': ${pushError.message}`);
+              return;
+            }
+
+            // Create PR description
+            const testListFormatted = testNames.map(t => `- \`${t}\``).join('\n');
+            const issueRef = issueUrl ? `\n\nRelated issue: ${issueUrl}` : '';
+            const triggerRef = `\n\nTriggered by: #${issue_number} (comment by @${comment_user})`;
+            const attributeType = mode === 'quarantine' ? 'QuarantinedTest' : 'ActiveIssue';
+
+            const prBody = `## ${actionVerb} Test(s)
 
           This PR was automatically generated to ${actionVerb.toLowerCase()} the following test(s) using the \`${attributeType}\` attribute:
 
@@ -284,32 +458,36 @@ jobs:
           ---
           ⚠️ Please review the changes before merging.`;
 
-          // Create PR
-          const { data: pr } = await github.rest.pulls.create({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            title: `[automated] ${actionVerb} ${testList}`,
-            body: prBody,
-            head: branchName,
-            base: 'main'
-          });
-
-          console.log(`Created PR #${pr.number}: ${pr.html_url}`);
-
-          // Add label
-          try {
-            await github.rest.issues.addLabels({
+            // Create PR
+            const { data: pr } = await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: pr.number,
-              labels: ['automated']
+              title: `[automated] ${actionVerb} ${testList}`,
+              body: prBody,
+              head: branchName,
+              base: 'main'
             });
-          } catch (labelError) {
-            console.log(`Note: Could not add label: ${labelError.message}`);
+
+            prUrl = pr.html_url;
+            prNumber = pr.number;
+            console.log(`Created PR #${prNumber}: ${prUrl}`);
+
+            // Add labels
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: ['automated', 'area-codeflow']
+              });
+            } catch (labelError) {
+              console.log(`Note: Could not add labels: ${labelError.message}`);
+            }
           }
 
           // Post success comment
-          const successBody = `✅ ${actionVerb} operation completed! Created PR #${pr.number}: ${pr.html_url}`;
+          const action = createdNewPr ? 'Created' : 'Updated';
+          const successBody = `✅ ${actionVerb} operation completed! ${action} PR #${prNumber}: ${prUrl}`;
           await github.rest.issues.createComment({
             issue_number: context.issue.number,
             owner: context.repo.owner,
