@@ -182,6 +182,7 @@ jobs:
           return 'success';
 
     - name: Verify user has write access
+      id: verify-permission
       uses: actions/github-script@v7
       with:
         script: |
@@ -196,14 +197,29 @@ jobs:
 
             const writePermissions = ['admin', 'write'];
             if (!writePermissions.includes(permission.permission)) {
+              core.setOutput('has_permission', 'false');
               core.setFailed(`@${comment_user} does not have write access to this repo. Required permissions: write or admin.`);
               return;
             }
 
+            core.setOutput('has_permission', 'true');
             console.log(`Verified ${comment_user} has ${permission.permission} access to the repo.`);
           } catch (error) {
+            core.setOutput('has_permission', 'false');
             core.setFailed(`Error checking permissions for @${comment_user}: ${error.message}`);
           }
+
+    - name: Unlock issue/PR if locked
+      if: github.event.issue.locked == true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          console.log(`Unlocking locked issue/PR #${context.issue.number}.`);
+          await github.rest.issues.unlock({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
 
     - name: Add reaction to indicate processing
       uses: actions/github-script@v7
@@ -495,6 +511,14 @@ jobs:
             body: successBody
           });
 
+          // Add success reaction to the command comment
+          await github.rest.reactions.createForIssueComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: context.payload.comment.id,
+            content: 'rocket'
+          });
+
     - name: Post no-changes comment
       if: steps.check-changes.outputs.has_changes == 'false'
       uses: actions/github-script@v7
@@ -510,17 +534,26 @@ jobs:
             body: body
           });
 
+          // Add reaction to indicate completion
+          await github.rest.reactions.createForIssueComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            comment_id: context.payload.comment.id,
+            content: 'rocket'
+          });
+
     - name: Post failure comment
       if: failure()
       uses: actions/github-script@v7
       with:
         script: |
+          const comment_user = context.payload.comment.user.login;
           const workflow_run_url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
           const actionVerb = process.env.ACTION_VERB || 'Operation';
           const toolOutput = process.env.TOOL_OUTPUT || '';
           const extractError = process.env.EXTRACT_ERROR || '';
 
-          let body = `❌ ${actionVerb} failed.\n\n`;
+          let body = `@${comment_user} ❌ ${actionVerb} failed.\n\n`;
 
           // Check for extract step error first
           if (extractError) {
@@ -553,3 +586,16 @@ jobs:
         ACTION_VERB: ${{ steps.extract-command.outputs.action_verb }}
         TOOL_OUTPUT: ${{ steps.run-tool.outputs.tool_output }}
         EXTRACT_ERROR: ${{ steps.extract-command.outputs.error_message }}
+
+    - name: Re-lock issue/PR if it was locked
+      if: github.event.issue.locked == true && (success() || failure())
+      uses: actions/github-script@v7
+      with:
+        script: |
+          console.log(`Re-locking previously locked issue/PR #${context.issue.number}.`);
+          await github.rest.issues.lock({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            lock_reason: "resolved"
+          });
