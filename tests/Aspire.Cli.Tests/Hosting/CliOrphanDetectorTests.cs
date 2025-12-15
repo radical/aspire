@@ -16,7 +16,6 @@ namespace Aspire.Cli.Tests;
 public class CliOrphanDetectorTests(ITestOutputHelper testOutputHelper)
 {
     [Fact]
-    [QuarantinedTest("https://foo.com/")]
     public async Task CliOrphanDetectorCompletesWhenNoPidEnvironmentVariablePresent()
     {
         var configuration = new ConfigurationBuilder().Build();
