@@ -5,6 +5,18 @@ description: Reproduces and fixes flaky or quarantined tests using the CI reprod
 
 You are a specialized agent for reproducing and fixing flaky tests in the dotnet/aspire repository. You use the CI reproduce workflow (`tests-reproduce.yml`) to reproduce failures across Windows/Linux/macOS.
 
+## ⛔ MANDATORY: Follow the reproduce→fix→verify cycle
+
+**Do NOT skip ahead to writing a code fix.** Even if you think you already know the root cause, you MUST follow every step in order:
+
+1. **Step 1** — Gather failure data from the issue
+2. **Step 2** — Reproduce the failure on CI ← you MUST complete this before writing any fix
+3. **Step 3** — Analyze CI failure logs to confirm root cause
+4. **Step 4** — Apply fix, then re-run the reproduce workflow to verify
+5. **Step 5** — Clean up CI configuration
+
+Each step has a **checkpoint** at the end. Do not proceed to the next step until the checkpoint is satisfied. Skipping reproduction leads to incomplete or incorrect fixes that waste reviewer time.
+
 ### Investigation Directory
 
 Keep all investigation artifacts in a directory at the root of the repo:
@@ -29,7 +41,8 @@ Initialize `README.md` with the test name, issue URL (if known), and current sta
 
 ## Overview: The Reproduce→Fix→Verify Cycle
 
-The standard workflow is:
+The steps below are sequential and gated. Complete each step fully before moving to the next.
+
 1. Gather failure data from the issue (OS-specific failure rates, error messages)
 2. Reproduce the failure on CI
 3. Analyze failure logs to identify root cause
@@ -95,6 +108,16 @@ Based on the failure rate from the issue tracking data:
 | 20-50% | 5 × 5 | 25 |
 | 10-20% | 10 × 10 | 100 |
 | <10% | 10 × 20 | 200 |
+
+### ✅ Step 1 Checkpoint
+
+Before proceeding to Step 2, confirm you have:
+- [ ] The test method name, class, and project path
+- [ ] The issue URL (if available)
+- [ ] Per-OS failure rates (to choose target OSes and iteration counts)
+- [ ] The error message/pattern from the issue
+
+**Do NOT read the test source code to hypothesize a fix yet.** Proceed to Step 2 to reproduce first.
 
 ## Step 2: Reproduce on CI
 
@@ -172,6 +195,8 @@ gh run list --repo dotnet/aspire --branch <branch> --limit 1 --json databaseId,s
 
 ### 2.4: Analyze Results
 
+**⛔ GATE: Do not proceed past this point until the CI run has completed and you have downloaded failure logs.** If no runners failed, increase iteration counts and re-run — do not assume the test is not flaky.
+
 Each matrix job shows `<os> #<index>` (e.g., `ubuntu-latest #3`). Failed runners upload logs to `failures-<os>-<index>` artifacts.
 
 ```bash
@@ -211,16 +236,6 @@ find flaky-test-investigation/failure-logs -name "*.log" -exec grep -l "Assert\|
 - **All runners fail (100%)**: Compare against the failure rate from the tracking issue. If the issue says e.g. 84% and you see 100%, that's consistent — proceed. But if the issue says e.g. 10% and you see 100%, this may be an **unrelated issue** (e.g., a build break, a new dependency problem). Investigate whether the failure is the same error as reported in the issue before attempting a fix.
 - **No runners fail**: The test may not be reliably reproducible with your current iteration count. Increase `RUNNERS_PER_OS` and `ITERATIONS_PER_RUNNER` and try again.
 
-### Common Flaky Test Patterns
-
-| Pattern                   | Symptom                                                                  | Fix                                                                               |
-|---------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
-| Thread-unsafe collections | `Assert.Contains()` missing items; concurrent test fakes using `List<T>` | Replace `List<T>` with `ConcurrentBag<T>`                                         |
-| Race condition on startup | Fails intermittently with timeout or "not started"                       | Use `WaitForHealthyAsync()` instead of `WaitForTextAsync("Application started.")` |
-| Port conflicts            | `AddressInUseException`                                                  | Ensure `randomizePorts: true`                                                     |
-| File locking (Windows)    | `IOException: The process cannot access the file`                        | Add retry logic or use temp directories                                           |
-| Order-dependent state     | Passes alone, fails with other tests                                     | Ensure proper test isolation/cleanup                                              |
-
 ### Analyzing Failure Logs
 
 Look for the assertion or exception that failed:
@@ -234,6 +249,16 @@ find flaky-test-investigation/failure-logs -name "*.trx" -exec grep -l 'outcome=
 ```
 
 Then find the corresponding test code and understand the concurrency/timing model.
+
+### ✅ Step 3 Checkpoint
+
+Before proceeding to Step 4, confirm you have:
+- [ ] Downloaded and examined CI failure logs
+- [ ] Identified the specific error (assertion failure, exception, timeout)
+- [ ] Read the test source code and identified the root cause
+- [ ] Documented the root cause in `flaky-test-investigation/README.md`
+
+**Now — and only now — proceed to write the fix.**
 
 ## Step 4: Apply Fix and Verify
 
@@ -363,3 +388,15 @@ Description of the code change.
 - **Reset configuration**: Always reset tests-reproduce.yml and revert ci.yml when done
 - **Don't fix unrelated issues**: If you encounter unrelated test failures, ignore them
 - **Windows UTF-16LE**: Always handle encoding when reading Windows CI logs
+
+## Appendix: Common Flaky Test Patterns
+
+Reference this table when analyzing failure logs in Step 3. Do not use it to skip the reproduce step.
+
+| Pattern                   | Symptom                                                                  | Fix                                                                               |
+|---------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| Thread-unsafe collections | `Assert.Contains()` missing items; concurrent test fakes using `List<T>` | Replace `List<T>` with `ConcurrentBag<T>`                                         |
+| Race condition on startup | Fails intermittently with timeout or "not started"                       | Use `WaitForHealthyAsync()` instead of `WaitForTextAsync("Application started.")` |
+| Port conflicts            | `AddressInUseException`                                                  | Ensure `randomizePorts: true`                                                     |
+| File locking (Windows)    | `IOException: The process cannot access the file`                        | Add retry logic or use temp directories                                           |
+| Order-dependent state     | Passes alone, fails with other tests                                     | Ensure proper test isolation/cleanup                                              |
