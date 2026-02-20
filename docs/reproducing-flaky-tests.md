@@ -180,8 +180,12 @@ public List<(string, string, string)> LoginToRegistryCalls { get; } = [];
 
 ### Reproduction
 
-- **First attempt** (SlimTestProgramTests, 45 runs): All passed — wrong test, too low failure rate
-- **Second attempt** (#13287, 50 runs): 5/5 Windows runners failed immediately ✅
+- **Run 1 — No fix** (5×5×2 = 50 runs): All 5 Windows runners failed (1/5 iterations each). Linux all passed ✅
+- **Run 2 — With ConcurrentBag fix** (5×5×2 = 50 runs): All 14 jobs passed, 0 failures ✅
+
+### Fix Applied
+
+Changed `List<T>` → `ConcurrentBag<T>` in `FakeContainerRuntime` for all call-tracking collections. Also changed `BuildImageCalls[0]` → `BuildImageCalls.Single()` since `ConcurrentBag` doesn't support indexing.
 
 ### Process Notes
 
