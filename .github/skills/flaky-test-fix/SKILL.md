@@ -102,13 +102,13 @@ Based on the failure rate from the issue tracking data:
 
 ### Detect Your OS
 
-Determine what OS you're running on to decide if local reproduction is useful:
+Determine what OS you're running on:
 
 ```bash
 uname -s  # Linux, Darwin (macOS), or check for Windows via $OS or $OSTYPE
 ```
 
-If the test only fails on an OS different from yours (e.g., fails on Windows but you're on Linux), skip to **Step 3: CI Reproduction**.
+**Only use local reproduction if the test fails exclusively on your current OS.** If the test fails on multiple OSes or on an OS different from yours, skip directly to **Step 3: CI Reproduction** — CI reproduction covers all OSes in one run.
 
 ### Run Locally
 
@@ -118,18 +118,17 @@ The test is likely quarantined, so you must build with `/p:RunQuarantinedTests=t
 # Build the project with quarantined tests enabled
 ./restore.sh && dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj /p:RunQuarantinedTests=true
 
-# Run repeatedly
-./run-test-100-times.sh -n 20 -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
+# Run repeatedly, saving results to the investigation directory
+./run-test-100-times.sh -n 20 -o flaky-test-investigation/local-results \
+  -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
   --no-build -- --filter-method "*.{TestMethodName}"
 ```
 
-Copy results into the investigation directory:
+If the script doesn't support `-o`, copy results after:
 
 ```bash
 cp -r /tmp/test-results-* flaky-test-investigation/local-results/
 ```
-
-Results are saved to `/tmp/test-results-<timestamp>/`.
 
 **Important**: Local reproduction may show *different* errors than CI. If the local error doesn't match the CI error pattern from the issue, don't be distracted — move to CI reproduction.
 
@@ -169,36 +168,19 @@ TEST_FILTER: '--filter-method "*.Test1" --filter-method "*.Test2"'
 
 ### 3.2: Enable the Reproduce Workflow in CI
 
-There are two ways to trigger the reproduce workflow:
-
-**Option A: Repository variable toggle (preferred, if you have repo write access)**
-
-```bash
-# Enable reproduce mode
-gh variable set REPRODUCE_FLAKY_TEST --body "true" --repo dotnet/aspire
-
-# Push your changes to trigger CI
-git add .github/workflows/tests-reproduce.yml
-git commit -m "Configure reproduce workflow for <test name>"
-git push
-
-# When done, disable reproduce mode
-gh variable delete REPRODUCE_FLAKY_TEST --repo dotnet/aspire
-```
-
-When `REPRODUCE_FLAKY_TEST` is `true`, `ci.yml` calls `tests-reproduce.yml` instead of `tests.yml`.
-
-**Option B: Edit ci.yml directly (if you can't set repo variables)**
-
-In `.github/workflows/ci.yml`, temporarily swap the tests job:
+In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-reproduce.yml`:
 
 ```yaml
   # Comment out the normal tests job:
   # tests:
   #   uses: ./.github/workflows/tests.yml
-  #   ...
+  #   name: Tests
+  #   needs: [prepare_for_ci]
+  #   if: ${{ github.repository_owner == 'dotnet' && needs.prepare_for_ci.outputs.skip_workflow != 'true' && vars.REPRODUCE_FLAKY_TEST != 'true' }}
+  #   with:
+  #     versionOverrideArg: ${{ needs.prepare_for_ci.outputs.VERSION_SUFFIX_OVERRIDE }}
 
-  # Add the reproduce job:
+  # Temporarily use the reproduce workflow:
   tests:
     uses: ./.github/workflows/tests-reproduce.yml
     name: Tests
@@ -206,7 +188,7 @@ In `.github/workflows/ci.yml`, temporarily swap the tests job:
     if: ${{ github.repository_owner == 'dotnet' && needs.prepare_for_ci.outputs.skip_workflow != 'true' }}
 ```
 
-**Important**: If using Option B, you MUST revert ci.yml before merging.
+**Important**: You MUST revert ci.yml back to calling `tests.yml` before the PR is merged.
 
 ### 3.3: Push and Wait
 
@@ -339,13 +321,7 @@ env:
 
 ### 6.3: Revert CI Configuration
 
-If you used Option A (repo variable):
-```bash
-gh variable delete REPRODUCE_FLAKY_TEST --repo dotnet/aspire
-```
-
-If you used Option B (edited ci.yml):
-- Revert ci.yml back to calling `tests.yml`
+Revert `ci.yml` back to calling `tests.yml` — uncomment the original `tests:` job and remove the temporary `tests-reproduce.yml` call.
 
 ### 6.4: Final Commit
 

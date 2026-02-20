@@ -78,20 +78,7 @@ TEST_FILTER: '--filter-method "*.Test1" --filter-method "*.Test2"'
 
 #### Step 2: Enable the Reproduce Workflow in CI
 
-**Option A: Repository variable toggle (preferred)**
-
-```bash
-# Enable reproduce mode — CI will run tests-reproduce.yml instead of tests.yml
-gh variable set REPRODUCE_FLAKY_TEST --body "true" --repo dotnet/aspire
-
-# When done, disable reproduce mode
-gh variable delete REPRODUCE_FLAKY_TEST --repo dotnet/aspire
-```
-
-**Option B: Edit ci.yml directly**
-
-In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-reproduce.yml`.
-Remember to revert before merging.
+In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-reproduce.yml` instead of `tests.yml`. Remember to revert before merging.
 
 #### Step 3: Commit and Push
 
@@ -118,14 +105,7 @@ git push
 
 ### Reverting CI to Normal
 
-When done, disable the reproduce mode:
-
-```bash
-# If using repo variable toggle (Option A)
-gh variable delete REPRODUCE_FLAKY_TEST --repo dotnet/aspire
-
-# If using ci.yml edit (Option B), revert ci.yml to call tests.yml
-```
+When done, revert `ci.yml` to call `tests.yml` — uncomment the original tests job and remove the temporary `tests-reproduce.yml` call.
 
 ### Future: Direct Workflow Dispatch
 
