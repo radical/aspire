@@ -8,20 +8,20 @@ Flaky tests fail intermittently. Some can be reproduced locally, but others only
 
 | Tool | When to use |
 |------|-------------|
-| `run-test-100-times.sh` | Local reproduction on your current OS |
+| `run-test-repeatedly.sh` | Local reproduction on your current OS |
 | `tests-reproduce.yml` | CI reproduction across Windows/macOS/Linux |
 
-## Local Reproduction: `run-test-100-times.sh`
+## Local Reproduction: `run-test-repeatedly.sh`
 
 Use this first if the flaky test fails on your local OS.
 
 ```bash
 # Run a specific test 100 times, stop on first failure
-./run-test-100-times.sh -- dotnet test tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj \
+./run-test-repeatedly.sh -- dotnet test tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj \
   --no-build -- --filter-method "*.TestProjectStartsAndStopsCleanly"
 
 # Run 50 times, don't stop on failure
-./run-test-100-times.sh -n 50 --run-all -- dotnet test tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj \
+./run-test-repeatedly.sh -n 50 --run-all -- dotnet test tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj \
   --no-build -- --filter-method "*.TestProjectStartsAndStopsCleanly"
 ```
 
@@ -197,7 +197,7 @@ When asked to fix a flaky test:
    ./build.sh -restore -build -projects tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj
 
    # Run repeatedly
-   ./run-test-100-times.sh -n 20 -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
+   ./run-test-repeatedly.sh -n 20 -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
      --no-build -- --filter-method "*.{TestMethodName}"
    ```
 

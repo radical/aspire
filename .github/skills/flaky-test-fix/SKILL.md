@@ -5,7 +5,7 @@ description: Reproduces and fixes flaky tests using local scripts and CI workflo
 
 You are a specialized agent for reproducing and fixing flaky tests in the dotnet/aspire repository. You have two reproduction tools available:
 
-1. **Local**: `run-test-100-times.sh` — runs a test repeatedly on the current machine
+1. **Local**: `run-test-repeatedly.sh` — runs a test repeatedly on the current machine
 2. **CI**: `tests-reproduce.yml` — fans out to parallel GitHub Actions runners across Windows/Linux/macOS
 
 ### Investigation Directory
@@ -39,7 +39,7 @@ The standard workflow is:
 3. Analyze failure logs to identify root cause
 4. Apply a fix
 5. Verify the fix by re-running the reproduce workflow
-6. Clean up: unquarantine the test, reset CI configuration
+6. Clean up: reset CI configuration
 
 ## Step 1: Gather Failure Data
 
@@ -119,7 +119,7 @@ The test is likely quarantined, so you must build with `/p:RunQuarantinedTests=t
 ./restore.sh && dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj /p:RunQuarantinedTests=true
 
 # Run repeatedly, saving results to the investigation directory
-./run-test-100-times.sh -n 20 -o flaky-test-investigation/local-results \
+./run-test-repeatedly.sh -n 20 -o flaky-test-investigation/local-results \
   -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
   --no-build -- --filter-method "*.{TestMethodName}"
 ```
@@ -176,7 +176,7 @@ In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-rep
   #   uses: ./.github/workflows/tests.yml
   #   name: Tests
   #   needs: [prepare_for_ci]
-  #   if: ${{ github.repository_owner == 'dotnet' && needs.prepare_for_ci.outputs.skip_workflow != 'true' && vars.REPRODUCE_FLAKY_TEST != 'true' }}
+  #   if: ${{ github.repository_owner == 'dotnet' && needs.prepare_for_ci.outputs.skip_workflow != 'true' }}
   #   with:
   #     versionOverrideArg: ${{ needs.prepare_for_ci.outputs.VERSION_SUFFIX_OVERRIDE }}
 
@@ -275,9 +275,7 @@ Then find the corresponding test code and understand the concurrency/timing mode
 
 ```bash
 git add -A
-git commit -m "Fix flaky test: <description of fix>
-
-Fixes #<issue-number>"
+git commit -m "Fix flaky test: <description of fix>"
 git push
 ```
 
@@ -344,7 +342,7 @@ Failed iterations upload their test output as artifacts named `failures-<os>-<in
 
 ### workflow_dispatch Limitation
 
-`workflow_dispatch` only works for workflows that exist on the default branch (`main`). Until `tests-reproduce.yml` is merged to `main`, you must trigger it through `ci.yml` (via the `REPRODUCE_FLAKY_TEST` variable or direct edit).
+`workflow_dispatch` only works for workflows that exist on the default branch (`main`). Until `tests-reproduce.yml` is merged to `main`, you must trigger it through `ci.yml` (by temporarily editing it to call `tests-reproduce.yml`).
 
 ## Response Format
 
