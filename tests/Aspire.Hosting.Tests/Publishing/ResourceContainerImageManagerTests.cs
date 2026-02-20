@@ -578,7 +578,7 @@ public class ResourceContainerImageBuilderTests(ITestOutputHelper output)
         Assert.True(fakeContainerRuntime.WasBuildImageCalled);
         Assert.Single(fakeContainerRuntime.BuildImageCalls);
 
-        var buildCall = fakeContainerRuntime.BuildImageCalls.Single();
+        var buildCall = fakeContainerRuntime.BuildImageCalls[0];
 
         // The context path should be normalized (no trailing slashes)
         Assert.False(buildCall.contextPath.EndsWith(Path.DirectorySeparatorChar.ToString()));
