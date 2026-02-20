@@ -238,6 +238,8 @@ When asked to fix a flaky test:
      - Waiting for log messages instead of health checks → use `WaitForHealthyAsync`
      - Port conflicts → ensure `randomizePorts: true`
      - Docker-dependent tests on non-Linux → skip appropriately
+     - Thread-unsafe collections in test fakes (`List<T>`) called concurrently → use `ConcurrentBag<T>`
+   - Note: Windows CI log files are UTF-16LE encoded. Use `iconv -f UTF-16LE -t UTF-8` to read them.
 
 5. **Apply the fix and verify**:
    - Make the code change
@@ -248,5 +250,12 @@ When asked to fix a flaky test:
 6. **Clean up**:
    - Revert `ci.yml` to call `tests.yml` instead of `tests-reproduce.yml`
    - Reset `tests-reproduce.yml` configuration to defaults
-   - Remove the `[QuarantinedTest]` attribute from the fixed test (use QuarantineTools)
+   - Remove the `[QuarantinedTest]` attribute from the fixed test:
+     ```bash
+     dotnet run --project tools/QuarantineTools -- -u Namespace.Type.Method
+     ```
+   - **Important**: QuarantineTools may remove `using` directives that are still needed by other attributes in the file (e.g., `[RequiresTools]`). Always build-verify after unquarantining:
+     ```bash
+     dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj
+     ```
    - Commit the final changes
