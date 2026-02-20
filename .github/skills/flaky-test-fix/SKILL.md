@@ -8,6 +8,29 @@ You are a specialized agent for reproducing and fixing flaky tests in the dotnet
 1. **Local**: `run-test-100-times.sh` — runs a test repeatedly on the current machine
 2. **CI**: `tests-reproduce.yml` — fans out to parallel GitHub Actions runners across Windows/Linux/macOS
 
+### Investigation Directory
+
+Keep all investigation artifacts in a directory at the root of the repo:
+
+```
+flaky-test-investigation/
+├── README.md              # Summary: test name, issue, root cause, fix, status
+├── failure-logs/          # Downloaded CI failure logs
+├── local-results/         # Local reproduction output
+└── notes.md               # Running notes, observations, hypotheses
+```
+
+Create this directory at the start of your investigation. Commit it to the branch as you work — this allows:
+- Post-investigation analysis of what went wrong
+- Future agents to pick up interrupted work
+- A record of the reproduce→fix→verify cycle
+
+```bash
+mkdir -p flaky-test-investigation/failure-logs flaky-test-investigation/local-results
+```
+
+Initialize `README.md` with the test name, issue URL (if known), and current status. Update it as you progress through each step.
+
 ## Overview: The Reproduce→Fix→Verify Cycle
 
 The standard workflow is:
@@ -77,15 +100,33 @@ Based on the failure rate from the issue tracking data:
 
 ## Step 2: Try Local Reproduction First
 
-If the test fails on your current OS (Linux in codespaces):
+### Detect Your OS
+
+Determine what OS you're running on to decide if local reproduction is useful:
 
 ```bash
-# Build the project first
-./restore.sh && dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj
+uname -s  # Linux, Darwin (macOS), or check for Windows via $OS or $OSTYPE
+```
+
+If the test only fails on an OS different from yours (e.g., fails on Windows but you're on Linux), skip to **Step 3: CI Reproduction**.
+
+### Run Locally
+
+The test is likely quarantined, so you must build with `/p:RunQuarantinedTests=true` to include it:
+
+```bash
+# Build the project with quarantined tests enabled
+./restore.sh && dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj /p:RunQuarantinedTests=true
 
 # Run repeatedly
 ./run-test-100-times.sh -n 20 -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
   --no-build -- --filter-method "*.{TestMethodName}"
+```
+
+Copy results into the investigation directory:
+
+```bash
+cp -r /tmp/test-results-* flaky-test-investigation/local-results/
 ```
 
 Results are saved to `/tmp/test-results-<timestamp>/`.
@@ -190,11 +231,15 @@ gh run list --repo dotnet/aspire --branch <branch> --limit 1 --json databaseId,s
 Each matrix job shows `<os> #<index>` (e.g., `ubuntu-latest #3`). Failed runners upload logs to `failures-<os>-<index>` artifacts.
 
 ```bash
-# Download failure artifacts
-gh run download <run-id> --repo dotnet/aspire --dir /tmp/ci-failures
+# Download failure artifacts into the investigation directory
+gh run download <run-id> --repo dotnet/aspire --dir flaky-test-investigation/failure-logs
 
 # List what was downloaded
-ls /tmp/ci-failures/
+ls flaky-test-investigation/failure-logs/
+
+# Commit the logs so they're preserved
+git add flaky-test-investigation/
+git commit -m "Add CI failure logs from run <run-id>"
 ```
 
 **CRITICAL: Windows log encoding gotcha**
@@ -203,15 +248,15 @@ Windows CI log files are encoded as **UTF-16LE**. Running `cat` on them produces
 
 ```bash
 # Convert Windows log to readable UTF-8
-iconv -f UTF-16LE -t UTF-8 /tmp/ci-failures/failures-windows-latest-1/test-output.log > /tmp/readable.log
-cat /tmp/readable.log
+iconv -f UTF-16LE -t UTF-8 flaky-test-investigation/failure-logs/failures-windows-latest-1/test-output.log > flaky-test-investigation/failure-logs/readable-windows.log
+cat flaky-test-investigation/failure-logs/readable-windows.log
 ```
 
 **Alternatively**, search for the error directly:
 
 ```bash
 # Search across all failure logs (handles encoding)
-find /tmp/ci-failures -name "*.log" -exec grep -l "Assert\|Error\|Exception" {} \;
+find flaky-test-investigation/failure-logs -name "*.log" -exec grep -l "Assert\|Error\|Exception" {} \;
 ```
 
 ## Step 4: Identify Root Cause
@@ -233,10 +278,10 @@ Look for the assertion or exception that failed:
 
 ```bash
 # Find the actual test failure in logs
-grep -A 10 "FAIL\|Assert\.\|Exception" /tmp/readable.log | head -50
+grep -A 10 "FAIL\|Assert\.\|Exception" flaky-test-investigation/failure-logs/readable-windows.log | head -50
 
 # For .trx files (XML test results)
-grep -o 'outcome="Failed".*' /tmp/ci-failures/**/*.trx
+find flaky-test-investigation/failure-logs -name "*.trx" -exec grep -l 'outcome="Failed"' {} \;
 ```
 
 Then find the corresponding test code and understand the concurrency/timing model.
@@ -312,6 +357,8 @@ Fixes #<issue-number>"
 git push
 ```
 
+**Note**: Keep the `flaky-test-investigation/` directory in the branch — it provides a record of the investigation. It will not be merged to `main` if the PR is squash-merged, but remains available on the branch for future reference.
+
 ## Key Technical Details
 
 ### Build System Quarantine Filtering
@@ -375,6 +422,9 @@ Description of the code change.
 ## Important Constraints
 
 - **Reproduce before fixing**: Always confirm the failure is reproducible before attempting a fix
+- **Detect your OS**: Don't assume Linux — check with `uname -s` and decide if local reproduction is viable
+- **Quarantined tests need /p:RunQuarantinedTests=true**: The build system filters them out by default
+- **Keep investigation artifacts**: Save all logs, results, and notes in `flaky-test-investigation/` and commit them
 - **Minimize CI usage**: Use the iteration count heuristic to avoid wasting runners
 - **Target specific OSes**: Only test on OSes that show failures in the tracking data
 - **Build-verify everything**: After QuarantineTools, after fixes, after unquarantining
