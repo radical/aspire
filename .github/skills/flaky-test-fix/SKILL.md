@@ -250,9 +250,24 @@ TEST_FILTER: '--filter-method "*.Test1" --filter-method "*.Test2"'
 
 **For quarantined tests**: The build step already includes `/p:RunQuarantinedTests=true`, so quarantined tests are automatically included. You do NOT need to add any special flags.
 
-### 2.2: Enable the Reproduce Workflow in CI
+### 2.2: Trigger the Reproduce Workflow
 
-In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-reproduce.yml`:
+There are two ways to trigger the reproduce workflow, depending on whether it exists on `main`:
+
+**Option A: `workflow_dispatch` (preferred — when `tests-reproduce.yml` exists on `main`)**
+
+If `tests-reproduce.yml` has been merged to `main`, you can dispatch it directly against your branch without modifying `ci.yml`:
+
+```bash
+# Edit tests-reproduce.yml env vars on your branch, commit and push, then:
+gh workflow run tests-reproduce.yml --repo dotnet/aspire --ref <your-branch>
+```
+
+This is cleaner because it doesn't touch `ci.yml` and doesn't require opening a PR.
+
+**Option B: Route through `ci.yml` (fallback — when `tests-reproduce.yml` is NOT on `main`)**
+
+If `tests-reproduce.yml` does not exist on `main`, `workflow_dispatch` won't work (GitHub requires the workflow file on the default branch to discover it). In this case, temporarily swap the tests job in `ci.yml`:
 
 ```yaml
   # Comment out the normal tests job:
@@ -274,12 +289,26 @@ In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-rep
 
 **Important**: You MUST revert ci.yml back to calling `tests.yml` before the PR is merged.
 
-### 2.3: Push and Monitor
+**Check which option is available:**
 
 ```bash
+# Check if tests-reproduce.yml exists on main
+git show origin/main:.github/workflows/tests-reproduce.yml > /dev/null 2>&1 && echo "Option A available" || echo "Use Option B"
+```
+
+### 2.3: Push, Monitor, and Cancel
+
+```bash
+# If using Option B (ci.yml routing):
 git add .github/workflows/tests-reproduce.yml .github/workflows/ci.yml
 git commit -m "Configure reproduce workflow for <test name>"
 git push
+
+# If using Option A (workflow_dispatch): just push the tests-reproduce.yml changes, then dispatch
+git add .github/workflows/tests-reproduce.yml
+git commit -m "Configure reproduce workflow for <test name>"
+git push
+gh workflow run tests-reproduce.yml --repo dotnet/aspire --ref <your-branch>
 ```
 
 **Monitor the run using polling** (CI runs take 10-30+ minutes):
@@ -305,6 +334,19 @@ gh run view <run-id> --repo dotnet/aspire --json jobs \
 ```
 
 **Tip**: Use `gh run watch` with bash `mode="async"` only as a background blocker. Don't read its output — instead use the targeted `gh run view` queries above to check progress.
+
+**Cancel old runs** when starting new ones to avoid wasting CI resources:
+
+```bash
+# Cancel a specific run
+gh run cancel <run-id> --repo dotnet/aspire
+
+# Cancel all in-progress runs on your branch (useful when iterating)
+gh run list --repo dotnet/aspire --branch <branch> --status in_progress --json databaseId --jq '.[].databaseId' | \
+  xargs -I {} gh run cancel {} --repo dotnet/aspire
+```
+
+Always cancel previous reproduce/verify runs before pushing a new configuration. CI concurrency settings (`cancel-in-progress`) may handle this automatically for PR-triggered runs, but `workflow_dispatch` runs are NOT auto-cancelled.
 
 ### 2.4: Handle Reproduction Results
 
@@ -497,6 +539,16 @@ VALUES ('fix_attempt', CAST((SELECT CAST(value AS INTEGER) FROM session_state WH
 
 Once the fix is verified:
 
+### 5.0: Cancel Any Remaining CI Runs
+
+Cancel any in-progress reproduce or verify runs that are no longer needed:
+
+```bash
+# List and cancel any remaining runs on your branch
+gh run list --repo dotnet/aspire --branch <branch> --status in_progress --json databaseId,name --jq '.[] | "\(.databaseId) \(.name)"'
+gh run cancel <run-id> --repo dotnet/aspire
+```
+
 ### 5.1: DO NOT Unquarantine or Close the Issue
 
 **Important policy**: A code fix alone is not sufficient to unquarantine a test. The test must have **zero failures across all OSes for 21 consecutive days** in the quarantine CI runs before it can be unquarantined. See `docs/unquarantine-policy.md`.
@@ -518,9 +570,11 @@ env:
   ITERATIONS_PER_RUNNER: "3"
 ```
 
-### 5.3: Revert CI Configuration
+### 5.3: Revert CI Configuration (if Option B was used)
 
-Revert `ci.yml` back to calling `tests.yml` — uncomment the original `tests:` job and remove the temporary `tests-reproduce.yml` call.
+If you modified `ci.yml` to route through `tests-reproduce.yml` (Option B in Step 2.2), revert it back to calling `tests.yml` — uncomment the original `tests:` job and remove the temporary `tests-reproduce.yml` call.
+
+If you used `workflow_dispatch` (Option A), no `ci.yml` changes need reverting.
 
 ### 5.4: Final Commit
 
@@ -549,9 +603,15 @@ The workflow:
 
 Failed iterations upload their test output as artifacts named `failures-<os>-<index>`.
 
-### workflow_dispatch Limitation
+### workflow_dispatch Behavior
 
-`workflow_dispatch` only works for workflows that exist on the default branch (`main`). Until `tests-reproduce.yml` is merged to `main`, you must trigger it through `ci.yml` (by temporarily editing it to call `tests-reproduce.yml`).
+`workflow_dispatch` requires the workflow file to exist on the **default branch** (`main`). Key implications:
+
+- **If `tests-reproduce.yml` is on `main`**: You can dispatch it against any branch with `gh workflow run tests-reproduce.yml --ref <branch>`. GitHub discovers the workflow from `main` but runs the version from the specified `--ref`. This means your branch's env var edits will be used. **This is the preferred approach** — no need to touch `ci.yml` or open a PR.
+- **If `tests-reproduce.yml` is NOT on `main`**: `workflow_dispatch` won't work. You must route through `ci.yml` (Option B in Step 2.2), which requires a PR to trigger the CI workflow.
+- **Creating a new workflow file on a feature branch won't help** — GitHub won't discover it via `workflow_dispatch` until it's merged to `main`.
+
+Check availability: `git show origin/main:.github/workflows/tests-reproduce.yml > /dev/null 2>&1`
 
 ## Response Format
 
