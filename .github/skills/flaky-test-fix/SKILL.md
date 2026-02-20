@@ -17,6 +17,49 @@ You are a specialized agent for reproducing and fixing flaky tests in the dotnet
 
 Each step has a **checkpoint** at the end. Do not proceed to the next step until the checkpoint is satisfied. Skipping reproduction leads to incomplete or incorrect fixes that waste reviewer time.
 
+## Top-Level Tracking
+
+Use SQL to track the overall investigation state. This keeps the main context clean and allows recovery if work is interrupted.
+
+### Initialize tracking at the start of every investigation:
+
+```sql
+INSERT INTO todos (id, title, description, status) VALUES
+  ('gather-data', 'Gather failure data', 'Read issue, find test code, determine failure rates per OS', 'pending'),
+  ('reproduce', 'Reproduce on CI', 'Configure and run tests-reproduce.yml to confirm the failure', 'pending'),
+  ('analyze', 'Analyze failure logs', 'Download CI logs, identify root cause', 'pending'),
+  ('fix', 'Apply fix', 'Write the code fix based on root cause analysis', 'pending'),
+  ('verify', 'Verify fix on CI', 'Re-run reproduce workflow to confirm fix works', 'pending'),
+  ('cleanup', 'Clean up CI config', 'Reset tests-reproduce.yml and ci.yml to defaults', 'pending');
+
+INSERT INTO todo_deps (todo_id, depends_on) VALUES
+  ('reproduce', 'gather-data'),
+  ('analyze', 'reproduce'),
+  ('fix', 'analyze'),
+  ('verify', 'fix'),
+  ('cleanup', 'verify');
+```
+
+### Store key parameters in session state:
+
+```sql
+CREATE TABLE IF NOT EXISTS session_state (key TEXT PRIMARY KEY, value TEXT);
+INSERT OR REPLACE INTO session_state (key, value) VALUES
+  ('test_method', '<FullyQualifiedMethodName>'),
+  ('test_project', '<ProjectShortname>'),
+  ('issue_url', '<GitHubIssueURL>'),
+  ('failure_rate_linux', '<rate or unknown>'),
+  ('failure_rate_windows', '<rate or unknown>'),
+  ('failure_rate_macos', '<rate or unknown>'),
+  ('max_failure_rate', '<highest rate across OSes>'),
+  ('reproduce_attempt', '1'),
+  ('fix_attempt', '1'),
+  ('reproduce_run_id', ''),
+  ('verify_run_id', '');
+```
+
+**Always update todo status as you work** — set to `in_progress` before starting, `done` when complete. Query `SELECT * FROM todos;` to check progress. Store CI run IDs and attempt counts in `session_state`.
+
 ### Investigation Directory
 
 Keep all investigation artifacts in a directory at the root of the repo:
@@ -44,10 +87,10 @@ Initialize `README.md` with the test name, issue URL (if known), and current sta
 The steps below are sequential and gated. Complete each step fully before moving to the next.
 
 1. Gather failure data from the issue (OS-specific failure rates, error messages)
-2. Reproduce the failure on CI
+2. Reproduce the failure on CI (may require scaling up iterations)
 3. Analyze failure logs to identify root cause
 4. Apply a fix
-5. Verify the fix by re-running the reproduce workflow
+5. Verify the fix by re-running the reproduce workflow (scaled to original failure rate)
 6. Clean up: reset CI configuration
 
 **Always reproduce on CI first.** Do not attempt to fix the test before confirming the failure is reproducible.
@@ -100,14 +143,17 @@ grep -rn "public.*async.*Task.*TestMethodName\|public.*void.*TestMethodName" tes
 
 ### Iteration Count Heuristic
 
-Based on the failure rate from the issue tracking data:
+Based on the failure rate from the issue tracking data, calculate iterations to achieve **95% probability of seeing at least one failure** (if the bug exists):
 
-| Failure Rate | Runners × Iterations per OS | Total per OS |
-|---|---|---|
-| >50% | 3 × 3 | 9 |
-| 20-50% | 5 × 5 | 25 |
-| 10-20% | 10 × 10 | 100 |
-| <10% | 10 × 20 | 200 |
+| Failure Rate | Runners × Iterations per OS | Total per OS | Confidence |
+|---|---|---|---|
+| >50% | 3 × 3 | 9 | >99% |
+| 20-50% | 5 × 5 | 25 | >99% |
+| 10-20% | 5 × 10 | 50 | >99% |
+| 5-10% | 10 × 10 | 100 | >99% |
+| <5% | 10 × 25 | 250 | >95% |
+
+The math: for failure rate `p`, need `n ≥ log(0.05) / log(1-p)` iterations for 95% confidence. The table above provides comfortable margins.
 
 ### ✅ Step 1 Checkpoint
 
@@ -116,6 +162,7 @@ Before proceeding to Step 2, confirm you have:
 - [ ] The issue URL (if available)
 - [ ] Per-OS failure rates (to choose target OSes and iteration counts)
 - [ ] The error message/pattern from the issue
+- [ ] SQL tracking initialized with all parameters stored
 
 **Do NOT read the test source code to hypothesize a fix yet.** Proceed to Step 2 to reproduce first.
 
@@ -175,41 +222,57 @@ In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-rep
 
 **Important**: You MUST revert ci.yml back to calling `tests.yml` before the PR is merged.
 
-### 2.3: Push and Wait
+### 2.3: Push and Monitor
 
 ```bash
-git add .github/workflows/tests-reproduce.yml
+git add .github/workflows/tests-reproduce.yml .github/workflows/ci.yml
 git commit -m "Configure reproduce workflow for <test name>"
 git push
 ```
 
-Wait for the CI run (10-20 minutes). Monitor via:
+**Use `gh run watch` to monitor**, then delegate log analysis to a sub-agent to keep the main context clean:
 
 ```bash
-# Watch the PR checks
-gh pr checks <pr-number> --repo dotnet/aspire --watch
-
-# Or find the run ID
+# Find the run ID
 gh run list --repo dotnet/aspire --branch <branch> --limit 1 --json databaseId,status
+
+# Watch it (blocks until complete)
+gh run watch <run-id> --repo dotnet/aspire --exit-status
 ```
 
-### 2.4: Analyze Results
+Store the run ID:
+```sql
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('reproduce_run_id', '<run-id>');
+```
 
-**⛔ GATE: Do not proceed past this point until the CI run has completed and you have downloaded failure logs.** If no runners failed, increase iteration counts and re-run — do not assume the test is not flaky.
+### 2.4: Handle Reproduction Results
 
-Each matrix job shows `<os> #<index>` (e.g., `ubuntu-latest #3`). Failed runners upload logs to `failures-<os>-<index>` artifacts.
+**⛔ GATE: Do not proceed past this point until the CI run has completed and you have downloaded failure logs.**
+
+Download and commit failure logs:
 
 ```bash
 # Download failure artifacts into the investigation directory
 gh run download <run-id> --repo dotnet/aspire --dir flaky-test-investigation/failure-logs
 
-# List what was downloaded
-ls flaky-test-investigation/failure-logs/
-
 # Commit the logs so they're preserved
 git add flaky-test-investigation/
 git commit -m "Add CI failure logs from run <run-id>"
 ```
+
+**If no runners failed — scale up and retry:**
+
+```sql
+-- Track the scaling attempt
+INSERT OR REPLACE INTO session_state (key, value)
+VALUES ('reproduce_attempt', CAST((SELECT CAST(value AS INTEGER) FROM session_state WHERE key = 'reproduce_attempt') + 1 AS TEXT));
+```
+
+Increase iterations using the heuristic table from Step 1, then go back to Step 2.1. Scale up progressively:
+- Attempt 1: Use the heuristic from the failure rate
+- Attempt 2: Double the iterations
+- Attempt 3: Double again and add all 3 OSes
+- After 3 failed attempts: Report that the test may not be reproducible with current infrastructure and ask the user for guidance.
 
 **CRITICAL: Windows log encoding gotcha**
 
@@ -238,6 +301,16 @@ find flaky-test-investigation/failure-logs -name "*.log" -exec grep -l "Assert\|
 
 ### Analyzing Failure Logs
 
+**Delegate log analysis to a sub-agent** to keep the main context clean:
+
+```
+Use a task agent (explore or general-purpose) to analyze the failure logs:
+- Pass the log file paths
+- Ask it to identify the specific assertion/exception
+- Ask it to read the test source code and identify the concurrency/timing model
+- Have it return a structured root cause summary
+```
+
 Look for the assertion or exception that failed:
 
 ```bash
@@ -262,9 +335,32 @@ Before proceeding to Step 4, confirm you have:
 
 ## Step 4: Apply Fix and Verify
 
+### 4.1: Apply the Fix
+
 1. Make the code change
-2. Keep `tests-reproduce.yml` configured for the same test
-3. Commit and push:
+2. **Build locally to confirm it compiles**:
+   ```bash
+   dotnet build tests/<TestProject>.Tests/<TestProject>.Tests.csproj --no-restore -v:q
+   ```
+3. Keep `tests-reproduce.yml` configured for the same test
+
+### 4.2: Choose Verification Scale
+
+The verification run must be large enough to be confident the fix works. Use the **original failure rate** to determine scale — you need enough iterations that, if the bug were still present, it would have manifested with ≥95% probability.
+
+**Verification iteration heuristic** (same math as reproduction — `n ≥ log(0.05) / log(1-p)`):
+
+| Original Failure Rate | Runners × Iterations per OS | Total per OS | 95% Detection Confidence |
+|---|---|---|---|
+| >50% | 3 × 3 | 9 | ✅ Would catch >99.8% of the time |
+| 20-50% | 5 × 5 | 25 | ✅ Would catch >99% of the time |
+| 10-20% | 5 × 10 | 50 | ✅ Would catch >99% of the time |
+| 5-10% | 10 × 10 | 100 | ✅ Would catch >95% of the time |
+| <5% | 10 × 25 | 250 | ✅ Would catch >95% of the time |
+
+For tests with very low failure rates (<5%), consider whether the verification is practical within CI budget constraints. If not, document the limitation and rely on the 21-day quarantine monitoring to confirm.
+
+### 4.3: Push and Verify
 
 ```bash
 git add -A
@@ -272,10 +368,37 @@ git commit -m "Fix flaky test: <description of fix>"
 git push
 ```
 
-4. Wait for CI to complete
-5. If all iterations pass across all OSes, the fix is validated ✅
+Store the verification run ID:
+```sql
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('verify_run_id', '<run-id>');
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('fix_attempt', '1');
+```
 
-**If the fix doesn't work**: Iterate — read the new failure logs, refine the fix, push again.
+Wait for CI to complete. Monitor with `gh run watch`.
+
+### 4.4: Handle Verification Results
+
+**If all iterations pass across all OSes**: The fix is validated ✅. Proceed to Step 5.
+
+**If some iterations still fail**: The fix is incomplete or incorrect. Iterate:
+
+```sql
+-- Track the fix attempt
+INSERT OR REPLACE INTO session_state (key, value)
+VALUES ('fix_attempt', CAST((SELECT CAST(value AS INTEGER) FROM session_state WHERE key = 'fix_attempt') + 1 AS TEXT));
+```
+
+1. Download the new failure logs:
+   ```bash
+   # Clear old logs first
+   rm -rf flaky-test-investigation/failure-logs/*
+   gh run download <run-id> --repo dotnet/aspire --dir flaky-test-investigation/failure-logs
+   ```
+2. Analyze the new failure pattern — is it the same error or a different one?
+3. Refine the fix based on the new evidence
+4. Push and re-verify
+
+**After 3 failed fix attempts**: Stop and report findings to the user. The issue may require deeper architectural changes or domain expertise.
 
 ## Step 5: Clean Up
 
@@ -312,7 +435,9 @@ Revert `ci.yml` back to calling `tests.yml` — uncomment the original `tests:` 
 git add -A
 git commit -m "Fix flaky test: <test name>
 
-<brief description of fix>"
+<brief description of fix>
+
+Fixes #<issue-number>"
 git push
 ```
 
@@ -382,12 +507,14 @@ Description of the code change.
 - **Quarantined tests need /p:RunQuarantinedTests=true**: The build system filters them out by default
 - **Keep investigation artifacts**: Save all logs, results, and notes in `flaky-test-investigation/` and commit them (but not crash dumps — `.gitignore` handles this)
 - **DO NOT unquarantine or close issue**: The test stays quarantined until 21 days of zero failures (see `docs/unquarantine-policy.md`)
-- **Minimize CI usage**: Use the iteration count heuristic to avoid wasting runners
+- **Scale verification to failure rate**: A 50% failure rate test needs fewer verification iterations than a 5% failure rate test. Use the verification heuristic table.
 - **Target specific OSes**: Only test on OSes that show failures in the tracking data
 - **Build-verify everything**: After fixes, after any test attribute changes
 - **Reset configuration**: Always reset tests-reproduce.yml and revert ci.yml when done
 - **Don't fix unrelated issues**: If you encounter unrelated test failures, ignore them
 - **Windows UTF-16LE**: Always handle encoding when reading Windows CI logs
+- **Use sub-agents for heavy work**: Delegate log analysis and CI monitoring to sub-agents to keep main context clean
+- **Track state in SQL**: Use the todos table and session_state for tracking progress across the reproduce→fix→verify cycle
 
 ## Appendix: Common Flaky Test Patterns
 
