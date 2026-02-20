@@ -3,10 +3,7 @@ name: flaky-test-fix
 description: Reproduces and fixes flaky tests using local scripts and CI workflows. Use this when asked to investigate, reproduce, or fix a flaky/quarantined test.
 ---
 
-You are a specialized agent for reproducing and fixing flaky tests in the dotnet/aspire repository. You have two reproduction tools available:
-
-1. **Local**: `run-test-repeatedly.sh` — runs a test repeatedly on the current machine
-2. **CI**: `tests-reproduce.yml` — fans out to parallel GitHub Actions runners across Windows/Linux/macOS
+You are a specialized agent for reproducing and fixing flaky tests in the dotnet/aspire repository. You use the CI reproduce workflow (`tests-reproduce.yml`) to reproduce failures across Windows/Linux/macOS.
 
 ### Investigation Directory
 
@@ -16,7 +13,6 @@ Keep all investigation artifacts in a directory at the root of the repo:
 flaky-test-investigation/
 ├── README.md              # Summary: test name, issue, root cause, fix, status
 ├── failure-logs/          # Downloaded CI failure logs
-├── local-results/         # Local reproduction output
 └── notes.md               # Running notes, observations, hypotheses
 ```
 
@@ -26,7 +22,7 @@ Create this directory at the start of your investigation. Commit it to the branc
 - A record of the reproduce→fix→verify cycle
 
 ```bash
-mkdir -p flaky-test-investigation/failure-logs flaky-test-investigation/local-results
+mkdir -p flaky-test-investigation/failure-logs
 ```
 
 Initialize `README.md` with the test name, issue URL (if known), and current status. Update it as you progress through each step.
@@ -35,11 +31,13 @@ Initialize `README.md` with the test name, issue URL (if known), and current sta
 
 The standard workflow is:
 1. Gather failure data from the issue (OS-specific failure rates, error messages)
-2. Reproduce the failure (locally first, then CI if needed)
+2. Reproduce the failure on CI
 3. Analyze failure logs to identify root cause
 4. Apply a fix
 5. Verify the fix by re-running the reproduce workflow
 6. Clean up: reset CI configuration
+
+**Always reproduce on CI first.** Do not attempt to fix the test before confirming the failure is reproducible.
 
 ## Step 1: Gather Failure Data
 
@@ -98,45 +96,9 @@ Based on the failure rate from the issue tracking data:
 | 10-20% | 10 × 10 | 100 |
 | <10% | 10 × 20 | 200 |
 
-## Step 2: Try Local Reproduction First
+## Step 2: Reproduce on CI
 
-### Detect Your OS
-
-Determine what OS you're running on:
-
-```bash
-uname -s  # Linux, Darwin (macOS), or check for Windows via $OS or $OSTYPE
-```
-
-**Only use local reproduction if the test fails exclusively on your current OS.** If the test fails on multiple OSes or on an OS different from yours, skip directly to **Step 3: CI Reproduction** — CI reproduction covers all OSes in one run.
-
-### Run Locally
-
-The test is likely quarantined, so you must build with `/p:RunQuarantinedTests=true` to include it:
-
-```bash
-# Build the project with quarantined tests enabled
-./restore.sh && dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj /p:RunQuarantinedTests=true
-
-# Run repeatedly, saving results to the investigation directory
-./run-test-repeatedly.sh -n 20 -o flaky-test-investigation/local-results \
-  -- dotnet test tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj \
-  --no-build -- --filter-method "*.{TestMethodName}"
-```
-
-If the script doesn't support `-o`, copy results after:
-
-```bash
-cp -r /tmp/test-results-* flaky-test-investigation/local-results/
-```
-
-**Important**: Local reproduction may show *different* errors than CI. If the local error doesn't match the CI error pattern from the issue, don't be distracted — move to CI reproduction.
-
-## Step 3: CI Reproduction
-
-Use this when the test fails only on Windows/macOS, or when local reproduction fails to trigger the same error.
-
-### 3.1: Configure the Reproduce Workflow
+### 2.1: Configure the Reproduce Workflow
 
 Edit `.github/workflows/tests-reproduce.yml` — change only the `env:` section at the top:
 
@@ -166,7 +128,7 @@ TEST_FILTER: '--filter-method "*.Test1" --filter-method "*.Test2"'
 
 **For quarantined tests**: The build step already includes `/p:RunQuarantinedTests=true`, so quarantined tests are automatically included. You do NOT need to add any special flags.
 
-### 3.2: Enable the Reproduce Workflow in CI
+### 2.2: Enable the Reproduce Workflow in CI
 
 In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-reproduce.yml`:
 
@@ -190,7 +152,7 @@ In `.github/workflows/ci.yml`, temporarily swap the tests job to call `tests-rep
 
 **Important**: You MUST revert ci.yml back to calling `tests.yml` before the PR is merged.
 
-### 3.3: Push and Wait
+### 2.3: Push and Wait
 
 ```bash
 git add .github/workflows/tests-reproduce.yml
@@ -208,7 +170,7 @@ gh pr checks <pr-number> --repo dotnet/aspire --watch
 gh run list --repo dotnet/aspire --branch <branch> --limit 1 --json databaseId,status
 ```
 
-### 3.4: Analyze Results
+### 2.4: Analyze Results
 
 Each matrix job shows `<os> #<index>` (e.g., `ubuntu-latest #3`). Failed runners upload logs to `failures-<os>-<index>` artifacts.
 
@@ -241,7 +203,13 @@ cat flaky-test-investigation/failure-logs/readable-windows.log
 find flaky-test-investigation/failure-logs -name "*.log" -exec grep -l "Assert\|Error\|Exception" {} \;
 ```
 
-## Step 4: Identify Root Cause
+## Step 3: Identify Root Cause
+
+### Interpreting Reproduction Results
+
+- **Some runners fail, some pass**: This is the expected pattern for a flaky test. Proceed to analyze the failures.
+- **All runners fail (100%)**: Compare against the failure rate from the tracking issue. If the issue says e.g. 84% and you see 100%, that's consistent — proceed. But if the issue says e.g. 10% and you see 100%, this may be an **unrelated issue** (e.g., a build break, a new dependency problem). Investigate whether the failure is the same error as reported in the issue before attempting a fix.
+- **No runners fail**: The test may not be reliably reproducible with your current iteration count. Increase `RUNNERS_PER_OS` and `ITERATIONS_PER_RUNNER` and try again.
 
 ### Common Flaky Test Patterns
 
@@ -267,7 +235,7 @@ find flaky-test-investigation/failure-logs -name "*.trx" -exec grep -l 'outcome=
 
 Then find the corresponding test code and understand the concurrency/timing model.
 
-## Step 5: Apply Fix and Verify
+## Step 4: Apply Fix and Verify
 
 1. Make the code change
 2. Keep `tests-reproduce.yml` configured for the same test
@@ -284,11 +252,11 @@ git push
 
 **If the fix doesn't work**: Iterate — read the new failure logs, refine the fix, push again.
 
-## Step 6: Clean Up
+## Step 5: Clean Up
 
 Once the fix is verified:
 
-### 6.1: DO NOT Unquarantine or Close the Issue
+### 5.1: DO NOT Unquarantine or Close the Issue
 
 **Important policy**: A code fix alone is not sufficient to unquarantine a test. The test must have **zero failures across all OSes for 21 consecutive days** in the quarantine CI runs before it can be unquarantined. See `docs/unquarantine-policy.md`.
 
@@ -296,7 +264,7 @@ Once the fix is verified:
 - **DO NOT** close the tracking issue
 - A separate process monitors the quarantine CI and handles unquarantining when the 21-day criteria are met
 
-### 6.2: Reset the Reproduce Workflow
+### 5.2: Reset the Reproduce Workflow
 
 Reset `.github/workflows/tests-reproduce.yml` env vars to defaults:
 
@@ -309,11 +277,11 @@ env:
   ITERATIONS_PER_RUNNER: "3"
 ```
 
-### 6.3: Revert CI Configuration
+### 5.3: Revert CI Configuration
 
 Revert `ci.yml` back to calling `tests.yml` — uncomment the original `tests:` job and remove the temporary `tests-reproduce.yml` call.
 
-### 6.4: Final Commit
+### 5.4: Final Commit
 
 ```bash
 git add -A
