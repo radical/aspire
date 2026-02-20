@@ -20,9 +20,34 @@ The standard workflow is:
 
 ## Step 1: Gather Failure Data
 
-### From the GitHub Issue
+### Finding the Issue
 
-Quarantined test issues (e.g., https://github.com/dotnet/aspire/issues/13287) contain tracking tables with per-OS failure rates over the last 100 runs. This data is critical:
+The user may provide:
+- A **test method name** (e.g., `DeployAsync_WithMultipleComputeEnvironments_Works`)
+- A **GitHub issue URL** (e.g., `https://github.com/dotnet/aspire/issues/13287`)
+- Both
+
+**If you only have the test name**, find the tracking issue:
+
+1. First check the test code for a `[QuarantinedTest]` attribute — it contains the issue URL:
+   ```bash
+   grep -rn "QuarantinedTest" tests/ --include="*.cs" | grep "TestMethodName"
+   ```
+
+2. If not found there, look up the test in the **quarantine tracking meta-issue** https://github.com/dotnet/aspire/issues/8813 — this issue tracks all quarantined tests with links to their individual issues:
+   ```bash
+   gh issue view 8813 --repo dotnet/aspire
+   ```
+   Search the output for the test name to find its linked issue.
+
+3. If still not found, search GitHub issues:
+   ```bash
+   gh search issues "TestMethodName" --repo dotnet/aspire --state open
+   ```
+
+### From the Issue
+
+Quarantined test issues contain tracking tables with per-OS failure rates over the last 100 runs. This data is critical:
 
 - **Which OSes fail**: Target only those OSes to save runner time
 - **Failure rate**: Determines how many iterations you need for reproduction
@@ -40,9 +65,6 @@ Find the test method, class, and project:
 ```bash
 # Search for the test method
 grep -rn "public.*async.*Task.*TestMethodName\|public.*void.*TestMethodName" tests/ --include="*.cs"
-
-# Find the QuarantinedTest attribute to get the issue URL
-grep -rn "QuarantinedTest.*<issue-number>" tests/ --include="*.cs"
 ```
 
 ### Iteration Count Heuristic
