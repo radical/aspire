@@ -55,6 +55,7 @@ jobs:
             \.github/workflows/specialized-test-runner.yml
             \.github/workflows/tests-outerloop.yml
             \.github/workflows/tests-quarantine.yml
+            \.github/workflows/tests-reproduce.yml
             \.github/workflows/update-*.yml
 
       - id: compute_version_suffix
@@ -76,13 +77,17 @@ jobs:
           Write-Host "Computed VERSION_SUFFIX_OVERRIDE=$VERSION_SUFFIX"
           "VERSION_SUFFIX_OVERRIDE=$VERSION_SUFFIX" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
+  # NOTE: Temporarily using tests-reproduce.yml instead of tests.yml
+  # to test flaky test reproduction. Revert to tests.yml when done.
+  # Original:
+  #   uses: ./.github/workflows/tests.yml
+  #   with:
+  #     versionOverrideArg: ${{ needs.prepare_for_ci.outputs.VERSION_SUFFIX_OVERRIDE }}
   tests:
-    uses: ./.github/workflows/tests.yml
+    uses: ./.github/workflows/tests-reproduce.yml
     name: Tests
     needs: [prepare_for_ci]
     if: ${{ github.repository_owner == 'dotnet' && needs.prepare_for_ci.outputs.skip_workflow != 'true' }}
-    with:
-      versionOverrideArg: ${{ needs.prepare_for_ci.outputs.VERSION_SUFFIX_OVERRIDE }}
 
   # This job is used for branch protection. It fails if any of the dependent jobs failed
   results:
