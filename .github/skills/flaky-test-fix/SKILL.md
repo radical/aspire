@@ -342,13 +342,6 @@ The workflow:
 
 Failed iterations upload their test output as artifacts named `failures-<os>-<index>`.
 
-### ConcurrentBag vs List
-
-When fixing thread-safety issues by replacing `List<T>` with `ConcurrentBag<T>`:
-- `ConcurrentBag` does NOT support indexing (`collection[0]`)
-- Use `.First()`, `.Single()`, or LINQ instead
-- `Assert.Single()` returns the element — preferred in tests
-
 ### workflow_dispatch Limitation
 
 `workflow_dispatch` only works for workflows that exist on the default branch (`main`). Until `tests-reproduce.yml` is merged to `main`, you must trigger it through `ci.yml` (via the `REPRODUCE_FLAKY_TEST` variable or direct edit).
