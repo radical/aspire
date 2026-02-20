@@ -49,6 +49,46 @@ jobs:
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
     steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          ERRORS=0
+
+          # Validate RUNNERS_PER_OS is a positive integer
+          if ! [[ "${{ env.RUNNERS_PER_OS }}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::RUNNERS_PER_OS must be a positive integer, got '${{ env.RUNNERS_PER_OS }}'"
+            ERRORS=1
+          fi
+
+          # Validate ITERATIONS_PER_RUNNER is a positive integer
+          if ! [[ "${{ env.ITERATIONS_PER_RUNNER }}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::ITERATIONS_PER_RUNNER must be a positive integer, got '${{ env.ITERATIONS_PER_RUNNER }}'"
+            ERRORS=1
+          fi
+
+          # Validate TARGET_OSES is not empty and contains only known runners
+          if [[ -z "${{ env.TARGET_OSES }}" ]]; then
+            echo "::error::TARGET_OSES must not be empty"
+            ERRORS=1
+          else
+            IFS=',' read -ra CHECK_OSES <<< "${{ env.TARGET_OSES }}"
+            for os in "${CHECK_OSES[@]}"; do
+              os=$(echo "$os" | xargs)
+              if [[ "$os" != "ubuntu-latest" && "$os" != "windows-latest" && "$os" != "macos-latest" ]]; then
+                echo "::error::Unknown OS in TARGET_OSES: '$os'. Allowed: ubuntu-latest, windows-latest, macos-latest"
+                ERRORS=1
+              fi
+            done
+          fi
+
+          # Validate TEST_FILTER is not the placeholder
+          if [[ "${{ env.TEST_FILTER }}" == *"YourTestMethodName"* ]]; then
+            echo "::error::TEST_FILTER still contains the placeholder 'YourTestMethodName'. Configure it with the actual test to reproduce."
+            ERRORS=1
+          fi
+
+          if [[ $ERRORS -ne 0 ]]; then exit 1; fi
+
       - name: Generate runner matrix
         id: generate
         shell: bash
@@ -165,7 +205,7 @@ jobs:
 
             # Cleanup between iterations
             rm -rf "${{ github.workspace }}/testresults" 2>/dev/null || true
-            pgrep -lf "dcp" 2>/dev/null | grep -E "dcp(\.exe|ctl)" | awk '{print $1}' | while read pid; do
+            pgrep -lf "dcp" 2>/dev/null | grep -E "\bdcp(\.exe|ctl)?\b" | awk '{print $1}' | while read pid; do
               kill -9 "$pid" 2>/dev/null || true
             done
             sleep 1

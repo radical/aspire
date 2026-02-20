@@ -63,6 +63,11 @@ if [[ ${#TEST_CMD[@]} -eq 0 ]]; then
     exit 1
 fi
 
+if ! [[ "$ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: -n must be a positive integer, got '$ITERATIONS'." >&2
+    exit 1
+fi
+
 # ---------- infer test assembly name from .csproj in args ----------
 TEST_ASSEMBLY_NAME=""
 TEST_PROJECT_DIR=""
@@ -115,7 +120,7 @@ fi
 # ---------- cleanup ----------
 clean_environment() {
     # Kill dcp / dcpctrl processes using pgrep + while loop
-    pgrep -lf "dcp" 2>/dev/null | grep -E "dcp(\.exe|ctl)" | awk '{print $1}' | while read pid; do
+    pgrep -lf "dcp" 2>/dev/null | grep -E "\bdcp(\.exe|ctl)?\b" | awk '{print $1}' | while read pid; do
         kill -9 "$pid" 2>/dev/null || true
     done
 
@@ -139,7 +144,7 @@ clean_environment() {
     # Brief wait for processes to die
     sleep 1
 
-    # Docker cleanup — only if docker is available
+    # Docker cleanup — stop and remove all containers, volumes, and networks
     if command -v docker &>/dev/null; then
         local containers
         containers="$(docker ps -aq 2>/dev/null)"

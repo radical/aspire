@@ -230,19 +230,22 @@ git commit -m "Configure reproduce workflow for <test name>"
 git push
 ```
 
-**Use `gh run watch` to monitor**, then delegate log analysis to a sub-agent to keep the main context clean:
+**Monitor the run using async mode** (CI runs take 10-30+ minutes, which exceeds sync tool timeouts):
 
 ```bash
 # Find the run ID
 gh run list --repo dotnet/aspire --branch <branch> --limit 1 --json databaseId,status
-
-# Watch it (blocks until complete)
-gh run watch <run-id> --repo dotnet/aspire --exit-status
 ```
 
-Store the run ID:
+Store the run ID, then watch it asynchronously:
 ```sql
 INSERT OR REPLACE INTO session_state (key, value) VALUES ('reproduce_run_id', '<run-id>');
+```
+
+```bash
+# Use bash mode="async" — this blocks until complete but won't timeout the agent
+gh run watch <run-id> --repo dotnet/aspire --exit-status
+# Then use read_bash with the shellId to poll for completion
 ```
 
 ### 2.4: Handle Reproduction Results
@@ -268,11 +271,15 @@ INSERT OR REPLACE INTO session_state (key, value)
 VALUES ('reproduce_attempt', CAST((SELECT CAST(value AS INTEGER) FROM session_state WHERE key = 'reproduce_attempt') + 1 AS TEXT));
 ```
 
-Increase iterations using the heuristic table from Step 1, then go back to Step 2.1. Scale up progressively:
-- Attempt 1: Use the heuristic from the failure rate
-- Attempt 2: Double the iterations
-- Attempt 3: Double again and add all 3 OSes
-- After 3 failed attempts: Report that the test may not be reproducible with current infrastructure and ask the user for guidance.
+Scale up progressively, focusing on the OS most likely to fail first (based on per-OS failure rates from the issue). Go back to Step 2.1 after each change:
+
+| Attempt | `TARGET_OSES` | `RUNNERS_PER_OS` | `ITERATIONS_PER_RUNNER` | Notes |
+|---------|---------------|-------------------|--------------------------|-------|
+| 1 | Highest-failure-rate OS only | From heuristic table | From heuristic table | Start narrow — one OS, sized by failure rate |
+| 2 | Same single OS | Same | 2× previous | Double `ITERATIONS_PER_RUNNER` only |
+| 3 | Add second-worst OS (if available) | Same | Same as attempt 2 | Expand OS coverage, keep iteration count |
+
+**Upper bounds**: Do not exceed `RUNNERS_PER_OS=10` or `ITERATIONS_PER_RUNNER=50` (total matrix entries must stay ≤ 256 per GitHub Actions limits). If attempt 3 still doesn't reproduce, report that the test may not be reproducible with current CI infrastructure and ask the user for guidance.
 
 **CRITICAL: Windows log encoding gotcha**
 
