@@ -29,11 +29,13 @@ public abstract class TestProgramFixture : IAsyncLifetime
 
         _app = _testProgram.Build();
 
-        using var cts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
+        using var startCts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
+        await _app.StartAsync(startCts.Token);
 
-        await _app.StartAsync(cts.Token);
-
-        await WaitReadyStateAsync(cts.Token);
+        // Use a separate timeout for readiness checks so that time spent in StartAsync
+        // does not reduce the time available for services to become ready.
+        using var readyCts = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
+        await WaitReadyStateAsync(readyCts.Token);
     }
 
     public async ValueTask DisposeAsync()
@@ -63,18 +65,18 @@ public class SlimTestProgramFixture : TestProgramFixture
 
     public override async Task WaitReadyStateAsync(CancellationToken cancellationToken = default)
     {
-        // Make sure services A, B and C are running
-        await App.WaitForTextAsync("Application started.", "servicea", cancellationToken);
-        using var clientA = App.CreateHttpClientWithResilience(TestProgram.ServiceABuilder.Resource.Name, "http");
-        await clientA.GetStringAsync("/", cancellationToken);
+        // Wait for all services in parallel to avoid sequential timeout accumulation.
+        await Task.WhenAll(
+            WaitForServiceReadyAsync("servicea", TestProgram.ServiceABuilder.Resource.Name, cancellationToken),
+            WaitForServiceReadyAsync("serviceb", TestProgram.ServiceBBuilder.Resource.Name, cancellationToken),
+            WaitForServiceReadyAsync("servicec", TestProgram.ServiceCBuilder.Resource.Name, cancellationToken));
+    }
 
-        await App.WaitForTextAsync("Application started.", "serviceb", cancellationToken);
-        using var clientB = App.CreateHttpClientWithResilience(TestProgram.ServiceBBuilder.Resource.Name, "http");
-        await clientB.GetStringAsync("/", cancellationToken);
-
-        await App.WaitForTextAsync("Application started.", "servicec", cancellationToken);
-        using var clientC = App.CreateHttpClientWithResilience(TestProgram.ServiceCBuilder.Resource.Name, "http");
-        await clientC.GetStringAsync("/", cancellationToken);
+    private async Task WaitForServiceReadyAsync(string logResourceName, string resourceName, CancellationToken cancellationToken)
+    {
+        await App.WaitForTextAsync("Application started.", logResourceName, cancellationToken);
+        using var client = App.CreateHttpClientWithResilience(resourceName, "http");
+        await client.GetStringAsync("/", cancellationToken);
     }
 }
 
