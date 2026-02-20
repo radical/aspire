@@ -245,14 +245,14 @@ find flaky-test-investigation/failure-logs -name "*.log" -exec grep -l "Assert\|
 
 ### Common Flaky Test Patterns
 
-| Pattern | Symptom | Fix |
-|---------|---------|-----|
-| Thread-unsafe collections | `Assert.Contains()` missing items; concurrent test fakes using `List<T>` | Replace `List<T>` with `ConcurrentBag<T>` |
-| Race condition on startup | Fails intermittently with timeout or "not started" | Use `WaitForHealthyAsync()` instead of `WaitForTextAsync("Application started.")` |
-| Port conflicts | `AddressInUseException` | Ensure `randomizePorts: true` |
-| File locking (Windows) | `IOException: The process cannot access the file` | Add retry logic or use temp directories |
-| Docker dependency | Test assumes Docker is available | Add `[DockerAvailable]` guard or skip on non-Docker OSes |
-| Order-dependent state | Passes alone, fails with other tests | Ensure proper test isolation/cleanup |
+| Pattern                   | Symptom                                                                  | Fix                                                                               |
+|---------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| Thread-unsafe collections | `Assert.Contains()` missing items; concurrent test fakes using `List<T>` | Replace `List<T>` with `ConcurrentBag<T>`                                         |
+| Race condition on startup | Fails intermittently with timeout or "not started"                       | Use `WaitForHealthyAsync()` instead of `WaitForTextAsync("Application started.")` |
+| Port conflicts            | `AddressInUseException`                                                  | Ensure `randomizePorts: true`                                                     |
+| File locking (Windows)    | `IOException: The process cannot access the file`                        | Add retry logic or use temp directories                                           |
+| Docker dependency         | Test assumes Docker is available                                         | Add `[DockerAvailable]` guard or skip on non-Docker OSes                          |
+| Order-dependent state     | Passes alone, fails with other tests                                     | Ensure proper test isolation/cleanup                                              |
 
 ### Analyzing Failure Logs
 
@@ -291,20 +291,13 @@ git push
 
 Once the fix is verified:
 
-### 6.1: Unquarantine the Test
+### 6.1: DO NOT Unquarantine or Close the Issue
 
-```bash
-# Remove the [QuarantinedTest] attribute
-dotnet run --project tools/QuarantineTools -- -u Namespace.Type.Method
-```
+**Important policy**: A code fix alone is not sufficient to unquarantine a test. The test must have **zero failures across all OSes for 21 consecutive days** in the quarantine CI runs before it can be unquarantined. See `docs/unquarantine-policy.md`.
 
-**IMPORTANT**: QuarantineTools may incorrectly remove `using` directives that are still needed by other attributes in the file (e.g., `[RequiresTools]` uses `Aspire.TestUtilities`). **Always build-verify after unquarantining**:
-
-```bash
-dotnet build tests/Aspire.{Project}.Tests/Aspire.{Project}.Tests.csproj
-```
-
-If the build fails with missing type/namespace errors, add back the removed `using` directive.
+- **DO NOT** remove the `[QuarantinedTest]` attribute
+- **DO NOT** close the tracking issue
+- A separate process monitors the quarantine CI and handles unquarantining when the 21-day criteria are met
 
 ### 6.2: Reset the Reproduce Workflow
 
@@ -327,9 +320,9 @@ Revert `ci.yml` back to calling `tests.yml` — uncomment the original `tests:` 
 
 ```bash
 git add -A
-git commit -m "Clean up: unquarantine <test name>, reset reproduce workflow
+git commit -m "Fix flaky test: <test name>
 
-Fixes #<issue-number>"
+<brief description of fix>"
 git push
 ```
 
@@ -393,6 +386,10 @@ Description of the code change.
 
 ### Files Changed
 - `path/to/file.cs` — description
+
+### Next Steps
+- Test remains quarantined — will be unquarantined after 21 days of zero failures
+- Issue #XXXXX remains open — will be closed by the unquarantine process
 ```
 
 ## Important Constraints
@@ -400,10 +397,11 @@ Description of the code change.
 - **Reproduce before fixing**: Always confirm the failure is reproducible before attempting a fix
 - **Detect your OS**: Don't assume Linux — check with `uname -s` and decide if local reproduction is viable
 - **Quarantined tests need /p:RunQuarantinedTests=true**: The build system filters them out by default
-- **Keep investigation artifacts**: Save all logs, results, and notes in `flaky-test-investigation/` and commit them
+- **Keep investigation artifacts**: Save all logs, results, and notes in `flaky-test-investigation/` and commit them (but not crash dumps — `.gitignore` handles this)
+- **DO NOT unquarantine or close issue**: The test stays quarantined until 21 days of zero failures (see `docs/unquarantine-policy.md`)
 - **Minimize CI usage**: Use the iteration count heuristic to avoid wasting runners
 - **Target specific OSes**: Only test on OSes that show failures in the tracking data
-- **Build-verify everything**: After QuarantineTools, after fixes, after unquarantining
-- **Reset configuration**: Always reset tests-reproduce.yml and CI toggle when done
+- **Build-verify everything**: After fixes, after any test attribute changes
+- **Reset configuration**: Always reset tests-reproduce.yml and revert ci.yml when done
 - **Don't fix unrelated issues**: If you encounter unrelated test failures, ignore them
 - **Windows UTF-16LE**: Always handle encoding when reading Windows CI logs
