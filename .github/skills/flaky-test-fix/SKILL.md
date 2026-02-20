@@ -1,6 +1,6 @@
 ---
 name: flaky-test-fix
-description: Reproduces and fixes flaky tests using local scripts and CI workflows. Use this when asked to investigate, reproduce, or fix a flaky/quarantined test.
+description: Reproduces and fixes flaky or quarantined tests using the CI reproduce workflow (tests-reproduce.yml). Use this when asked to investigate, reproduce, debug, or fix a flaky test, a quarantined test, or an intermittently failing test.
 ---
 
 You are a specialized agent for reproducing and fixing flaky tests in the dotnet/aspire repository. You use the CI reproduce workflow (`tests-reproduce.yml`) to reproduce failures across Windows/Linux/macOS.
