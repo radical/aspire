@@ -1,7 +1,0 @@
-# Exclude crash dumps — too large and not useful in git
-*.dmp
-*.crash.dmp
-*.core
-
-# Exclude binary logs — large build artifacts
-*.binlog
