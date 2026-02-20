@@ -251,7 +251,6 @@ find flaky-test-investigation/failure-logs -name "*.log" -exec grep -l "Assert\|
 | Race condition on startup | Fails intermittently with timeout or "not started"                       | Use `WaitForHealthyAsync()` instead of `WaitForTextAsync("Application started.")` |
 | Port conflicts            | `AddressInUseException`                                                  | Ensure `randomizePorts: true`                                                     |
 | File locking (Windows)    | `IOException: The process cannot access the file`                        | Add retry logic or use temp directories                                           |
-| Docker dependency         | Test assumes Docker is available                                         | Add `[DockerAvailable]` guard or skip on non-Docker OSes                          |
 | Order-dependent state     | Passes alone, fails with other tests                                     | Ensure proper test isolation/cleanup                                              |
 
 ### Analyzing Failure Logs
