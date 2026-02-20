@@ -40,10 +40,7 @@ The user may provide:
    ```
    Search the output for the test name to find its linked issue.
 
-3. If still not found, search GitHub issues:
-   ```bash
-   gh search issues "TestMethodName" --repo dotnet/aspire --state open
-   ```
+3. If neither source has the issue, **proceed without historical failure data**. Use a default configuration (all 3 OSes, 5×5 iterations) since you don't know which OSes fail or the failure rate.
 
 ### From the Issue
 
