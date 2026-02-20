@@ -148,9 +148,40 @@ The `TEST_PROJECT` maps to test project paths:
 
 The workflow tries `tests/{name}.Tests/` first, then `tests/Aspire.{name}.Tests/`.
 
----
+## Current Investigation: SlimTestProgramTests (#9671, #9672, #9673)
 
-## Instructions for Copilot Agents
+### Failure Data (from quarantine run tracking)
+
+| OS | Failure Rate (last 100 runs) |
+|---|---|
+| Linux | 16/100 (16%) |
+| Windows | 16/100 (16%) |
+| macOS | 0/100 (0%) ✅ |
+
+**Overall failure rate**: 23.1% (80/346 in last 30 days)
+
+### Root Cause
+
+All three tests share the same `SlimTestProgramFixture` which fails in `InitializeAsync` → `WaitReadyStateAsync`:
+
+```
+Collection fixture type 'SlimTestProgramFixture' threw in InitializeAsync
+---- System.Threading.Tasks.TaskCanceledException : A task was canceled.
+   at SlimTestProgramFixture.WaitReadyStateAsync (TestProgramFixture.cs:line 68)
+```
+
+The fixture uses `WaitForTextAsync("Application started.", ...)` which races — the log message can appear before the HTTP endpoint is ready, or the wait can time out if logs are delayed.
+
+### Reproduction Attempts
+
+1. **Run 1** (5 runners × 3 iters × 3 OSes = 45 total): All passed — too few iterations to hit 16% failure rate
+2. **Run 2** (20 runners × 10 iters × 2 OSes = 400 total): Targeted Linux + Windows only — pending
+
+### Planned Fix
+
+Replace `WaitForTextAsync("Application started.", ...)` with `WaitForHealthyAsync(...)` which properly waits for resource health state, avoiding the race condition.
+
+---
 
 ### Fixing a Flaky Test
 
