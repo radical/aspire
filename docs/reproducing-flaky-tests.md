@@ -148,38 +148,54 @@ The `TEST_PROJECT` maps to test project paths:
 
 The workflow tries `tests/{name}.Tests/` first, then `tests/Aspire.{name}.Tests/`.
 
-## Current Investigation: SlimTestProgramTests (#9671, #9672, #9673)
+## Current Investigation: DeployAsync_WithMultipleComputeEnvironments_Works (#13287)
 
 ### Failure Data (from quarantine run tracking)
 
 | OS | Failure Rate (last 100 runs) |
 |---|---|
-| Linux | 16/100 (16%) |
-| Windows | 16/100 (16%) |
-| macOS | 0/100 (0%) ✅ |
+| Windows | 84/100 (84%) |
+| Linux | 47/100 (47%) |
+| macOS | 42/100 (42%) |
 
-**Overall failure rate**: 23.1% (80/346 in last 30 days)
+**Overall failure rate**: 99.4% — nearly guaranteed to fail.
+
+### Error
+
+```
+Assert.Contains() Failure: Filter not matched in collection
+Collection: [Tuple ("aasregistry.azurecr.io", "00000000-...", "fake-refresh-token")]
+```
+
+The test expects two registry logins (`acaregistry` + `aasregistry`) but only one appears. The deploy pipeline processes compute environments concurrently, so `LoginToRegistryAsync` is called on `FakeContainerRuntime` from two threads simultaneously.
 
 ### Root Cause
 
-All three tests share the same `SlimTestProgramFixture` which fails in `InitializeAsync` → `WaitReadyStateAsync`:
+`FakeContainerRuntime.LoginToRegistryCalls` is a `List<T>` — **not thread-safe**. Concurrent `Add()` calls from parallel pipeline steps race and lose items. This is a **test infrastructure bug**, not a production bug.
 
+```csharp
+// FakeContainerRuntime.cs line 27 — NOT thread-safe
+public List<(string, string, string)> LoginToRegistryCalls { get; } = [];
 ```
-Collection fixture type 'SlimTestProgramFixture' threw in InitializeAsync
----- System.Threading.Tasks.TaskCanceledException : A task was canceled.
-   at SlimTestProgramFixture.WaitReadyStateAsync (TestProgramFixture.cs:line 68)
-```
 
-The fixture uses `WaitForTextAsync("Application started.", ...)` which races — the log message can appear before the HTTP endpoint is ready, or the wait can time out if logs are delayed.
+### Reproduction
 
-### Reproduction Attempts
+- **First attempt** (SlimTestProgramTests, 45 runs): All passed — wrong test, too low failure rate
+- **Second attempt** (#13287, 50 runs): 5/5 Windows runners failed immediately ✅
 
-1. **Run 1** (5 runners × 3 iters × 3 OSes = 45 total): All passed — too few iterations to hit 16% failure rate
-2. **Run 2** (20 runners × 10 iters × 2 OSes = 400 total): Targeted Linux + Windows only — pending
+### Process Notes
 
-### Planned Fix
+**What worked well:**
+- The reproduce workflow fanned out correctly across OSes
+- Failure artifacts were uploaded and downloadable via `gh run download`
+- The iteration loop with cleanup between runs worked perfectly
+- The issue's quarantine tracking data made it easy to target the right OSes
 
-Replace `WaitForTextAsync("Application started.", ...)` with `WaitForHealthyAsync(...)` which properly waits for resource health state, avoiding the race condition.
+**What needs improvement:**
+- The failure log file was UTF-16LE encoded (Windows) — need `iconv` to read it. Consider adding a step to convert logs or use `-Encoding utf8` in PowerShell.
+- When the failure rate is very high (84%), even 5 runners × 5 iterations is overkill. For initial reproduction, start small (3×3) and scale up only if needed.
+- The `--filter-method` filter correctly matched both `[InlineData]` variants of the Theory test.
+- Consider adding the specific error message to the reproduce workflow output summary for quick diagnosis without downloading artifacts.
 
 ---
 
