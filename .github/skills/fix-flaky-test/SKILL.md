@@ -73,7 +73,9 @@ dotnet build tests/<TestProject>.Tests/<TestProject>.Tests.csproj -v:q /p:RunQua
 
 Choose iteration count based on failure rate. If unsure, consult REFERENCE.md § Verification Scale.
 
-**Done when:** Either you reproduced the failure locally (proceed to Phase 4), or local reproduction failed and you proceed to Phase 3.
+**Done when:** Either you reproduced the failure locally (proceed to Phase 4, but CI verification in Phase 5.2 is still mandatory), or local reproduction failed and you proceed to Phase 3.
+
+> **⚠️ Local reproduction does NOT replace CI verification.** Even if you reproduce and fix locally, you must still run CI verification (Phase 5.2) before opening a PR. Local success only lets you skip Phase 3 (CI reproduction baseline).
 
 ## Phase 3: Reproduce on CI
 
@@ -114,7 +116,11 @@ git push --set-upstream origin <branch-name>
 gh workflow run reproduce-flaky-tests.yml --repo dotnet/aspire --ref <branch-name>
 ```
 
-If workflow dispatch fails with HTTP 403, your token lacks `actions:write`. Document this in the PR — continue with the investigation.
+If workflow dispatch fails with HTTP 403, your token lacks `actions:write`. Try these in order:
+1. Re-authenticate: `gh auth refresh -s actions:write`
+2. If still blocked, fall back to **log-based analysis** using existing quarantine failure logs (Phase 1, step 5). You may proceed to Phase 4 with log-based evidence only — document this clearly in the PR body under "Verification Rationale" and explain why CI reproduction was not possible.
+
+> **⚠️** Without CI reproduction, you have no pre-fix baseline. The PR must explicitly state this gap, and CI verification (Phase 5.2) becomes the sole proof that the fix is effective.
 
 ### 3.4: Monitor and validate results
 
@@ -150,6 +156,8 @@ gh run cancel <old-run-id> --repo dotnet/aspire
 ```
 
 After 2 failed single-test attempts → escalate to **quarantine-project mode**: manually edit the `TEST_FILTER` in the workflow YAML to `--filter-trait "quarantined=true"` with `RUNNERS_PER_OS: "3"` and `ITERATIONS_PER_RUNNER: "3"`. This recreates the contention from the quarantine CI.
+
+> **⚠️ Quarantine-project mode uses a broad filter.** Before verification (Phase 5) or cleanup (Phase 6), you **must** restore the single-test filter using `configure-reproduce.ps1` or `cleanup-investigation.ps1`. Never push the broad `--filter-trait "quarantined=true"` filter to the final PR.
 
 If quarantine-project mode also fails → fall back to log-based analysis using existing quarantine failure logs. Note this in the PR.
 
@@ -211,11 +219,18 @@ If reproduction used quarantine-project mode, use the same mode for verification
 
 ### 5.3: Validate verification results
 
-Apply the same job validation rules from Phase 3.4. The verification run should show significantly better results than the reproduction run.
+Apply the same job validation rules from Phase 3.4. Compare verification results against the reproduction run.
+
+**Success criteria (all must be true):**
+- Zero test failures across all test-executing jobs (jobs where `Total: ≥ 1`)
+- At least one OS has test-executing jobs (i.e., not all jobs are zero-test/infrastructure failures)
 
 **If all test-executing iterations pass:** Verification successful ✅ — proceed to Phase 6.
 
-**If some still fail:** Iterate on the fix. After 3 failed attempts, stop and report to the user.
+**If some still fail:** Iterate on the fix (return to Phase 4). Track your attempt number — **after 3 failed fix-verify cycles, stop and report to the user** with:
+- The failure logs from each attempt
+- Your analysis of why the fix didn't work
+- Whether the root cause hypothesis needs revisiting
 
 **Done when:** CI verification completed and all test-executing iterations pass.
 
