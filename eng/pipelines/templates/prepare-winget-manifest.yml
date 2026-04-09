@@ -10,9 +10,9 @@ parameters:
   - name: archiveRoot
     type: string
     default: ''
-  - name: validateUrls
+  - name: skipUrlValidation
     type: boolean
-    default: true
+    default: false
   - name: runInstallTest
     type: boolean
     default: true
@@ -101,8 +101,8 @@ steps:
         $args.ArchiveRoot = '${{ parameters.archiveRoot }}'
       }
 
-      if ('${{ parameters.validateUrls }}' -eq 'true') {
-        $args.ValidateUrls = $true
+      if ('${{ parameters.skipUrlValidation }}' -eq 'true') {
+        $args.SkipUrlValidation = $true
       }
 
       & "$(Build.SourcesDirectory)/eng/winget/generate-manifests.ps1" @args
