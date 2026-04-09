@@ -436,9 +436,8 @@ extends:
                 # publishes CLI archives to ci.dot.net. Feature branches and PR builds
                 # don't have Maestro default channels so URLs won't be valid.
                 # NOTE: ${{ not() }} is NOT supported in AzDO template expressions,
-                # so we use De Morgan's law to negate the runInstallTest condition.
+                # so we use De Morgan's law to express "not isPublishingBranch".
                 skipUrlValidation: ${{ or(eq(variables['_RunAsPublic'], 'true'), eq(variables['Build.Reason'], 'PullRequest'), and(ne(variables['Build.SourceBranch'], 'refs/heads/main'), eq(startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'), false), eq(startsWith(variables['Build.SourceBranch'], 'refs/heads/internal/release/'), false))) }}
-                runInstallTest: ${{ and(ne(variables['_RunAsPublic'], 'true'), ne(variables['Build.Reason'], 'PullRequest'), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'), startsWith(variables['Build.SourceBranch'], 'refs/heads/internal/release/'))) }}
 
           - job: Homebrew
             displayName: Homebrew Cask
@@ -466,4 +465,3 @@ extends:
                 artifactVersion: $(aspireArtifactVersion)
                 archiveRoot: $(Pipeline.Workspace)/native-archives
                 skipUrlValidation: ${{ or(eq(variables['_RunAsPublic'], 'true'), eq(variables['Build.Reason'], 'PullRequest'), and(ne(variables['Build.SourceBranch'], 'refs/heads/main'), eq(startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'), false), eq(startsWith(variables['Build.SourceBranch'], 'refs/heads/internal/release/'), false))) }}
-                runInstallTest: ${{ and(ne(variables['_RunAsPublic'], 'true'), ne(variables['Build.Reason'], 'PullRequest'), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'), startsWith(variables['Build.SourceBranch'], 'refs/heads/internal/release/'))) }}

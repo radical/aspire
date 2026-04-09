@@ -13,9 +13,8 @@ parameters:
   - name: skipUrlValidation
     type: boolean
     default: false
-  - name: runInstallTest
-    type: boolean
-    default: true
+  # runInstallTest is derived from skipUrlValidation (they are logical inverses).
+  # Callers should only set skipUrlValidation; install tests run when URLs are valid.
 
 steps:
   - pwsh: |
@@ -226,7 +225,7 @@ steps:
         exit 1
       }
     displayName: 🟣Test WinGet manifest install/uninstall
-    condition: and(succeeded(), eq('${{ parameters.runInstallTest }}', 'true'))
+    condition: and(succeeded(), eq(${{ parameters.skipUrlValidation }}, false))
 
   - pwsh: |
       Copy-Item "$(Build.SourcesDirectory)/eng/winget/dogfood.ps1" "$(Build.StagingDirectory)/winget-manifests/dogfood.ps1"

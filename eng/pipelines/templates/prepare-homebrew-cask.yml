@@ -11,9 +11,8 @@ parameters:
   - name: skipUrlValidation
     type: boolean
     default: false
-  - name: runInstallTest
-    type: boolean
-    default: true
+  # runInstallTest is derived from skipUrlValidation (they are logical inverses).
+  # Callers should only set skipUrlValidation; install tests run when URLs are valid.
 
 steps:
   - bash: |
@@ -219,7 +218,7 @@ steps:
         echo "  Confirmed: aspire is no longer in PATH"
       fi
     displayName: 🟣Test cask install/uninstall
-    condition: and(succeeded(), eq('${{ parameters.runInstallTest }}', 'true'))
+    condition: and(succeeded(), eq(${{ parameters.skipUrlValidation }}, false))
 
   - bash: |
       set -euo pipefail
@@ -258,7 +257,7 @@ steps:
       echo "Wrote Homebrew validation summary to $outputPath"
       cat "$outputPath"
     displayName: 🟣Write Homebrew validation summary
-    condition: and(succeeded(), eq('${{ parameters.runInstallTest }}', 'true'))
+    condition: and(succeeded(), eq(${{ parameters.skipUrlValidation }}, false))
 
   - bash: |
       set -euo pipefail

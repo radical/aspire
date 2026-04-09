@@ -318,7 +318,7 @@ extends:
                 artifactVersion: $(aspireArtifactVersion)
                 channel: $(installerChannel)
                 archiveRoot: $(Pipeline.Workspace)/native-archives
-                runInstallTest: false
+                skipUrlValidation: true
 
           - job: Homebrew
             displayName: Homebrew Cask
@@ -342,4 +342,3 @@ extends:
                 artifactVersion: $(aspireArtifactVersion)
                 archiveRoot: $(Pipeline.Workspace)/native-archives
                 skipUrlValidation: true
-                runInstallTest: false
