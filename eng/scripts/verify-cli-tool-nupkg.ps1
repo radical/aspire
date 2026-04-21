@@ -291,3 +291,7 @@ finally {
         Remove-Item -Recurse -Force $toolInstallDir -ErrorAction SilentlyContinue
     }
 }
+
+# Explicitly exit 0 so $LASTEXITCODE is set for callers.
+# The catch block already calls exit 1 on any failure path.
+exit 0
