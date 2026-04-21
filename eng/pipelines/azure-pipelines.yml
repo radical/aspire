@@ -183,7 +183,6 @@ extends:
           teamName: $(_TeamName)
           extraBuildArgs: >-
             /p:Configuration=$(_BuildConfig)
-            $(_SignArgs)
             $(_OfficialBuildIdArgs)
 
       - template: /eng/pipelines/templates/build_sign_native.yml@self

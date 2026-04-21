@@ -28,7 +28,7 @@ jobs:
         variables:
         - TeamName: ${{ parameters.teamName }}
         - ${{ if eq(parameters.codeSign, true) }}:
-          - _buildArgs: '--sign'
+          - _buildArgs: '-sign'
         - ${{ else }}:
           - _buildArgs: ''
 
@@ -97,7 +97,7 @@ jobs:
           - ${{ if eq(parameters.codeSign, true) }}:
             - script: >-
                 $(Build.SourcesDirectory)/$(scriptName)
-                --restore --sign
+                -restore -sign
                 ${{ parameters.extraBuildArgs }}
                 -projects $(Build.SourcesDirectory)/src/Aspire.Managed/Aspire.Managed.csproj
                 /bl:$(Build.Arcade.LogsPath)SignManaged.binlog
@@ -128,9 +128,9 @@ jobs:
 
           - script: >-
               $(Build.SourcesDirectory)/$(scriptName)
-              --ci
-              --build
-              --restore
+              -ci
+              -build
+              -restore
               /p:SkipManagedBuild=true
               /p:TargetRids=${{ targetRid }}
               /p:PackCliTool=true
