@@ -16,9 +16,6 @@ parameters:
     type: string
   - name: dotnetScript
     type: string
-  - name: targetRids
-    type: object
-    default: ''
   - name: runHelixTests
     type: boolean
     default: false
@@ -40,43 +37,11 @@ parameters:
 
 steps:
   # Internal pipeline: Build with pack+sign
+  # CLI tool nupkgs and native archives are produced by the build_sign_native stage
+  # for all platforms (macOS, Linux, Windows). This job builds all managed packages,
+  # signs them, and publishes. The CLI tool nupkgs are downloaded and merged into
+  # the Shipping directory before Arcade's publish-using-pipelines picks them up.
   - ${{ if ne(parameters.runAsPublic, 'true') }}:
-    # Per-RID steps that must complete before the main build+sign:
-    # Step 1: dotnet publish produces the self-contained single-file aspire-managed binary.
-    # Step 2: build.cmd -sign runs Arcade's signing, which picks up the binary via ItemsToSign in Signing.props.
-    # Step 3: Bundle.proj creates the bundle layout and archive using the signed binary.
-    - ${{ each targetRid in parameters.targetRids }}:
-      - script: ${{ parameters.dotnetScript }}
-                publish
-                $(Build.SourcesDirectory)/src/Aspire.Managed/Aspire.Managed.csproj
-                -c ${{ parameters.buildConfig }}
-                -r ${{ targetRid }}
-                --self-contained
-                /p:GenerateDocumentationFile=false
-                /p:EnforceCodeStyleInBuild=false
-                $(_OfficialBuildIdArgs)
-                /bl:${{ parameters.repoLogPath }}/PublishManaged-${{ targetRid }}.binlog
-        displayName: 🟣Publish aspire-managed (${{ targetRid }})
-
-      - script: ${{ parameters.buildScript }}
-                -restore -sign $(_SignArgs)
-                -configuration ${{ parameters.buildConfig }}
-                $(_OfficialBuildIdArgs)
-                -projects $(Build.SourcesDirectory)/src/Aspire.Managed/Aspire.Managed.csproj
-                /bl:${{ parameters.repoLogPath }}/SignManaged-${{ targetRid }}.binlog
-        displayName: 🟣Sign aspire-managed (${{ targetRid }})
-
-      - script: ${{ parameters.dotnetScript }}
-                msbuild
-                $(Build.SourcesDirectory)/eng/Bundle.proj
-                "/t:_RestoreDcpPackage;_RunCreateLayout"
-                /p:Configuration=${{ parameters.buildConfig }}
-                /p:TargetRid=${{ targetRid }}
-                /p:BundleVersion=ci-bundlepayload
-                /p:ContinuousIntegrationBuild=true
-                /bl:${{ parameters.repoLogPath }}/BundleLayout-${{ targetRid }}.binlog
-        displayName: 🟣Create bundle layout (${{ targetRid }})
-
     - script: ${{ parameters.buildScript }}
               -restore -build
               -pack
@@ -86,50 +51,49 @@ steps:
               /bl:${{ parameters.repoLogPath }}/build.binlog
               $(_OfficialBuildIdArgs)
               $(_InternalBuildArgs)
-              /p:TargetRids=${{ join(':', parameters.targetRids) }}
-              /p:PackCliTool=true
+              /p:SkipNativeBuild=true
               /p:SkipTestProjects=true
               /p:BuildExtension=true
       displayName: 🟣Build
 
-    # Verify the signed win-x64 CLI archive works (version check + project creation)
+    # Verify all CLI tool nupkgs in Shipping are signed after the build's -sign pass.
+    # Tool nupkgs from macOS/Windows native builds arrive pre-signed; Linux nupkgs
+    # arrive unsigned and rely on this build's MicroBuild signing sweep. This step
+    # uses 'dotnet nuget verify' as the authoritative gate — it validates the full
+    # NuGet signature chain, not just the presence of .signature.p7s.
     - pwsh: |
         $ErrorActionPreference = 'Stop'
-        $archiveDir = "${{ parameters.repoArtifactsPath }}/packages/${{ parameters.buildConfig }}"
-        $archive = Get-ChildItem -Path $archiveDir -Filter "aspire-cli-win-x64-*.zip" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $archive) {
-          Write-Host "##[warning]No win-x64 CLI archive found - skipping verification"
+        $shippingDir = "${{ parameters.repoArtifactsPath }}/packages/${{ parameters.buildConfig }}/Shipping"
+        $toolNupkgs = Get-ChildItem -Path $shippingDir -Filter "Aspire.Cli.*.nupkg" -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -notmatch '\.symbols\.' }
+
+        if ($toolNupkgs.Count -eq 0) {
+          Write-Host "No CLI tool nupkgs found in Shipping — skipping signature verification"
           exit 0
         }
-        Write-Host "Found archive: $($archive.FullName)"
-        & "$(Build.SourcesDirectory)/eng/scripts/verify-cli-archive.ps1" -ArchivePath $archive.FullName
-        if ($LASTEXITCODE -ne 0) {
-          Write-Host "##[error]CLI archive verification failed"
+
+        Write-Host "Verifying NuGet signatures for $($toolNupkgs.Count) CLI tool nupkgs..."
+        $failed = @()
+        foreach ($pkg in $toolNupkgs) {
+          Write-Host "  Verifying: $($pkg.Name)"
+          $output = & dotnet nuget verify $pkg.FullName --all 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $failed += $pkg.Name
+            Write-Host "##[warning]Signature verification failed for $($pkg.Name):"
+            Write-Host ($output -join "`n")
+          } else {
+            Write-Host "    Signed OK"
+          }
+        }
+
+        if ($failed.Count -gt 0) {
+          Write-Host "##[error]$($failed.Count) CLI tool nupkg(s) failed signature verification:"
+          foreach ($f in $failed) { Write-Host "##[error]  $f" }
           exit 1
         }
-      displayName: 🟣Verify CLI archive (win-x64)
-      condition: succeeded()
-      env:
-        ASPIRE_CLI_TELEMETRY_OPTOUT: 'true'
-        DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
-
-    # Verify CLI tool nupkgs (size, binary presence, PE header) for each Windows RID
-    - ${{ each targetRid in parameters.targetRids }}:
-      - pwsh: |
-          $ErrorActionPreference = 'Stop'
-          $runFunctional = '${{ targetRid }}' -eq 'win-x64'
-          $args = @(
-            '-PackagesDir', "${{ parameters.repoArtifactsPath }}/packages/${{ parameters.buildConfig }}",
-            '-Rid', '${{ targetRid }}'
-          )
-          if ($runFunctional) { $args += '-RunFunctionalTests' }
-          & "$(Build.SourcesDirectory)/eng/scripts/verify-cli-tool-nupkg.ps1" @args
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "##[error]CLI tool nupkg verification failed for ${{ targetRid }}"
-            exit 1
-          }
-        displayName: 🟣Verify CLI tool nupkg (${{ targetRid }})
-        condition: succeeded()
+        Write-Host "All $($toolNupkgs.Count) CLI tool nupkgs have valid signatures"
+      displayName: 🟣Verify CLI tool nupkg signatures
+      condition: and(succeeded(), eq(variables['_SignType'], 'real'))
 
     # Log MicroBuild environment for debugging
     # MicroBuildOutputFolderOverride is set by the MicroBuildSigningPlugin task in eng/common/templates-official/job/onelocbuild.yml
@@ -267,41 +231,6 @@ steps:
       inputs:
         PathtoPublish: '${{ parameters.repoArtifactsPath }}/packages/Release/vscode'
         ArtifactName: aspire-vscode-extension
-
-    # Publish Windows CLI archives as separate artifacts so the Prepare Installers
-    # stage can download them by name (matching the native_archives_<rid> pattern
-    # used by build_sign_native for macOS/Linux).
-    - ${{ if eq(parameters.isWindows, 'true') }}:
-      # Stage all archives first, then publish them together so 1ES compliance
-      # steps are injected once (between the last stage and the first publish)
-      # instead of between every stage/publish pair.
-      - ${{ each targetRid in parameters.targetRids }}:
-        - pwsh: |
-            $ErrorActionPreference = 'Stop'
-            $sourceDir = '${{ parameters.repoArtifactsPath }}/packages'
-            $pattern = 'aspire-cli-${{ targetRid }}-*'
-            $stagingDir = '$(Build.StagingDirectory)/native_archives_${{ replace(targetRid, '-', '_') }}'
-
-            New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
-
-            $files = Get-ChildItem -Path $sourceDir -Recurse -Filter $pattern
-            if ($files.Count -eq 0) {
-              Write-Error "No CLI archives matching '$pattern' found under '$sourceDir'"
-              exit 1
-            }
-
-            foreach ($f in $files) {
-              Copy-Item $f.FullName $stagingDir
-              Write-Host "Staged: $($f.Name)"
-            }
-          displayName: 🟣Stage CLI archives (${{ targetRid }})
-
-      - ${{ each targetRid in parameters.targetRids }}:
-        - task: 1ES.PublishBuildArtifacts@1
-          displayName: 🟣Publish native_archives_${{ replace(targetRid, '-', '_') }}
-          inputs:
-            PathtoPublish: $(Build.StagingDirectory)/native_archives_${{ replace(targetRid, '-', '_') }}
-            ArtifactName: native_archives_${{ replace(targetRid, '-', '_') }}
 
     - script: ${{ parameters.dotnetScript }}
               build

@@ -21,6 +21,10 @@
     When set, installs the tool from the local packages and runs functional checks
     (aspire --version, aspire new). Only use for RIDs that can execute on the agent.
 
+.PARAMETER VerifySignature
+    When set, verifies that both the RID-specific nupkg and the pointer package
+    contain a .signature.p7s entry (NuGet package signature smoke test).
+
 .EXAMPLE
     .\verify-cli-tool-nupkg.ps1 -PackagesDir "artifacts\packages\Release" -Rid "win-x64"
 .EXAMPLE
@@ -34,7 +38,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Rid,
 
-    [switch]$RunFunctionalTests
+    [switch]$RunFunctionalTests,
+
+    [switch]$VerifySignature
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,11 +49,30 @@ function Write-Step  { param([string]$msg) Write-Host "`u{25B6} $msg" -Foregroun
 function Write-Ok    { param([string]$msg) Write-Host "`u{2705} $msg" -ForegroundColor Green }
 function Write-Err   { param([string]$msg) Write-Host "`u{274C} $msg" -ForegroundColor Red }
 
+function Test-NupkgSignature {
+    param([string]$NupkgPath)
+    # A NuGet-signed nupkg contains a .signature.p7s entry inside the zip archive.
+    try {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($NupkgPath)
+        try {
+            $hasSig = $zip.Entries | Where-Object { $_.FullName -eq '.signature.p7s' }
+            return [bool]$hasSig
+        } finally {
+            $zip.Dispose()
+        }
+    } catch {
+        Write-Err "Failed to open nupkg as zip: $_"
+        return $false
+    }
+}
+
 # Minimum expected nupkg size in bytes (5 MB — NativeAOT binary should be large)
 $MinNupkgSize = 5MB
 
 $extractDir = $null
 $toolInstallDir = $null
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 try {
     Write-Host ""
@@ -57,6 +82,7 @@ try {
     Write-Host "  Packages dir:     $PackagesDir"
     Write-Host "  RID:              $Rid"
     Write-Host "  Functional tests: $RunFunctionalTests"
+    Write-Host "  Verify signature: $VerifySignature"
     Write-Host "=========================================="
     Write-Host ""
 
@@ -128,6 +154,16 @@ try {
         Write-Ok "Binary is a valid PE executable"
     }
 
+    # Step 4b: Verify RID-specific nupkg is signed (smoke test)
+    if ($VerifySignature) {
+        Write-Step "Checking RID-specific nupkg signature..."
+        if (-not (Test-NupkgSignature $ridNupkg.FullName)) {
+            Write-Err "RID-specific nupkg $($ridNupkg.Name) is NOT signed (no .signature.p7s)"
+            exit 1
+        }
+        Write-Ok "RID-specific nupkg is signed"
+    }
+
     # Step 5: Verify the pointer/shim package exists
     Write-Step "Looking for primary pointer package (Aspire.Cli.*.nupkg, not RID-specific)..."
     $primaryNupkg = Get-ChildItem -Path $effectiveDir -Filter "Aspire.Cli.*.nupkg" -ErrorAction SilentlyContinue |
@@ -141,6 +177,16 @@ try {
         exit 1
     }
     Write-Ok "Found primary: $($primaryNupkg.Name)"
+
+    # Step 5b: Verify pointer package is signed (smoke test)
+    if ($VerifySignature) {
+        Write-Step "Checking pointer package signature..."
+        if (-not (Test-NupkgSignature $primaryNupkg.FullName)) {
+            Write-Err "Pointer package $($primaryNupkg.Name) is NOT signed (no .signature.p7s)"
+            exit 1
+        }
+        Write-Ok "Pointer package is signed"
+    }
 
     # Step 6: Functional tests — install tool and exercise CLI
     if ($RunFunctionalTests) {
