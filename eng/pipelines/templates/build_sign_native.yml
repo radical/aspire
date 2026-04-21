@@ -196,13 +196,13 @@ jobs:
               $runFunctional = ('${{ targetRid }}' -eq 'osx-arm64' -and '${{ parameters.agentOs }}' -eq 'macos') -or `
                                ('${{ targetRid }}' -eq 'linux-x64' -and '${{ parameters.agentOs }}' -eq 'linux') -or `
                                ('${{ targetRid }}' -eq 'win-x64' -and '${{ parameters.agentOs }}' -eq 'windows')
-              $args = @(
-                '-PackagesDir', "$(Build.SourcesDirectory)/artifacts/packages/$(_BuildConfig)",
-                '-Rid', '${{ targetRid }}'
-              )
-              if ($runFunctional) { $args += '-RunFunctionalTests' }
-              if ('${{ parameters.codeSign }}' -eq 'True') { $args += '-VerifySignature' }
-              & "$(Build.SourcesDirectory)/eng/scripts/verify-cli-tool-nupkg.ps1" @args
+              $verifyArgs = @{
+                PackagesDir = "$(Build.SourcesDirectory)/artifacts/packages/$(_BuildConfig)"
+                Rid = '${{ targetRid }}'
+              }
+              if ($runFunctional) { $verifyArgs['RunFunctionalTests'] = $true }
+              if ('${{ parameters.codeSign }}' -eq 'True') { $verifyArgs['VerifySignature'] = $true }
+              & "$(Build.SourcesDirectory)/eng/scripts/verify-cli-tool-nupkg.ps1" @verifyArgs
               if ($LASTEXITCODE -ne 0) {
                 Write-Host "##[error]CLI tool nupkg verification failed for ${{ targetRid }}"
                 exit 1
