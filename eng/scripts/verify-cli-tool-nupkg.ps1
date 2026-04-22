@@ -12,7 +12,7 @@
     5. Verifies the binary OS format and CPU architecture match the target RID
        (PE Machine type on Windows, ELF e_machine on Linux, Mach-O cputype on macOS)
     6. Checks the primary pointer package (Aspire.Cli.*.nupkg) exists and validates
-       its contents (no binary, small size, nuspec references all RID packages)
+       its contents (no binary, small size, DotnetToolSettings.xml references all RIDs)
     7. (Optional) Installs the tool locally and runs aspire --version + aspire new
 
 .PARAMETER PackagesDir
@@ -258,7 +258,7 @@ try {
 
     # Step 5b: Deep-validate the pointer package contents.
     # The pointer package should be small (metadata-only), contain no binary,
-    # and its nuspec should reference all RID-specific packages found in the directory.
+    # and its DotnetToolSettings.xml should reference all 7 supported RIDs.
     Write-Step "Validating pointer package contents..."
     $maxPointerSize = 1MB
     if ($primaryNupkg.Length -gt $maxPointerSize) {
@@ -284,41 +284,43 @@ try {
         }
         Write-Ok "Pointer package contains no binary"
 
-        # Extract the nuspec and verify it references all RID-specific packages
+        # Verify DotnetToolSettings.xml lists all expected RID packages.
+        # The pointer package maps RIDs to RID-specific packages via
+        # <RuntimeIdentifierPackages> in DotnetToolSettings.xml (not the nuspec).
+        $toolSettingsFile = Get-ChildItem -Path $pointerExtractDir -Filter "DotnetToolSettings.xml" -Recurse | Select-Object -First 1
+        if ($toolSettingsFile) {
+            $toolSettingsContent = Get-Content $toolSettingsFile.FullName -Raw
+            Write-Step "Checking DotnetToolSettings.xml for RID package references..."
+
+            # The current RID must always be referenced
+            if ($toolSettingsContent -notmatch [regex]::Escape("Aspire.Cli.$Rid")) {
+                Write-Err "DotnetToolSettings.xml is missing reference to current RID package: Aspire.Cli.$Rid"
+                exit 1
+            }
+            Write-Ok "DotnetToolSettings.xml references current RID: $Rid"
+
+            # Count total RuntimeIdentifierPackage entries
+            $ridEntries = [regex]::Matches($toolSettingsContent, 'RuntimeIdentifier="([^"]+)"')
+            $referencedRids = $ridEntries | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+            Write-Step "DotnetToolSettings.xml lists $($referencedRids.Count) RIDs: $($referencedRids -join ', ')"
+
+            # Expect the well-known set of 7 RIDs
+            $expectedRidSet = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'linux-musl-x64', 'osx-x64', 'osx-arm64') | Sort-Object
+            $missingRids = $expectedRidSet | Where-Object { $referencedRids -notcontains $_ }
+            if ($missingRids.Count -gt 0) {
+                Write-Err "DotnetToolSettings.xml is missing these expected RIDs: $($missingRids -join ', ')"
+                exit 1
+            }
+            Write-Ok "DotnetToolSettings.xml references all $($expectedRidSet.Count) expected RIDs"
+        } else {
+            Write-Err "No DotnetToolSettings.xml found inside pointer package"
+            exit 1
+        }
+
+        # Verify the nuspec version matches the RID-specific nupkg version
         $nuspecFile = Get-ChildItem -Path $pointerExtractDir -Filter "*.nuspec" -Recurse | Select-Object -First 1
         if ($nuspecFile) {
             $nuspecContent = Get-Content $nuspecFile.FullName -Raw
-
-            # Derive expected RIDs from the RID-specific nupkgs present in the directory
-            $ridNupkgs = Get-ChildItem -Path $effectiveDir -Filter "Aspire.Cli.*.nupkg" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -notmatch '\.symbols\.' -and $_.Name -match 'Aspire\.Cli\.(win|linux|osx)' }
-            $expectedRids = $ridNupkgs | ForEach-Object {
-                # Extract RID from filename: Aspire.Cli.<rid>.<version>.nupkg
-                # RID patterns: win-x64, linux-x64, linux-arm64, linux-musl-x64, osx-x64, osx-arm64
-                if ($_.Name -match '^Aspire\.Cli\.((win|linux-musl|linux|osx)-(x64|arm64))\.') {
-                    $Matches[1]
-                }
-            } | Where-Object { $_ } | Sort-Object -Unique
-
-            if ($expectedRids.Count -gt 0) {
-                Write-Step "Checking nuspec references for $($expectedRids.Count) RID packages: $($expectedRids -join ', ')"
-                $missingRids = @()
-                foreach ($rid in $expectedRids) {
-                    if ($nuspecContent -notmatch [regex]::Escape("Aspire.Cli.$rid")) {
-                        $missingRids += $rid
-                    }
-                }
-                if ($missingRids.Count -gt 0) {
-                    Write-Err "Pointer package nuspec is missing references to these RID packages: $($missingRids -join ', ')"
-                    exit 1
-                }
-                Write-Ok "Pointer package nuspec references all $($expectedRids.Count) RID packages"
-            } else {
-                # Only the current RID nupkg is present (single-RID build). Still valid.
-                Write-Step "Only current RID nupkg present — skipping full RID-set nuspec check"
-            }
-
-            # Verify the nuspec references the same version as the RID-specific nupkg
             $expectedVersion = $ridNupkg.Name -replace "^Aspire\.Cli\.$([regex]::Escape($Rid))\.", '' -replace '\.nupkg$', ''
             if ($nuspecContent -match 'version>([^<]+)<') {
                 $pointerVersion = $Matches[1]
@@ -328,9 +330,6 @@ try {
                 }
                 Write-Ok "Pointer package version matches RID package: $expectedVersion"
             }
-        } else {
-            Write-Err "No .nuspec found inside pointer package"
-            exit 1
         }
     } finally {
         if (Test-Path $pointerExtractDir) {
@@ -436,25 +435,26 @@ try {
             Remove-Item -Recurse -Force $starterDir -ErrorAction SilentlyContinue
         }
 
-        # Step 9: aspire new aspire — AppHost-only template (validates both templates work)
-        $aspireDir = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-verify-apphost-$([System.IO.Path]::GetRandomFileName())"
+        # Step 9: aspire new aspire-empty — Empty AppHost template (validates both templates work)
+        # aspire-empty creates a flat C# AppHost structure (apphost.cs, aspire.config.json)
+        $aspireDir = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-verify-empty-$([System.IO.Path]::GetRandomFileName())"
         New-Item -ItemType Directory -Path $aspireDir -Force | Out-Null
 
-        Write-Step "Running 'aspire new aspire' ..."
-        $newAspireOutput = & $shimPath new aspire --name VerifyAppHost --output $aspireDir --non-interactive --nologo 2>&1
+        Write-Step "Running 'aspire new aspire-empty' ..."
+        $newAspireOutput = & $shimPath new aspire-empty --name VerifyEmpty --output $aspireDir --non-interactive --nologo 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Err "'aspire new aspire' failed (exit code $LASTEXITCODE)"
+            Write-Err "'aspire new aspire-empty' failed (exit code $LASTEXITCODE)"
             Write-Host ($newAspireOutput -join "`n")
             exit 1
         }
 
-        $aspireAppHost = Join-Path $aspireDir "VerifyAppHost.AppHost"
-        $aspireDefaults = Join-Path $aspireDir "VerifyAppHost.ServiceDefaults"
-        if ((Test-Path $aspireAppHost) -and (Test-Path $aspireDefaults)) {
-            Write-Ok "'aspire new aspire' created AppHost + ServiceDefaults projects"
+        $appHostCs = Join-Path $aspireDir "apphost.cs"
+        $aspireConfig = Join-Path $aspireDir "aspire.config.json"
+        if ((Test-Path $appHostCs) -and (Test-Path $aspireConfig)) {
+            Write-Ok "'aspire new aspire-empty' created AppHost structure (apphost.cs + aspire.config.json)"
         } else {
-            Write-Err "'aspire new aspire' did not create expected project structure"
-            Write-Host "Expected: VerifyAppHost.AppHost, VerifyAppHost.ServiceDefaults"
+            Write-Err "'aspire new aspire-empty' did not create expected AppHost structure"
+            Write-Host "Expected: apphost.cs, aspire.config.json"
             Write-Host "Found:"
             Get-ChildItem $aspireDir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
             exit 1
