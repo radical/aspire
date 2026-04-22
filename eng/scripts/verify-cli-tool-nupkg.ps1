@@ -7,7 +7,8 @@
     1. Finds the RID-specific tool nupkg (Aspire.Cli.<rid>.*.nupkg)
     2. Validates the nupkg size is above a minimum threshold
     3. Extracts the package and verifies the aspire binary is present
-    4. On Windows: checks the binary is a PE executable
+    4. Verifies the binary OS format and CPU architecture match the target RID
+       (PE Machine type on Windows, ELF e_machine on Linux, Mach-O cputype on macOS)
     5. Checks the primary pointer package (Aspire.Cli.*.nupkg) exists
     6. (Optional) Installs the tool locally and runs aspire --version + aspire new
 
@@ -142,16 +143,58 @@ try {
     }
     Write-Ok "Found binary: $($toolBinary.FullName.Substring($extractDir.Length))"
 
-    # Step 4: Verify binary is a PE executable on Windows
+    # Step 4: Verify binary OS and architecture match the target RID
+    $expectedArch = $Rid.Split('-')[-1]  # x64 or arm64 (works for linux-musl-x64 too)
+
     if ($Rid -like 'win-*') {
-        Write-Step "Checking binary is a PE executable..."
+        # Read PE Machine type from header via BitConverter
+        Write-Step "Checking PE binary architecture (expected: $expectedArch)..."
         $bytes = [System.IO.File]::ReadAllBytes($toolBinary.FullName)
-        if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
-            $firstBytes = if ($bytes.Length -ge 2) { "0x{0:X2} 0x{1:X2}" -f $bytes[0], $bytes[1] } else { "too short" }
-            Write-Err "Binary does not have PE (MZ) header. First bytes: $firstBytes"
+        $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+        $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+
+        $expectedMachine = switch ($expectedArch) {
+            'x64'   { 0x8664 }  # IMAGE_FILE_MACHINE_AMD64
+            'arm64' { 0xAA64 }  # IMAGE_FILE_MACHINE_ARM64
+            default { Write-Err "Unknown Windows architecture: $expectedArch"; exit 1 }
+        }
+
+        if ($machine -ne $expectedMachine) {
+            Write-Err "PE Machine mismatch. Expected: 0x$($expectedMachine.ToString('X4')) ($expectedArch), Got: 0x$($machine.ToString('X4'))"
             exit 1
         }
-        Write-Ok "Binary is a valid PE executable"
+        Write-Ok "PE binary architecture: 0x$($machine.ToString('X4')) ($expectedArch)"
+    }
+    else {
+        # On Linux and macOS, use `file` to verify binary format and architecture
+        Write-Step "Checking binary format with 'file' (expected arch: $expectedArch)..."
+        if (-not (Get-Command file -ErrorAction SilentlyContinue)) {
+            Write-Err "'file' command not found. Cannot verify binary architecture for $Rid."
+            exit 1
+        }
+
+        $fileOutput = & file -b $toolBinary.FullName 2>&1
+        Write-Step "file output: $fileOutput"
+
+        $expectedPattern = switch ($Rid) {
+            'linux-x64'       { 'ELF 64-bit.*x86-64' }
+            'linux-arm64'     { 'ELF 64-bit.*ARM aarch64' }
+            'linux-musl-x64'  { 'ELF 64-bit.*x86-64' }
+            'osx-x64'         { 'Mach-O 64-bit.*x86_64' }
+            'osx-arm64'       { 'Mach-O 64-bit.*arm64' }
+            default           { $null }
+        }
+
+        if (-not $expectedPattern) {
+            Write-Step "No known file signature pattern for RID '$Rid', skipping architecture check"
+        }
+        elseif ($fileOutput -notmatch $expectedPattern) {
+            Write-Err "Binary format mismatch for $Rid. Expected pattern: '$expectedPattern', Got: '$fileOutput'"
+            exit 1
+        }
+        else {
+            Write-Ok "Binary format and architecture verified for $Rid"
+        }
     }
 
     # Step 4b: Verify RID-specific nupkg is signed (smoke test)
