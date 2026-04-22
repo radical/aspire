@@ -7,10 +7,13 @@
     1. Finds the RID-specific tool nupkg (Aspire.Cli.<rid>.*.nupkg)
     2. Validates the nupkg size is above a minimum threshold
     3. Extracts the package and verifies the aspire binary is present
-    4. Verifies the binary OS format and CPU architecture match the target RID
+    4. Validates the nupkg contains only the expected NativeAOT artifacts
+       (binary + DotnetToolSettings.xml, no managed DLLs/deps.json)
+    5. Verifies the binary OS format and CPU architecture match the target RID
        (PE Machine type on Windows, ELF e_machine on Linux, Mach-O cputype on macOS)
-    5. Checks the primary pointer package (Aspire.Cli.*.nupkg) exists
-    6. (Optional) Installs the tool locally and runs aspire --version + aspire new
+    6. Checks the primary pointer package (Aspire.Cli.*.nupkg) exists and validates
+       its contents (no binary, small size, nuspec references all RID packages)
+    7. (Optional) Installs the tool locally and runs aspire --version + aspire new
 
 .PARAMETER PackagesDir
     Path to the directory containing nupkg files
@@ -143,6 +146,38 @@ try {
     }
     Write-Ok "Found binary: $($toolBinary.FullName.Substring($extractDir.Length))"
 
+    # Step 3b: Verify the nupkg contains only expected NativeAOT artifacts.
+    # A correctly-built NativeAOT tool nupkg has exactly 2 files under tools/:
+    # the native binary and DotnetToolSettings.xml. A managed fallback may produce
+    # additional DLLs, deps.json, or runtimeconfig.json files.
+    $toolsDir = Join-Path $extractDir "tools"
+    if (Test-Path $toolsDir) {
+        $toolFiles = Get-ChildItem -Path $toolsDir -Recurse -File
+        $toolFileNames = $toolFiles | ForEach-Object { $_.Name }
+        Write-Step "Files under tools/: $($toolFileNames -join ', ')"
+
+        # Check for managed-publish artifacts that should never appear in a NativeAOT package
+        $managedArtifacts = $toolFiles | Where-Object {
+            $_.Name -like '*.deps.json' -or
+            $_.Name -like '*.runtimeconfig.json' -or
+            ($_.Name -like '*.dll' -and $_.Name -ne 'DotnetToolSettings.xml')
+        }
+        if ($managedArtifacts) {
+            Write-Err "Nupkg contains managed-publish artifacts (expected NativeAOT single binary):"
+            foreach ($f in $managedArtifacts) { Write-Host "  $($f.FullName.Substring($extractDir.Length))" }
+            exit 1
+        }
+        Write-Ok "No managed-publish artifacts found (deps.json, runtimeconfig.json, DLLs)"
+
+        # Expect exactly 2 files: binary + DotnetToolSettings.xml
+        if ($toolFiles.Count -ne 2) {
+            Write-Err "Expected exactly 2 files under tools/ (binary + DotnetToolSettings.xml), found $($toolFiles.Count):"
+            foreach ($f in $toolFiles) { Write-Host "  $($f.FullName.Substring($extractDir.Length))" }
+            exit 1
+        }
+        Write-Ok "Tool directory contains exactly 2 files (binary + DotnetToolSettings.xml)"
+    }
+
     # Step 4: Verify binary OS and architecture match the target RID
     $expectedArch = $Rid.Split('-')[-1]  # x64 or arm64 (works for linux-musl-x64 too)
 
@@ -221,6 +256,88 @@ try {
     }
     Write-Ok "Found primary: $($primaryNupkg.Name)"
 
+    # Step 5b: Deep-validate the pointer package contents.
+    # The pointer package should be small (metadata-only), contain no binary,
+    # and its nuspec should reference all RID-specific packages found in the directory.
+    Write-Step "Validating pointer package contents..."
+    $maxPointerSize = 1MB
+    if ($primaryNupkg.Length -gt $maxPointerSize) {
+        Write-Err "Pointer package is unexpectedly large ($([math]::Round($primaryNupkg.Length / 1MB, 1)) MB). It should be metadata-only (< 1 MB)."
+        exit 1
+    }
+    Write-Ok "Pointer package size OK ($([math]::Round($primaryNupkg.Length / 1KB, 0)) KB)"
+
+    $pointerExtractDir = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-pointer-verify-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Path $pointerExtractDir -Force | Out-Null
+    try {
+        $pointerZip = Join-Path $pointerExtractDir "$($primaryNupkg.BaseName).zip"
+        Copy-Item $primaryNupkg.FullName $pointerZip
+        Expand-Archive -Path $pointerZip -DestinationPath $pointerExtractDir -Force
+
+        # Verify no binary is inside the pointer package
+        $pointerBinaries = Get-ChildItem -Path $pointerExtractDir -Recurse -File |
+            Where-Object { $_.Name -eq 'aspire' -or $_.Name -eq 'aspire.exe' }
+        if ($pointerBinaries) {
+            Write-Err "Pointer package contains a binary (it should be metadata-only):"
+            foreach ($f in $pointerBinaries) { Write-Host "  $($f.FullName.Substring($pointerExtractDir.Length))" }
+            exit 1
+        }
+        Write-Ok "Pointer package contains no binary"
+
+        # Extract the nuspec and verify it references all RID-specific packages
+        $nuspecFile = Get-ChildItem -Path $pointerExtractDir -Filter "*.nuspec" -Recurse | Select-Object -First 1
+        if ($nuspecFile) {
+            $nuspecContent = Get-Content $nuspecFile.FullName -Raw
+
+            # Derive expected RIDs from the RID-specific nupkgs present in the directory
+            $ridNupkgs = Get-ChildItem -Path $effectiveDir -Filter "Aspire.Cli.*.nupkg" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notmatch '\.symbols\.' -and $_.Name -match 'Aspire\.Cli\.(win|linux|osx)' }
+            $expectedRids = $ridNupkgs | ForEach-Object {
+                # Extract RID from filename: Aspire.Cli.<rid>.<version>.nupkg
+                # RID patterns: win-x64, linux-x64, linux-arm64, linux-musl-x64, osx-x64, osx-arm64
+                if ($_.Name -match '^Aspire\.Cli\.((win|linux-musl|linux|osx)-(x64|arm64))\.') {
+                    $Matches[1]
+                }
+            } | Where-Object { $_ } | Sort-Object -Unique
+
+            if ($expectedRids.Count -gt 0) {
+                Write-Step "Checking nuspec references for $($expectedRids.Count) RID packages: $($expectedRids -join ', ')"
+                $missingRids = @()
+                foreach ($rid in $expectedRids) {
+                    if ($nuspecContent -notmatch [regex]::Escape("Aspire.Cli.$rid")) {
+                        $missingRids += $rid
+                    }
+                }
+                if ($missingRids.Count -gt 0) {
+                    Write-Err "Pointer package nuspec is missing references to these RID packages: $($missingRids -join ', ')"
+                    exit 1
+                }
+                Write-Ok "Pointer package nuspec references all $($expectedRids.Count) RID packages"
+            } else {
+                # Only the current RID nupkg is present (single-RID build). Still valid.
+                Write-Step "Only current RID nupkg present — skipping full RID-set nuspec check"
+            }
+
+            # Verify the nuspec references the same version as the RID-specific nupkg
+            $expectedVersion = $ridNupkg.Name -replace "^Aspire\.Cli\.$([regex]::Escape($Rid))\.", '' -replace '\.nupkg$', ''
+            if ($nuspecContent -match 'version>([^<]+)<') {
+                $pointerVersion = $Matches[1]
+                if ($pointerVersion -ne $expectedVersion) {
+                    Write-Err "Pointer package version ($pointerVersion) does not match RID package version ($expectedVersion)"
+                    exit 1
+                }
+                Write-Ok "Pointer package version matches RID package: $expectedVersion"
+            }
+        } else {
+            Write-Err "No .nuspec found inside pointer package"
+            exit 1
+        }
+    } finally {
+        if (Test-Path $pointerExtractDir) {
+            Remove-Item -Recurse -Force $pointerExtractDir -ErrorAction SilentlyContinue
+        }
+    }
+
     # Step 5b: Verify pointer package is signed (smoke test)
     if ($VerifySignature) {
         Write-Step "Checking pointer package signature..."
@@ -288,30 +405,63 @@ try {
         }
         Write-Ok "'aspire --version' returned: $($versionOutput -join ' ')"
 
-        # Step 8: aspire new — exercises bundle self-extraction + template scaffolding
-        $projectDir = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-verify-project-$([System.IO.Path]::GetRandomFileName())"
-        New-Item -ItemType Directory -Path $projectDir -Force | Out-Null
+        # Step 8: aspire new aspire-starter — exercises bundle self-extraction + template scaffolding
+        $starterDir = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-verify-starter-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Path $starterDir -Force | Out-Null
 
         Write-Step "Running 'aspire new aspire-starter' ..."
-        $newOutput = & $shimPath new aspire-starter --name VerifyApp --output $projectDir --non-interactive --nologo 2>&1
+        $newOutput = & $shimPath new aspire-starter --name VerifyStarter --output $starterDir --non-interactive --nologo 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Err "'aspire new' failed (exit code $LASTEXITCODE)"
+            Write-Err "'aspire new aspire-starter' failed (exit code $LASTEXITCODE)"
             Write-Host ($newOutput -join "`n")
             exit 1
         }
 
-        $appHostDir = Join-Path $projectDir "VerifyApp.AppHost"
-        if (Test-Path $appHostDir) {
-            Write-Ok "'aspire new' created project successfully"
+        $starterAppHost = Join-Path $starterDir "VerifyStarter.AppHost"
+        $starterDefaults = Join-Path $starterDir "VerifyStarter.ServiceDefaults"
+        $starterWeb = Join-Path $starterDir "VerifyStarter.Web"
+        $starterApi = Join-Path $starterDir "VerifyStarter.ApiService"
+        if ((Test-Path $starterAppHost) -and (Test-Path $starterDefaults) -and
+            (Test-Path $starterWeb) -and (Test-Path $starterApi)) {
+            Write-Ok "'aspire new aspire-starter' created all expected projects"
         } else {
-            Write-Err "'aspire new' did not create expected VerifyApp.AppHost directory"
-            Get-ChildItem $projectDir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Err "'aspire new aspire-starter' did not create expected project structure"
+            Write-Host "Expected: VerifyStarter.AppHost, VerifyStarter.ServiceDefaults, VerifyStarter.Web, VerifyStarter.ApiService"
+            Write-Host "Found:"
+            Get-ChildItem $starterDir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
             exit 1
         }
 
-        # Cleanup project dir
-        if (Test-Path $projectDir) {
-            Remove-Item -Recurse -Force $projectDir -ErrorAction SilentlyContinue
+        if (Test-Path $starterDir) {
+            Remove-Item -Recurse -Force $starterDir -ErrorAction SilentlyContinue
+        }
+
+        # Step 9: aspire new aspire — AppHost-only template (validates both templates work)
+        $aspireDir = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-verify-apphost-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Path $aspireDir -Force | Out-Null
+
+        Write-Step "Running 'aspire new aspire' ..."
+        $newAspireOutput = & $shimPath new aspire --name VerifyAppHost --output $aspireDir --non-interactive --nologo 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err "'aspire new aspire' failed (exit code $LASTEXITCODE)"
+            Write-Host ($newAspireOutput -join "`n")
+            exit 1
+        }
+
+        $aspireAppHost = Join-Path $aspireDir "VerifyAppHost.AppHost"
+        $aspireDefaults = Join-Path $aspireDir "VerifyAppHost.ServiceDefaults"
+        if ((Test-Path $aspireAppHost) -and (Test-Path $aspireDefaults)) {
+            Write-Ok "'aspire new aspire' created AppHost + ServiceDefaults projects"
+        } else {
+            Write-Err "'aspire new aspire' did not create expected project structure"
+            Write-Host "Expected: VerifyAppHost.AppHost, VerifyAppHost.ServiceDefaults"
+            Write-Host "Found:"
+            Get-ChildItem $aspireDir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+            exit 1
+        }
+
+        if (Test-Path $aspireDir) {
+            Remove-Item -Recurse -Force $aspireDir -ErrorAction SilentlyContinue
         }
     }
 

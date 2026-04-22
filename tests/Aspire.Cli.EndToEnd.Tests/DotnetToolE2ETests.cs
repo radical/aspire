@@ -133,6 +133,72 @@ public sealed class DotnetToolE2ETests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// Verifies that <c>aspire init --non-interactive</c> can initialize Aspire structure
+    /// in an existing .NET project when the CLI is installed as a dotnet tool.
+    /// Creates a vanilla <c>dotnet new web</c> project, then runs <c>aspire init</c> and
+    /// verifies the AppHost and ServiceDefaults projects are created.
+    /// </summary>
+    [Fact]
+    public async Task DotnetToolInstall_AspireInit_AddsAspireStructure()
+    {
+        var repoRoot = CliE2ETestHelpers.GetRepoRoot();
+        var (packagesDir, version) = FindToolPackageInfo(repoRoot);
+
+        var workspace = TemporaryWorkspace.Create(output);
+        var containerPackagesPath = CopyPackagesAndWriteNuGetConfig(packagesDir, workspace);
+
+        var strategy = CliInstallStrategy.LatestGa();
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, workspace: workspace);
+
+        var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
+
+        var counter = new SequenceCounter();
+        var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
+
+        await auto.PrepareDockerEnvironmentAsync(counter, workspace);
+
+        await InstallCliAsDotnetToolAsync(auto, counter, containerPackagesPath, version);
+
+        // Create a vanilla .NET web project
+        await auto.ClearScreenAsync(counter);
+        await auto.TypeAsync("mkdir /tmp/inittest && cd /tmp/inittest && dotnet new web --name MyApi --output .");
+        await auto.EnterAsync();
+        await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromMinutes(2));
+
+        // Run aspire init --non-interactive
+        await auto.ClearScreenAsync(counter);
+        await auto.TypeAsync("cd /tmp/inittest && aspire init --non-interactive");
+        await auto.EnterAsync();
+        await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromMinutes(3));
+
+        // Verify the AppHost directory was created
+        await auto.ClearScreenAsync(counter);
+        await auto.TypeAsync("test -d /tmp/inittest/MyApi.AppHost && echo APPHOST_OK");
+        await auto.EnterAsync();
+        await auto.WaitUntilAsync(
+            s => s.ContainsText("APPHOST_OK"),
+            timeout: TimeSpan.FromSeconds(10),
+            description: "waiting for AppHost directory to exist after aspire init");
+        await auto.WaitForSuccessPromptAsync(counter);
+
+        // Verify the ServiceDefaults directory was created
+        await auto.ClearScreenAsync(counter);
+        await auto.TypeAsync("test -d /tmp/inittest/MyApi.ServiceDefaults && echo DEFAULTS_OK");
+        await auto.EnterAsync();
+        await auto.WaitUntilAsync(
+            s => s.ContainsText("DEFAULTS_OK"),
+            timeout: TimeSpan.FromSeconds(10),
+            description: "waiting for ServiceDefaults directory to exist after aspire init");
+        await auto.WaitForSuccessPromptAsync(counter);
+
+        // Exit the shell
+        await auto.TypeAsync("exit");
+        await auto.EnterAsync();
+
+        await pendingRun;
+    }
+
+    /// <summary>
     /// Finds the directory containing built NuGet packages and the tool package version.
     /// Skips gracefully in local dev when packages aren't available; fails in CI.
     /// </summary>
