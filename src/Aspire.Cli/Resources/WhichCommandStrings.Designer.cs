@@ -138,6 +138,15 @@ namespace Aspire.Cli.Resources {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Bundle directory.
+        /// </summary>
+        internal static string BundleDirectoryLabel {
+            get {
+                return ResourceManager.GetString("BundleDirectoryLabel", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to unknown.
         /// </summary>
         internal static string UnknownValue {

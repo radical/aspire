@@ -87,6 +87,9 @@
   <data name="UpdateCommandLabel" xml:space="preserve">
     <value>Update command</value>
   </data>
+  <data name="BundleDirectoryLabel" xml:space="preserve">
+    <value>Bundle directory</value>
+  </data>
   <data name="UnknownValue" xml:space="preserve">
     <value>unknown</value>
   </data>

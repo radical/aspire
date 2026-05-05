@@ -119,6 +119,11 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
     public string? UpdateCommand { get; internal set; }
 
     /// <summary>
+    /// Gets the bundle directory path (e.g., <c>/usr/local/bundle</c> for mode A). Empty when prefix is unknown.
+    /// </summary>
+    public string BundleDirectory { get; internal set; } = string.Empty;
+
+    /// <summary>
     /// Gets the count of PR hives (PR build directories) on the developer machine.
     /// Hives are detected as subdirectories in the hives directory.
     /// This method accesses the file system.

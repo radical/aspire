@@ -593,6 +593,9 @@ public class Program
         executionContext.Prefix = prefix ?? string.Empty;
         executionContext.UpdateCommand = updateCommand;
         executionContext.Version = version;
+        executionContext.BundleDirectory = string.IsNullOrEmpty(prefix)
+            ? string.Empty
+            : Path.Combine(prefix, BundleDiscovery.BundleDirectoryName);
 
         logger.LogInformation("Acquisition identity: route={Route}, channel={Channel}, mode={Mode}, prefix={Prefix}", route, channel, mode, prefix);
     }

@@ -38,6 +38,9 @@ internal sealed record WhichOutput
 
     /// <summary>The user-facing update command hint, or <c>null</c> when not applicable.</summary>
     public string? UpdateCommand { get; init; }
+
+    /// <summary>The bundle directory path (e.g., <c>/usr/local/bundle</c>). Empty when prefix is unknown.</summary>
+    public string BundleDirectory { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -112,6 +115,11 @@ internal sealed class WhichCommand : BaseCommand
         {
             InteractionService.DisplayMessage(KnownEmojis.Gear, $"{WhichCommandStrings.UpdateCommandLabel}: {ExecutionContext.UpdateCommand}");
         }
+
+        if (!string.IsNullOrEmpty(ExecutionContext.BundleDirectory))
+        {
+            InteractionService.DisplayMessage(KnownEmojis.FileFolder, $"{WhichCommandStrings.BundleDirectoryLabel}: {ExecutionContext.BundleDirectory}");
+        }
     }
 
     private WhichOutput BuildOutput() =>
@@ -124,6 +132,7 @@ internal sealed class WhichCommand : BaseCommand
             Mode = ExecutionContext.Mode.ToString().ToLowerInvariant(),
             Prefix = ExecutionContext.Prefix ?? string.Empty,
             UpdateCommand = ExecutionContext.UpdateCommand,
+            BundleDirectory = ExecutionContext.BundleDirectory,
         };
 
     private static string RouteToString(Aspire.Cli.Acquisition.InstallRoute route) =>
