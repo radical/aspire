@@ -196,4 +196,73 @@ public class WhichCommandTests(ITestOutputHelper outputHelper)
         await Verify(capturedJson, extension: "json")
             .UseFileName("Which_PrRoute_RendersPrNumber_Json");
     }
+
+    // ── bundleDirectory regression tests ──────────────────────────────────
+
+    /// <summary>
+    /// Regression: JSON output always includes bundleDirectory field and can be parsed correctly.
+    /// Tests that the JSON serialization always includes the bundleDirectory property,
+    /// even when empty, and that it parses as valid JSON.
+    /// </summary>
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("script")]
+    [InlineData("brew")]
+    public async Task Which_BundleDirectory_JsonAlwaysIncludesField(string routeLabel)
+    {
+        var (_, route, channel, mode, prefix, updateCommand, version, prNumber) =
+            s_routeCases.First(r => r.Label == routeLabel);
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        string? capturedJson = null;
+        var interaction = new TestInteractionService
+        {
+            DisplayRawTextCallback = text => capturedJson = text,
+        };
+        var services = CreateServices(workspace, interaction, route, channel, mode, prefix, updateCommand, version, prNumber);
+
+        using var provider = services.BuildServiceProvider();
+        var rootCommand = provider.GetRequiredService<RootCommand>();
+        var result = rootCommand.Parse("which --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(0, exitCode);
+        Assert.NotNull(capturedJson);
+
+        // Verify JSON can be parsed and bundleDirectory is always present
+        var doc = System.Text.Json.JsonDocument.Parse(capturedJson);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("bundleDirectory", out var bundleDir), "bundleDirectory field must be present in JSON output");
+        Assert.Equal(System.Text.Json.JsonValueKind.String, bundleDir.ValueKind);
+    }
+
+    /// <summary>
+    /// Regression: Human-readable output omits bundleDirectory line when empty (which is the case for all test routes).
+    /// Confirms that we don't accidentally add extra output when bundleDirectory is empty.
+    /// </summary>
+    [Fact]
+    public async Task Which_BundleDirectory_HumanReadableOmitsWhenEmpty()
+    {
+        var (_, route, channel, mode, prefix, updateCommand, version, prNumber) =
+            s_routeCases.First(r => r.Label == "script");
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var interaction = new TestInteractionService();
+        var services = CreateServices(workspace, interaction, route, channel, mode, prefix, updateCommand, version, prNumber);
+
+        using var provider = services.BuildServiceProvider();
+        var rootCommand = provider.GetRequiredService<RootCommand>();
+        var result = rootCommand.Parse("which");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(0, exitCode);
+
+        var output = string.Join(Environment.NewLine, interaction.DisplayedMessages
+            .Select(m => $"{m.Emoji.Name}: {m.Message}"));
+
+        // Verify bundleDirectory is not in output when empty
+        Assert.DoesNotContain("BundleDirectory", output, StringComparison.Ordinal);
+    }
 }

@@ -3,5 +3,6 @@
   "channel": "",
   "version": "",
   "mode": "unknown",
-  "prefix": ""
+  "prefix": "",
+  "bundleDirectory": ""
 }

@@ -3,5 +3,6 @@
   "channel": "stable",
   "version": "9.4.0-dev",
   "mode": "a",
-  "prefix": "/home/user/.aspire"
+  "prefix": "/home/user/.aspire",
+  "bundleDirectory": ""
 }
