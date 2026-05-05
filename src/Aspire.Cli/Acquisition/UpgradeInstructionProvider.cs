@@ -79,10 +79,12 @@ internal sealed class UpgradeInstructionProvider(IIdentityChannelReader channelR
             var prNumber = channelReader.GetPrNumber(informationalVersion);
             if (prNumber is not null)
             {
-                return $"get-aspire-cli-pr.sh -r {prNumber}";
+                return OperatingSystem.IsWindows()
+                    ? $"get-aspire-cli-pr.ps1 -PRNumber {prNumber}"
+                    : $"get-aspire-cli-pr.sh -r {prNumber}";
             }
         }
 
-        return "get-aspire-cli-pr.sh";
+        return OperatingSystem.IsWindows() ? "get-aspire-cli-pr.ps1" : "get-aspire-cli-pr.sh";
     }
 }
