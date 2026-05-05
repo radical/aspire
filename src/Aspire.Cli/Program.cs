@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Agents;
 using Aspire.Cli.Agents.ClaudeCode;
 using Aspire.Cli.Agents.CopilotCli;
@@ -322,6 +323,11 @@ public class Program
         // - Diagnostic provider for OTLP/console exporters (exports all activities, DEBUG only)
         builder.Services.AddSingleton(sp => new TelemetryManager(sp.GetRequiredService<IConfiguration>(), args));
 
+        builder.Services.AddSingleton<IInstallPathResolver, InstallPathResolver>();
+        builder.Services.AddSingleton<IIdentityChannelReader, IdentityChannelReader>();
+        builder.Services.AddSingleton<IInstallRouteDetector, InstallRouteDetector>();
+        builder.Services.AddSingleton<IUpgradeInstructionProvider, UpgradeInstructionProvider>();
+
         // Shared services.
         builder.Services.AddSingleton(sp =>
         {
@@ -527,6 +533,7 @@ public class Program
         builder.Services.AddTransient<SdkCommand>();
         builder.Services.AddTransient<SdkGenerateCommand>();
         builder.Services.AddTransient<SdkDumpCommand>();
+        builder.Services.AddTransient<WhichCommand>();
         builder.Services.AddTransient<RestoreCommand>();
         builder.Services.AddTransient<SetupCommand>();
 #if DEBUG
@@ -537,6 +544,49 @@ public class Program
 
         var app = builder.Build();
         return app;
+    }
+
+    private static void InitializeAcquisitionIdentity(IServiceProvider services, ILogger logger)
+    {
+        var executionContext = services.GetRequiredService<CliExecutionContext>();
+        var routeDetector = services.GetRequiredService<IInstallRouteDetector>();
+        var channelReader = services.GetRequiredService<IIdentityChannelReader>();
+        var pathResolver = services.GetRequiredService<IInstallPathResolver>();
+        var upgradeInstructions = services.GetRequiredService<IUpgradeInstructionProvider>();
+
+        var binaryPath = Environment.ProcessPath ?? string.Empty;
+
+        // Detect channel from assembly metadata.
+        string channel;
+        int? prNumber = null;
+        try
+        {
+            channel = channelReader.ReadChannel();
+            prNumber = channelReader.GetPrNumber(channel);
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "Failed to read channel from assembly metadata. Defaulting to empty.");
+            channel = string.Empty;
+        }
+
+        // Detect install route and optional sidecar updateCommand.
+        var (route, sidecarUpdateCommand) = routeDetector.Detect(binaryPath);
+
+        // Detect mode and prefix.
+        var (mode, prefix) = pathResolver.Resolve(binaryPath);
+
+        // Compute the user-facing update command hint.
+        var updateCommand = upgradeInstructions.Get(route, sidecarUpdateCommand, binaryPath);
+
+        executionContext.Route = route;
+        executionContext.Channel = channel;
+        executionContext.PrNumber = prNumber;
+        executionContext.Mode = mode;
+        executionContext.Prefix = prefix ?? string.Empty;
+        executionContext.UpdateCommand = updateCommand;
+
+        logger.LogInformation("Acquisition identity: route={Route}, channel={Channel}, mode={Mode}, prefix={Prefix}", route, channel, mode, prefix);
     }
 
     private static DirectoryInfo GetHivesDirectory()
@@ -752,6 +802,9 @@ public class Program
 
         // Log feature state at startup for diagnostics
         app.Services.GetRequiredService<IFeatures>().LogFeatureState();
+
+        // Resolve acquisition identity and populate CliExecutionContext.
+        InitializeAcquisitionIdentity(app.Services, logger);
 
         // Display first run experience if this is the first time the CLI is run on this machine
         await DisplayFirstTimeUseNoticeIfNeededAsync(app.Services, args, cts.Token);

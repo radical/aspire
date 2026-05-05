@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.CommandLine;
+using Aspire.Cli.Acquisition;
 
 namespace Aspire.Cli;
 
@@ -78,6 +79,38 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
     /// TaskCompletionSource that is completed when a command is selected and set on this context.
     /// </summary>
     public TaskCompletionSource<Command> CommandSelected { get; } = new();
+
+    // --- Acquisition identity (set during startup by Program.cs) ---
+
+    /// <summary>
+    /// Gets the detected install route of the running binary.
+    /// </summary>
+    public InstallRoute Route { get; internal set; } = InstallRoute.Unknown;
+
+    /// <summary>
+    /// Gets the channel embedded in the binary assembly metadata (e.g., "latest", "rc1", "pr12345").
+    /// </summary>
+    public string Channel { get; internal set; } = string.Empty;
+
+    /// <summary>
+    /// Gets the PR number parsed from the binary version string, or <c>null</c> when not a PR build.
+    /// </summary>
+    public int? PrNumber { get; internal set; }
+
+    /// <summary>
+    /// Gets the install mode determined from the sidecar location.
+    /// </summary>
+    public InstallMode Mode { get; internal set; } = InstallMode.Unknown;
+
+    /// <summary>
+    /// Gets the installation prefix directory (e.g., <c>/usr/local</c> for mode A). Empty when mode is unknown.
+    /// </summary>
+    public string Prefix { get; internal set; } = string.Empty;
+
+    /// <summary>
+    /// Gets the user-facing update command hint (e.g., <c>winget upgrade Microsoft.Aspire</c>), or <c>null</c> when not applicable.
+    /// </summary>
+    public string? UpdateCommand { get; internal set; }
 
     /// <summary>
     /// Gets the count of PR hives (PR build directories) on the developer machine.
