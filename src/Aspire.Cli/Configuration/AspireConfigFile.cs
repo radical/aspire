@@ -90,8 +90,15 @@ internal sealed class AspireConfigFile
     /// <summary>
     /// Aspire channel for package resolution.
     /// </summary>
+    /// <remarks>
+    /// This is project-local state. The global <c>~/.aspire/aspire.config.json</c> no longer stores
+    /// a <c>channel</c> field (deleted in PR4). Default System.Text.Json behavior silently ignores
+    /// unknown fields on deserialization; do NOT add <c>[JsonRequired]</c> or tighten
+    /// <c>UnmappedMemberHandling</c> — older configs that still contain a <c>"channel"</c> field
+    /// (e.g. the global settings file written by a pre-PR4 CLI) must continue to load without throwing.
+    /// </remarks>
     [JsonPropertyName("channel")]
-    [Description("The Aspire channel to use for package resolution (e.g., \"stable\", \"preview\", \"staging\", \"daily\"). Used by aspire add to determine which NuGet feed to use.")]
+    [Description("The Aspire channel to use for package resolution (e.g., \"stable\", \"staging\", \"daily\"). Used by aspire add to determine which NuGet feed to use.")]
     public string? Channel { get; set; }
 
     /// <summary>
@@ -413,7 +420,6 @@ internal sealed class AspireConfigFile
                 config.Sdk = new AspireConfigSdk { Version = settings.SdkVersion };
             }
 
-            config.Channel = settings.Channel;
             config.Features = settings.Features;
             config.Packages = settings.Packages;
         }

@@ -29,7 +29,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
     private readonly ITemplate[] _templates;
     private readonly IFeatures _features;
     private readonly IPackagingService _packagingService;
-    private readonly IConfigurationService _configurationService;
     private readonly AgentInitCommand _agentInitCommand;
     private readonly ICliHostEnvironment _hostEnvironment;
 
@@ -82,7 +81,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
         ICliUpdateNotifier updateNotifier,
         CliExecutionContext executionContext,
         IPackagingService packagingService,
-        IConfigurationService configurationService,
         AgentInitCommand agentInitCommand,
         ICliHostEnvironment hostEnvironment,
         IConfiguration configuration)
@@ -92,7 +90,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
         _templateProvider = templateProvider;
         _features = features;
         _packagingService = packagingService;
-        _configurationService = configurationService;
         _agentInitCommand = agentInitCommand;
         _hostEnvironment = hostEnvironment;
 
@@ -325,10 +322,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
                 var channels = await _packagingService.GetChannelsAsync(cancellationToken);
 
                 var configuredChannelName = parseResult.GetValue(_channelOption);
-                if (string.IsNullOrWhiteSpace(configuredChannelName))
-                {
-                    configuredChannelName = await _configurationService.GetConfigurationAsync("channel", cancellationToken);
-                }
 
                 var selectedChannel = string.IsNullOrWhiteSpace(configuredChannelName)
                     ? channels.FirstOrDefault(c => c.Type is PackageChannelType.Implicit) ?? channels.FirstOrDefault()

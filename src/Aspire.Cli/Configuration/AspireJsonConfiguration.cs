@@ -43,11 +43,17 @@ internal sealed class AspireJsonConfiguration
     public string? Language { get; set; }
 
     /// <summary>
-    /// The Aspire channel to use for package resolution (e.g., "stable", "preview", "staging").
+    /// The Aspire channel to use for package resolution (e.g., "stable", "staging").
     /// Used by aspire add to determine which NuGet feed to use.
     /// </summary>
+    /// <remarks>
+    /// Default System.Text.Json behavior silently ignores unknown fields on deserialization; do NOT
+    /// add <c>[JsonRequired]</c> or tighten <c>UnmappedMemberHandling</c> — older configs that still
+    /// contain a <c>"channel"</c> field must continue to load without throwing.
+    /// </remarks>
     [JsonPropertyName("channel")]
-    [Description("The Aspire channel to use for package resolution (e.g., \"stable\", \"preview\", \"staging\"). Used by aspire add to determine which NuGet feed to use.")]
+    [LocalAspireJsonConfigurationProperty]
+    [Description("The Aspire channel to use for package resolution (e.g., \"stable\", \"staging\", \"daily\"). Used by aspire add to determine which NuGet feed to use.")]
     public string? Channel { get; set; }
 
     /// <summary>

@@ -32,7 +32,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
     private readonly IDotNetCliRunner _dotNetCliRunner;
     private readonly IDotNetSdkInstaller _sdkInstaller;
     private readonly IPackagingService _packagingService;
-    private readonly IConfigurationService _configurationService;
     private readonly ILogger _logger;
     private readonly string _workingDirectory;
 
@@ -49,7 +48,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
     /// <param name="dotNetCliRunner">The .NET CLI runner for building project references.</param>
     /// <param name="sdkInstaller">The SDK installer for checking .NET SDK availability.</param>
     /// <param name="packagingService">The packaging service for channel resolution.</param>
-    /// <param name="configurationService">The configuration service for reading channel settings.</param>
     /// <param name="logger">The logger for diagnostic output.</param>
     public PrebuiltAppHostServer(
         string appPath,
@@ -59,7 +57,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
         IDotNetCliRunner dotNetCliRunner,
         IDotNetSdkInstaller sdkInstaller,
         IPackagingService packagingService,
-        IConfigurationService configurationService,
         ILogger logger)
     {
         _appDirectoryPath = Path.GetFullPath(appPath);
@@ -69,7 +66,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
         _dotNetCliRunner = dotNetCliRunner;
         _sdkInstaller = sdkInstaller;
         _packagingService = packagingService;
-        _configurationService = configurationService;
         _logger = logger;
 
         // Create a working directory for this app host session
@@ -109,8 +105,8 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
 
         try
         {
-            // Resolve the configured channel (local settings.json → global config fallback)
-            var channelName = await ResolveChannelNameAsync(cancellationToken);
+            // Resolve the configured channel from local project config.
+            var channelName = ResolveChannelName();
 
             if (projectRefs.Count > 0)
             {
@@ -335,19 +331,13 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
     }
 
     /// <summary>
-    /// Resolves the configured channel name from local project config or global config.
+    /// Resolves the configured channel name from local project config.
     /// </summary>
-    private async Task<string?> ResolveChannelNameAsync(CancellationToken cancellationToken)
+    private string? ResolveChannelName()
     {
         // Check aspire.config.json first, then fall back to legacy .aspire/settings.json.
         var channelName = AspireConfigFile.Load(_appDirectoryPath)?.Channel
             ?? AspireJsonConfiguration.Load(_appDirectoryPath)?.Channel;
-
-        // Fall back to global config
-        if (string.IsNullOrEmpty(channelName))
-        {
-            channelName = await _configurationService.GetConfigurationAsync("channel", cancellationToken);
-        }
 
         if (!string.IsNullOrEmpty(channelName))
         {
