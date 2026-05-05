@@ -72,6 +72,12 @@
   <data name="ChannelLabel" xml:space="preserve">
     <value>Channel</value>
   </data>
+  <data name="VersionLabel" xml:space="preserve">
+    <value>Version</value>
+  </data>
+  <data name="PrNumberLabel" xml:space="preserve">
+    <value>PR number</value>
+  </data>
   <data name="ModeLabel" xml:space="preserve">
     <value>Mode</value>
   </data>

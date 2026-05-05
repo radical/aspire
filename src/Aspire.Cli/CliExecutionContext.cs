@@ -98,6 +98,12 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
     public int? PrNumber { get; internal set; }
 
     /// <summary>
+    /// Gets the binary's informational version string (e.g., <c>13.4.0-dev</c>), with any
+    /// <c>+source-metadata</c> suffix stripped. Empty when the attribute is absent.
+    /// </summary>
+    public string Version { get; internal set; } = string.Empty;
+
+    /// <summary>
     /// Gets the install mode determined from the sidecar location.
     /// </summary>
     public InstallMode Mode { get; internal set; } = InstallMode.Unknown;

@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Resources;
@@ -21,6 +22,13 @@ internal sealed record WhichOutput
 
     /// <summary>The channel embedded in the binary (e.g., "latest", "rc1", "pr12345").</summary>
     public string Channel { get; init; } = string.Empty;
+
+    /// <summary>The binary's informational version, with any <c>+source-metadata</c> suffix stripped.</summary>
+    public string Version { get; init; } = string.Empty;
+
+    /// <summary>The PR number for PR-channel builds. Omitted from JSON when <c>null</c>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PrNumber { get; init; }
 
     /// <summary>The install mode: "a", "b", or "unknown".</summary>
     public string Mode { get; init; } = string.Empty;
@@ -86,6 +94,13 @@ internal sealed class WhichCommand : BaseCommand
 
         InteractionService.DisplayMessage(KnownEmojis.MagnifyingGlassTiltedLeft, $"{WhichCommandStrings.RouteLabel}: {RouteToString(ExecutionContext.Route)}");
         InteractionService.DisplayMessage(KnownEmojis.Information, $"{WhichCommandStrings.ChannelLabel}: {(string.IsNullOrEmpty(ExecutionContext.Channel) ? unknown : ExecutionContext.Channel)}");
+        InteractionService.DisplayMessage(KnownEmojis.Information, $"{WhichCommandStrings.VersionLabel}: {(string.IsNullOrEmpty(ExecutionContext.Version) ? unknown : ExecutionContext.Version)}");
+
+        if (ExecutionContext.PrNumber is not null)
+        {
+            InteractionService.DisplayMessage(KnownEmojis.Information, $"{WhichCommandStrings.PrNumberLabel}: {ExecutionContext.PrNumber}");
+        }
+
         InteractionService.DisplayMessage(KnownEmojis.Package, $"{WhichCommandStrings.ModeLabel}: {ExecutionContext.Mode.ToString().ToLowerInvariant()}");
 
         if (!string.IsNullOrEmpty(ExecutionContext.Prefix))
@@ -104,6 +119,8 @@ internal sealed class WhichCommand : BaseCommand
         {
             Route = RouteToString(ExecutionContext.Route),
             Channel = ExecutionContext.Channel ?? string.Empty,
+            Version = ExecutionContext.Version,
+            PrNumber = ExecutionContext.PrNumber,
             Mode = ExecutionContext.Mode.ToString().ToLowerInvariant(),
             Prefix = ExecutionContext.Prefix ?? string.Empty,
             UpdateCommand = ExecutionContext.UpdateCommand,

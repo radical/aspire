@@ -22,6 +22,11 @@
         <target state="new">Mode</target>
         <note />
       </trans-unit>
+      <trans-unit id="PrNumberLabel">
+        <source>PR number</source>
+        <target state="new">PR number</target>
+        <note />
+      </trans-unit>
       <trans-unit id="PrefixLabel">
         <source>Prefix</source>
         <target state="new">Prefix</target>
@@ -40,6 +45,11 @@
       <trans-unit id="UpdateCommandLabel">
         <source>Update command</source>
         <target state="new">Update command</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="VersionLabel">
+        <source>Version</source>
+        <target state="new">Version</target>
         <note />
       </trans-unit>
     </body>

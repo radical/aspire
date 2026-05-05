@@ -4,6 +4,7 @@
 using System.CommandLine;
 using System.CommandLine.Parsing;
 using System.Diagnostics;
+using System.Reflection;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -579,12 +580,19 @@ public class Program
         // Compute the user-facing update command hint.
         var updateCommand = upgradeInstructions.Get(route, sidecarUpdateCommand, binaryPath);
 
+        var rawVersion = Assembly.GetEntryAssembly()
+            ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? string.Empty;
+        var plusIdx = rawVersion.IndexOf('+');
+        var version = plusIdx >= 0 ? rawVersion[..plusIdx] : rawVersion;
+
         executionContext.Route = route;
         executionContext.Channel = channel;
         executionContext.PrNumber = prNumber;
         executionContext.Mode = mode;
         executionContext.Prefix = prefix ?? string.Empty;
         executionContext.UpdateCommand = updateCommand;
+        executionContext.Version = version;
 
         logger.LogInformation("Acquisition identity: route={Route}, channel={Channel}, mode={Mode}, prefix={Prefix}", route, channel, mode, prefix);
     }
