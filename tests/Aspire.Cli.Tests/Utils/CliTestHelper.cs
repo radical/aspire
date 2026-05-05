@@ -210,6 +210,7 @@ internal static class CliTestHelper
         services.AddTransient<DashboardCommand>();
         services.AddTransient<DashboardRunCommand>();
         services.AddTransient<UpdateCommand>();
+        services.AddTransient<WhichCommand>();
         services.AddTransient<SetupCommand>();
         services.AddTransient<McpCommand>();
         services.AddTransient<McpStartCommand>();
@@ -252,6 +253,22 @@ internal static class CliTestHelper
         services.AddTransient(options.AppHostBackchannelFactory);
 
         return services;
+    }
+
+    /// <summary>
+    /// Creates a default <see cref="CliExecutionContext"/> for the given workspace, identical to
+    /// the one the test helper would normally inject. Callers can mutate acquisition identity
+    /// properties (Route, Mode, Channel, UpdateCommand, etc.) before returning the context.
+    /// </summary>
+    internal static CliExecutionContext CreateDefaultCliExecutionContext(IServiceProvider _, TemporaryWorkspace workspace)
+    {
+        var workingDirectory = workspace.WorkspaceRoot;
+        var hivesDirectory = new DirectoryInfo(Path.Combine(workingDirectory.FullName, ".aspire", "hives"));
+        var cacheDirectory = new DirectoryInfo(Path.Combine(workingDirectory.FullName, ".aspire", "cache"));
+        var logsDirectory = new DirectoryInfo(Path.Combine(workingDirectory.FullName, ".aspire", "logs"));
+        var logFilePath = Path.Combine(logsDirectory.FullName, "test.log");
+        var sdksDirectory = new DirectoryInfo(Path.Combine(workingDirectory.FullName, ".aspire", "sdks"));
+        return new CliExecutionContext(workingDirectory, hivesDirectory, cacheDirectory, sdksDirectory, logsDirectory, logFilePath);
     }
 }
 

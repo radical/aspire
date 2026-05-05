@@ -3,6 +3,7 @@
 
 using System.Collections;
 using System.Runtime.InteropServices;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Interaction;
@@ -581,12 +582,18 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
     public async Task UpdateCommand_SelfUpdate_WhenRunningAsNativeAotDotnetTool_DisplaysDotnetToolUpdateCommand()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
-        using var processPathScope = DotNetToolDetection.UseProcessPathForTesting("/home/test/.dotnet/tools/.store/aspire.cli/9.4.0/aspire.cli.linux-x64/9.4.0/tools/any/linux-x64/aspire");
         var interactionService = new TestInteractionService();
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.InteractionServiceFactory = _ => interactionService;
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.DotnetTool;
+                ctx.UpdateCommand = "dotnet tool update -g Aspire.Cli";
+                return ctx;
+            };
         });
 
         using var provider = services.BuildServiceProvider();
@@ -595,7 +602,8 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        // PR2: dotnet-tool installs refuse in-process self-update and print the update hint.
+        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
         Assert.Contains(interactionService.DisplayedPlainText, text => text.Contains("dotnet tool update -g Aspire.Cli", StringComparison.Ordinal));
     }
 
@@ -605,12 +613,18 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         using var tempDirectory = new TestTempDirectory();
         var toolPath = Path.Combine(tempDirectory.Path, "custom tool path");
-        using var processPathScope = DotNetToolDetection.UseProcessPathForTesting(CreateCustomToolPathInstall(toolPath));
         var interactionService = new TestInteractionService();
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.InteractionServiceFactory = _ => interactionService;
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.DotnetTool;
+                ctx.UpdateCommand = $"dotnet tool update --tool-path \"{toolPath}\" Aspire.Cli";
+                return ctx;
+            };
         });
 
         using var provider = services.BuildServiceProvider();
@@ -619,7 +633,8 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        // PR2: dotnet-tool installs refuse in-process self-update and print the update hint.
+        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
         Assert.Contains(interactionService.DisplayedPlainText, text => text.Contains($"dotnet tool update --tool-path \"{toolPath}\" Aspire.Cli", StringComparison.Ordinal));
     }
 
@@ -690,6 +705,14 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
                     return Task.FromResult(archivePath);
                 }
             };
+
+            // PR2: only Script route goes through in-process self-update.
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.Script;
+                return ctx;
+            };
         });
 
         using var provider = services.BuildServiceProvider();
@@ -735,6 +758,14 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
                     return Task.FromResult(archivePath);
                 }
             };
+
+            // PR2: only Script route goes through in-process self-update.
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.Script;
+                return ctx;
+            };
         });
 
         using var provider = services.BuildServiceProvider();
@@ -775,6 +806,14 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
                     File.WriteAllText(archivePath, "fake archive");
                     return Task.FromResult(archivePath);
                 }
+            };
+
+            // PR2: only Script route goes through in-process self-update.
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.Script;
+                return ctx;
             };
         });
 
@@ -1189,6 +1228,14 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
             options.InteractionServiceFactory = _ => wrappedService;
 
             options.CliDownloaderFactory = _ => new TestCliDownloader(workspace.WorkspaceRoot);
+
+            // PR2: only Script route goes through in-process self-update.
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.Script;
+                return ctx;
+            };
         });
 
         using var provider = services.BuildServiceProvider();
@@ -1230,6 +1277,14 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
                     File.WriteAllText(archivePath, "fake archive");
                     return Task.FromResult(archivePath);
                 }
+            };
+
+            // PR2: only Script route goes through in-process self-update.
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.Script;
+                return ctx;
             };
         });
 
@@ -1275,6 +1330,14 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
                     File.WriteAllText(archivePath, "fake archive");
                     return Task.FromResult(archivePath);
                 }
+            };
+
+            // PR2: only Script route goes through in-process self-update.
+            options.CliExecutionContextFactory = provider =>
+            {
+                var ctx = CliTestHelper.CreateDefaultCliExecutionContext(provider, workspace);
+                ctx.Route = InstallRoute.Script;
+                return ctx;
             };
         });
 
