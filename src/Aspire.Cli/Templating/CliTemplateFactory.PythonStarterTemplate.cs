@@ -73,15 +73,12 @@ internal sealed partial class CliTemplateFactory
                         AddRedisPackageToConfig(outputPath, aspireVersion);
                     }
 
-                    // Write channel to settings.json before restore so package resolution uses the selected channel.
-                    if (!string.IsNullOrEmpty(inputs.Channel))
+                    // Always write channel to settings.json before restore so package resolution uses the correct channel.
+                    var config = AspireJsonConfiguration.Load(outputPath);
+                    if (config is not null)
                     {
-                        var config = AspireJsonConfiguration.Load(outputPath);
-                        if (config is not null)
-                        {
-                            config.Channel = inputs.Channel;
-                            config.Save(outputPath);
-                        }
+                        config.Channel = !string.IsNullOrEmpty(inputs.Channel) ? inputs.Channel : _executionContext.Channel;
+                        config.Save(outputPath);
                     }
 
                     var appHostProject = _projectFactory.TryGetProject(new FileInfo(Path.Combine(outputPath, "apphost.ts")));

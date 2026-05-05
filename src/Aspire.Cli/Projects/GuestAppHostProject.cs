@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text.Json;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Certificates;
 using Aspire.Cli.Configuration;
@@ -34,6 +35,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     private readonly ICertificateService _certificateService;
     private readonly IDotNetCliRunner _runner;
     private readonly IPackagingService _packagingService;
+    private readonly IIdentityChannelReader _channelReader;
     private readonly IConfiguration _configuration;
     private readonly IFeatures _features;
     private readonly ILanguageDiscovery _languageDiscovery;
@@ -54,6 +56,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         ICertificateService certificateService,
         IDotNetCliRunner runner,
         IPackagingService packagingService,
+        IIdentityChannelReader channelReader,
         IConfiguration configuration,
         IFeatures features,
         ILanguageDiscovery languageDiscovery,
@@ -68,6 +71,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         _certificateService = certificateService;
         _runner = runner;
         _packagingService = packagingService;
+        _channelReader = channelReader;
         _configuration = configuration;
         _features = features;
         _languageDiscovery = languageDiscovery;
@@ -341,12 +345,9 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                     return (Success: true, Output: prepareOutput, Error: (string?)null, ChannelName: channelName, NeedsCodeGen: needsCodeGen);
                 }, emoji: KnownEmojis.Gear);
 
-            // Save the channel to settings if available (config already has SdkVersion)
-            if (buildResult.ChannelName is not null)
-            {
-                config.Channel = buildResult.ChannelName;
-                SaveConfiguration(config, directory);
-            }
+            // Always save the channel: use resolved channel from prepare, or fall back to baked identity channel
+            config.Channel = buildResult.ChannelName ?? _channelReader.ReadChannel();
+            SaveConfiguration(config, directory);
 
             if (!buildResult.Success)
             {
@@ -1197,11 +1198,10 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         {
             config.SdkVersion = newSdkVersion;
         }
-        // Update channel if it's an explicit channel (not the implicit/default one)
-        if (context.Channel.Type == Packaging.PackageChannelType.Explicit)
-        {
-            config.Channel = context.Channel.Name;
-        }
+        // Update channel: use explicit channel name if provided, otherwise fall back to baked identity channel
+        config.Channel = context.Channel.Type == Packaging.PackageChannelType.Explicit
+            ? context.Channel.Name
+            : _channelReader.ReadChannel();
         foreach (var (packageId, _, newVersion) in updates)
         {
             config.AddOrUpdatePackage(packageId, newVersion);

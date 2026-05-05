@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
@@ -22,17 +23,20 @@ internal sealed class ScaffoldingService : IScaffoldingService
     private readonly IAppHostServerProjectFactory _appHostServerProjectFactory;
     private readonly ILanguageDiscovery _languageDiscovery;
     private readonly IInteractionService _interactionService;
+    private readonly IIdentityChannelReader _channelReader;
     private readonly ILogger<ScaffoldingService> _logger;
 
     public ScaffoldingService(
         IAppHostServerProjectFactory appHostServerProjectFactory,
         ILanguageDiscovery languageDiscovery,
         IInteractionService interactionService,
+        IIdentityChannelReader channelReader,
         ILogger<ScaffoldingService> logger)
     {
         _appHostServerProjectFactory = appHostServerProjectFactory;
         _languageDiscovery = languageDiscovery;
         _interactionService = interactionService;
+        _channelReader = channelReader;
         _logger = logger;
     }
 
@@ -61,17 +65,10 @@ internal sealed class ScaffoldingService : IScaffoldingService
         {
             config.SdkVersion = context.SdkVersion;
         }
-        if (!string.IsNullOrWhiteSpace(context.Channel))
-        {
-            config.Channel = context.Channel;
-        }
+        config.Channel = !string.IsNullOrWhiteSpace(context.Channel) ? context.Channel : _channelReader.ReadChannel();
 
         PreAddJavaScriptHostingForBrownfieldTypeScript(config, directory, language, sdkVersion);
-        if (!string.IsNullOrWhiteSpace(context.SdkVersion) ||
-            !string.IsNullOrWhiteSpace(context.Channel))
-        {
-            config.Save(directory.FullName);
-        }
+        config.Save(directory.FullName);
 
         // Include the code generation package for scaffolding and code gen
         var codeGenPackage = await _languageDiscovery.GetPackageForLanguageAsync(language.LanguageId, cancellationToken);
@@ -194,10 +191,7 @@ internal sealed class ScaffoldingService : IScaffoldingService
         }
 
         config.Profiles = profiles;
-        if (prepareResult.ChannelName is not null)
-        {
-            config.Channel = prepareResult.ChannelName;
-        }
+        config.Channel = prepareResult.ChannelName ?? _channelReader.ReadChannel();
         config.AppHost ??= new AspireConfigAppHost();
         config.AppHost.Path ??= language.AppHostFileName;
         config.AppHost.Language = language.LanguageId;
