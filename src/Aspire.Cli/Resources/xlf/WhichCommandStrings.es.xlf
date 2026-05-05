@@ -1,0 +1,47 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<xliff xmlns="urn:oasis:names:tc:xliff:document:1.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="1.2" xsi:schemaLocation="urn:oasis:names:tc:xliff:document:1.2 xliff-core-1.2-transitional.xsd">
+  <file datatype="xml" source-language="en" target-language="es" original="../WhichCommandStrings.resx">
+    <body>
+      <trans-unit id="ChannelLabel">
+        <source>Channel</source>
+        <target state="new">Channel</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="Description">
+        <source>Show identity information about this Aspire CLI installation</source>
+        <target state="new">Show identity information about this Aspire CLI installation</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="FormatOptionDescription">
+        <source>Output format (text or json)</source>
+        <target state="new">Output format (text or json)</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="ModeLabel">
+        <source>Mode</source>
+        <target state="new">Mode</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="PrefixLabel">
+        <source>Prefix</source>
+        <target state="new">Prefix</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="RouteLabel">
+        <source>Route</source>
+        <target state="new">Route</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="UnknownValue">
+        <source>unknown</source>
+        <target state="new">unknown</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="UpdateCommandLabel">
+        <source>Update command</source>
+        <target state="new">Update command</target>
+        <note />
+      </trans-unit>
+    </body>
+  </file>
+</xliff>
