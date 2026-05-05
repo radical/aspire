@@ -30,7 +30,6 @@ internal sealed class UpdateCommand : BaseCommand
     private readonly ICliDownloader? _cliDownloader;
     private readonly ICliUpdateNotifier _updateNotifier;
     private readonly IFeatures _features;
-    private readonly IConfigurationService _configurationService;
     private readonly IConfiguration _configuration;
 
     private static readonly OptionWithLegacy<FileInfo?> s_appHostOption = new("--apphost", "--project", UpdateCommandStrings.ProjectArgumentDescription);
@@ -60,7 +59,6 @@ internal sealed class UpdateCommand : BaseCommand
         IFeatures features,
         ICliUpdateNotifier updateNotifier,
         CliExecutionContext executionContext,
-        IConfigurationService configurationService,
         AspireCliTelemetry telemetry,
         IConfiguration configuration)
         : base("update", UpdateCommandStrings.Description, features, updateNotifier, executionContext, interactionService, telemetry)
@@ -72,7 +70,6 @@ internal sealed class UpdateCommand : BaseCommand
         _cliDownloader = cliDownloader;
         _updateNotifier = updateNotifier;
         _features = features;
-        _configurationService = configurationService;
         _configuration = configuration;
 
         Options.Add(s_appHostOption);
@@ -116,30 +113,43 @@ internal sealed class UpdateCommand : BaseCommand
         // If --self is specified, handle CLI self-update
         if (isSelfUpdate)
         {
-            // When running as a dotnet tool, print the update command instead of executing
-            var dotNetToolUpdateCommand = GetDotNetToolUpdateCommand();
-            if (dotNetToolUpdateCommand is not null)
+            // Use pre-computed acquisition identity from startup to decide how to handle the update.
+            var route = ExecutionContext.Route;
+
+            if (Aspire.Cli.Acquisition.SelfUpdateRouter.RunsInProcess(route))
             {
-                InteractionService.DisplayMessage(KnownEmojis.Information, UpdateCommandStrings.DotNetToolSelfUpdateMessage);
-                InteractionService.DisplayPlainText($"  {dotNetToolUpdateCommand}");
-                return 0;
+                if (_cliDownloader is null)
+                {
+                    InteractionService.DisplayError("CLI self-update is not available in this environment.");
+                    return ExitCodeConstants.InvalidCommand;
+                }
+
+                try
+                {
+                    return await ExecuteSelfUpdateAsync(parseResult, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    InteractionService.DisplayCancellationMessage();
+                    return ExitCodeConstants.InvalidCommand;
+                }
             }
 
-            if (_cliDownloader is null)
+            // Non-script installs: refuse and print the update command.
+            var updateCommand = ExecutionContext.UpdateCommand;
+            if (updateCommand is not null)
             {
-                InteractionService.DisplayError("CLI self-update is not available in this environment.");
-                return ExitCodeConstants.InvalidCommand;
+                var routeLabel = route.ToString().ToLowerInvariant();
+                InteractionService.DisplayMessage(KnownEmojis.Information,
+                    string.Format(System.Globalization.CultureInfo.CurrentCulture, UpdateCommandStrings.SelfUpdateRefusalWithCommand, routeLabel));
+                InteractionService.DisplayPlainText($"  {updateCommand}");
+            }
+            else
+            {
+                InteractionService.DisplayError(UpdateCommandStrings.SelfUpdateRefusalUnknown);
             }
 
-            try
-            {
-                return await ExecuteSelfUpdateAsync(parseResult, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                InteractionService.DisplayCancellationMessage();
-                return ExitCodeConstants.InvalidCommand;
-            }
+            return ExitCodeConstants.InvalidCommand;
         }
 
         // Otherwise, handle project update
@@ -322,20 +332,6 @@ internal sealed class UpdateCommand : BaseCommand
 
             // Extract and update to $HOME/.aspire/bin
             await ExtractAndUpdateAsync(archivePath, cancellationToken);
-
-            // Save the selected channel to global settings for future use with 'aspire new' and 'aspire init'
-            // For stable channel, clear the setting to leave it blank (like the install scripts do)
-            // For other channels (staging, daily), save the channel name
-            if (string.Equals(channel, PackageChannelNames.Stable, StringComparison.OrdinalIgnoreCase))
-            {
-                await _configurationService.DeleteConfigurationAsync("channel", isGlobal: true, cancellationToken);
-                _logger.LogDebug("Cleared global channel setting for stable channel");
-            }
-            else
-            {
-                await _configurationService.SetConfigurationAsync("channel", channel, isGlobal: true, cancellationToken);
-                _logger.LogDebug("Saved global channel setting: {Channel}", channel);
-            }
 
             return 0;
         }

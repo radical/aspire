@@ -242,6 +242,16 @@
         <target state="new">Update the Aspire CLI itself to the latest version</target>
         <note />
       </trans-unit>
+      <trans-unit id="SelfUpdateRefusalUnknown">
+        <source>Unable to determine the install route. Self-update is not available. Please use the original installation method to update the Aspire CLI.</source>
+        <target state="new">Unable to determine the install route. Self-update is not available. Please use the original installation method to update the Aspire CLI.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="SelfUpdateRefusalWithCommand">
+        <source>This is a {0} install. To update, run:</source>
+        <target state="new">This is a {0} install. To update, run:</target>
+        <note>{0} is the install route (e.g., "winget", "brew", "dotnet-tool")</note>
+      </trans-unit>
       <trans-unit id="UnxpectedCodePath">
         <source>Unexpected code path.</source>
         <target state="translated">Непредвиденный путь к коду.</target>

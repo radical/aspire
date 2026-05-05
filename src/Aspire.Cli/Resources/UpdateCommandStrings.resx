@@ -174,4 +174,11 @@
   <data name="NuGetConfigDirOptionDescription" xml:space="preserve">
     <value>Directory to create or update the NuGet.config file in</value>
   </data>
+  <data name="SelfUpdateRefusalWithCommand" xml:space="preserve">
+    <value>This is a {0} install. To update, run:</value>
+    <comment>{0} is the install route (e.g., "winget", "brew", "dotnet-tool")</comment>
+  </data>
+  <data name="SelfUpdateRefusalUnknown" xml:space="preserve">
+    <value>Unable to determine the install route. Self-update is not available. Please use the original installation method to update the Aspire CLI.</value>
+  </data>
 </root>
