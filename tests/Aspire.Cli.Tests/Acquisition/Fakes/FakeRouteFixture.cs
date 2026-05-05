@@ -6,13 +6,12 @@ using Aspire.Cli.Acquisition;
 namespace Aspire.Cli.Tests.Acquisition.Fakes;
 
 /// <summary>
-/// Test fixture that creates an isolated temporary directory and writes either a v3 sidecar
-/// layout (<see cref="WithSidecar"/>) or a v2 IdentityManifest layout (<see cref="WithIdentityManifest"/>)
-/// into it. Cleans up on disposal.
+/// Test fixture that creates an isolated temporary directory and writes a v3 sidecar
+/// layout (<see cref="WithSidecar"/>) into it.  Cleans up on disposal.
 /// </summary>
 /// <remarks>
-/// Callers pick exactly one <c>With*</c> method; calling either more than once or mixing both
-/// is unsupported and will throw.
+/// Callers call <see cref="WithSidecar"/> exactly once; calling it more than once is
+/// unsupported and will throw.
 /// </remarks>
 internal sealed class FakeRouteFixture : IDisposable
 {
@@ -22,7 +21,7 @@ internal sealed class FakeRouteFixture : IDisposable
     /// <summary>The root of the isolated temporary directory.</summary>
     public string Root => _tempDir.Path;
 
-    /// <summary>The prefix directory that contains the <c>.aspire-install.json</c> sidecar or <c>installs/</c> tree.</summary>
+    /// <summary>The prefix directory that contains the <c>.aspire-install.json</c> sidecar.</summary>
     public string Prefix { get; private set; } = string.Empty;
 
     /// <summary>The path to the placeholder <c>aspire[.exe]</c> binary.</summary>
@@ -48,23 +47,6 @@ internal sealed class FakeRouteFixture : IDisposable
         return this;
     }
 
-    /// <summary>
-    /// Configures a v2 IdentityManifest layout for testing the back-compat code path.
-    /// </summary>
-    /// <returns><see langword="this"/> for fluent chaining.</returns>
-    public FakeRouteFixture WithIdentityManifest(IdentityManifestBuilder builder)
-    {
-        EnsureNotConfigured();
-
-        var installDir = builder.WriteTo(_tempDir.Path);
-        Prefix = installDir;
-
-        var binDir = Path.Combine(installDir, "bin");
-        BinaryPath = Path.Combine(binDir, OperatingSystem.IsWindows() ? "aspire.exe" : "aspire");
-
-        return this;
-    }
-
     /// <inheritdoc/>
     public void Dispose() => _tempDir.Dispose();
 
@@ -72,7 +54,7 @@ internal sealed class FakeRouteFixture : IDisposable
     {
         if (_configured)
         {
-            throw new InvalidOperationException("FakeRouteFixture has already been configured. Call WithSidecar or WithIdentityManifest exactly once.");
+            throw new InvalidOperationException("FakeRouteFixture has already been configured. Call WithSidecar exactly once.");
         }
 
         _configured = true;
