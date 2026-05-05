@@ -193,7 +193,9 @@ internal static class BundleDiscovery
 
     /// <summary>
     /// Attempts to discover DCP relative to the current process.
-    /// This is used by CLI to find DCP in the bundle layout.
+    /// Applies the two-stat sidecar rule to find the install prefix before
+    /// resolving the bundle layout, so both Mode A (<c>prefix/bin/aspire</c>)
+    /// and Mode B (<c>prefix/aspire</c>) installs are handled correctly.
     /// </summary>
     public static bool TryDiscoverDcpFromProcessPath(
         out string? dcpCliPath,
@@ -210,11 +212,14 @@ internal static class BundleDiscovery
             return false;
         }
 
-        return TryDiscoverDcpFromDirectory(baseDir, out dcpCliPath, out dcpExtensionsPath, out dcpBinPath);
+        var bundleDir = Path.Combine(GetInstallPrefix(baseDir), BundleDirectoryName);
+        return TryDiscoverDcpFromDirectory(bundleDir, out dcpCliPath, out dcpExtensionsPath, out dcpBinPath);
     }
 
     /// <summary>
     /// Attempts to discover aspire-managed relative to the current process.
+    /// Applies the two-stat sidecar rule to find the install prefix before
+    /// resolving the bundle layout, so both Mode A and Mode B installs are handled correctly.
     /// </summary>
     public static bool TryDiscoverManagedFromProcessPath(out string? managedPath)
     {
@@ -226,12 +231,44 @@ internal static class BundleDiscovery
             return false;
         }
 
-        return TryDiscoverManagedFromDirectory(baseDir, out managedPath);
+        var bundleDir = Path.Combine(GetInstallPrefix(baseDir), BundleDirectoryName);
+        return TryDiscoverManagedFromDirectory(bundleDir, out managedPath);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // HELPER METHODS
     // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Resolves the install prefix from the process executable directory using
+    /// the two-stat sidecar rule (inline copy of the rule from
+    /// <c>InstallPathResolver</c> — cannot reference Aspire.Cli types here).
+    /// <list type="bullet">
+    ///   <item>Mode B: sidecar found alongside the binary → prefix = <paramref name="processDirectory"/>.</item>
+    ///   <item>Mode A: sidecar found one level up → prefix = parent directory.</item>
+    ///   <item>Unknown: no sidecar found → prefix = <paramref name="processDirectory"/>.</item>
+    /// </list>
+    /// </summary>
+    private static string GetInstallPrefix(string processDirectory)
+    {
+        const string SidecarFileName = ".aspire-install.json";
+
+        // Mode B: binary lives at the prefix root alongside the sidecar
+        if (File.Exists(Path.Combine(processDirectory, SidecarFileName)))
+        {
+            return processDirectory;
+        }
+
+        // Mode A: binary lives under a bin/ subdirectory; prefix is one level up
+        var parentDir = Path.GetDirectoryName(processDirectory);
+        if (!string.IsNullOrEmpty(parentDir) && File.Exists(Path.Combine(parentDir, SidecarFileName)))
+        {
+            return parentDir;
+        }
+
+        // Unknown layout — fall back to the process directory
+        return processDirectory;
+    }
 
     /// <summary>
     /// Gets the full path to the DCP executable given a DCP directory.
