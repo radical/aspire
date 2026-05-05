@@ -1,6 +1,7 @@
 ﻿{
   "route": "script",
   "channel": "stable",
+  "version": "9.4.0-dev",
   "mode": "a",
   "prefix": "/home/user/.aspire"
 }

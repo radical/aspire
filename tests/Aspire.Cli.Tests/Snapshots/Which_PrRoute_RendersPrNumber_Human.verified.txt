@@ -1,0 +1,9 @@
+﻿[
+  magnifying_glass_tilted_left: Route: pr,
+  information: Channel: pr,
+  information: Version: 9.4.0-dev,
+  information: PR number: 99999,
+  package: Mode: a,
+  file_folder: Prefix: /home/user/.aspire/dogfood/pr-99999,
+  gear: Update command: get-aspire-cli-pr.sh -r 99999
+]

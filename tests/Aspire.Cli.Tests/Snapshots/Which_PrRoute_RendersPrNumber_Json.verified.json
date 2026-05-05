@@ -1,0 +1,9 @@
+﻿{
+  "route": "pr",
+  "channel": "pr",
+  "version": "9.4.0-dev",
+  "prNumber": 99999,
+  "mode": "a",
+  "prefix": "/home/user/.aspire/dogfood/pr-99999",
+  "updateCommand": "get-aspire-cli-pr.sh -r 99999"
+}

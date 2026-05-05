@@ -1,6 +1,7 @@
 ﻿[
   magnifying_glass_tilted_left: Route: winget,
   information: Channel: stable,
+  information: Version: 9.4.0-dev,
   package: Mode: b,
   file_folder: Prefix: C:\Program Files\aspire,
   gear: Update command: winget upgrade Microsoft.Aspire
