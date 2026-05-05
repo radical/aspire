@@ -59,7 +59,7 @@ internal sealed class SetupCommand : BaseCommand
         // Determine extraction directory
         if (string.IsNullOrEmpty(installPath))
         {
-            installPath = BundleService.GetDefaultExtractDir(processPath);
+            installPath = _bundleService.GetDefaultExtractDir(processPath);
         }
 
         if (string.IsNullOrEmpty(installPath))

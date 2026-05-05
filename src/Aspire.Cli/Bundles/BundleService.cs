@@ -6,6 +6,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.IO.Hashing;
 using System.Text;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Layout;
 using Aspire.Cli.Utils;
 using Aspire.Shared;
@@ -16,7 +17,7 @@ namespace Aspire.Cli.Bundles;
 /// <summary>
 /// Manages extraction of the embedded bundle payload from self-extracting CLI binaries.
 /// </summary>
-internal sealed class BundleService(IBundlePayloadProvider payloadProvider, ILayoutDiscovery layoutDiscovery, ILogger<BundleService> logger) : IBundleService
+internal sealed class BundleService(IBundlePayloadProvider payloadProvider, ILayoutDiscovery layoutDiscovery, IInstallPathResolver installPathResolver, ILogger<BundleService> logger) : IBundleService
 {
     /// <summary>
     /// Name of the marker file written after successful extraction.
@@ -91,6 +92,15 @@ internal sealed class BundleService(IBundlePayloadProvider payloadProvider, ILay
             throw new InvalidOperationException(
                 "Bundle extraction failed. Run 'aspire setup --force' to retry, or reinstall the Aspire CLI.");
         }
+
+        // Run Pass 1 GC on both fresh extraction and already-up-to-date paths so
+        // stale versioned directories are swept regardless of whether extraction ran.
+        if (result is BundleExtractResult.AlreadyUpToDate or BundleExtractResult.Extracted)
+        {
+            var versionsRoot = Path.Combine(extractDir, VersionsDirectoryName);
+            var versionId = ComputeVersionId(GetCurrentVersion(ProcessPathOverride));
+            TryCleanupStaleVersions(versionsRoot, versionId);
+        }
     }
 
     /// <inheritdoc/>
@@ -109,8 +119,13 @@ internal sealed class BundleService(IBundlePayloadProvider payloadProvider, ILay
             return BundleExtractResult.NoPayload;
         }
 
-        // Use a file lock for cross-process synchronization
-        var lockPath = Path.Combine(destinationPath, ".aspire-bundle-lock");
+        // Use a file lock for cross-process synchronization.
+        // Lock is stored under <prefix>/.locks/<version>.lock so multiple processes
+        // sharing the same install prefix serialize on a per-version basis.
+        var versionForLock = VersionHelper.GetDefaultSdkVersion();
+        var locksDir = Path.Combine(destinationPath, ".locks");
+        Directory.CreateDirectory(locksDir);
+        var lockPath = Path.Combine(locksDir, $"{versionForLock}.lock");
         logger.LogDebug("Acquiring bundle extraction lock at {LockPath}...", lockPath);
         using var fileLock = await FileLock.AcquireAsync(lockPath, cancellationToken).ConfigureAwait(false);
         logger.LogDebug("Bundle extraction lock acquired.");
@@ -302,19 +317,15 @@ internal sealed class BundleService(IBundlePayloadProvider payloadProvider, ILay
     }
 
     /// <summary>
-    /// Determines the default extraction directory for the current CLI binary.
-    /// If CLI is at ~/.aspire/bin/aspire, returns ~/.aspire/ so layout discovery
-    /// finds components via the bin/ layout pattern.
+    /// Determines the default extraction directory (install prefix) for the current CLI binary.
+    /// Delegates to <see cref="IInstallPathResolver"/> to handle both Mode A
+    /// (<c>prefix/bin/aspire</c>) and Mode B (<c>prefix/aspire</c>) layouts.
     /// </summary>
-    internal static string? GetDefaultExtractDir(string processPath)
+    /// <inheritdoc/>
+    public string? GetDefaultExtractDir(string processPath)
     {
-        var cliDir = Path.GetDirectoryName(processPath);
-        if (string.IsNullOrEmpty(cliDir))
-        {
-            return null;
-        }
-
-        return Path.GetDirectoryName(cliDir) ?? cliDir;
+        var (_, prefix) = installPathResolver.Resolve(processPath);
+        return string.IsNullOrEmpty(prefix) ? null : prefix;
     }
 
     /// <summary>

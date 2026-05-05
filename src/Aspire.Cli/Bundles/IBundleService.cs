@@ -16,6 +16,13 @@ internal interface IBundleService
     bool IsBundle { get; }
 
     /// <summary>
+    /// Determines the default extraction directory (install prefix) for the given process path.
+    /// Returns <see langword="null"/> if the prefix cannot be resolved.
+    /// </summary>
+    /// <param name="processPath">The full path to the CLI process executable.</param>
+    string? GetDefaultExtractDir(string processPath);
+
+    /// <summary>
     /// Ensures the bundle is extracted for the current CLI binary if it contains an embedded payload.
     /// No-ops if no payload is embedded, or if the layout is already extracted and up to date.
     /// </summary>
