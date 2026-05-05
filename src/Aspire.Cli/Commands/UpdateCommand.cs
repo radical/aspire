@@ -139,7 +139,11 @@ internal sealed class UpdateCommand : BaseCommand
             var updateCommand = ExecutionContext.UpdateCommand;
             if (updateCommand is not null)
             {
-                var routeLabel = route.ToString().ToLowerInvariant();
+                var routeLabel = route switch
+                {
+                    Aspire.Cli.Acquisition.InstallRoute.DotnetTool => "dotnet-tool",
+                    _ => route.ToString().ToLowerInvariant(),
+                };
                 InteractionService.DisplayMessage(KnownEmojis.Information,
                     string.Format(System.Globalization.CultureInfo.CurrentCulture, UpdateCommandStrings.SelfUpdateRefusalWithCommand, routeLabel));
                 InteractionService.DisplayPlainText($"  {updateCommand}");

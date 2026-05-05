@@ -84,7 +84,7 @@ internal sealed class WhichCommand : BaseCommand
     {
         var unknown = WhichCommandStrings.UnknownValue;
 
-        InteractionService.DisplayMessage(KnownEmojis.MagnifyingGlassTiltedLeft, $"{WhichCommandStrings.RouteLabel}: {ExecutionContext.Route.ToString().ToLowerInvariant()}");
+        InteractionService.DisplayMessage(KnownEmojis.MagnifyingGlassTiltedLeft, $"{WhichCommandStrings.RouteLabel}: {RouteToString(ExecutionContext.Route)}");
         InteractionService.DisplayMessage(KnownEmojis.Information, $"{WhichCommandStrings.ChannelLabel}: {(string.IsNullOrEmpty(ExecutionContext.Channel) ? unknown : ExecutionContext.Channel)}");
         InteractionService.DisplayMessage(KnownEmojis.Package, $"{WhichCommandStrings.ModeLabel}: {ExecutionContext.Mode.ToString().ToLowerInvariant()}");
 
@@ -102,10 +102,21 @@ internal sealed class WhichCommand : BaseCommand
     private WhichOutput BuildOutput() =>
         new()
         {
-            Route = ExecutionContext.Route.ToString().ToLowerInvariant(),
+            Route = RouteToString(ExecutionContext.Route),
             Channel = ExecutionContext.Channel ?? string.Empty,
             Mode = ExecutionContext.Mode.ToString().ToLowerInvariant(),
             Prefix = ExecutionContext.Prefix ?? string.Empty,
             UpdateCommand = ExecutionContext.UpdateCommand,
+        };
+
+    private static string RouteToString(Aspire.Cli.Acquisition.InstallRoute route) =>
+        route switch
+        {
+            Aspire.Cli.Acquisition.InstallRoute.Script => "script",
+            Aspire.Cli.Acquisition.InstallRoute.Pr => "pr",
+            Aspire.Cli.Acquisition.InstallRoute.Winget => "winget",
+            Aspire.Cli.Acquisition.InstallRoute.Brew => "brew",
+            Aspire.Cli.Acquisition.InstallRoute.DotnetTool => "dotnet-tool",
+            _ => "unknown",
         };
 }
