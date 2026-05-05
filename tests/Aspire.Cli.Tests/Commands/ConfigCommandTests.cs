@@ -811,7 +811,8 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         var settings = JsonNode.Parse(json)?.AsObject();
 
         Assert.NotNull(settings);
-        Assert.Equal("daily", settings["channel"]?.ToString());
+        // PR4: channel is intentionally dropped during legacy migration — it should NOT carry over.
+        Assert.Null(settings["channel"]);
         var appHost = settings["appHost"]?.AsObject();
         Assert.NotNull(appHost);
         Assert.Equal("AppHost.csproj", appHost["path"]?.ToString());

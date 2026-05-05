@@ -4,6 +4,7 @@
 using System.Text;
 using Aspire.Cli.Agents;
 using Aspire.Cli.Agents.Playwright;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Bundles;
 using Aspire.Cli.Certificates;
@@ -161,6 +162,8 @@ internal static class CliTestHelper
             return language => ActivatorUtilities.CreateInstance<GuestAppHostProject>(sp, language);
         });
         services.AddSingleton<IAppHostProjectFactory, AppHostProjectFactory>();
+
+        services.AddSingleton<IIdentityChannelReader, IdentityChannelReader>();
 
         services.AddSingleton<IEnvironmentCheck, WslEnvironmentCheck>();
         services.AddSingleton<IEnvironmentCheck, DotNetSdkCheck>();
@@ -463,7 +466,8 @@ internal sealed class CliServiceCollectionTestOptions
         var languageDiscovery = serviceProvider.GetRequiredService<ILanguageDiscovery>();
         var interactionService = serviceProvider.GetRequiredService<IInteractionService>();
         var logger = serviceProvider.GetRequiredService<ILogger<ScaffoldingService>>();
-        return new ScaffoldingService(appHostServerProjectFactory, languageDiscovery, interactionService, logger);
+        var channelReader = serviceProvider.GetRequiredService<IIdentityChannelReader>();
+        return new ScaffoldingService(appHostServerProjectFactory, languageDiscovery, interactionService, channelReader, logger);
     };
 
     public Func<IServiceProvider, IProcessExecutionFactory> DotNetCliExecutionFactoryFactory { get; set; } = (IServiceProvider serviceProvider) =>
