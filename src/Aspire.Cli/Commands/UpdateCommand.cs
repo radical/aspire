@@ -371,6 +371,7 @@ internal sealed class UpdateCommand : BaseCommand
         var exeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "aspire.exe" : "aspire";
         var targetExePath = Path.Combine(installDir, exeName);
         var tempExtractDir = Directory.CreateTempSubdirectory("aspire-cli-extract").FullName;
+        FileLock? selfUpdateLock = null;
 
         try
         {
@@ -396,6 +397,16 @@ internal sealed class UpdateCommand : BaseCommand
             // Backup current executable if it exists
             var exeDir = Path.GetDirectoryName(targetExePath)!;
             FileDeleteHelper.TryCleanupOldItems(exeDir, exeName);
+
+            // Acquire a per-prefix lock to prevent concurrent binary swaps (e.g. two
+            // update invocations racing from the same install prefix).
+            if (!string.IsNullOrEmpty(ExecutionContext.Prefix))
+            {
+                var locksDir = Path.Combine(ExecutionContext.Prefix, ".locks");
+                Directory.CreateDirectory(locksDir);
+                selfUpdateLock = await FileLock.AcquireAsync(
+                    Path.Combine(locksDir, "self-update.lock"), cancellationToken);
+            }
 
             string? backupPath = null;
             if (File.Exists(targetExePath))
@@ -464,6 +475,7 @@ internal sealed class UpdateCommand : BaseCommand
         }
         finally
         {
+            selfUpdateLock?.Dispose();
             // Clean up temp directories
             CleanupDirectory(tempExtractDir);
             CleanupDirectory(Path.GetDirectoryName(archivePath)!);
