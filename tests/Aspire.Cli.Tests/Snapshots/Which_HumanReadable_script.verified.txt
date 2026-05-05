@@ -1,0 +1,6 @@
+﻿[
+  magnifying_glass_tilted_left: Route: script,
+  information: Channel: stable,
+  package: Mode: a,
+  file_folder: Prefix: /home/user/.aspire
+]

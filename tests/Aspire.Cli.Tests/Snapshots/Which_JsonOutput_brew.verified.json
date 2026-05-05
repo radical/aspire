@@ -1,0 +1,7 @@
+﻿{
+  "route": "brew",
+  "channel": "stable",
+  "mode": "b",
+  "prefix": "/opt/homebrew/aspire",
+  "updateCommand": "brew upgrade aspire"
+}

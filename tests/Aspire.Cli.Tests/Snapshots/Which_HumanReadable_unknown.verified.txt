@@ -1,0 +1,5 @@
+﻿[
+  magnifying_glass_tilted_left: Route: unknown,
+  information: Channel: unknown,
+  package: Mode: unknown
+]

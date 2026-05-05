@@ -1,0 +1,7 @@
+﻿[
+  magnifying_glass_tilted_left: Route: brew,
+  information: Channel: stable,
+  package: Mode: b,
+  file_folder: Prefix: /opt/homebrew/aspire,
+  gear: Update command: brew upgrade aspire
+]

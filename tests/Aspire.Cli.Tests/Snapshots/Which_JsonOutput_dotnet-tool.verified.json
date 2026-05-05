@@ -1,0 +1,7 @@
+﻿{
+  "route": "dotnet-tool",
+  "channel": "stable",
+  "mode": "unknown",
+  "prefix": "",
+  "updateCommand": "dotnet tool update -g Aspire.Cli"
+}

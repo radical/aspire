@@ -1,0 +1,7 @@
+﻿{
+  "route": "winget",
+  "channel": "stable",
+  "mode": "b",
+  "prefix": "C:\\Program Files\\aspire",
+  "updateCommand": "winget upgrade Microsoft.Aspire"
+}

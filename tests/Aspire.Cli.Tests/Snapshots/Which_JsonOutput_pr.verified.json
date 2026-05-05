@@ -1,0 +1,7 @@
+﻿{
+  "route": "pr",
+  "channel": "pr42",
+  "mode": "a",
+  "prefix": "/home/user/.aspire",
+  "updateCommand": "get-aspire-cli-pr.sh -r 42"
+}

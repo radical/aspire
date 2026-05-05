@@ -1,0 +1,7 @@
+﻿[
+  magnifying_glass_tilted_left: Route: pr,
+  information: Channel: pr42,
+  package: Mode: a,
+  file_folder: Prefix: /home/user/.aspire,
+  gear: Update command: get-aspire-cli-pr.sh -r 42
+]
