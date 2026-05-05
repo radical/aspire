@@ -1,9 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Bundles;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Shared;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aspire.Cli.Tests;
 
@@ -43,18 +45,22 @@ public class BundleServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void GetDefaultExtractDir_ReturnsParentOfParent()
+    public void GetDefaultExtractDir_ModeA_ReturnsPrefix()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            var result = BundleService.GetDefaultExtractDir(@"C:\Users\test\.aspire\bin\aspire.exe");
-            Assert.Equal(@"C:\Users\test\.aspire", result);
-        }
-        else
-        {
-            var result = BundleService.GetDefaultExtractDir("/home/test/.aspire/bin/aspire");
-            Assert.Equal("/home/test/.aspire", result);
-        }
+        var expectedPrefix = OperatingSystem.IsWindows() ? @"C:\Users\test\.aspire" : "/home/test/.aspire";
+        var binaryPath = OperatingSystem.IsWindows()
+            ? @"C:\Users\test\.aspire\bin\aspire.exe"
+            : "/home/test/.aspire/bin/aspire";
+        var resolver = new FakeInstallPathResolver(InstallMode.A, expectedPrefix);
+        var service = new BundleService(
+            new NullBundlePayloadProvider(),
+            new NullLayoutDiscovery(),
+            resolver,
+            NullLogger<BundleService>.Instance);
+
+        var result = service.GetDefaultExtractDir(binaryPath);
+
+        Assert.Equal(expectedPrefix, result);
     }
 
     [Fact]
@@ -192,5 +198,10 @@ public class BundleServiceTests(ITestOutputHelper outputHelper)
         var dcpDir = Path.Combine(root, BundleDiscovery.DcpDirectoryName);
         Directory.CreateDirectory(dcpDir);
         File.WriteAllText(Path.Combine(dcpDir, "placeholder"), "dcp");
+    }
+
+    private sealed class FakeInstallPathResolver(InstallMode mode, string prefix) : IInstallPathResolver
+    {
+        public (InstallMode Mode, string Prefix) Resolve(string binaryPath) => (mode, prefix);
     }
 }

@@ -3,8 +3,10 @@
 
 using System.Formats.Tar;
 using System.IO.Compression;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Bundles;
 using Aspire.Cli.Layout;
+using Aspire.Cli.Tests.Acquisition.Fakes;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
@@ -209,6 +211,9 @@ public class BundleServiceIntegrationTests(ITestOutputHelper outputHelper)
             Path.Combine(layoutRoot, "linux-x64"),
             BundleDiscovery.GetExecutableFileName("aspire"),
             "native-aot-cli");
+        // Write Mode A sidecar at layoutRoot so InstallPathResolver returns (Mode.A, layoutRoot).
+        Directory.CreateDirectory(layoutRoot);
+        SidecarBuilder.ForScript().WriteTo(layoutRoot);
         var payload = CreateFakeBundlePayload();
         var provider = new TestBundlePayloadProvider(payload);
         var layoutDiscovery = new TestLayoutDiscovery(layoutRoot);
@@ -352,7 +357,7 @@ public class BundleServiceIntegrationTests(ITestOutputHelper outputHelper)
 
     private static BundleService CreateService(TestBundlePayloadProvider provider, ILayoutDiscovery layoutDiscovery, string? processPathOverride = null)
     {
-        return new BundleService(provider, layoutDiscovery, NullLogger<BundleService>.Instance)
+        return new BundleService(provider, layoutDiscovery, new InstallPathResolver(), NullLogger<BundleService>.Instance)
         {
             ProcessPathOverride = processPathOverride
         };
