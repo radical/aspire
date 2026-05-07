@@ -326,8 +326,26 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
 
                 var configuredChannelName = parseResult.GetValue(_channelOption);
 
+                // When the running CLI was built on a local-build channel (pr-*, run-*, local) and
+                // the matching hive-backed channel is registered, prefer it over the Implicit
+                // (nuget.org) channel. Without this, `aspire new` resolves the template version
+                // from nuget.org and yields the latest stable (e.g. 13.2.4), which is then routed
+                // by Package Source Mapping to the PR hive and rejected because the hive only
+                // contains the corresponding prerelease (e.g. 13.4.0-pr.16820.gSHA). Aligning the
+                // selected channel with the CLI's own build channel keeps the version-range
+                // semantics coherent end-to-end (build → execution context → hive → restore).
+                PackageChannel? localBuildChannel = null;
+                if (string.IsNullOrWhiteSpace(configuredChannelName) &&
+                    VersionHelper.IsLocalBuildChannel(ExecutionContext.Channel))
+                {
+                    localBuildChannel = channels.FirstOrDefault(c =>
+                        string.Equals(c.Name, ExecutionContext.Channel, StringComparison.OrdinalIgnoreCase));
+                }
+
                 var selectedChannel = string.IsNullOrWhiteSpace(configuredChannelName)
-                    ? channels.FirstOrDefault(c => c.Type is PackageChannelType.Implicit) ?? channels.FirstOrDefault()
+                    ? localBuildChannel
+                        ?? channels.FirstOrDefault(c => c.Type is PackageChannelType.Implicit)
+                        ?? channels.FirstOrDefault()
                     : channels.FirstOrDefault(c => string.Equals(c.Name, configuredChannelName, StringComparison.OrdinalIgnoreCase));
 
                 if (selectedChannel is null)
