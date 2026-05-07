@@ -96,9 +96,8 @@ jobs:
                 $channel = 'stable'
               } elseif ($sourceBranch -match '^refs/heads/(release|internal/release)/') {
                 $channel = 'staging'
-              } elseif ($sourceBranch -eq 'refs/heads/main') {
-                $channel = 'daily'
               } else {
+                # main and any other branch fall through to daily
                 $channel = 'daily'
               }
 
