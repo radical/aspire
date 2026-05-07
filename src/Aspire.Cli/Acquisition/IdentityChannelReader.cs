@@ -12,14 +12,15 @@ namespace Aspire.Cli.Acquisition;
 /// <remarks>
 /// The channel is baked into the CLI assembly at build time as
 /// <c>[AssemblyMetadata("AspireCliChannel", "&lt;value&gt;")]</c>. The value is
-/// one of <c>stable</c>, <c>staging</c>, <c>daily</c>, or <c>pr</c>.
+/// one of <c>stable</c>, <c>staging</c>, <c>daily</c>, <c>pr</c>, or <c>local</c>
+/// (the default for developer builds with no <c>/p:AspireCliChannel=</c> override).
 /// </remarks>
 internal interface IIdentityChannelReader
 {
     /// <summary>
     /// Returns the channel baked into the CLI assembly.
     /// </summary>
-    /// <returns>One of <c>stable</c>, <c>staging</c>, <c>daily</c>, or <c>pr</c>.</returns>
+    /// <returns>One of <c>stable</c>, <c>staging</c>, <c>daily</c>, <c>pr</c>, or <c>local</c>.</returns>
     /// <exception cref="InvalidOperationException">
     /// Thrown when the <c>AspireCliChannel</c> assembly metadata is missing or empty.
     /// </exception>
@@ -91,7 +92,7 @@ internal sealed class IdentityChannelReader : IIdentityChannelReader
         {
             throw new InvalidOperationException(
                 $"Assembly metadata '{ChannelMetadataKey}' is missing or empty on '{_assembly.GetName().Name}'. " +
-                "The CLI must be built with /p:AspireCliChannel=<channel> (one of stable, staging, daily, pr).");
+                "The CLI must be built with /p:AspireCliChannel=<channel> (one of stable, staging, daily, pr, local).");
         }
 
         return metadata.Value;

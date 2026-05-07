@@ -19,7 +19,7 @@ namespace Aspire.Cli.Tests;
 /// </summary>
 public class CliBootstrapTests
 {
-    private static readonly string[] s_validChannels = ["stable", "staging", "daily", "pr"];
+    private static readonly string[] s_validChannels = ["stable", "staging", "daily", "pr", "local"];
 
     private static async Task<IHost> BuildHostAsync()
     {

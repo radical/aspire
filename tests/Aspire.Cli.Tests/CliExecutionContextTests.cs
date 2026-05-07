@@ -16,7 +16,7 @@ public class CliExecutionContextTests
     }
 
     [Fact]
-    public void Channel_DefaultsToDaily_WhenNotSpecified()
+    public void Channel_DefaultsToLocal_WhenNotSpecified()
     {
         var workingDir = new DirectoryInfo(AppContext.BaseDirectory);
         var hivesDir = new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, "hives"));
@@ -26,7 +26,7 @@ public class CliExecutionContextTests
 
         var ctx = new CliExecutionContext(workingDir, hivesDir, cacheDir, sdksDir, logsDir, "test.log");
 
-        Assert.Equal("daily", ctx.Channel);
+        Assert.Equal("local", ctx.Channel);
         Assert.Null(ctx.PrNumber);
     }
 

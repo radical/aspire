@@ -7,7 +7,7 @@ namespace Aspire.Cli.Tests;
 
 public class AssemblyMetadataChannelTests
 {
-    private static readonly string[] s_validChannels = ["stable", "staging", "daily", "pr"];
+    private static readonly string[] s_validChannels = ["stable", "staging", "daily", "pr", "local"];
 
     [Fact]
     public void AspireCliChannel_AssemblyMetadata_IsOneOfExpectedValues()

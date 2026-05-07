@@ -20,11 +20,11 @@
 
        Forward the same $(AspireCliChannel) the production csproj reads so the test host
        and the production assembly stay in lockstep: under /p:AspireCliChannel=stable both pick up
-       "stable"; under no override both default to "daily" via the production csproj's fallback.
+       "stable"; under no override both default to "local" via the production csproj's fallback.
        Tests relying on comparing context.Channel against the entry assembly's metadata depend on
        this lockstep. -->
   <PropertyGroup>
-    <AspireCliChannel Condition="'$(AspireCliChannel)' == ''">daily</AspireCliChannel>
+    <AspireCliChannel Condition="'$(AspireCliChannel)' == ''">local</AspireCliChannel>
   </PropertyGroup>
   <ItemGroup>
     <AssemblyMetadata Include="AspireCliChannel" Value="$(AspireCliChannel)" />

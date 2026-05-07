@@ -16,6 +16,7 @@ public class IdentityChannelReaderTests
     [InlineData("staging")]
     [InlineData("daily")]
     [InlineData("pr")]
+    [InlineData("local")]
     public void ReadChannel_AssemblyHasMetadataForKnownChannel_ReturnsValue(string channel)
     {
         var assembly = BuildFakeAssemblyWithChannelMetadata($"FakeCli_{channel}", channel);
