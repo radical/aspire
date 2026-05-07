@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Reflection;
+using Aspire.Cli.Packaging;
 
 namespace Aspire.Cli.Tests;
 
@@ -20,5 +21,20 @@ public class AssemblyMetadataChannelTests
 
         Assert.NotNull(metadata);
         Assert.Contains(metadata.Value, s_validChannels);
+    }
+
+    [Fact]
+    public void CliAssembly_BakesChannel_AsLocal_MatchingCsprojDefault()
+    {
+        var assembly = typeof(Aspire.Cli.Program).Assembly;
+
+        var metadata = assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "AspireCliChannel");
+
+        Assert.NotNull(metadata);
+        // Exact equality (not set-membership) — guards csproj default; see ocean-pr1-design-review.md F1 / fix-review C2.
+        // The membership test above passes for "daily" too; this one fails if the csproj default reverts.
+        Assert.Equal(PackageChannelNames.Local, metadata.Value);
     }
 }
