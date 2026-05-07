@@ -419,11 +419,12 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
             return null;
         }
 
-        // Skip PSM for the local identity hive — it exists for dev convenience
-        // but should not restrict NuGet resolution (restores pre-Wave-7 behavior).
-        // PR hives (pr-*) retain PSM because they represent isolated package sets.
-        if (string.Equals(channelName, _executionContext.IdentityChannel, StringComparison.OrdinalIgnoreCase)
-            && !channelName.StartsWith("pr-", StringComparison.OrdinalIgnoreCase))
+        // Skip PSM only for the local-build identity hive — it exists for dev convenience
+        // (a locally-built CLI consuming its own per-run hive) and should not restrict NuGet
+        // resolution (restores pre-Wave-7 behavior). For all other identity channels (stable,
+        // staging, daily, pr-*) PSM must emit so restore honors the channel's package source
+        // mappings even when channelName == IdentityChannel.
+        if (string.Equals(_executionContext.IdentityChannel, PackageChannelNames.Local, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }

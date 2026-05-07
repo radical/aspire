@@ -249,14 +249,16 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         }
     }
 
-    // PSM-guard cross-product tests (Ocean Wave 9 Part 2 follow-up / commit ed36ba4c30)
-    // Guard predicate: channelName == IdentityChannel && !channelName.StartsWith("pr-")
-    // When guard fires → TryCreateTemporaryNuGetConfigAsync returns null (no PSM for local-identity hive).
-    // PR hives (pr-*) and non-matching channels always get PSM.
+    // PSM-guard cross-product tests.
+    // Guard predicate (post-H2 fix): IdentityChannel == "local"
+    //   → fires only for locally-built CLIs; TryCreateTemporaryNuGetConfigAsync returns null.
+    // For every other identity channel (stable, staging, daily, pr) PSM must emit so restore
+    // honors the channel's package source mappings, even when channelName == IdentityChannel.
 
     [Fact]
-    public async Task TryCreateTemporaryNuGetConfig_LocalIdentityChannel_NonPrName_ReturnsNull()
+    public async Task TryCreateTemporaryNuGetConfig_LocalIdentityChannel_LocalChannelName_ReturnsNull()
     {
+        // Locally-built CLI consuming its own local hive — only case the guard should fire.
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         var executionContext = CreateContextWithChannel("local");
@@ -268,16 +270,17 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task TryCreateTemporaryNuGetConfig_LocalIdentityChannel_PrChannelName_ReturnsConfig()
+    public async Task TryCreateTemporaryNuGetConfig_LocalIdentityChannel_PrChannelName_ReturnsNull()
     {
+        // IdentityChannel == "local" — guard always fires regardless of the requested channel.
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         var executionContext = CreateContextWithChannel("local");
         var server = CreateServerWithExplicitChannel(workspace, "pr-12345", executionContext);
 
-        using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(server, "pr-12345");
+        var result = await InvokeTryCreateTemporaryNuGetConfigAsync(server, "pr-12345");
 
-        Assert.NotNull(result);
+        Assert.Null(result);
     }
 
     [Fact]
@@ -294,25 +297,26 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task TryCreateTemporaryNuGetConfig_DailyIdentityChannel_DailyChannel_ReturnsNull()
+    public async Task TryCreateTemporaryNuGetConfig_DailyIdentityChannel_DailyChannel_ReturnsConfig()
     {
-        // channelName == IdentityChannel ("daily" == "daily") and not pr-* → guard fires → null.
-        // This is the same predicate as local-on-local; the guard is not literal-"local"-only.
+        // Post-H2: a 'daily' CLI consuming the 'daily' channel must still get PSM. The previous
+        // broader guard (channelName == IdentityChannel && !pr-*) silently dropped PSM here,
+        // letting restore fall back to ambient sources — exactly the channel-name bug class
+        // the H2 fix closes. Identity == "daily" != "local" → guard MUST NOT fire.
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         var executionContext = CreateContextWithChannel("daily");
         var server = CreateServerWithExplicitChannel(workspace, "daily", executionContext);
 
-        var result = await InvokeTryCreateTemporaryNuGetConfigAsync(server, "daily");
+        using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(server, "daily");
 
-        Assert.Null(result);
+        Assert.NotNull(result);
     }
 
     [Fact]
     public async Task TryCreateTemporaryNuGetConfig_PrIdentityChannel_PrChannelName_ReturnsConfig()
     {
-        // A developer running a pr-16820 CLI (IdentityChannel = "pr") installs a pr-12345 hive.
-        // "pr-12345" != "pr" → channelName != IdentityChannel → guard does not fire → PSM emits.
+        // PR-build CLI installing a different PR's hive — guard does not fire (identity != "local").
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         var executionContext = CreateContextWithChannel("pr");

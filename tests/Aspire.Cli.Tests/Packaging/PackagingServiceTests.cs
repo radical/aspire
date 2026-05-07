@@ -992,11 +992,12 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         const string pinnedVersion = "13.4.0-pr.16820.g1a99aa46";
         File.WriteAllText(Path.Combine(runPackagesDir.FullName, $"Aspire.ProjectTemplates.{pinnedVersion}.nupkg"), string.Empty);
 
-        // CLI binary built with default channel ("daily")
+        // CLI binary built with non-local channel ("daily") — explicit so the test stays
+        // accurate even as the CliExecutionContext default channel evolves.
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir,
             new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")),
             new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")),
-            "test.log");
+            "test.log", channel: "daily");
 
         var packagingService = new PackagingService(executionContext, new FakeNuGetPackageCache(), new TestFeatures(), new ConfigurationBuilder().Build(), NullLogger<PackagingService>.Instance);
 
