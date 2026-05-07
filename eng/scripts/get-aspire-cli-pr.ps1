@@ -24,7 +24,7 @@
     Mutually exclusive with PRNumber and WorkflowRunId.
 
 .PARAMETER HiveLabel
-    Override the NuGet hive label (default: pr-PRNUMBER, run-RUNID, or run-GITHUB_RUN_ID for LocalDir).
+    Override the NuGet hive label (default: pr-PRNUMBER, run-RUNID, or local for LocalDir).
 
 .PARAMETER InstallPath
     Directory prefix to install (default: $HOME/.aspire on Unix, %USERPROFILE%\.aspire on Windows)
@@ -109,7 +109,7 @@ param(
     [Parameter(HelpMessage = "Use pre-downloaded artifacts from a local directory instead of downloading from GitHub")]
     [string]$LocalDir = "",
 
-    [Parameter(HelpMessage = "Override the NuGet hive label (default: pr-<PR>, run-<RUN_ID>, or local when GITHUB_RUN_ID is unset)")]
+    [Parameter(HelpMessage = "Override the NuGet hive label (default: pr-<PR>, run-<RUN_ID>, or local for --LocalDir)")]
     [string]$HiveLabel = "",
 
     [Parameter(HelpMessage = "Directory prefix to install")]
@@ -1268,8 +1268,6 @@ function Start-InstallFromLocalDir {
     $cliBinDir = Join-Path $resolvedInstallPrefix "bin"
     $resolvedHiveLabel = if ($HiveLabel) {
         $HiveLabel
-    } elseif ($env:GITHUB_RUN_ID) {
-        "run-$($env:GITHUB_RUN_ID)"
     } else {
         "local"
     }
