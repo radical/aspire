@@ -36,13 +36,26 @@ echo "=== Extracting bundle ==="
 
 # Set up NuGet hive
 echo "=== Setting up NuGet package hive ==="
-HIVE_DIR="$ASPIRE_HOME/hives/local/packages"
-mkdir -p "$HIVE_DIR"
 
 SHIPPING_DIR="$NUGETS_DIR/Release/Shipping"
 if [ ! -d "$SHIPPING_DIR" ]; then
     SHIPPING_DIR="$NUGETS_DIR"
 fi
+
+# Auto-detect PR identity from .nupkg filenames (e.g. "Aspire.Cli.13.4.0-pr.16820.g3703c5c4.nupkg")
+# so PR-built packages land in the same hive the CLI's CliExecutionContext.Channel resolves to
+# ("pr-<N>"). Falls back to "local" for true local-dev builds.
+HIVE_LABEL="local"
+SAMPLE_NUPKG=$(find "$SHIPPING_DIR" "$NUGETS_RID_DIR" -maxdepth 4 -name "Aspire.Cli.*.nupkg" 2>/dev/null | head -1)
+if [ -n "$SAMPLE_NUPKG" ]; then
+    SUFFIX=$(basename "$SAMPLE_NUPKG" | sed -nE 's/.*-(pr\.[0-9]+\.[0-9a-g]+).*\.nupkg$/\1/p')
+    if [[ "$SUFFIX" =~ ^pr\.([0-9]+)\.[0-9a-g]+$ ]]; then
+        HIVE_LABEL="pr-${BASH_REMATCH[1]}"
+    fi
+fi
+HIVE_DIR="$ASPIRE_HOME/hives/$HIVE_LABEL/packages"
+echo "  Using hive label: $HIVE_LABEL"
+mkdir -p "$HIVE_DIR"
 
 if [ -d "$SHIPPING_DIR" ]; then
     find "$SHIPPING_DIR" -name "*.nupkg" -exec cp {} "$HIVE_DIR/" \;

@@ -1269,7 +1269,20 @@ function Start-InstallFromLocalDir {
     $resolvedHiveLabel = if ($HiveLabel) {
         $HiveLabel
     } else {
-        "local"
+        # Auto-detect PR identity from .nupkg filenames (e.g. "13.4.0-pr.16820.g3703c5c4")
+        # so PR-built packages land in the same hive the CLI's CliExecutionContext.Channel
+        # resolves to ("pr-<N>"). Falls back to "local" for true local-dev builds.
+        $detectedLabel = "local"
+        try {
+            $detectedSuffix = Get-VersionSuffixFromPackages -DownloadDir $LocalDirPath
+            if ($detectedSuffix -match '^pr\.(\d+)\.[0-9a-g]+$') {
+                $detectedLabel = "pr-$($Matches[1])"
+            }
+        }
+        catch {
+            # No PR-style packages in the local dir; keep "local".
+        }
+        $detectedLabel
     }
     $nugetHiveDir = Join-Path $resolvedInstallPrefix "hives" $resolvedHiveLabel "packages"
 

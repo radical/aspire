@@ -1018,7 +1018,16 @@ install_from_local_dir() {
     if [[ -n "$HIVE_LABEL" ]]; then
         hive_label="$HIVE_LABEL"
     else
-        hive_label="local"
+        # Auto-detect PR identity from .nupkg filenames (e.g. "13.4.0-pr.16820.g3703c5c4")
+        # so PR-built packages land in the same hive the CLI's CliExecutionContext.Channel
+        # resolves to ("pr-<N>"). Falls back to "local" for true local-dev builds.
+        local detected_suffix
+        if detected_suffix=$(extract_version_suffix_from_packages "$local_dir") \
+            && [[ "$detected_suffix" =~ ^pr\.([0-9]+)\.[0-9a-g]+$ ]]; then
+            hive_label="pr-${BASH_REMATCH[1]}"
+        else
+            hive_label="local"
+        fi
     fi
     local nuget_hive_dir="$INSTALL_PREFIX/hives/$hive_label/packages"
 
