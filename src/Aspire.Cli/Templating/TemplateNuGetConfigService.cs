@@ -154,9 +154,31 @@ internal sealed class TemplateNuGetConfigService(
             var matchingChannel = allChannels.FirstOrDefault(c => string.Equals(c.Name, channelName, StringComparison.OrdinalIgnoreCase));
             if (matchingChannel is null)
             {
-                throw new ChannelNotFoundException($"No channel found matching '{channelName}'. Valid options are: {string.Join(", ", allChannels.Select(c => c.Name))}");
+                // A locally-built CLI bakes channel="local" into its assembly metadata, but the
+                // matching ~/.aspire/hives/local hive only exists if the developer installed the
+                // build via the dogfood script. On a clean machine the hive is absent and the
+                // PackagingService produces no "local" channel, which would otherwise fail any
+                // caller that forwards CliExecutionContext.Channel as an explicit override
+                // (e.g. `aspire init`). Treat this exact case as a request for the implicit
+                // channel — semantically a CLI with no local hive is just a CLI that uses the
+                // ambient NuGet configuration. This is NOT a global-channel fallback (the
+                // anti-pattern PR1 removed): the implicit channel is the CLI's own no-channel
+                // default, not a value read from any settings file.
+                if (string.Equals(channelName, PackageChannelNames.Local, StringComparison.OrdinalIgnoreCase))
+                {
+                    var implicitChannel = allChannels.FirstOrDefault(c => c.Type is PackageChannelType.Implicit)
+                        ?? throw new ChannelNotFoundException($"No channel found matching '{channelName}' and no implicit channel is registered. Valid options are: {string.Join(", ", allChannels.Select(c => c.Name))}");
+                    channels = new[] { implicitChannel };
+                }
+                else
+                {
+                    throw new ChannelNotFoundException($"No channel found matching '{channelName}'. Valid options are: {string.Join(", ", allChannels.Select(c => c.Name))}");
+                }
             }
-            channels = new[] { matchingChannel };
+            else
+            {
+                channels = new[] { matchingChannel };
+            }
         }
         else
         {

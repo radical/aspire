@@ -969,6 +969,97 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(ExitCodeConstants.Success, exitCode);
     }
 
+    /// <summary>
+    /// T-B1 (Wave-11 review hardening, fresh-machine regression). On a developer machine that
+    /// has never used Aspire, <c>~/.aspire/hives/</c> does not exist (so no per-hive channels
+    /// are registered). A locally-built CLI bakes <c>local</c> as its identity channel via
+    /// <c>[AssemblyMetadata("AspireCliChannel", "local")]</c>, and <see cref="CliExecutionContext.Channel"/>
+    /// returns that value verbatim. <c>aspire init</c> currently passes
+    /// <see cref="CliExecutionContext.Channel"/> as the channel-override into
+    /// <c>TemplateNuGetConfigService.ResolveTemplatePackageAsync</c>, which name-matches against
+    /// the channels produced by <see cref="PackagingService.GetChannelsAsync"/>: <c>default</c>
+    /// (implicit), <c>stable</c>, <c>daily</c>, optional <c>staging</c>, and one entry per hive
+    /// directory. With no <c>local</c> hive on disk, the lookup throws
+    /// <see cref="Aspire.Cli.Exceptions.ChannelNotFoundException"/> and clean-machine <c>aspire init</c> fails.
+    ///
+    /// Expected behavior (pinned by this test): when the running CLI's identity channel is
+    /// <c>local</c> AND no matching named channel is registered, init MUST fall back to the
+    /// implicit channel rather than throwing. This mirrors how the <c>local</c> channel
+    /// gracefully degrades to public-feed package resolution when no local hive has been
+    /// scaffolded yet.
+    ///
+    /// If Linus's B1 fix lands as a different shape (e.g., explicit "no channel found, surface
+    /// friendly error" with <see cref="ExitCodeConstants.FailedToInstallTemplates"/>), this test
+    /// will need to be flipped to assert that exit code; the design intent — "no silent
+    /// ChannelNotFoundException on a clean machine" — stays the same.
+    /// </summary>
+    [Fact]
+    public async Task InitCommand_OnLocalChannelCli_WithNoLocalHive_FallsBackToImplicitChannel()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var solutionFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "Test.sln"));
+        File.WriteAllText(solutionFile.FullName, "Fake solution file");
+
+        // Simulate a fresh machine: hives directory does not exist, no per-hive channels.
+        var hivesDir = new DirectoryInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "hives"));
+        Assert.False(hivesDir.Exists, "Test precondition: hives directory must not exist on a fresh machine.");
+
+        string? capturedTemplateVersion = null;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            // Pin the running CLI's identity channel to "local" — the value baked into a CLI
+            // built without an explicit /p:AspireCliChannel= override.
+            options.CliExecutionContextFactory = _ =>
+                BuildExecutionContext(options.WorkingDirectory, channel: "local", prNumber: null);
+
+            options.PackagingServiceFactory = _ =>
+            {
+                // Only the implicit channel is registered — no `local` named channel, no PR hives.
+                // This matches what PackagingService.GetChannelsAsync returns on a clean machine
+                // for a CLI whose channel is `local` (where stable/daily/staging are also present
+                // but irrelevant — they don't match the `local` channel name).
+                var fakeCache = new FakeNuGetPackageCache
+                {
+                    GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
+                        Task.FromResult<IEnumerable<NuGetPackageCli>>(
+                            [new NuGetPackageCli { Id = "Aspire.ProjectTemplates", Source = "nuget.org", Version = "13.3.0" }])
+                };
+                var implicitChannel = PackageChannel.CreateImplicitChannel(fakeCache);
+                return new TestPackagingService
+                {
+                    GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([implicitChannel])
+                };
+            };
+
+            options.DotNetCliRunnerFactory = _ =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.InstallTemplateAsyncCallback = (_, version, _, _, _, _, _) =>
+                {
+                    capturedTemplateVersion = version;
+                    return (0, version);
+                };
+                runner.NewProjectAsyncCallback = (_, _, outputPath, _, _) =>
+                {
+                    Directory.CreateDirectory(outputPath);
+                    return 0;
+                };
+                return runner;
+            };
+        });
+
+        var serviceProvider = services.BuildServiceProvider();
+        var initCommand = serviceProvider.GetRequiredService<InitCommand>();
+
+        var parseResult = initCommand.Parse("init");
+        var exitCode = await parseResult.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.Equal("13.3.0", capturedTemplateVersion);
+    }
+
     private static CliExecutionContext CreateExecutionContextForChannel(DirectoryInfo workingDirectory, string contextChannel)
     {
         if (contextChannel.StartsWith("pr-", StringComparison.Ordinal) &&

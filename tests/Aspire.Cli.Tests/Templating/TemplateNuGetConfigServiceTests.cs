@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Reflection;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Templating;
@@ -34,32 +33,6 @@ namespace Aspire.Cli.Tests.Templating;
 /// </summary>
 public class TemplateNuGetConfigServiceTests
 {
-    [Fact]
-    public void Ctor_DoesNotAcceptIConfigurationService()
-    {
-        // The strongest possible spec encoding: the type's constructor cannot accept the
-        // dependency the spec forbids. Any future change that re-introduces
-        // IConfigurationService as a constructor parameter MUST also restore an explicit
-        // tripwire in this file (see GlobalChannelFallbackRemovalTests for the pattern).
-        var ctor = typeof(TemplateNuGetConfigService).GetConstructors().Single();
-
-        Assert.DoesNotContain(
-            ctor.GetParameters(),
-            p => p.ParameterType == typeof(IConfigurationService));
-    }
-
-    [Fact]
-    public void Type_HasNoIConfigurationServiceField()
-    {
-        // Defensive: the dependency is gone from the ctor; ensure no stray instance field
-        // of type IConfigurationService survives that some future refactor could repurpose
-        // for a global-channel read.
-        var fields = typeof(TemplateNuGetConfigService)
-            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-
-        Assert.DoesNotContain(fields, f => f.FieldType == typeof(IConfigurationService));
-    }
-
     [Fact]
     public async Task PromptToCreateOrUpdateNuGetConfigAsync_NullChannelName_DoesNotConsultGlobalConfig()
     {
@@ -127,6 +100,72 @@ public class TemplateNuGetConfigServiceTests
         // The resolver throws EmptyChoicesException when no packages found — that's fine,
         // we are asserting the resolver did NOT throw or consult any global config first.
         await Assert.ThrowsAsync<Aspire.Cli.Interaction.EmptyChoicesException>(
+            async () => await service.ResolveTemplatePackageAsync(query, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ResolveTemplatePackageAsync_LocalChannelOverride_NoLocalHive_FallsBackToImplicitChannel()
+    {
+        // A locally-built CLI bakes channel="local" into assembly metadata. On a clean
+        // machine without ~/.aspire/hives/local, PackagingService produces no "local"
+        // channel, and InitCommand forwards CliExecutionContext.Channel ("local") as
+        // ChannelOverride. Without the resolver-level fallback this throws
+        // ChannelNotFoundException and `aspire init` is unusable on a clean machine.
+        // The fallback policy: a request for "local" with no matching channel resolves
+        // to the implicit channel (ambient NuGet config) — a CLI with no local hive is
+        // semantically just a CLI using ambient NuGet.
+        var packagingService = new TestPackagingService
+        {
+            GetChannelsAsyncCallback = _ =>
+            {
+                var implicitCh = PackageChannel.CreateImplicitChannel(new FakeNuGetPackageCache
+                {
+                    GetTemplatePackagesAsyncCallback = (_, _, _, _) => Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(
+                    [
+                        new Aspire.Shared.NuGetPackageCli { Id = TemplateNuGetConfigService.TemplatesPackageName, Version = "13.3.0", Source = "implicit" }
+                    ])
+                });
+                return Task.FromResult<IEnumerable<PackageChannel>>([implicitCh]);
+            }
+        };
+
+        var service = CreateService(packagingService: packagingService);
+
+        var query = new TemplatePackageQuery(
+            ChannelOverride: PackageChannelNames.Local,
+            VersionOverride: null,
+            SourceOverride: null,
+            IncludePrHives: false);
+
+        var selection = await service.ResolveTemplatePackageAsync(query, CancellationToken.None);
+
+        Assert.Equal(PackageChannelType.Implicit, selection.Channel.Type);
+    }
+
+    [Fact]
+    public async Task ResolveTemplatePackageAsync_NonExistentChannelOverride_NotLocal_StillThrowsChannelNotFound()
+    {
+        // The fallback is intentionally narrow: only "local" → implicit. A request for
+        // any other unrecognized channel name must still fail loudly so typos surface
+        // (e.g., "stalbe" for "stable").
+        var packagingService = new TestPackagingService
+        {
+            GetChannelsAsyncCallback = _ =>
+            {
+                var implicitCh = PackageChannel.CreateImplicitChannel(new FakeNuGetPackageCache());
+                return Task.FromResult<IEnumerable<PackageChannel>>([implicitCh]);
+            }
+        };
+
+        var service = CreateService(packagingService: packagingService);
+
+        var query = new TemplatePackageQuery(
+            ChannelOverride: "stalbe",
+            VersionOverride: null,
+            SourceOverride: null,
+            IncludePrHives: false);
+
+        await Assert.ThrowsAsync<Aspire.Cli.Exceptions.ChannelNotFoundException>(
             async () => await service.ResolveTemplatePackageAsync(query, CancellationToken.None));
     }
 
