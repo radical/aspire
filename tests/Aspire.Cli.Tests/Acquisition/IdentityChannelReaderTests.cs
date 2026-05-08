@@ -105,11 +105,11 @@ public class IdentityChannelReaderTests
         Assert.Contains(ChannelMetadataKey, ex.Message, StringComparison.Ordinal);
     }
 
-    // Spec-derived: GitHub Actions PR builds emit `InformationalVersion` of the form
-    // `<base>-pr.<N>.g<SHA>(+<sha>)?` (see `.github/workflows/ci.yml` /
-    // `/p:VersionSuffix=pr.$PR_NUMBER.g$SHORT_SHA`). The parser MUST accept that real
-    // shape and extract <N>. The legacy no-separator `-pr<N>.<sha>` form is also
-    // accepted for back-compat with assemblies built from local dev shells.
+    // GitHub Actions PR builds emit `InformationalVersion` of the form
+    // `<base>-pr.<N>.g<SHA>(+<sha>)?` (set via `/p:VersionSuffix=pr.$PR_NUMBER.g$SHORT_SHA`).
+    // The parser MUST accept that real shape and extract <N>. The legacy no-separator
+    // `-pr<N>.<sha>` form is also accepted for back-compat with assemblies built from
+    // local dev shells.
     [Theory]
     [InlineData("0.0.0-pr12345.deadbeef", 12345)]               // legacy no-separator
     [InlineData("0.0.0-pr.5", 5)]                                // CI shape, short

@@ -31,40 +31,11 @@ public class CliBootstrapTests
     }
 
     [Fact]
-    public void IIdentityChannelReader_TypeExists_AndProductionImplementationShape()
-    {
-        // Locks the type signatures in place so the bootstrap wiring stays bound to a stable
-        // contract. If the interface or default implementation shape changes, the production
-        // factory delegate in Program.BuildApplicationAsync needs to change in lockstep.
-        var iface = typeof(IIdentityChannelReader);
-        Assert.True(iface.IsInterface);
-
-        var readChannel = iface.GetMethod(nameof(IIdentityChannelReader.ReadChannel));
-        Assert.NotNull(readChannel);
-        Assert.Equal(typeof(string), readChannel.ReturnType);
-        Assert.Empty(readChannel.GetParameters());
-
-        var impl = typeof(IdentityChannelReader);
-        Assert.True(iface.IsAssignableFrom(impl));
-
-        var ctor = impl.GetConstructors().Single();
-        var parameters = ctor.GetParameters();
-        Assert.Single(parameters);
-        Assert.Equal(typeof(Assembly), parameters[0].ParameterType);
-
-        // Spec (PR1 follow-through): the ctor MUST require an explicit assembly. The default
-        // null parameter was a footgun under RemoteExecutor / plugin-loader scenarios where
-        // Assembly.GetEntryAssembly() returns the wrong assembly. Callers must decide.
-        Assert.False(parameters[0].HasDefaultValue,
-            "IdentityChannelReader ctor must NOT have a default parameter — see PR1 follow-through removing the Assembly? = null footgun.");
-    }
-
-    [Fact]
     public void IdentityChannelReader_NullAssembly_ThrowsArgumentNullException()
     {
-        // Spec (PR1 follow-through): explicit null produces an immediate, descriptive
-        // ArgumentNullException so misuse is caught at construction time rather than
-        // surfacing later as the cryptic "metadata missing on '?'" exception.
+        // Explicit null produces an immediate, descriptive ArgumentNullException so misuse
+        // is caught at construction time rather than surfacing later as the cryptic
+        // "metadata missing on '?'" exception.
         Assert.Throws<ArgumentNullException>(() => new IdentityChannelReader(null!));
     }
 

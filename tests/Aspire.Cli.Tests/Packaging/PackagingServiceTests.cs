@@ -1095,7 +1095,7 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task GetChannelsAsync_LocalHive_EmptyDirectory_ReturnsChannelWithNullPinnedVersion()
     {
-        // G1 (corrupted/partial state): the user has `~/.aspire/hives/local/` on disk but no
+        // Partial-state shape: the user has `~/.aspire/hives/local/` on disk but no
         // packages have been deposited yet (e.g., a partially-completed local build, or an
         // install script that created the layout but failed before staging packages).
         // Pinning behavior:
@@ -1138,7 +1138,7 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task GetChannelsAsync_LocalHive_EmptyPackagesDirectory_ReturnsChannelWithNullPinnedVersion()
     {
-        // G1 variant: `~/.aspire/hives/local/packages/` exists but contains zero `*.nupkg` files.
+        // Partial-state variant: `~/.aspire/hives/local/packages/` exists but contains zero `*.nupkg` files.
         // GetLocalHivePinnedVersion returns null because no FindHighestVersion lookup matches.
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var tempDir = workspace.WorkspaceRoot;

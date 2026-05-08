@@ -248,7 +248,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     // PSM-guard cross-product tests.
-    // Guard predicate (post-H2 fix): IdentityChannel == "local"
+    // Guard predicate: IdentityChannel == "local"
     //   → fires only for locally-built CLIs; TryCreateTemporaryNuGetConfigAsync returns null.
     // For every other identity channel (stable, staging, daily, pr) PSM must emit so restore
     // honors the channel's package source mappings, even when channelName == IdentityChannel.
@@ -297,10 +297,9 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task TryCreateTemporaryNuGetConfig_DailyIdentityChannel_DailyChannel_ReturnsConfig()
     {
-        // Post-H2: a 'daily' CLI consuming the 'daily' channel must still get PSM. The previous
-        // broader guard (channelName == IdentityChannel && !pr-*) silently dropped PSM here,
-        // letting restore fall back to ambient sources — exactly the channel-name bug class
-        // the H2 fix closes. Identity == "daily" != "local" → guard MUST NOT fire.
+        // A 'daily' CLI consuming the 'daily' channel must still get a per-channel NuGet config.
+        // The local-hive guard fires only when both the identity channel AND the requested
+        // channel are 'local'; with identity=='daily' the guard must not trip.
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         var executionContext = CreateContextWithChannel("daily");

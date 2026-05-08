@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Templating;
 using Aspire.Cli.Tests.Mcp;
@@ -11,36 +10,21 @@ using Aspire.Cli.Utils;
 namespace Aspire.Cli.Tests.Templating;
 
 /// <summary>
-/// Regression tests for the template NuGet config service's channel-resolution behavior.
-/// <para>
-/// <see cref="TemplateNuGetConfigService"/> MUST NOT consult
-/// <see cref="IConfigurationService.GetConfigurationAsync(string, CancellationToken)"/>
-/// (or the directory-scoped variant) to resolve the channel from any of its
-/// channel-resolving entry points:
-/// <list type="number">
-///   <item><see cref="TemplateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(string?, string, CancellationToken)"/></item>
-///   <item><see cref="TemplateNuGetConfigService.CreateOrUpdateNuGetConfigWithoutPromptAsync(string?, string, CancellationToken)"/></item>
-///   <item><see cref="TemplateNuGetConfigService.ResolveTemplatePackageAsync(TemplatePackageQuery, CancellationToken)"/></item>
-/// </list>
-/// </para>
-/// <para>
-/// The strongest spec encoding is "the dependency simply isn't there" — if
-/// <see cref="IConfigurationService"/> is not injected, no fallback can possibly
-/// occur. We assert that structurally first; a behavioral exercise of each entry
-/// point follows as defense-in-depth in case a future change re-introduces the
-/// dependency for some other purpose.
-/// </para>
+/// Channel-resolution behavior for <see cref="TemplateNuGetConfigService"/>.
+/// None of the channel-resolving entry points
+/// (<see cref="TemplateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(string?, string, CancellationToken)"/>,
+/// <see cref="TemplateNuGetConfigService.CreateOrUpdateNuGetConfigWithoutPromptAsync(string?, string, CancellationToken)"/>,
+/// <see cref="TemplateNuGetConfigService.ResolveTemplatePackageAsync(TemplatePackageQuery, CancellationToken)"/>)
+/// may resolve a channel by reading from a global identity-channel source; channel input
+/// must come from the caller-supplied argument or fall back to the implicit channel only.
 /// </summary>
 public class TemplateNuGetConfigServiceTests
 {
     [Fact]
-    public async Task PromptToCreateOrUpdateNuGetConfigAsync_NullChannelName_DoesNotConsultGlobalConfig()
+    public async Task PromptToCreateOrUpdateNuGetConfigAsync_NullChannelName_ShortCircuits()
     {
-        // Behavioral defense-in-depth: even if a future change re-introduces an
-        // IConfigurationService dependency for some other purpose, this entry point
-        // MUST short-circuit on null/whitespace channelName without consulting the
-        // global config. We assert that no exception flies and the implicit channel
-        // is not asked for any work.
+        // Null/whitespace channelName must short-circuit without consulting any
+        // ambient channel source. No exception, no implicit-channel work requested.
         var service = CreateService();
 
         await service.PromptToCreateOrUpdateNuGetConfigAsync(channelName: null, outputPath: Directory.CreateTempSubdirectory().FullName, CancellationToken.None);
@@ -49,15 +33,15 @@ public class TemplateNuGetConfigServiceTests
     }
 
     [Fact]
-    public async Task CreateOrUpdateNuGetConfigWithoutPromptAsync_NullChannelName_DoesNotConsultGlobalConfig()
+    public async Task CreateOrUpdateNuGetConfigWithoutPromptAsync_NullChannelName_ShortCircuits()
     {
         var service = CreateService();
 
         var dir = Directory.CreateTempSubdirectory();
         try
         {
-            // For null/whitespace inputs the method must short-circuit and return false
-            // without ever asking ANY config service for a channel.
+            // Null/whitespace inputs must short-circuit and return false without
+            // resolving a channel from any ambient source.
             Assert.False(await service.CreateOrUpdateNuGetConfigWithoutPromptAsync(channelName: null, outputPath: dir.FullName, CancellationToken.None));
             Assert.False(await service.CreateOrUpdateNuGetConfigWithoutPromptAsync(channelName: "", outputPath: dir.FullName, CancellationToken.None));
             Assert.False(await service.CreateOrUpdateNuGetConfigWithoutPromptAsync(channelName: "   ", outputPath: dir.FullName, CancellationToken.None));
@@ -69,13 +53,12 @@ public class TemplateNuGetConfigServiceTests
     }
 
     [Fact]
-    public async Task ResolveTemplatePackageAsync_NullChannelOverride_DoesNotConsultGlobalConfig_AndUsesImplicitOnly()
+    public async Task ResolveTemplatePackageAsync_NullChannelOverride_UsesImplicitChannelOnly()
     {
-        // When the caller does not supply an explicit channel override (--channel), the resolver
-        // MUST fall back to implicit-only channels only — never to the global
-        // ~/.aspire/aspire.config.json#channel. This test exercises the actual production codepath
-        // with a tracking packaging service that returns one implicit + one explicit channel;
-        // the resolver must request only the implicit one.
+        // No explicit ChannelOverride: the resolver picks the implicit channel only.
+        // We exercise the production codepath with a tracking packaging service so the
+        // assertion is that the resolver completes (no exception is thrown by
+        // an unexpected channel-lookup path) and only the implicit channel is in play.
         var requestedChannels = new List<PackageChannelType>();
         var packagingService = new TestPackagingService
         {
@@ -97,8 +80,10 @@ public class TemplateNuGetConfigServiceTests
             SourceOverride: null,
             IncludePrHives: false);
 
-        // The resolver throws EmptyChoicesException when no packages found — that's fine,
-        // we are asserting the resolver did NOT throw or consult any global config first.
+        // No packages were staged on the implicit channel, so the resolver throws
+        // EmptyChoicesException — that's the expected terminal state for "implicit was
+        // tried, nothing matched". The assertion is that this exception is the one that
+        // surfaces (not ChannelNotFoundException from a different lookup path).
         await Assert.ThrowsAsync<Aspire.Cli.Interaction.EmptyChoicesException>(
             async () => await service.ResolveTemplatePackageAsync(query, CancellationToken.None));
     }
@@ -187,7 +172,7 @@ public class TemplateNuGetConfigServiceTests
             CancellationToken cancellationToken)
         {
             throw new InvalidOperationException(
-                "TemplateNuGetConfigService unexpectedly entered the prompt path during a tripwire test.");
+                "TemplateNuGetConfigService unexpectedly entered the version-prompt path; this stub is wired in tests where the prompt should never be reached.");
         }
     }
 

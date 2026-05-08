@@ -162,9 +162,8 @@ internal sealed class TemplateNuGetConfigService(
                 // caller that forwards CliExecutionContext.Channel as an explicit override
                 // (e.g. `aspire init`). Treat this exact case as a request for the implicit
                 // channel — semantically a CLI with no local hive is just a CLI that uses the
-                // ambient NuGet configuration. This is NOT a global-channel fallback (the
-                // anti-pattern PR1 removed): the implicit channel is the CLI's own no-channel
-                // default, not a value read from any settings file.
+                // ambient NuGet configuration. The implicit channel is the CLI's own
+                // no-channel default, derived from ambient NuGet, not from any settings file.
                 if (string.Equals(channelName, PackageChannelNames.Local, StringComparison.OrdinalIgnoreCase))
                 {
                     var implicitChannel = allChannels.FirstOrDefault(c => c.Type is PackageChannelType.Implicit)

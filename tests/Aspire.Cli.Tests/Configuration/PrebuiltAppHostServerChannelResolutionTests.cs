@@ -14,11 +14,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aspire.Cli.Tests.Configuration;
 
 /// <summary>
-/// Behavioral guards on <see cref="PrebuiltAppHostServer"/>'s channel resolution: it must
-/// consult only per-project state (<c>aspire.config.json</c>) and return <see langword="null"/>
-/// when no per-project channel is set — never read from any global identity-channel source.
+/// Behavioral guards on <see cref="PrebuiltAppHostServer"/>'s channel resolution: it
+/// consults only per-project state (<c>aspire.config.json</c>) and returns
+/// <see langword="null"/> when no per-project channel is set.
 /// </summary>
-public class GlobalChannelFallbackRemovalTests(ITestOutputHelper outputHelper)
+public class PrebuiltAppHostServerChannelResolutionTests(ITestOutputHelper outputHelper)
 {
     [Fact]
     public void PrebuiltAppHostServer_ResolveChannelName_ReturnsNullWhenNoAspireConfigJson()
