@@ -6,6 +6,7 @@ using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Cli.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Xml.Linq;
@@ -1056,6 +1057,39 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         // Non-hosting packages must not appear
         Assert.DoesNotContain(packageList, p => p.Id == "Aspire.ProjectTemplates");
         Assert.DoesNotContain(packageList, p => p.Id == "Aspire.AppHost.Sdk");
+    }
+
+    [Fact]
+    public async Task GetChannelsAsync_LocalHive_AspireMappingPointsAtLocalDirectory_NotPublicFeed()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var tempDir = workspace.WorkspaceRoot;
+        var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
+        var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
+        var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir,
+            new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")),
+            new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")),
+            "test.log");
+
+        var localPackagesDir = new DirectoryInfo(Path.Combine(hivesDir.FullName, PackageChannelNames.Local, "packages"));
+        localPackagesDir.Create();
+        File.WriteAllText(Path.Combine(localPackagesDir.FullName, "Aspire.Hosting.13.4.0-pr.16820.g1a99aa46.nupkg"), string.Empty);
+
+        var packagingService = new PackagingService(executionContext, new FakeNuGetPackageCache(), new TestFeatures(), new ConfigurationBuilder().Build(), NullLogger<PackagingService>.Instance);
+
+        var channels = await packagingService.GetChannelsAsync().DefaultTimeout();
+        var localChannel = channels.First(c => c.Name == PackageChannelNames.Local);
+
+        Assert.NotNull(localChannel.Mappings);
+        var aspireMapping = localChannel.Mappings!.FirstOrDefault(m => m.PackageFilter == "Aspire*");
+        Assert.NotNull(aspireMapping);
+        var expectedLocalPath = localPackagesDir.FullName.Replace('\\', '/');
+        Assert.Equal(expectedLocalPath, aspireMapping.Source);
+        Assert.False(UrlHelper.IsHttpUrl(aspireMapping.Source), "Local hive Aspire* mapping must be a filesystem path, not an HTTP feed.");
+
+        var fallbackMapping = localChannel.Mappings!.FirstOrDefault(m => m.PackageFilter == PackageMapping.AllPackages);
+        Assert.NotNull(fallbackMapping);
+        Assert.Equal("https://api.nuget.org/v3/index.json", fallbackMapping.Source);
     }
 
     private sealed class FakeNuGetPackageCacheWithPackages(List<Aspire.Shared.NuGetPackageCli> packages) : INuGetPackageCache
