@@ -211,3 +211,4 @@ extension/package.nls.*.json
 local.settings.json
 diagnostics.log
 .squad/
+tags
