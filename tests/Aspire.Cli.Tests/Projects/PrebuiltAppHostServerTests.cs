@@ -166,7 +166,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             new TestDotNetCliRunner(),
             new TestDotNetSdkInstaller(),
             Aspire.Cli.Tests.Mcp.MockPackagingServiceFactory.Create(),
-            new TestConfigurationService(),
             Aspire.Cli.Tests.Mcp.TestExecutionContextFactory.CreateTestContext(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
@@ -217,7 +216,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             new TestDotNetCliRunner(),
             new TestDotNetSdkInstaller(),
             Aspire.Cli.Tests.Mcp.MockPackagingServiceFactory.Create(),
-            new TestConfigurationService(),
             Aspire.Cli.Tests.Mcp.TestExecutionContextFactory.CreateTestContext(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
@@ -367,7 +365,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             new TestDotNetCliRunner(),
             new TestDotNetSdkInstaller(),
             packagingService,
-            new TestConfigurationService(),
             executionContext,
             Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
     }
@@ -385,7 +382,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ResolveChannelName_UsesProjectLocalAspireConfig_NotGlobalChannel()
+    public async Task ResolveChannelName_UsesProjectLocalAspireConfig()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
@@ -396,11 +393,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             }
             """);
 
-        var configurationService = new TestConfigurationService
-        {
-            OnGetConfiguration = key => key == "channel" ? "pr-old" : null
-        };
-
         var nugetService = new BundleNuGetService(new NullLayoutDiscovery(), new LayoutProcessRunner(new TestProcessExecutionFactory()), new TestFeatures(), TestExecutionContextFactory.CreateTestContext(), Microsoft.Extensions.Logging.Abstractions.NullLogger<BundleNuGetService>.Instance);
         var server = new PrebuiltAppHostServer(
             workspace.WorkspaceRoot.FullName,
@@ -410,7 +402,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             new TestDotNetCliRunner(),
             new TestDotNetSdkInstaller(),
             Aspire.Cli.Tests.Mcp.MockPackagingServiceFactory.Create(),
-            configurationService,
             Aspire.Cli.Tests.Mcp.TestExecutionContextFactory.CreateTestContext(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 

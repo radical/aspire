@@ -32,7 +32,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
     private readonly IDotNetCliRunner _dotNetCliRunner;
     private readonly IDotNetSdkInstaller _sdkInstaller;
     private readonly IPackagingService _packagingService;
-    private readonly IConfigurationService _configurationService;
     private readonly CliExecutionContext _executionContext;
     private readonly ILogger _logger;
     private readonly string _workingDirectory;
@@ -50,7 +49,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
     /// <param name="dotNetCliRunner">The .NET CLI runner for building project references.</param>
     /// <param name="sdkInstaller">The SDK installer for checking .NET SDK availability.</param>
     /// <param name="packagingService">The packaging service for channel resolution.</param>
-    /// <param name="configurationService">The configuration service for reading channel settings.</param>
     /// <param name="executionContext">The CLI execution context providing identity channel information.</param>
     /// <param name="logger">The logger for diagnostic output.</param>
     public PrebuiltAppHostServer(
@@ -61,7 +59,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
         IDotNetCliRunner dotNetCliRunner,
         IDotNetSdkInstaller sdkInstaller,
         IPackagingService packagingService,
-        IConfigurationService configurationService,
         CliExecutionContext executionContext,
         ILogger logger)
     {
@@ -72,7 +69,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject
         _dotNetCliRunner = dotNetCliRunner;
         _sdkInstaller = sdkInstaller;
         _packagingService = packagingService;
-        _configurationService = configurationService;
         _executionContext = executionContext;
         _logger = logger;
 

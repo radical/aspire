@@ -29,7 +29,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
     private readonly ITemplate[] _templates;
     private readonly IFeatures _features;
     private readonly IPackagingService _packagingService;
-    private readonly IConfigurationService _configurationService;
     private readonly AgentInitCommand _agentInitCommand;
     private readonly ICliHostEnvironment _hostEnvironment;
 
@@ -82,7 +81,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
         ICliUpdateNotifier updateNotifier,
         CliExecutionContext executionContext,
         IPackagingService packagingService,
-        IConfigurationService configurationService,
         AgentInitCommand agentInitCommand,
         ICliHostEnvironment hostEnvironment,
         IConfiguration configuration)
@@ -92,7 +90,6 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
         _templateProvider = templateProvider;
         _features = features;
         _packagingService = packagingService;
-        _configurationService = configurationService;
         _agentInitCommand = agentInitCommand;
         _hostEnvironment = hostEnvironment;
 

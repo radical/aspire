@@ -14,32 +14,19 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aspire.Cli.Tests.Configuration;
 
 /// <summary>
-/// Regression tests verifying that the three readers
-/// (<see cref="DotNetBasedAppHostServerProject"/>, <see cref="PrebuiltAppHostServer"/>,
-/// <see cref="Aspire.Cli.Commands.NewCommand"/>) no longer fall back to reading
-/// the global identity-channel via <see cref="IConfigurationService.GetConfigurationAsync(string, CancellationToken)"/>.
-/// With the global writers gone, any leftover global state must be ignored —
-/// the readers must only honor per-project channel state.
+/// Behavioral guards on <see cref="PrebuiltAppHostServer"/>'s channel resolution: it must
+/// consult only per-project state (<c>aspire.config.json</c>) and return <see langword="null"/>
+/// when no per-project channel is set — never read from any global identity-channel source.
 /// </summary>
 public class GlobalChannelFallbackRemovalTests(ITestOutputHelper outputHelper)
 {
     [Fact]
-    public void PrebuiltAppHostServer_ResolveChannelName_DoesNotConsultIConfigurationService()
+    public void PrebuiltAppHostServer_ResolveChannelName_ReturnsNullWhenNoAspireConfigJson()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var appHostDirectory = workspace.CreateDirectory("apphost");
 
-        // Trip-wire: any read of the global config service explodes the test. Combined
-        // with an empty workspace (no aspire.config.json / .aspire/settings.json),
-        // ResolveChannelName() must return null without ever asking the global config.
-        var tripwireConfig = new TestConfigurationService
-        {
-            OnGetConfiguration = key => throw new InvalidOperationException(
-                $"PrebuiltAppHostServer.ResolveChannelName must not consult IConfigurationService (key='{key}'). " +
-                "Channel resolution uses per-project aspire.config.json only, never the global config.")
-        };
-
-        var server = CreateServer(appHostDirectory.FullName, tripwireConfig);
+        var server = CreateServer(appHostDirectory.FullName);
 
         var resolveChannelName = typeof(PrebuiltAppHostServer)
             .GetMethod("ResolveChannelName", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -56,18 +43,11 @@ public class GlobalChannelFallbackRemovalTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var appHostDirectory = workspace.CreateDirectory("apphost");
 
-        // Per-project channel — must be picked up; global config must not be consulted.
         var config = AspireConfigFile.LoadOrCreate(appHostDirectory.FullName);
         config.Channel = "staging";
         config.Save(appHostDirectory.FullName);
 
-        var tripwireConfig = new TestConfigurationService
-        {
-            OnGetConfiguration = key => throw new InvalidOperationException(
-                $"PrebuiltAppHostServer must not consult IConfigurationService for channel (key='{key}').")
-        };
-
-        var server = CreateServer(appHostDirectory.FullName, tripwireConfig);
+        var server = CreateServer(appHostDirectory.FullName);
 
         var resolveChannelName = typeof(PrebuiltAppHostServer)
             .GetMethod("ResolveChannelName", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -77,87 +57,7 @@ public class GlobalChannelFallbackRemovalTests(ITestOutputHelper outputHelper)
         Assert.Equal("staging", resolved);
     }
 
-    [Fact]
-    public void PrebuiltAppHostServer_ResolveChannelName_IsSynchronous()
-    {
-        // The previously-async ResolveChannelNameAsync was converted to sync
-        // ResolveChannelName because the only await (the global config read) is gone.
-        // Lock the contract so a future change doesn't quietly reintroduce an await.
-        var resolveChannelName = typeof(PrebuiltAppHostServer)
-            .GetMethod("ResolveChannelName", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(resolveChannelName);
-        Assert.Equal(typeof(string), resolveChannelName.ReturnType);
-        Assert.Empty(resolveChannelName.GetParameters());
-
-        var resolveChannelNameAsync = typeof(PrebuiltAppHostServer)
-            .GetMethod("ResolveChannelNameAsync", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.Null(resolveChannelNameAsync);
-    }
-
-    [Fact]
-    public void DotNetBasedAppHostServerProject_HoldsConfigurationServiceFieldButDoesNotReadChannelFromGlobal()
-    {
-        // The channel-read line was dropped but the IConfigurationService dependency
-        // is left in place for other (future) consumers. Lock both invariants:
-        //   1. The field is still declared (DI wiring shouldn't be broken).
-        //   2. No method body calls IConfigurationService.GetConfigurationAsync
-        //      (which is what the deleted block used).
-        var configField = typeof(DotNetBasedAppHostServerProject)
-            .GetField("_configurationService", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(configField);
-        Assert.Equal(typeof(IConfigurationService), configField.FieldType);
-
-        AssertNoIConfigurationServiceReadCalls(typeof(DotNetBasedAppHostServerProject));
-    }
-
-    [Fact]
-    public void NewCommand_HoldsConfigurationServiceFieldButDoesNotReadChannelFromGlobal()
-    {
-        var configField = typeof(Aspire.Cli.Commands.NewCommand)
-            .GetField("_configurationService", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(configField);
-        Assert.Equal(typeof(IConfigurationService), configField.FieldType);
-
-        AssertNoIConfigurationServiceReadCalls(typeof(Aspire.Cli.Commands.NewCommand));
-    }
-
-    [Fact]
-    public void PrebuiltAppHostServer_DoesNotReadChannelFromGlobalConfigurationService()
-    {
-        // PrebuiltAppHostServer keeps IConfigurationService for other purposes (e.g.
-        // SetConfigurationAsync writes elsewhere); only the channel-read fallback was
-        // removed. Use IL inspection to verify no GetConfigurationAsync /
-        // GetConfigurationFromDirectoryAsync read remains in any method body.
-        AssertNoIConfigurationServiceReadCalls(typeof(PrebuiltAppHostServer));
-    }
-
-    private static void AssertNoIConfigurationServiceReadCalls(Type type)
-    {
-        // We can't easily disassemble IL portably here without a dependency. Instead
-        // fall back to an interface-based scan: collect all fields/properties of type
-        // IConfigurationService and assert that the type's declared instance methods
-        // don't reference the *read* methods through any reflection-discoverable surface.
-        // The strongest portable signal is to verify, via a tripwire pattern in the
-        // companion behavioral test (above), that ResolveChannelName never invokes the
-        // tripwire. For coverage of the other 2 readers we lock the structural shape:
-        // the IConfigurationService field exists but is not used to read "channel".
-        //
-        // Note: this guard intentionally uses a behavioral tripwire elsewhere. Here we
-        // verify the field is present (not deleted by accident) and that the method
-        // table contains no ResolveChannelNameAsync/equivalent that would hint at a
-        // re-introduced async read.
-        var asyncResolveChannel = type
-            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
-            .FirstOrDefault(m => m.Name.Equals("ResolveChannelNameAsync", StringComparison.Ordinal));
-
-        Assert.Null(asyncResolveChannel);
-    }
-
-    private static PrebuiltAppHostServer CreateServer(string appPath, IConfigurationService configurationService)
+    private static PrebuiltAppHostServer CreateServer(string appPath)
     {
         var nugetService = new BundleNuGetService(
             new NullLayoutDiscovery(),
@@ -174,7 +74,6 @@ public class GlobalChannelFallbackRemovalTests(ITestOutputHelper outputHelper)
             new TestDotNetCliRunner(),
             new TestDotNetSdkInstaller(),
             MockPackagingServiceFactory.Create(),
-            configurationService,
             TestExecutionContextFactory.CreateTestContext(),
             NullLogger.Instance);
     }
