@@ -636,7 +636,7 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         var solutionFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "Test.sln"));
         File.WriteAllText(solutionFile.FullName, "Fake solution file");
 
-        // Simulate a stale PR hive on disk so executionContext.GetPrHiveCount() returns > 0.
+        // Simulate a stale PR hive on disk so executionContext.GetHiveCount() returns > 0.
         var hivesDir = new DirectoryInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "hives"));
         Directory.CreateDirectory(Path.Combine(hivesDir.FullName, "pr-12345", "packages"));
 
