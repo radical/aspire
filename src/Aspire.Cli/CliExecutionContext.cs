@@ -14,10 +14,11 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
 
     /// <summary>
     /// Gets the resolved hive label for the running CLI. For non-PR builds this is the
-    /// identity channel verbatim — one of <c>stable</c>, <c>staging</c>, or <c>daily</c>.
-    /// For PR builds (identity channel <c>pr</c> with a non-null <see cref="PrNumber"/>)
-    /// this is the per-PR hive label <c>pr-&lt;N&gt;</c> (for example <c>pr-16820</c>),
-    /// matching the directory layout the packaging service creates under the hives root.
+    /// identity channel verbatim — one of <c>local</c>, <c>stable</c>, <c>staging</c>, or
+    /// <c>daily</c>. For PR builds (identity channel <c>pr</c> with a non-null
+    /// <see cref="PrNumber"/>) this is the per-PR hive label <c>pr-&lt;N&gt;</c> (for example
+    /// <c>pr-16820</c>), matching the directory layout the packaging service creates under
+    /// the hives root.
     /// </summary>
     /// <remarks>
     /// This is the value reseed call sites (template factories, scaffolding, guest apphost
@@ -32,9 +33,9 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
 
     /// <summary>
     /// Gets the raw build-time identity channel value for the running CLI — one of
-    /// <c>stable</c>, <c>staging</c>, <c>daily</c>, or <c>pr</c>. Unlike <see cref="Channel"/>,
-    /// this never resolves to a per-PR hive label; the literal <c>pr</c> is returned for
-    /// every PR build regardless of <see cref="PrNumber"/>.
+    /// <c>local</c>, <c>stable</c>, <c>staging</c>, <c>daily</c>, or <c>pr</c>. Unlike
+    /// <see cref="Channel"/>, this never resolves to a per-PR hive label; the literal
+    /// <c>pr</c> is returned for every PR build regardless of <see cref="PrNumber"/>.
     /// </summary>
     public string IdentityChannel => _channel;
 
