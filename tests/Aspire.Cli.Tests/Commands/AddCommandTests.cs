@@ -1494,6 +1494,76 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.False(promptedForVersion);
         Assert.Equal(cliVersion, selectedPackageVersion);
     }
+    [Fact]
+    public async Task AddCommand_WithLocalHive_PrefersCurrentCliVersion()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var localPackagesDir = new DirectoryInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "hives", PackageChannelNames.Local, "packages"));
+        localPackagesDir.Create();
+
+        var cliVersion = VersionHelper.GetDefaultSdkVersion();
+        // Aspire.Hosting drives GetLocalHivePinnedVersion; Aspire.Hosting.Redis is the integration we add.
+        File.WriteAllText(Path.Combine(localPackagesDir.FullName, $"Aspire.Hosting.{cliVersion}.nupkg"), string.Empty);
+        File.WriteAllText(Path.Combine(localPackagesDir.FullName, $"Aspire.Hosting.Redis.{cliVersion}.nupkg"), string.Empty);
+
+        var selectedPackageVersion = string.Empty;
+        var promptedForVersion = false;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.AddCommandPrompterFactory = (sp) =>
+            {
+                var interactionService = sp.GetRequiredService<IInteractionService>();
+                var prompter = new TestAddCommandPrompter(interactionService);
+                prompter.PromptForIntegrationVersionCallback = (packages) =>
+                {
+                    promptedForVersion = true;
+                    throw new InvalidOperationException("Should not prompt when the current CLI version is available in the local hive.");
+                };
+
+                return prompter;
+            };
+
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                // The local channel enumerates .nupkg files directly and does not call package search.
+                // Implicit channel still goes through search; return a stable that should be ignored.
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, invocationOptions, cancellationToken) =>
+                {
+                    var implicitPackage = new NuGetPackage
+                    {
+                        Id = "Aspire.Hosting.Redis",
+                        Source = "implicit",
+                        Version = "13.2.2"
+                    };
+
+                    return (0, new[] { implicitPackage });
+                };
+
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, noRestore, invocationOptions, cancellationToken) =>
+                {
+                    selectedPackageVersion = packageVersion;
+                    return 0;
+                };
+
+                return runner;
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add redis");
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(0, exitCode);
+        Assert.False(promptedForVersion);
+        Assert.Equal(cliVersion, selectedPackageVersion);
+    }
 }
 
 internal sealed class TestAddCommandPrompter(IInteractionService interactionService) : AddCommandPrompter(interactionService)
