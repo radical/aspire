@@ -39,12 +39,22 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
     /// </summary>
     public string IdentityChannel => _channel;
 
-    private readonly string _channel = channel;
+    private readonly string _channel = channel == "pr" && prNumber is null
+        ? throw new InvalidOperationException(
+            "CliExecutionContext was constructed with channel='pr' but no PrNumber. " +
+            "PR-channel CLIs must always carry a PrNumber parsed from the assembly's " +
+            "InformationalVersion; a null PrNumber here indicates a malformed PR build " +
+            "(missing or unparseable PR suffix in the version string).")
+        : channel;
 
     /// <summary>
-    /// Gets the pull-request number associated with this invocation, when
-    /// <see cref="IdentityChannel"/> is <c>pr</c>. <see langword="null"/> for any
-    /// non-PR channel.
+    /// Gets the pull-request number associated with this invocation. Parsed from the
+    /// running assembly's <c>InformationalVersion</c> independently of the identity
+    /// channel string, and exposed verbatim — non-null PrNumbers can occur on any
+    /// channel when a version-suffix happens to parse as a PR number. The value is
+    /// only semantically meaningful when <see cref="IdentityChannel"/> is <c>pr</c>,
+    /// where it is required (the constructor throws otherwise) and is used to derive
+    /// the per-PR hive label exposed via <see cref="Channel"/>.
     /// </summary>
     public int? PrNumber { get; } = prNumber;
 

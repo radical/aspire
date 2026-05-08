@@ -93,17 +93,17 @@ public class CliExecutionContextTests
     }
 
     [Fact]
-    public void Channel_PrChannelWithoutPrNumber_ReturnsPr()
+    public void Channel_PrChannelWithoutPrNumber_Throws()
     {
-        // Degraded but consistent: there is no <N> to resolve, so the raw `pr` value
-        // is returned. Reseed sites then propagate `pr` downstream — the alternative
-        // (throwing or returning empty) would break bootstrap on PR builds where
-        // ParsePrNumber happened to fail.
-        var ctx = CreateContext(channel: "pr", prNumber: null);
+        // Type-level invariant: a 'pr' identity-channel without a parsed PrNumber is
+        // a malformed CLI build (PR build whose InformationalVersion suffix could not
+        // be parsed). Failing fast in the ctor prevents downstream channel resolvers
+        // from hunting for a non-existent 'pr' channel and surfacing a confusing
+        // ChannelNotFoundException far from the actual bootstrap defect.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => CreateContext(channel: "pr", prNumber: null));
 
-        Assert.Equal("pr", ctx.Channel);
-        Assert.Equal("pr", ctx.IdentityChannel);
-        Assert.Null(ctx.PrNumber);
+        Assert.Contains("PrNumber", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
