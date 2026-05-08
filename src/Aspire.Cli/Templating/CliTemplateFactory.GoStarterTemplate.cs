@@ -60,9 +60,9 @@ internal sealed partial class CliTemplateFactory
                     // Seed the channel into settings.json before restore so package resolution
                     // uses the correct channel. Explicit input wins; otherwise default to the
                     // channel baked into the running CLI (CliExecutionContext.Channel).
-                    var seedChannel = !string.IsNullOrEmpty(inputs.Channel)
-                        ? inputs.Channel
-                        : _executionContext.Channel;
+                    var seedChannel = string.IsNullOrEmpty(inputs.Channel)
+                        ? _executionContext.Channel
+                        : inputs.Channel;
                     if (!string.IsNullOrEmpty(seedChannel))
                     {
                         var config = AspireJsonConfiguration.Load(outputPath);
