@@ -127,6 +127,15 @@ public class IdentityChannelReaderTests
     [InlineData("0.0.0-pr2147483648", null)]                     // overflow → null
     [InlineData("0.0.0-prabc.def", null)]                        // marker followed by non-digits
     [InlineData("1.0.0-rc.1.pr12345", null)]                     // `.pr` (no leading `-`) must NOT match
+    // T-T1 (Wave-11 review hardening): malformed-input survey driven by the two-model code review.
+    // The parser is the gatekeeper for the bootstrap path in Program.cs; it MUST return null cleanly
+    // (never throw) for every shape a caller might hand us — whitespace, free-form garbage, the dot-
+    // separated `-pr.<garbage>` form (CI-shape with a non-numeric tail), and overflow inputs that are
+    // dot-separated (the legacy no-separator overflow case is already covered by `0.0.0-pr2147483648`).
+    [InlineData("   ", null)]                                    // whitespace-only
+    [InlineData("not-a-version", null)]                          // free-form garbage
+    [InlineData("1.0.0-pr.abc", null)]                           // CI-shape marker with non-numeric tail
+    [InlineData("1.0.0-pr.99999999999999999999", null)]          // CI-shape overflow → null (no throw)
     public void ParsePrNumber_ReturnsExpected(string? input, int? expected)
     {
         Assert.Equal(expected, IdentityChannelReader.ParsePrNumber(input));
