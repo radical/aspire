@@ -308,9 +308,10 @@ internal sealed class UpdateCommand : BaseCommand
     {
         var channel = selectedChannel ?? parseResult.GetValue(_channelOption) ?? parseResult.GetValue(_qualityOption);
 
-        // If channel is not specified, always prompt the user to select one.
-        // This ensures they consciously choose a channel that will be saved to global settings
-        // for future 'aspire new' and 'aspire init' commands.
+        // If channel is not specified, prompt the user to select one. The choice
+        // applies only to this self-update invocation; subsequent 'aspire new'
+        // and 'aspire init' commands resolve channel per-project from
+        // aspire.config.json, not from any global setting.
         if (string.IsNullOrEmpty(channel))
         {
             var isStagingEnabled = KnownFeatures.IsStagingChannelEnabled(_features, _configuration);

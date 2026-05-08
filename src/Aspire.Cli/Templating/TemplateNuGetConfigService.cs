@@ -65,7 +65,8 @@ internal sealed class TemplateNuGetConfigService(
     }
 
     /// <summary>
-    /// Applies NuGet.config create/update behavior for a channel name (option or global config value).
+    /// Applies NuGet.config create/update behavior for a channel name resolved from
+    /// command input (e.g. <c>--channel</c>) or per-project <c>aspire.config.json</c>.
     /// </summary>
     /// <param name="channelName">The optional channel name from command input.</param>
     /// <param name="outputPath">The output path where the project was created.</param>
@@ -232,8 +233,9 @@ internal sealed class TemplateNuGetConfigService(
             return new TemplatePackageSelection(cliVersionMatch.Package, cliVersionMatch.Channel);
         }
 
-        // If channel was specified via --channel option or global setting (but no --version),
-        // automatically select the highest version from that channel without prompting.
+        // If channel was specified via --channel option or per-project aspire.config.json
+        // (but no --version), automatically select the highest version from that channel
+        // without prompting.
         if (hasChannelSetting)
         {
             var first = orderedPackagesFromChannels.First();
@@ -311,7 +313,7 @@ internal sealed class TemplateNuGetConfigService(
 /// <summary>
 /// Inputs that control how <see cref="TemplateNuGetConfigService.ResolveTemplatePackageAsync"/> picks a channel and version.
 /// </summary>
-/// <param name="ChannelOverride">Optional channel name override (e.g. from <c>--channel</c>). When null, the global <c>channel</c> configuration is consulted.</param>
+/// <param name="ChannelOverride">Optional channel name override resolved upstream from <c>--channel</c> or per-project <c>aspire.config.json</c>. When null, channel selection proceeds without an explicit override (the resolver's default behavior).</param>
 /// <param name="VersionOverride">Optional explicit template version (e.g. from <c>--version</c>).</param>
 /// <param name="SourceOverride">Optional source override carried for symmetry with <see cref="TemplateInputs"/>; not consulted by resolution today.</param>
 /// <param name="IncludePrHives">When true (e.g. for <c>aspire new</c>), local PR hive directories under <c>~/.aspire/hives</c> participate in channel discovery; when false (e.g. for <c>aspire init</c>), they are ignored.</param>
