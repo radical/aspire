@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics.CodeAnalysis;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Shared;
 
@@ -17,7 +18,7 @@ internal static class VersionHelper
     public static bool IsLocalBuildChannel(string? channelName)
     {
         return channelName is not null &&
-            (channelName.Equals("local", StringComparison.OrdinalIgnoreCase) ||
+            (channelName.Equals(PackageChannelNames.Local, StringComparison.OrdinalIgnoreCase) ||
              channelName.StartsWith("pr-", StringComparison.OrdinalIgnoreCase) ||
              channelName.StartsWith("run-", StringComparison.OrdinalIgnoreCase));
     }
