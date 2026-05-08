@@ -33,8 +33,9 @@ public class AssemblyMetadataChannelTests
             .FirstOrDefault(a => a.Key == "AspireCliChannel");
 
         Assert.NotNull(metadata);
-        // Exact equality (not set-membership) — guards csproj default; see ocean-pr1-design-review.md F1 / fix-review C2.
-        // The membership test above passes for "daily" too; this one fails if the csproj default reverts.
+        // Exact equality (not set-membership) — guards the csproj default
+        // <AspireCliChannel>local</AspireCliChannel>. The membership test above passes
+        // for "daily" too; this one fails if the csproj default reverts.
         Assert.Equal(PackageChannelNames.Local, metadata.Value);
     }
 }

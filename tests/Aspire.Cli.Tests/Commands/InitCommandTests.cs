@@ -970,28 +970,23 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
     }
 
     /// <summary>
-    /// T-B1 (Wave-11 review hardening, fresh-machine regression). On a developer machine that
-    /// has never used Aspire, <c>~/.aspire/hives/</c> does not exist (so no per-hive channels
-    /// are registered). A locally-built CLI bakes <c>local</c> as its identity channel via
+    /// Fresh-machine regression. On a developer machine that has never used Aspire,
+    /// <c>~/.aspire/hives/</c> does not exist (so no per-hive channels are registered).
+    /// A locally-built CLI bakes <c>local</c> as its identity channel via
     /// <c>[AssemblyMetadata("AspireCliChannel", "local")]</c>, and <see cref="CliExecutionContext.Channel"/>
     /// returns that value verbatim. <c>aspire init</c> currently passes
     /// <see cref="CliExecutionContext.Channel"/> as the channel-override into
     /// <c>TemplateNuGetConfigService.ResolveTemplatePackageAsync</c>, which name-matches against
     /// the channels produced by <see cref="PackagingService.GetChannelsAsync"/>: <c>default</c>
     /// (implicit), <c>stable</c>, <c>daily</c>, optional <c>staging</c>, and one entry per hive
-    /// directory. With no <c>local</c> hive on disk, the lookup throws
-    /// <see cref="Aspire.Cli.Exceptions.ChannelNotFoundException"/> and clean-machine <c>aspire init</c> fails.
+    /// directory. With no <c>local</c> hive on disk, the lookup would otherwise throw
+    /// <see cref="Aspire.Cli.Exceptions.ChannelNotFoundException"/> and clean-machine
+    /// <c>aspire init</c> would fail.
     ///
-    /// Expected behavior (pinned by this test): when the running CLI's identity channel is
-    /// <c>local</c> AND no matching named channel is registered, init MUST fall back to the
-    /// implicit channel rather than throwing. This mirrors how the <c>local</c> channel
-    /// gracefully degrades to public-feed package resolution when no local hive has been
-    /// scaffolded yet.
-    ///
-    /// If Linus's B1 fix lands as a different shape (e.g., explicit "no channel found, surface
-    /// friendly error" with <see cref="ExitCodeConstants.FailedToInstallTemplates"/>), this test
-    /// will need to be flipped to assert that exit code; the design intent — "no silent
-    /// ChannelNotFoundException on a clean machine" — stays the same.
+    /// Pinned behavior: when the running CLI's identity channel is <c>local</c> AND no matching
+    /// named channel is registered, init falls back to the implicit channel rather than throwing.
+    /// This mirrors how the <c>local</c> channel gracefully degrades to public-feed package
+    /// resolution when no local hive has been scaffolded yet.
     /// </summary>
     [Fact]
     public async Task InitCommand_OnLocalChannelCli_WithNoLocalHive_FallsBackToImplicitChannel()

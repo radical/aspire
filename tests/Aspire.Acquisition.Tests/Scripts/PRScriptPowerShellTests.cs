@@ -322,10 +322,10 @@ public class PRScriptPowerShellTests(ITestOutputHelper testOutput)
     [Fact]
     public async Task LocalDir_WhatIf_WithGitHubRunIdEnvSet_UsesLocalHiveLabel()
     {
-        // Regression guard for fix-review H1: the GITHUB_RUN_ID env var must NOT influence
-        // the hive label when -LocalDir is used. Without this test, re-introducing the
-        // removed GITHUB_RUN_ID branch would produce "run-99999" silently.
-        // See ocean-pr1-design-review.md F3 / fix-review H1.
+        // Regression guard: the GITHUB_RUN_ID env var must NOT influence the hive label
+        // when -LocalDir is used. Without this test, re-introducing a GITHUB_RUN_ID
+        // branch would produce "run-99999" silently instead of the expected "local"
+        // hive label.
         using var env = new TestEnvironment();
         using var cmd = new ScriptToolCommand(s_scriptPath, env, _testOutput);
         var localDir = Path.Combine(env.TempDirectory, "local-artifacts");

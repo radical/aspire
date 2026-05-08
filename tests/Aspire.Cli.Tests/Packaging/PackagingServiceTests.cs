@@ -936,8 +936,8 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
 
     /// <summary>
     /// Verifies that hive channel names always match their directory name regardless of
-    /// the CLI identity channel. The Wave 7 in-memory rename (run-* → local) has been
-    /// removed; the script now writes the hive as "local" directly.
+    /// the CLI identity channel. PackagingService no longer renames hive directories
+    /// in-memory; the script writes the hive as "local" directly.
     /// </summary>
     [Fact]
     public async Task GetChannelsAsync_HiveChannelNameAlwaysMatchesDirectoryName()
