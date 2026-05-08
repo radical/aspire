@@ -1092,6 +1092,75 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         Assert.Equal("https://api.nuget.org/v3/index.json", fallbackMapping.Source);
     }
 
+    [Fact]
+    public async Task GetChannelsAsync_LocalHive_EmptyDirectory_ReturnsChannelWithNullPinnedVersion()
+    {
+        // G1 (corrupted/partial state): the user has `~/.aspire/hives/local/` on disk but no
+        // packages have been deposited yet (e.g., a partially-completed local build, or an
+        // install script that created the layout but failed before staging packages).
+        // Pinning behavior:
+        //  - GetChannelsAsync still produces a `local` channel because GetDirectories() sees the dir.
+        //  - GetLocalHivePinnedVersion returns null (no Aspire.ProjectTemplates / Aspire.Hosting /
+        //    Aspire.AppHost.Sdk nupkgs to derive a version from), so the channel's PinnedVersion
+        //    is null. Downstream, PackageChannel.GetIntegrationPackagesAsync only takes the
+        //    direct-enumeration shortcut when PinnedVersion != null, so an empty local hive
+        //    falls through to the standard NuGet search path with the local dir as a source.
+        // This test pins the channel-construction half of that contract.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var tempDir = workspace.WorkspaceRoot;
+        var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
+        var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
+        var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir,
+            new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")),
+            new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")),
+            "test.log");
+
+        // Create the hive root but no `packages/` subdir — directory-exists-but-unpopulated.
+        var localHiveDir = new DirectoryInfo(Path.Combine(hivesDir.FullName, PackageChannelNames.Local));
+        localHiveDir.Create();
+
+        var packagingService = new PackagingService(executionContext, new FakeNuGetPackageCache(), new TestFeatures(), new ConfigurationBuilder().Build(), NullLogger<PackagingService>.Instance);
+
+        var channels = await packagingService.GetChannelsAsync().DefaultTimeout();
+
+        var localChannel = channels.FirstOrDefault(c => c.Name == PackageChannelNames.Local);
+        Assert.NotNull(localChannel);
+        Assert.Null(localChannel.PinnedVersion);
+        Assert.NotNull(localChannel.Mappings);
+        var aspireMapping = localChannel.Mappings!.FirstOrDefault(m => m.PackageFilter == "Aspire*");
+        Assert.NotNull(aspireMapping);
+        // Mapping still points at the (non-existent) packages dir; PackageChannel guards on
+        // Directory.Exists before enumerating, so this is safe at downstream call time.
+        var expectedLocalPackagesPath = Path.Combine(localHiveDir.FullName, "packages").Replace('\\', '/');
+        Assert.Equal(expectedLocalPackagesPath, aspireMapping.Source);
+    }
+
+    [Fact]
+    public async Task GetChannelsAsync_LocalHive_EmptyPackagesDirectory_ReturnsChannelWithNullPinnedVersion()
+    {
+        // G1 variant: `~/.aspire/hives/local/packages/` exists but contains zero `*.nupkg` files.
+        // GetLocalHivePinnedVersion returns null because no FindHighestVersion lookup matches.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var tempDir = workspace.WorkspaceRoot;
+        var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
+        var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
+        var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir,
+            new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")),
+            new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")),
+            "test.log");
+
+        var localPackagesDir = new DirectoryInfo(Path.Combine(hivesDir.FullName, PackageChannelNames.Local, "packages"));
+        localPackagesDir.Create();
+
+        var packagingService = new PackagingService(executionContext, new FakeNuGetPackageCache(), new TestFeatures(), new ConfigurationBuilder().Build(), NullLogger<PackagingService>.Instance);
+
+        var channels = await packagingService.GetChannelsAsync().DefaultTimeout();
+
+        var localChannel = channels.FirstOrDefault(c => c.Name == PackageChannelNames.Local);
+        Assert.NotNull(localChannel);
+        Assert.Null(localChannel.PinnedVersion);
+    }
+
     private sealed class FakeNuGetPackageCacheWithPackages(List<Aspire.Shared.NuGetPackageCli> packages) : INuGetPackageCache
     {
         public Task<IEnumerable<Aspire.Shared.NuGetPackageCli>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, bool prerelease, FileInfo? nugetConfigFile, CancellationToken cancellationToken)
