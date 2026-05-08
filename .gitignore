@@ -210,3 +210,4 @@ extension/package.nls.*.json
 # Azure Functions local settings (may contain encrypted secrets)
 local.settings.json
 diagnostics.log
+.squad/
