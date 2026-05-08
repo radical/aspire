@@ -317,7 +317,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         // PR-build CLI installing a different PR's hive — guard does not fire (identity != "local").
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
-        var executionContext = CreateContextWithChannel("pr");
+        var executionContext = CreateContextWithChannel("pr", prNumber: 12345);
         var server = CreateServerWithExplicitChannel(workspace, "pr-12345", executionContext);
 
         using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(server, "pr-12345");
@@ -325,14 +325,15 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         Assert.NotNull(result);
     }
 
-    private static CliExecutionContext CreateContextWithChannel(string channel) =>
+    private static CliExecutionContext CreateContextWithChannel(string channel, int? prNumber = null) =>
         new(new DirectoryInfo(Path.GetTempPath()),
             new DirectoryInfo(Path.Combine(Path.GetTempPath(), "hives")),
             new DirectoryInfo(Path.Combine(Path.GetTempPath(), "cache")),
             new DirectoryInfo(Path.Combine(Path.GetTempPath(), "sdks")),
             new DirectoryInfo(Path.Combine(Path.GetTempPath(), "logs")),
             "test.log",
-            channel: channel);
+            channel: channel,
+            prNumber: prNumber);
 
     private static PrebuiltAppHostServer CreateServerWithExplicitChannel(
         TemporaryWorkspace workspace,
