@@ -89,15 +89,25 @@ jobs:
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       targets: '[{"os": "macos-13", "runner": "macos-13", "rids": "osx-x64"}]'
 
-  prepare_installer_artifacts:
-    name: Prepare installer artifacts
+  prepare_winget_installer_artifacts:
+    name: Prepare WinGet installer artifacts
     uses: ./.github/workflows/prepare-installer-artifacts.yml
     needs: [
       build_cli_archive_windows,
       build_cli_archive_windows_arm64,
+    ]
+    with:
+      installer: winget
+
+  prepare_homebrew_installer_artifacts:
+    name: Prepare Homebrew installer artifacts
+    uses: ./.github/workflows/prepare-installer-artifacts.yml
+    needs: [
       build_cli_archive_macos,
       build_cli_archive_macos_x64,
     ]
+    with:
+      installer: homebrew
 
   build_cli_e2e_image:
     name: Build CLI E2E Docker image
@@ -350,7 +360,8 @@ jobs:
       build_cli_archive_windows_arm64,
       build_cli_archive_macos,
       build_cli_archive_macos_x64,
-      prepare_installer_artifacts,
+      prepare_winget_installer_artifacts,
+      prepare_homebrew_installer_artifacts,
       build_cli_e2e_image,
       extension_tests_win,
       cli_starter_validation_windows,
@@ -440,7 +451,8 @@ jobs:
                   needs.cli_starter_validation_windows.result == 'skipped' ||
                   needs.typescript_sdk_tests.result == 'skipped' ||
                   needs.build_cli_archive_macos_x64.result == 'skipped' ||
-                  needs.prepare_installer_artifacts.result == 'skipped' ||
+                  needs.prepare_winget_installer_artifacts.result == 'skipped' ||
+                  needs.prepare_homebrew_installer_artifacts.result == 'skipped' ||
                   needs.tests_no_nugets.result == 'skipped' ||
                   needs.tests_requires_nugets_linux.result == 'skipped' ||
                   needs.tests_requires_nugets_windows.result == 'skipped' ||
@@ -454,7 +466,8 @@ jobs:
                  (needs.extension_tests_win.result == 'skipped' ||
                   needs.typescript_sdk_tests.result == 'skipped' ||
                   needs.build_cli_archive_macos_x64.result == 'skipped' ||
-                  needs.prepare_installer_artifacts.result == 'skipped' ||
+                  needs.prepare_winget_installer_artifacts.result == 'skipped' ||
+                  needs.prepare_homebrew_installer_artifacts.result == 'skipped' ||
                   needs.tests_no_nugets.result == 'skipped' ||
                  needs.tests_requires_nugets_linux.result == 'skipped' ||
                  needs.tests_requires_nugets_windows.result == 'skipped' ||

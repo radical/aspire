@@ -2,28 +2,29 @@ name: Prepare installer artifacts
 
 on:
   workflow_call:
+    inputs:
+      installer:
+        required: true
+        type: string
 
 jobs:
-  prepare_installer_artifacts:
-    name: Prepare ${{ matrix.installer.name }}
-    runs-on: ${{ matrix.installer.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        installer:
-          - id: winget
-            name: WinGet manifests
-            runner: windows-latest
-            archivePattern: cli-native-archives-win-*
-            outputPath: artifacts/installers/winget-manifests
-            artifactName: winget-manifests-prerelease
-          - id: homebrew
-            name: Homebrew cask
-            runner: macos-latest
-            archivePattern: cli-native-archives-osx-*
-            outputPath: artifacts/installers/homebrew-cask
-            artifactName: homebrew-cask-prerelease
+  validate_installer:
+    name: Validate installer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate installer input
+        shell: bash
+        run: |
+          case "${{ inputs.installer }}" in
+            winget|homebrew) ;;
+            *) echo "Unknown installer: ${{ inputs.installer }}" >&2; exit 1 ;;
+          esac
 
+  prepare_winget_artifacts:
+    name: Prepare WinGet manifests
+    needs: validate_installer
+    if: ${{ inputs.installer == 'winget' }}
+    runs-on: windows-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -31,35 +32,57 @@ jobs:
       - name: Download CLI archives
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: ${{ matrix.installer.archivePattern }}
+          pattern: cli-native-archives-win-*
           path: ${{ github.workspace }}/native-archives
           merge-multiple: false
 
       - name: Prepare WinGet manifest artifact
-        if: ${{ matrix.installer.id == 'winget' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & "$env:GITHUB_WORKSPACE/eng/winget/prepare-manifest-artifact.ps1" `
             -Channel prerelease `
             -ArchiveRoot "$env:GITHUB_WORKSPACE/native-archives" `
-            -OutputPath "$env:GITHUB_WORKSPACE/${{ matrix.installer.outputPath }}" `
+            -OutputPath "$env:GITHUB_WORKSPACE/artifacts/installers/winget-manifests" `
             -ValidationMode Offline
 
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: winget-manifests-prerelease
+          path: ${{ github.workspace }}/artifacts/installers/winget-manifests
+          if-no-files-found: error
+          retention-days: 15
+
+  prepare_homebrew_artifacts:
+    name: Prepare Homebrew cask
+    needs: validate_installer
+    if: ${{ inputs.installer == 'homebrew' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Download CLI archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-native-archives-osx-*
+          path: ${{ github.workspace }}/native-archives
+          merge-multiple: false
+
       - name: Prepare Homebrew cask artifact
-        if: ${{ matrix.installer.id == 'homebrew' }}
         shell: bash
         run: >
           eng/homebrew/prepare-cask-artifact.sh
           --channel prerelease
           --archive-root "${GITHUB_WORKSPACE}/native-archives"
-          --output-dir "${GITHUB_WORKSPACE}/${{ matrix.installer.outputPath }}"
+          --output-dir "${GITHUB_WORKSPACE}/artifacts/installers/homebrew-cask"
           --validation-mode Offline
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.installer.artifactName }}
-          path: ${{ github.workspace }}/${{ matrix.installer.outputPath }}
+          name: homebrew-cask-prerelease
+          path: ${{ github.workspace }}/artifacts/installers/homebrew-cask
           if-no-files-found: error
           retention-days: 15
