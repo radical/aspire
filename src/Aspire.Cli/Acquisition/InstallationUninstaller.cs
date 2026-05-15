@@ -32,6 +32,8 @@ namespace Aspire.Cli.Acquisition;
 /// </remarks>
 internal sealed class InstallationUninstaller : IInstallationUninstaller
 {
+    private static readonly string s_aspireBinaryName = OperatingSystem.IsWindows() ? "aspire.exe" : "aspire";
+
     private readonly IInstallSidecarReader _sidecarReader;
     private readonly ILogger<InstallationUninstaller> _logger;
 
@@ -204,9 +206,7 @@ internal sealed class InstallationUninstaller : IInstallationUninstaller
         var removals = new List<string>();
         var manualSteps = new List<string>();
 
-        var aspireBinary = OperatingSystem.IsWindows()
-            ? Path.Combine(binDir, "aspire.exe")
-            : Path.Combine(binDir, "aspire");
+        var aspireBinary = Path.Combine(binDir, s_aspireBinaryName);
         if (File.Exists(aspireBinary))
         {
             removals.Add(aspireBinary);

@@ -347,6 +347,16 @@ public class InstallationDiscoveryDiscoverAllTests(ITestOutputHelper outputHelpe
         var name = OperatingSystem.IsWindows() ? "aspire.exe" : "aspire";
         var path = Path.Combine(dir, name);
         File.WriteAllBytes(path, [0x00]); // existence is what matters
+        if (!OperatingSystem.IsWindows())
+        {
+            // Match shell semantics: a non-executable file is not a binary on PATH.
+            // PathLookupHelper.FindFullPathFromPath honors the executable bit on Unix,
+            // so without this chmod the PATH walk would skip the test fixture.
+            File.SetUnixFileMode(path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        }
         return path;
     }
 }

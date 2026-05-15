@@ -88,7 +88,7 @@ internal sealed class UninstallCommand : BaseCommand
         }
 
         var prefix = string.IsNullOrEmpty(prefixArg)
-            ? Path.Combine(HomeDirectoryResolver.GetUserHomeOrThrow(), ".aspire", "dogfood", FormattableString.Invariant($"pr-{prNumber!.Value}"))
+            ? Path.Combine(CliPathHelper.GetAspireHomeDirectory(), "dogfood", FormattableString.Invariant($"pr-{prNumber!.Value}"))
             : Path.GetFullPath(prefixArg);
 
         var plan = _uninstaller.Plan(prefix);

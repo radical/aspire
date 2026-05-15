@@ -8,7 +8,10 @@ namespace Aspire.Cli.Utils;
 internal static class CliPathHelper
 {
     internal static string GetAspireHomeDirectory()
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aspire");
+        => Path.Combine(GetUserProfileDirectory(), ".aspire");
+
+    internal static string GetUserProfileDirectory()
+        => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     /// <summary>
     /// Creates a randomized CLI-managed socket path.

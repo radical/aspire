@@ -35,6 +35,8 @@ namespace Aspire.Cli.Acquisition;
 /// </remarks>
 internal sealed class InstallationDiscovery : IInstallationDiscovery
 {
+    private static readonly string s_aspireBinaryName = OperatingSystem.IsWindows() ? "aspire.exe" : "aspire";
+
     private readonly IIdentityChannelReader _channelReader;
     private readonly IInstallSidecarReader _sidecarReader;
     private readonly IPeerInstallProbe _peerProbe;
@@ -90,10 +92,10 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
 
         var self = DescribeSelf();
         _logger.LogDebug(
-            "Discovery: starting walk. self.Path='{SelfPath}', self.Canonical='{SelfCanonical}', HOME='{Home}'.",
+            "Discovery: starting walk. self.Path='{SelfPath}', self.Canonical='{SelfCanonical}', AspireHome='{AspireHome}'.",
             self.Path,
             self.CanonicalPath ?? "(null)",
-            HomeDirectoryResolver.GetUserHomeDirectory());
+            CliPathHelper.GetAspireHomeDirectory());
 
         var results = new List<InstallationInfo> { self };
         // Deduplicate by canonical path (case-insensitive on Windows). The
@@ -360,30 +362,21 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
     /// </summary>
     private static PathHit? FindFirstAspireOnPath(ILogger? logger)
     {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(path))
+        // PathLookupHelper handles PATH/PATHEXT and (on Unix) the executable
+        // bit consistently with how the shell would resolve `aspire` itself.
+        var candidate = PathLookupHelper.FindFullPathFromPath("aspire");
+        if (string.IsNullOrEmpty(candidate))
         {
             return null;
         }
 
-        var binaryNames = OperatingSystem.IsWindows() ? new[] { "aspire.exe", "aspire" } : new[] { "aspire" };
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        var canonical = ResolveCanonicalPath(candidate, logger);
+        if (string.IsNullOrEmpty(canonical))
         {
-            foreach (var name in binaryNames)
-            {
-                var candidate = Path.Combine(dir, name);
-                if (!File.Exists(candidate))
-                {
-                    continue;
-                }
-                var canonical = ResolveCanonicalPath(candidate, logger);
-                if (!string.IsNullOrEmpty(canonical))
-                {
-                    return new PathHit(candidate, canonical);
-                }
-            }
+            return null;
         }
-        return null;
+
+        return new PathHit(candidate, canonical);
     }
 
     /// <summary>
@@ -401,18 +394,13 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
             yield return new DiscoveryCandidate(pathHit.OriginalPath, "$PATH");
         }
 
-        var home = HomeDirectoryResolver.GetUserHomeDirectory();
-        if (string.IsNullOrEmpty(home))
-        {
-            _logger.LogDebug("Discovery: no user home directory available; skipping well-known prefix walk and dotnet-tool store probe.");
-            yield break;
-        }
+        var aspireHome = CliPathHelper.GetAspireHomeDirectory();
 
         // Release-script default. We always check for the binary at the
         // canonical location even when the parent dir is absent, because
         // File.Exists short-circuits cleanly.
-        var releaseDir = Path.Combine(home, ".aspire", "bin");
-        var releaseBinary = Path.Combine(releaseDir, OperatingSystem.IsWindows() ? "aspire.exe" : "aspire");
+        var releaseDir = Path.Combine(aspireHome, "bin");
+        var releaseBinary = Path.Combine(releaseDir, s_aspireBinaryName);
         if (File.Exists(releaseBinary))
         {
             _logger.LogDebug("Discovery: release prefix walk yielded '{Binary}'.", releaseBinary);
@@ -434,7 +422,7 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
         }
 
         // PR-script default: ~/.aspire/dogfood/pr-*/bin/aspire[.exe].
-        var dogfoodRoot = Path.Combine(home, ".aspire", "dogfood");
+        var dogfoodRoot = Path.Combine(aspireHome, "dogfood");
         if (Directory.Exists(dogfoodRoot))
         {
             var subdirCount = 0;
@@ -442,7 +430,7 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
             {
                 subdirCount++;
                 var binDir = Path.Combine(prDir, "bin");
-                var binary = Path.Combine(binDir, OperatingSystem.IsWindows() ? "aspire.exe" : "aspire");
+                var binary = Path.Combine(binDir, s_aspireBinaryName);
                 if (File.Exists(binary))
                 {
                     _logger.LogDebug("Discovery: dogfood walk yielded '{Binary}'.", binary);
@@ -474,17 +462,16 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
         // We don't rebuild that whole path; we enumerate version dirs and
         // glob downward, which is robust to <version>, <tfm>, and <rid>
         // shifting in future packages.
-        var toolStore = Path.Combine(home, ".dotnet", "tools", ".store", "aspire.cli");
+        var toolStore = Path.Combine(CliPathHelper.GetUserProfileDirectory(), ".dotnet", "tools", ".store", "aspire.cli");
         if (Directory.Exists(toolStore))
         {
-            var binaryName = OperatingSystem.IsWindows() ? "aspire.exe" : "aspire";
             // EnumerateFiles with SearchOption.AllDirectories is cheap
             // here because the .store tree is shallow and Aspire-owned;
             // we accept the breadth-first walk for code simplicity.
             IEnumerable<string> matches;
             try
             {
-                matches = Directory.EnumerateFiles(toolStore, binaryName, SearchOption.AllDirectories);
+                matches = Directory.EnumerateFiles(toolStore, s_aspireBinaryName, SearchOption.AllDirectories);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -502,7 +489,7 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
             {
                 _logger.LogDebug(
                     "Discovery: dotnet-tool store '{ToolStore}' exists but contains no '{BinaryName}' binary — not classifying as a real install.",
-                    toolStore, binaryName);
+                    toolStore, s_aspireBinaryName);
             }
         }
         else
