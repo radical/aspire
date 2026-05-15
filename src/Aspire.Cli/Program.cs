@@ -645,7 +645,11 @@ public class Program
     {
         var configuration = serviceProvider.GetRequiredService<IConfiguration>();
         var isInformationalCommand = args.Any(a => CommonOptionNames.InformationalOptionNames.Contains(a));
-        var noLogo = args.Any(a => a == CommonOptionNames.NoLogo) || configuration.GetBool(CliConfigNames.NoLogo, defaultValue: false) || isInformationalCommand;
+        var isMachineReadableOutput = HasMachineReadableOutputFormat(args);
+        var noLogo = args.Any(a => a == CommonOptionNames.NoLogo)
+            || configuration.GetBool(CliConfigNames.NoLogo, defaultValue: false)
+            || isInformationalCommand
+            || isMachineReadableOutput;
         var showBanner = args.Any(a => a == CommonOptionNames.Banner);
 
         var sentinel = serviceProvider.GetRequiredService<IFirstTimeUseNoticeSentinel>();
@@ -683,6 +687,31 @@ public class Program
                 sentinel.CreateIfNotExists();
             }
         }
+    }
+
+    // Machine-readable output flags should never have welcome/telemetry text
+    // interleaved with the structured payload. Today the only such flag is
+    // `--format json` (consumed by `aspire info`); extend this scan if new
+    // options are added.
+    private static bool HasMachineReadableOutputFormat(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg.Equals("--format=json", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (arg.Equals("--format", StringComparison.OrdinalIgnoreCase)
+                && i + 1 < args.Length
+                && args[i + 1].Equals("json", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IAnsiConsole BuildAnsiConsole(IServiceProvider serviceProvider, TextWriter writer)
