@@ -65,19 +65,23 @@ if ($Uninstall) {
 
 # Auto-detect manifest path if not specified
 if (-not $ManifestPath) {
-    # Look for versioned manifest directories under the script directory.
-    # Convention: manifests/m/Microsoft/Aspire/{Version}/
-    $candidates = Get-ChildItem -Path $ScriptDir -Directory -Recurse -Depth 6 |
-        Where-Object {
-            Test-Path (Join-Path $_.FullName "*.installer.yaml")
-        } |
-        Select-Object -First 1
-
-    if ($candidates) {
-        $ManifestPath = $candidates.FullName
+    if (Get-ChildItem -Path $ScriptDir -File -Filter "*.installer.yaml" | Select-Object -First 1) {
+        $ManifestPath = $ScriptDir
     } else {
-        Write-Error "No manifest directory found under $ScriptDir. Specify -ManifestPath explicitly."
-        exit 1
+        # Look for versioned manifest directories under the script directory.
+        # Convention: manifests/m/Microsoft/Aspire/{Version}/
+        $candidates = Get-ChildItem -Path $ScriptDir -Directory -Recurse -Depth 6 |
+            Where-Object {
+                Test-Path (Join-Path $_.FullName "*.installer.yaml")
+            } |
+            Select-Object -First 1
+
+        if ($candidates) {
+            $ManifestPath = $candidates.FullName
+        } else {
+            Write-Error "No manifest directory found under $ScriptDir. Specify -ManifestPath explicitly."
+            exit 1
+        }
     }
 }
 
