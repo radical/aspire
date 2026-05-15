@@ -12,10 +12,11 @@ winget install Microsoft.Aspire              # stable
 
 ## Contents
 
-| Directory / File         | Description                                                                      |
-|--------------------------|----------------------------------------------------------------------------------|
-| `microsoft.aspire/`      | Manifest templates for stable releases                                           |
-| `generate-manifests.ps1` | Downloads installers, computes SHA256 hashes, generates manifests from templates |
+| Directory / File               | Description                                                                      |
+|--------------------------------|----------------------------------------------------------------------------------|
+| `microsoft.aspire/`            | Manifest templates for stable releases                                           |
+| `generate-manifests.ps1`       | Downloads installers, computes SHA256 hashes, generates manifests from templates |
+| `prepare-manifest-artifact.ps1` | Prepares CI artifacts by generating, validating, and adding dogfood helpers      |
 
 Each manifest set contains three YAML files following the [WinGet manifest schema v1.10](https://learn.microsoft.com/windows/package-manager/package/manifest):
 
@@ -46,9 +47,10 @@ Where arch is `x64` or `arm64`.
 
 ## CI Pipeline
 
-| Pipeline                              | Prepares                                       | Publishes             |
-|---------------------------------------|------------------------------------------------|-----------------------|
-| `azure-pipelines.yml` (prepare stage) | Stable manifests (artifacts only) | —                     |
-| `release-publish-nuget.yml` (release) | —                                              | Stable manifests only |
+| Pipeline                              | Prepares                                        | Publishes             |
+|---------------------------------------|-------------------------------------------------|-----------------------|
+| `.github/workflows/tests.yml`         | Prerelease manifests (artifacts only)           | —                     |
+| `azure-pipelines.yml` (prepare stage) | Stable or prerelease manifests (artifacts only) | —                     |
+| `release-publish-nuget.yml` (release) | —                                               | Stable manifests only |
 
 Publishing submits a PR to `microsoft/winget-pkgs` using `wingetcreate submit`.

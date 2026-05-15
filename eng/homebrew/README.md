@@ -16,6 +16,7 @@ brew install --cask aspire              # stable
 |---|---|
 | `aspire.rb.template` | Cask template for stable releases |
 | `generate-cask.sh` | Downloads tarballs, computes SHA256 hashes, generates cask from template |
+| `prepare-cask-artifact.sh` | Prepares CI artifacts by generating, validating, and adding dogfood helpers |
 
 ### Pipeline templates
 
@@ -52,7 +53,8 @@ Where arch is `arm64` or `x64`.
 
 | Pipeline | Prepares | Publishes |
 |---|---|---|
-| `azure-pipelines.yml` (prepare stage) | Stable casks (artifacts only) | — |
+| `.github/workflows/tests.yml` | Prerelease casks (artifacts only) | — |
+| `azure-pipelines.yml` (prepare stage) | Stable or prerelease casks (artifacts only) | — |
 | `release-publish-nuget.yml` (release) | — | Stable cask only |
 
 Publishing submits a PR to `Homebrew/homebrew-cask` using the GitHub REST API:
