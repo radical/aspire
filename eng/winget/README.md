@@ -17,6 +17,7 @@ winget install Microsoft.Aspire              # stable
 | `microsoft.aspire/`            | Manifest templates for stable releases                                           |
 | `generate-manifests.ps1`       | Downloads installers, computes SHA256 hashes, generates manifests from templates |
 | `prepare-manifest-artifact.ps1` | Prepares CI artifacts by generating, validating, and adding dogfood helpers      |
+| `dogfood.ps1`                  | Installs generated manifests locally, optionally using downloaded native archives |
 
 Each manifest set contains three YAML files following the [WinGet manifest schema v1.10](https://learn.microsoft.com/windows/package-manager/package/manifest):
 
@@ -54,3 +55,10 @@ Where arch is `x64` or `arm64`.
 | `release-publish-nuget.yml` (release) | —                                               | Stable manifests only |
 
 Publishing submits a PR to `microsoft/winget-pkgs` using `wingetcreate submit`.
+
+To dogfood a GitHub Actions artifact locally, download the `winget-manifests-prerelease`
+artifact and the `cli-native-archives-win-*` artifacts into the same parent directory, then run:
+
+```powershell
+.\dogfood.ps1 -ArchiveRoot ..
+```

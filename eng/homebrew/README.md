@@ -17,6 +17,7 @@ brew install --cask aspire              # stable
 | `aspire.rb.template` | Cask template for stable releases |
 | `generate-cask.sh` | Downloads tarballs, computes SHA256 hashes, generates cask from template |
 | `prepare-cask-artifact.sh` | Prepares CI artifacts by generating, validating, and adding dogfood helpers |
+| `dogfood.sh` | Installs a generated cask locally, optionally using downloaded native archive artifacts |
 
 ### Pipeline templates
 
@@ -72,6 +73,13 @@ Prepare validation currently runs:
 2. `brew style --fix` on the generated cask
 3. `brew audit --cask --online`, or `brew audit --cask --new --online` when the cask does not yet exist upstream
 4. `HOMEBREW_NO_INSTALL_FROM_API=1 brew install --cask ...` followed by uninstall validation
+
+To dogfood a GitHub Actions artifact locally, download the `homebrew-cask-prerelease`
+artifact and the `cli-native-archives-osx-*` artifacts into the same parent directory, then run:
+
+```bash
+./dogfood.sh --archive-root ..
+```
 
 ## Open Items
 

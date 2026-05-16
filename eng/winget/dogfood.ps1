@@ -10,6 +10,10 @@
     Path to the directory containing the WinGet manifest YAML files.
     Defaults to auto-detecting the manifest directory relative to this script.
 
+.PARAMETER ArchiveRoot
+    Root directory containing downloaded aspire-cli-win-* archive artifacts. When present, the
+    local manifest is rewritten to install from those archive files instead of ci.dot.net URLs.
+
 .PARAMETER Uninstall
     Uninstall a previously dogfooded Aspire CLI.
 
@@ -22,6 +26,10 @@
     # Install from a specific manifest directory
 
 .EXAMPLE
+    .\dogfood.ps1 -ArchiveRoot ..\native-archives
+    # Install using downloaded native archive artifacts
+
+.EXAMPLE
     .\dogfood.ps1 -Uninstall
     # Uninstall the dogfooded Aspire CLI
 #>
@@ -31,12 +39,124 @@ param(
     [Parameter(Position = 0)]
     [string]$ManifestPath,
 
+    [string]$ArchiveRoot,
+
     [switch]$Uninstall
 )
 
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+function Get-InstallerManifestPath {
+    param([string]$Path)
+
+    $installerManifests = @(Get-ChildItem -Path $Path -File -Filter "*.installer.yaml")
+    if ($installerManifests.Count -ne 1) {
+        Write-Error "Expected exactly one *.installer.yaml manifest under $Path, but found $($installerManifests.Count)."
+        exit 1
+    }
+
+    return $installerManifests[0].FullName
+}
+
+function Get-ManifestVersion {
+    param([string]$ManifestPath)
+
+    foreach ($line in Get-Content -Path $ManifestPath) {
+        if ($line -match '^\s*PackageVersion:\s*"?([^"]+)"?\s*$') {
+            return $Matches[1]
+        }
+    }
+
+    Write-Error "Could not read PackageVersion from $ManifestPath."
+    exit 1
+}
+
+function Find-ArchiveIfPresent {
+    param(
+        [string]$Root,
+        [string]$ArchiveName
+    )
+
+    if (-not (Test-Path $Root)) {
+        return $null
+    }
+
+    return Get-ChildItem -Path $Root -File -Recurse -Filter $ArchiveName -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+
+function Find-Archive {
+    param(
+        [string]$Root,
+        [string]$ArchiveName
+    )
+
+    $matches = @(Get-ChildItem -Path $Root -File -Recurse -Filter $ArchiveName -ErrorAction SilentlyContinue | Sort-Object FullName)
+    if ($matches.Count -eq 0) {
+        Write-Error "Could not find $ArchiveName under $Root."
+        exit 1
+    }
+
+    if ($matches.Count -gt 1) {
+        $matchList = $matches | ForEach-Object { "  $($_.FullName)" }
+        Write-Error "Found multiple $ArchiveName archives under ${Root}:`n$($matchList -join "`n")"
+        exit 1
+    }
+
+    return $matches[0].FullName
+}
+
+function Get-DefaultArchiveRoot {
+    param([string]$Version)
+
+    foreach ($candidate in @($ScriptDir, (Split-Path -Parent $ScriptDir))) {
+        if ((Find-ArchiveIfPresent -Root $candidate -ArchiveName "aspire-cli-win-x64-$Version.zip") -and
+            (Find-ArchiveIfPresent -Root $candidate -ArchiveName "aspire-cli-win-arm64-$Version.zip")) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    return $null
+}
+
+function ConvertTo-FileUri {
+    param([string]$Path)
+
+    return ([System.Uri]::new((Resolve-Path $Path).ProviderPath)).AbsoluteUri
+}
+
+function Set-LocalInstallerUrls {
+    param(
+        [string]$InstallerManifestPath,
+        [string]$ResolvedArchiveRoot,
+        [string]$Version
+    )
+
+    $archiveByArchitecture = @{
+        "x64"   = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName "aspire-cli-win-x64-$Version.zip"
+        "arm64" = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName "aspire-cli-win-arm64-$Version.zip"
+    }
+
+    $currentArchitecture = $null
+    $updatedLines = foreach ($line in Get-Content -Path $InstallerManifestPath) {
+        if ($line -match '^\s*-\s*Architecture:\s*(\S+)\s*$') {
+            $currentArchitecture = $Matches[1]
+            $line
+            continue
+        }
+
+        if ($line -match '^(\s*)InstallerUrl:\s*' -and $currentArchitecture -and $archiveByArchitecture.ContainsKey($currentArchitecture)) {
+            "$($Matches[1])InstallerUrl: $(ConvertTo-FileUri -Path $archiveByArchitecture[$currentArchitecture])"
+            continue
+        }
+
+        $line
+    }
+
+    Set-Content -Path $InstallerManifestPath -Value $updatedLines
+}
 
 if ($Uninstall) {
     Write-Host "Uninstalling dogfooded Aspire CLI..."
@@ -103,6 +223,22 @@ Write-Host "  Manifest path: $ManifestPath"
 Write-Host "  Manifest files:"
 foreach ($f in $manifestFiles) {
     Write-Host "    - $($f.Name)"
+}
+Write-Host ""
+
+$installerManifestPath = Get-InstallerManifestPath -Path $ManifestPath
+$version = Get-ManifestVersion -ManifestPath $installerManifestPath
+
+if (-not $ArchiveRoot) {
+    $ArchiveRoot = Get-DefaultArchiveRoot -Version $version
+}
+
+if ($ArchiveRoot) {
+    $ArchiveRoot = (Resolve-Path $ArchiveRoot).Path
+    Write-Host "Using local native archive artifacts from: $ArchiveRoot"
+    Set-LocalInstallerUrls -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version
+} else {
+    Write-Host "No local native archive artifacts found; installing with URLs from the manifests."
 }
 Write-Host ""
 
