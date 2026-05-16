@@ -270,8 +270,10 @@ fi
 echo ""
 echo "Installing $CASK_NAME from local tap..."
 # Disable auto-update during install — auto-update can re-index the tap before
-# the cask file is picked up, causing a "cask unavailable" error.
-HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask "$TAP_NAME/$CASK_NAME"
+# the cask file is picked up, causing a "cask unavailable" error. Also disable
+# quarantine because local PR artifacts are unsigned and macOS kills quarantined
+# ad-hoc signed binaries before the CLI can print its version.
+HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask --no-quarantine "$TAP_NAME/$CASK_NAME"
 
 # Verify
 echo ""
