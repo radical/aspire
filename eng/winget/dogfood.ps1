@@ -17,6 +17,9 @@
 .PARAMETER Uninstall
     Uninstall a previously dogfooded Aspire CLI.
 
+.PARAMETER Force
+    Allow replacing an existing Microsoft.Aspire WinGet installation.
+
 .EXAMPLE
     .\dogfood.ps1
     # Auto-detects manifests in the script directory and installs
@@ -41,7 +44,9 @@ param(
 
     [string]$ArchiveRoot,
 
-    [switch]$Uninstall
+    [switch]$Uninstall,
+
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -225,6 +230,14 @@ foreach ($f in $manifestFiles) {
     Write-Host "    - $($f.Name)"
 }
 Write-Host ""
+
+if (-not $Force) {
+    $existingInstall = winget list --id Microsoft.Aspire --accept-source-agreements 2>&1
+    if ($LASTEXITCODE -eq 0 -and $existingInstall -match "Microsoft\.Aspire") {
+        Write-Error "Microsoft.Aspire is already installed. Uninstall it first, or rerun with -Force to replace it with the dogfood manifest."
+        exit 1
+    }
+}
 
 $installerManifestPath = Get-InstallerManifestPath -Path $ManifestPath
 $version = Get-ManifestVersion -ManifestPath $installerManifestPath

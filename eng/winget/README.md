@@ -62,3 +62,5 @@ artifact and the `cli-native-archives-win-*` artifacts into the same parent dire
 ```powershell
 .\dogfood.ps1 -ArchiveRoot ..
 ```
+
+If `Microsoft.Aspire` is already installed through WinGet, uninstall it first or pass `-Force` to allow the local dogfood manifest to replace it.
