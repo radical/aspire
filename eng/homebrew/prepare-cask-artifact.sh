@@ -223,7 +223,16 @@ if [[ "$VALIDATION_MODE" != "GenerateOnly" ]]; then
         brew untap "$test_tap_name" >/dev/null 2>&1 || true
       }
 
-      trap 'cleanup; cleanup_test_tap' EXIT
+      test_cask_ref="$test_tap_name/$cask_name"
+      test_cask_installed=false
+
+      cleanup_test_install() {
+        if [[ "$test_cask_installed" == true ]]; then
+          brew uninstall --cask "$test_cask_ref" >/dev/null 2>&1 || true
+        fi
+      }
+
+      trap 'cleanup_test_install; cleanup; cleanup_test_tap' EXIT
 
       echo "Setting up local tap..."
       brew tap-new --no-git "$test_tap_name"
@@ -231,7 +240,8 @@ if [[ "$VALIDATION_MODE" != "GenerateOnly" ]]; then
       cp "$OUTPUT_FILE" "$test_tap_root/Casks/$cask_file"
 
       echo "Installing aspire from local tap..."
-      HOMEBREW_NO_INSTALL_FROM_API=1 brew install --cask "$test_tap_name/$cask_name"
+      test_cask_installed=true
+      HOMEBREW_NO_INSTALL_FROM_API=1 brew install --cask "$test_cask_ref"
       echo "Install succeeded"
 
       echo "Verifying aspire CLI is in PATH..."
@@ -247,7 +257,8 @@ if [[ "$VALIDATION_MODE" != "GenerateOnly" ]]; then
       echo "aspire CLI verified"
 
       echo "Uninstalling aspire..."
-      brew uninstall --cask "$test_tap_name/$cask_name"
+      brew uninstall --cask "$test_cask_ref"
+      test_cask_installed=false
       echo "Uninstall succeeded"
 
       cleanup_test_tap

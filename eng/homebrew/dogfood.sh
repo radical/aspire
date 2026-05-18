@@ -284,15 +284,20 @@ fi
 
 # Verify
 echo ""
-if command -v aspire &>/dev/null; then
-  echo "Installed successfully!"
-  echo "  Path:    $(command -v aspire)"
-  aspireVersion="$(aspire --version 2>&1)" || true
-  echo "  Version: $aspireVersion"
-else
-  echo "Warning: aspire command not found in PATH after install."
-  echo "You may need to restart your shell or add the install location to your PATH."
+if ! command -v aspire &>/dev/null; then
+  echo "Error: aspire command not found in PATH after install." >&2
+  echo "You may need to restart your shell or add the install location to your PATH." >&2
+  exit 1
 fi
+
+echo "Installed successfully!"
+echo "  Path:    $(command -v aspire)"
+if ! aspireVersion="$(aspire --version 2>&1)"; then
+  echo "Error: aspire --version failed after install:" >&2
+  echo "$aspireVersion" >&2
+  exit 1
+fi
+echo "  Version: $aspireVersion"
 
 echo ""
 echo "To uninstall: $(basename "$0") --uninstall"

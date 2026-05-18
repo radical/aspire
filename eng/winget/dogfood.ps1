@@ -275,7 +275,12 @@ Write-Host "Validation passed."
 # Install
 Write-Host ""
 Write-Host "Installing Aspire CLI from local manifest..."
-winget install --manifest $ManifestPath --accept-package-agreements --accept-source-agreements
+$installArgs = @("install", "--manifest", $ManifestPath, "--accept-package-agreements", "--accept-source-agreements")
+if ($Force) {
+    $installArgs += "--force"
+}
+
+winget @installArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Installation failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE
@@ -296,14 +301,16 @@ $verifyResult = pwsh -NoProfile -Command '
     Write-Host "  Version: $v"
 ' 2>&1
 
-if ($LASTEXITCODE -eq 0) {
+$verifyExitCode = $LASTEXITCODE
+if ($verifyExitCode -eq 0) {
     Write-Host $verifyResult
     Write-Host ""
     Write-Host "Installed successfully!"
 } else {
     Write-Host $verifyResult
     Write-Host ""
-    Write-Warning "aspire command not found in PATH. You may need to restart your shell."
+    Write-Error "Failed to verify Aspire CLI installation."
+    exit $verifyExitCode
 }
 
 Write-Host ""
