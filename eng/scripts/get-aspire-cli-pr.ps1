@@ -2022,9 +2022,9 @@ OPTIONS:
         if ($InvokedFromFile) { exit 1 } else { return 1 }
     }
 
-    if ($InstallMode -ne 'Tool' -and $Force) {
-        Write-Message "Error: -Force can only be combined with -InstallMode Tool: archive mode installs from downloaded binaries and does not use dotnet tool update." -Level Error
-        Write-Message "Use -InstallMode Tool with -Force, or drop -Force." -Level Info
+    if ($InstallMode -ne 'Tool' -and $InstallMode -ne 'WinGet' -and $Force) {
+        Write-Message "Error: -Force can only be combined with -InstallMode Tool or -InstallMode WinGet." -Level Error
+        Write-Message "Use -InstallMode Tool/WinGet with -Force, or drop -Force." -Level Info
         if ($InvokedFromFile) { exit 1 } else { return 1 }
     }
 
