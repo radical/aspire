@@ -119,6 +119,14 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
             """);
         FileHelper.MakeExecutable(brewPath);
 
+        var curlPath = Path.Combine(mockBinDir, "curl");
+        await File.WriteAllTextAsync(curlPath, """
+            #!/usr/bin/env bash
+            printf '404'
+            exit 0
+            """);
+        FileHelper.MakeExecutable(curlPath);
+
         return mockBinDir;
     }
 
