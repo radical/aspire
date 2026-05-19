@@ -126,17 +126,114 @@ function Get-DefaultArchiveRoot {
     return $null
 }
 
-function ConvertTo-FileUri {
-    param([string]$Path)
+function Start-LocalArchiveServer {
+    param([string]$ArchiveRoot)
 
-    return ([System.Uri]::new((Resolve-Path $Path).ProviderPath)).AbsoluteUri
+    # WinGet downloads InstallerUrl payloads via WinINet's InternetOpenUrl(), which
+    # only supports http/https/ftp — not file://. So we serve the local archives over
+    # a loopback HTTP listener instead of rewriting InstallerUrl to file:///, which
+    # used to fail at install time with:
+    #   "InternetOpenUrl() failed. 0x8007007b : The filename, directory name, or
+    #    volume label syntax is incorrect."
+    #
+    # HttpListener on a loopback prefix does NOT require admin / netsh urlacl
+    # registration for the current user — that restriction only applies to non-loopback
+    # bindings. See:
+    # https://learn.microsoft.com/dotnet/api/system.net.httplistener
+    $port = (Get-FreeLoopbackPort)
+    $prefix = "http://127.0.0.1:$port/"
+    $listener = [System.Net.HttpListener]::new()
+    $listener.Prefixes.Add($prefix)
+    $listener.Start()
+
+    # Use a runspace (not Start-Job/Start-ThreadJob) so we don't pull in the Jobs or
+    # ThreadJob modules, which aren't guaranteed to be available on every winget host.
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $runspace
+    [void]$ps.AddScript({
+        param($Listener, $ArchiveRoot)
+        while ($Listener.IsListening) {
+            try {
+                $context = $Listener.GetContext()
+            } catch {
+                break
+            }
+
+            try {
+                $requestedName = [System.IO.Path]::GetFileName([System.Uri]::UnescapeDataString($context.Request.Url.AbsolutePath))
+                $filePath = Join-Path $ArchiveRoot $requestedName
+                if ((Test-Path -LiteralPath $filePath -PathType Leaf) -and
+                    # Defend against path traversal: requested name must not contain separators.
+                    -not $requestedName.Contains([IO.Path]::DirectorySeparatorChar) -and
+                    -not $requestedName.Contains([IO.Path]::AltDirectorySeparatorChar)) {
+                    $bytes = [System.IO.File]::ReadAllBytes($filePath)
+                    $context.Response.ContentType = 'application/octet-stream'
+                    $context.Response.ContentLength64 = $bytes.LongLength
+                    $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+                } else {
+                    $context.Response.StatusCode = 404
+                }
+            } catch {
+                try { $context.Response.StatusCode = 500 } catch { }
+            } finally {
+                try { $context.Response.Close() } catch { }
+            }
+        }
+    }).AddArgument($listener).AddArgument((Resolve-Path $ArchiveRoot).ProviderPath)
+
+    $asyncResult = $ps.BeginInvoke()
+
+    return [pscustomobject]@{
+        Listener    = $listener
+        BaseUri     = $prefix.TrimEnd('/')
+        PowerShell  = $ps
+        Runspace    = $runspace
+        AsyncResult = $asyncResult
+    }
 }
 
-function Set-LocalInstallerUrls {
+function Stop-LocalArchiveServer {
+    param($Server)
+
+    if (-not $Server) { return }
+
+    try {
+        if ($Server.Listener -and $Server.Listener.IsListening) {
+            $Server.Listener.Stop()
+        }
+        if ($Server.Listener) {
+            $Server.Listener.Close()
+        }
+    } catch { }
+
+    try {
+        if ($Server.PowerShell -and $Server.AsyncResult) {
+            [void]$Server.PowerShell.EndInvoke($Server.AsyncResult)
+        }
+    } catch { }
+
+    try { if ($Server.PowerShell) { $Server.PowerShell.Dispose() } } catch { }
+    try { if ($Server.Runspace)   { $Server.Runspace.Dispose() } } catch { }
+}
+
+function Get-FreeLoopbackPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try {
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    } finally {
+        $listener.Stop()
+    }
+}
+
+function Set-LocalInstallerSources {
     param(
         [string]$InstallerManifestPath,
         [string]$ResolvedArchiveRoot,
-        [string]$Version
+        [string]$Version,
+        [string]$BaseUri
     )
 
     $archiveByArchitecture = @{
@@ -144,14 +241,17 @@ function Set-LocalInstallerUrls {
         "arm64" = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName "aspire-cli-win-arm64-$Version.zip"
     }
 
-    # winget install verifies the recorded InstallerSha256 against the actual file
-    # contents, so we have to refresh the hash whenever we redirect InstallerUrl at a
-    # local archive. PR-channel manifests in particular ship with the placeholder
+    # winget install hashes the downloaded payload and compares it with the recorded
+    # InstallerSha256, so we have to refresh the hash whenever we redirect InstallerUrl
+    # at a local archive. PR-channel manifests in particular ship with the placeholder
     # ("0" * 64) baked in by generate-manifests.ps1's -SkipUrlValidation path, and that
     # hash never matches a real build.
     $sha256ByArchitecture = @{}
+    $urlByArchitecture = @{}
     foreach ($arch in $archiveByArchitecture.Keys) {
-        $sha256ByArchitecture[$arch] = (Get-FileHash -Path $archiveByArchitecture[$arch] -Algorithm SHA256).Hash.ToUpperInvariant()
+        $archivePath = $archiveByArchitecture[$arch]
+        $sha256ByArchitecture[$arch] = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToUpperInvariant()
+        $urlByArchitecture[$arch] = "$BaseUri/$([System.IO.Path]::GetFileName($archivePath))"
     }
 
     $currentArchitecture = $null
@@ -162,8 +262,8 @@ function Set-LocalInstallerUrls {
             continue
         }
 
-        if ($line -match '^(\s*)InstallerUrl:\s*' -and $currentArchitecture -and $archiveByArchitecture.ContainsKey($currentArchitecture)) {
-            "$($Matches[1])InstallerUrl: $(ConvertTo-FileUri -Path $archiveByArchitecture[$currentArchitecture])"
+        if ($line -match '^(\s*)InstallerUrl:\s*' -and $currentArchitecture -and $urlByArchitecture.ContainsKey($currentArchitecture)) {
+            "$($Matches[1])InstallerUrl: $($urlByArchitecture[$currentArchitecture])"
             continue
         }
 
@@ -259,10 +359,11 @@ if (-not $Force) {
 # file in the directory as a multi-file manifest. The CI artifact ships dogfood.ps1
 # alongside the yaml files, so pointing winget at the artifact directly fails with
 # "The manifest does not contain a valid root. File: dogfood.ps1". Staging also keeps
-# Set-LocalInstallerUrls's rewrites out of the user's artifact so reruns are idempotent.
+# Set-LocalInstallerSources's rewrites out of the user's artifact so reruns are idempotent.
 $stagedManifestDir = Join-Path ([System.IO.Path]::GetTempPath()) ("aspire-winget-manifest-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stagedManifestDir -Force | Out-Null
 
+$archiveServer = $null
 try {
     foreach ($f in $manifestFiles) {
         Copy-Item -Path $f.FullName -Destination (Join-Path $stagedManifestDir $f.Name) -Force
@@ -290,11 +391,10 @@ try {
         Write-Warning "Failed to enable local manifests. You may need to run this as Administrator."
     }
 
-    # Validate the manifest BEFORE we rewrite InstallerUrl/InstallerSha256 to point at
-    # local archives. winget's schema requires InstallerUrl to match ^https?://, so a
-    # rewritten file:// manifest fails ``winget validate``. winget install does its own
-    # (more permissive) validation and accepts file:// URLs when LocalManifestFiles is
-    # enabled, so we still validate the pristine yaml and install the rewritten copy.
+    # Validate the manifest BEFORE we rewrite InstallerUrl/InstallerSha256. winget's
+    # schema requires InstallerUrl to match ^https?:// (so any rewritten URL — even an
+    # http://127.0.0.1/... one — passes validation, but file:// does not). Validating
+    # the pristine yaml first catches manifest authoring problems before we mutate it.
     Write-Host ""
     Write-Host "Validating manifests..."
     winget validate --manifest $stagedManifestDir
@@ -305,7 +405,14 @@ try {
     Write-Host "Validation passed."
 
     if ($ArchiveRoot) {
-        Set-LocalInstallerUrls -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version
+        # winget's downloader is WinINet (InternetOpenUrl), which only supports
+        # http/https/ftp/gopher — not file://. Serve the local archives over a loopback
+        # HTTP listener and rewrite InstallerUrl to point at it.
+        Write-Host ""
+        Write-Host "Starting local archive server..."
+        $archiveServer = Start-LocalArchiveServer -ArchiveRoot $ArchiveRoot
+        Write-Host "  Serving $ArchiveRoot at $($archiveServer.BaseUri)"
+        Set-LocalInstallerSources -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version -BaseUri $archiveServer.BaseUri
     }
 
     # Install
@@ -323,11 +430,17 @@ try {
     }
 }
 finally {
+    Stop-LocalArchiveServer -Server $archiveServer
     Remove-Item -Path $stagedManifestDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Refresh PATH
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+# Refresh PATH so the verification subprocess can see machine/user changes that
+# winget made during install (the parent process's environment block is a snapshot
+# from before install). Tests set ASPIRE_TEST_MODE=true so the mock winget bin
+# already on PATH isn't replaced by the machine/user PATH from the registry.
+if ($env:ASPIRE_TEST_MODE -ne 'true') {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
 
 # Verify in a new process to pick up PATH changes
 Write-Host ""
