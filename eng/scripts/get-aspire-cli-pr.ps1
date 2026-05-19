@@ -651,7 +651,7 @@ function Get-DefaultInstallPrefix {
     return [System.IO.Path]::GetFullPath($defaultPath)
 }
 
-# Simplified PATH environment update
+# Current-process PATH environment update.
 function Test-PathContainsDirectory {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -691,35 +691,7 @@ function Update-PathEnvironment {
         }
     }
 
-    # Update persistent PATH for Windows.
-    # PR installs deliberately skip the persistent user PATH write: a PR build is a per-session
-    # dogfood activation. Writing it into HKCU\Environment would silently demote a developer's
-    # daily/stable install on every new shell until they hunt down the stale entry. The
-    # activation hint printed elsewhere shows how to opt in manually.
-    $isPrPath = $CliBinDir -match '[/\\]dogfood[/\\]pr-[^/\\]+[/\\]bin$'
-    if ($Script:HostOS -eq "win" -and -not $isPrPath) {
-        try {
-            $userPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
-            if (-not $userPath) { $userPath = "" }
-            $userPathArray = if ($userPath) { $userPath.Split($pathSeparator, [StringSplitOptions]::RemoveEmptyEntries) } else { @() }
-            if ($userPathArray -notcontains $CliBinDir) {
-                if ($PSCmdlet.ShouldProcess("User PATH environment variable", "Add $CliBinDir")) {
-                    $newUserPath = (@($CliBinDir) + $userPathArray) -join $pathSeparator
-                    [Environment]::SetEnvironmentVariable("PATH", $newUserPath, [EnvironmentVariableTarget]::User)
-                    Write-Message "Added $CliBinDir to user PATH environment variable" -Level Info
-                }
-            }
-
-            Write-Message "" -Level Info
-            Write-Message "The aspire cli is now available for use in this and new sessions." -Level Success
-        }
-        catch {
-            Write-Message "Failed to update persistent PATH environment variable: $($_.Exception.Message)" -Level Warning
-            Write-Message "You may need to manually add $CliBinDir to your PATH environment variable" -Level Info
-        }
-    } elseif ($Script:HostOS -eq "win" -and $isPrPath) {
-        Write-Message "PR install: leaving user PATH untouched; the activation hint below shows the PATH line to use." -Level Info
-    }
+    Write-Message "The aspire cli is now available for use in this session." -Level Success
 
     # GitHub Actions support
     if ($env:GITHUB_ACTIONS -eq "true" -and $env:GITHUB_PATH) {
@@ -1757,16 +1729,16 @@ function Start-DownloadAndInstall {
         }
     }
 
-    # Print PATH activation hint for PR installs.
+    # Print activation hint for PR-route installs.
     # Uses Write-Host so the hint is visible on the host stream (not stderr) in normal output.
     # Printed in success path (after install completes) and also under -WhatIf.
     # The OS path separator is used so the line is valid on both Windows (;) and Unix (:).
-    # The new-PATH expression is emitted with double quotes so PowerShell expands `$env:PATH`
-    # when the user pastes the line into their profile — single quotes would assign the literal
-    # text "$env:PATH" and clobber the existing PATH.
-    if (-not $HiveOnly -and $PRNumber -gt 0 -and ($InstallMode -eq 'Archive' -or $script:InstallPathExplicit)) {
+    if (-not $HiveOnly -and ($InstallMode -eq 'Archive' -or $script:InstallPathExplicit)) {
         $pathSep = [System.IO.Path]::PathSeparator
-        Write-Host "Add to your shell profile: `$env:PATH = `"$cliBinDir$pathSep`$env:PATH`";"
+        $cliExeName = if ($Script:HostOS -eq 'win') { 'aspire.exe' } else { 'aspire' }
+        $directCliPath = Join-Path $cliBinDir $cliExeName
+        Write-Host "Run Aspire directly: $directCliPath"
+        Write-Host "For this shell only, run: `$env:PATH = `"$cliBinDir$pathSep`$env:PATH`";"
     }
 }
 

@@ -485,131 +485,10 @@ install_archive() {
     say_verbose "Successfully installed archive"
 }
 
-# Function to add PATH to shell configuration file
-# Parameters:
-#   $1 - config_file: Path to the shell configuration file
-#   $2 - bin_path: The binary path to add to PATH
-#   $3 - command: The command to add to the configuration file
+# Function to check whether a directory is already on PATH.
 path_contains() {
     local bin_path="$1"
     [[ ":$PATH:" == *":$bin_path:"* ]]
-}
-
-add_to_path()
-{
-    local config_file="$1"
-    local bin_path="$2"
-    local command="$3"
-
-    if [[ "$DRY_RUN" == true ]]; then
-        say_info "[DRY RUN] Would check if $bin_path is already in \$PATH"
-        say_info "[DRY RUN] Would add '$command' to $config_file if not already present"
-        return 0
-    fi
-
-    if path_contains "$bin_path"; then
-        say_info "Path $bin_path already exists in \$PATH, skipping addition"
-    elif [[ -f "$config_file" ]] && grep -Fxq "$command" "$config_file"; then
-        say_info "Command already exists in $config_file, skipping addition"
-    elif [[ -w $config_file ]]; then
-        echo -e "\n# Added by get-aspire-cli*.sh script" >> "$config_file"
-        echo "$command" >> "$config_file"
-        say_info "Successfully added aspire to \$PATH in $config_file"
-    else
-        say_info "Manually add the following to $config_file (or similar):"
-        say_info "  $command"
-    fi
-}
-
-# Function to add PATH to shell profile
-add_to_shell_profile() {
-    local bin_path="$1"
-    local bin_path_unexpanded="$2"
-    local xdg_config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
-
-    # Detect the current shell
-    local shell_name
-
-    # Try to get shell from SHELL environment variable
-    if [[ -n "${SHELL:-}" ]]; then
-        shell_name=$(basename "$SHELL")
-    else
-        # Fallback to detecting from process
-        shell_name=$(ps -p $$ -o comm= 2>/dev/null || echo "sh")
-    fi
-
-    # Normalize shell name
-    case "$shell_name" in
-        bash|zsh|fish)
-            ;;
-        sh|dash|ash)
-            shell_name="sh"
-            ;;
-        *)
-            # Default to bash for unknown shells
-            shell_name="bash"
-            ;;
-    esac
-
-    say_verbose "Detected shell: $shell_name"
-
-    local config_files
-    case "$shell_name" in
-        bash)
-            config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile $xdg_config_home/bash/.bashrc $xdg_config_home/bash/.bash_profile"
-            ;;
-        zsh)
-            config_files="$HOME/.zshrc $HOME/.zshenv $xdg_config_home/zsh/.zshrc $xdg_config_home/zsh/.zshenv"
-            ;;
-        fish)
-            config_files="$HOME/.config/fish/config.fish"
-            ;;
-        sh)
-            config_files="$HOME/.profile /etc/profile"
-            ;;
-        *)
-            # Default to bash files for unknown shells
-            config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile"
-            ;;
-    esac
-
-    # Get the appropriate shell config file
-    local config_file=""
-
-    # Find the first existing config file
-    for file in $config_files; do
-        if [[ -f "$file" ]]; then
-            config_file="$file"
-            break
-        fi
-    done
-
-    if [[ -z $config_file ]]; then
-        say_warn "No existing shell profile file found for $shell_name (checked: $config_files). Not adding to PATH automatically."
-        say_info "Add Aspire CLI to PATH manually by adding:"
-        say_info "  export PATH=\"$bin_path_unexpanded:\$PATH\""
-        return 0
-    fi
-
-    case "$shell_name" in
-        bash|zsh|sh)
-            add_to_path "$config_file" "$bin_path" "export PATH=\"$bin_path_unexpanded:\$PATH\""
-            ;;
-        fish)
-            add_to_path "$config_file" "$bin_path" "fish_add_path $bin_path_unexpanded"
-            ;;
-        *)
-            say_error "Unsupported shell type $shell_name. Please add the path $bin_path_unexpanded manually to \$PATH in your profile."
-            return 1
-            ;;
-    esac
-
-    if [[ "$DRY_RUN" != true ]]; then
-        printf "\nTo use the Aspire CLI in new terminal sessions, restart your terminal or run:\n"
-        say_info "  source $config_file"
-    fi
-
-    return 0
 }
 
 # =============================================================================
@@ -1652,46 +1531,32 @@ main() {
         fi
     fi
 
-    # Add to shell profile for persistent PATH. Default tool installs use 'dotnet tool install -g',
-    # which owns any global-tools PATH guidance; explicit tool-path installs use cli_install_dir.
-    # PR installs deliberately skip the persistent profile write: a PR build is a per-session
-    # dogfood activation. Touching ~/.zshrc / ~/.bashrc would silently demote a developer's
-    # daily/stable install on every new terminal until they hunt down the stale `export PATH=`
-    # line. The activation hint printed below shows how to opt in manually.
+    # PR-route installs do not write persistent PATH state. Default tool installs use
+    # 'dotnet tool install -g', which owns any global-tools PATH guidance; explicit
+    # tool-path installs use the activation hint printed below.
     if [[ "$HIVE_ONLY" != true ]]; then
         if [[ "$INSTALL_MODE" != "tool" || "$INSTALL_PREFIX_EXPLICIT" == true ]]; then
             if [[ "$SKIP_PATH" == true ]]; then
                 say_info "Skipping PATH configuration due to --skip-path flag"
             else
                 local path_to_add="$cli_install_dir"
-                local path_to_add_unexpanded="$INSTALL_PATH_UNEXPANDED"
 
                 if path_contains "$path_to_add"; then
                     say_info "Path $path_to_add already exists in \$PATH, skipping addition"
                 else
-                    if [[ -n "$PR_NUMBER" ]]; then
-                        say_info "PR install: leaving shell profile untouched; the activation hint below shows the PATH line to use."
-                    else
-                        add_to_shell_profile "$path_to_add" "$path_to_add_unexpanded"
-                    fi
-
-                    # Add to current session PATH, if the path is not already in PATH
-                    if [[ "$DRY_RUN" == true ]]; then
-                        say_info "[DRY RUN] Would add $path_to_add to PATH"
-                    else
-                        export PATH="$path_to_add:$PATH"
-                    fi
+                    say_info "Leaving PATH unchanged; use the activation hint below for this install."
                 fi
             fi
         fi
     fi
 
-    # Print PATH activation hint for PR installs.
+    # Print activation hint for PR-route installs.
     # Goes to stdout (not stderr) so it's visible in normal install output and tests can grep it.
     # Printed in success path (after install completes) and also under --dry-run.
-    if [[ "$HIVE_ONLY" != true && -n "$PR_NUMBER" && ("$INSTALL_MODE" == "archive" || "$INSTALL_PREFIX_EXPLICIT" == true) ]]; then
-        local profile_path_unexpanded="$INSTALL_PATH_UNEXPANDED"
-        echo "Add to your shell profile: export PATH=\"$profile_path_unexpanded:\$PATH\""
+    if [[ "$HIVE_ONLY" != true && ("$INSTALL_MODE" == "archive" || "$INSTALL_PREFIX_EXPLICIT" == true) ]]; then
+        local path_unexpanded="$INSTALL_PATH_UNEXPANDED"
+        echo "Run Aspire directly: $path_unexpanded/aspire"
+        echo "For this shell only, run: export PATH=\"$path_unexpanded:\$PATH\""
     fi
 }
 
