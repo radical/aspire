@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Security.Cryptography;
 using Aspire.TestUtilities;
 using Microsoft.DotNet.XUnitExtensions;
 using Xunit;
@@ -320,6 +321,20 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         await File.WriteAllTextAsync(Path.Combine(root, "aspire-cli-osx-x64-13.3.0.tar.gz"), "fake x64 archive");
     }
 
+    private static async Task CreateFakeWinGetArchivesAsync(string root)
+    {
+        var archiveDir = Path.Combine(root, "Debug", "Shipping");
+        Directory.CreateDirectory(archiveDir);
+        await File.WriteAllTextAsync(Path.Combine(archiveDir, "aspire-cli-win-x64-13.3.0.zip"), "fake x64 archive");
+        await File.WriteAllTextAsync(Path.Combine(archiveDir, "aspire-cli-win-arm64-13.3.0.zip"), "fake arm64 archive");
+    }
+
+    private static async Task<string> GetSha256HexAsync(string path)
+    {
+        var bytes = await File.ReadAllBytesAsync(path);
+        return Convert.ToHexString(SHA256.HashData(bytes));
+    }
+
     [Fact]
     [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
     public async Task Bash_Help_DescribesInstallerModes()
@@ -466,6 +481,38 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
     }
 
     [Fact]
+    [RequiresTools(["ruby"])]
+    [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
+    public async Task Bash_PrepareHomebrewCask_Offline_GeneratesCaskWithArchiveHashesAndDogfood()
+    {
+        using var env = new TestEnvironment();
+        var archiveRoot = Path.Combine(env.TempDirectory, "archives");
+        await CreateFakeHomebrewArchivesAsync(archiveRoot);
+        var mockBinDir = await CreateMockHomebrewBinAsync(env, aspireExitCode: 0);
+        var outputDir = Path.Combine(env.TempDirectory, "homebrew-output");
+        using var cmd = new ScriptToolCommand("eng/homebrew/prepare-cask-artifact.sh", env, _testOutput);
+        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}/usr/bin:/bin:/usr/sbin:/sbin");
+
+        var result = await cmd.ExecuteAsync(
+            "--version", "13.3.0",
+            "--artifact-version", "13.3.0-pr.1234.abc",
+            "--channel", "prerelease",
+            "--archive-root", archiveRoot,
+            "--output-dir", outputDir,
+            "--validation-mode", "Offline");
+
+        result.EnsureSuccessful();
+
+        var cask = await File.ReadAllTextAsync(Path.Combine(outputDir, "aspire.rb"));
+        Assert.Contains("version \"13.3.0\"", cask);
+        Assert.Contains("https://ci.dot.net/public/aspire/13.3.0-pr.1234.abc/aspire-cli-osx-#{arch}-#{version}.tar.gz", cask);
+        Assert.Contains((await GetSha256HexAsync(Path.Combine(archiveRoot, "aspire-cli-osx-arm64-13.3.0.tar.gz"))).ToLowerInvariant(), cask);
+        Assert.Contains((await GetSha256HexAsync(Path.Combine(archiveRoot, "aspire-cli-osx-x64-13.3.0.tar.gz"))).ToLowerInvariant(), cask);
+        Assert.DoesNotContain("${", cask);
+        Assert.True(File.Exists(Path.Combine(outputDir, "dogfood.sh")));
+    }
+
+    [Fact]
     [RequiresTools(["pwsh"])]
     public async Task PowerShell_WinGetMode_WhatIf_DownloadsManifestAndNativeArchives()
     {
@@ -554,6 +601,39 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("-HiveOnly cannot be combined with -InstallMode Homebrew", result.Output);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task PowerShell_PrepareWinGetManifest_GenerateOnly_GeneratesManifestsWithArchiveHashesAndDogfood()
+    {
+        using var env = new TestEnvironment();
+        var archiveRoot = Path.Combine(env.TempDirectory, "archives");
+        await CreateFakeWinGetArchivesAsync(archiveRoot);
+        var outputDir = Path.Combine(env.TempDirectory, "winget-output");
+        using var cmd = new ScriptToolCommand("eng/winget/prepare-manifest-artifact.ps1", env, _testOutput);
+
+        var result = await cmd.ExecuteAsync(
+            "-Channel", "prerelease",
+            "-ArchiveRoot", archiveRoot,
+            "-OutputPath", outputDir,
+            "-ValidationMode", "GenerateOnly");
+
+        result.EnsureSuccessful();
+
+        var installerManifest = await File.ReadAllTextAsync(Path.Combine(outputDir, "Microsoft.Aspire.installer.yaml"));
+        Assert.Contains("PackageVersion: \"13.3.0\"", installerManifest);
+        Assert.Contains("InstallerUrl: https://ci.dot.net/public/aspire/13.3.0/aspire-cli-win-x64-13.3.0.zip", installerManifest);
+        Assert.Contains("InstallerUrl: https://ci.dot.net/public/aspire/13.3.0/aspire-cli-win-arm64-13.3.0.zip", installerManifest);
+        Assert.Contains(await GetSha256HexAsync(Path.Combine(archiveRoot, "Debug", "Shipping", "aspire-cli-win-x64-13.3.0.zip")), installerManifest);
+        Assert.Contains(await GetSha256HexAsync(Path.Combine(archiveRoot, "Debug", "Shipping", "aspire-cli-win-arm64-13.3.0.zip")), installerManifest);
+        Assert.DoesNotContain(new string('0', 64), installerManifest);
+        Assert.DoesNotContain("${", installerManifest);
+
+        var localeManifest = await File.ReadAllTextAsync(Path.Combine(outputDir, "Microsoft.Aspire.locale.en-US.yaml"));
+        Assert.Contains("For testing builds only. Prerelease package in stable manifest.", localeManifest);
+        Assert.True(File.Exists(Path.Combine(outputDir, "Microsoft.Aspire.yaml")));
+        Assert.True(File.Exists(Path.Combine(outputDir, "dogfood.ps1")));
     }
 
     [Fact]
