@@ -358,36 +358,38 @@ public class PRScriptFunctionTests(ITestOutputHelper testOutput)
 
     #endregion
 
-    #region add_to_path PR install
+    #region source contract
 
     [Fact]
-    public async Task AddToPath_AppendsExportLine()
+    public void ShellSource_DoesNotReferencePersistentShellProfileFiles()
     {
-        // add_to_path is the lower-level helper invoked by add_to_shell_profile when the
-        // shell config is writable. PR installs deliberately bypass add_to_shell_profile
-        // entirely (verified by PR-install end-to-end behavior); this test pins the
-        // remaining contract: when called directly with a writable config, it appends a
-        // single `export PATH=...` line preceded by the marker comment.
-        using var env = new TestEnvironment();
-        var configFile = Path.Combine(env.MockHome, ".zshrc");
-        File.WriteAllText(configFile, "# existing config\n");
+        var source = File.ReadAllText(GetRepoPath(ScriptPaths.PRShell));
 
-        var newPath = Path.Combine(env.MockHome, ".aspire", "bin");
-        var newCommand = "export PATH=\"$HOME/.aspire/bin:$PATH\"";
+        Assert.DoesNotContain(".bashrc", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(".zshrc", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(".profile", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(".bash_profile", source, StringComparison.Ordinal);
+    }
 
-        using var cmd = new ScriptFunctionCommand(
-            s_prScript,
-            $"VERBOSE=true; DRY_RUN=false; add_to_path '{configFile}' '{newPath}' '{newCommand}'",
-            env,
-            _testOutput);
+    [Fact]
+    public void PowerShellSource_DoesNotWriteUserPathEnvironment()
+    {
+        var source = File.ReadAllText(GetRepoPath(ScriptPaths.PRPowerShell));
+        var userEnvironmentWrite = new System.Text.RegularExpressions.Regex(
+            @"\[Environment\]::SetEnvironmentVariable\([^)]*(['""`]User['""`]|EnvironmentVariableTarget\]::User)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
 
-        var result = await cmd.ExecuteAsync();
+        Assert.False(
+            userEnvironmentWrite.IsMatch(source),
+            "get-aspire-cli-pr.ps1 must not call [Environment]::SetEnvironmentVariable(..., 'User') or EnvironmentVariableTarget.User.");
+    }
 
-        result.EnsureSuccessful();
-        var contents = File.ReadAllText(configFile);
-        Assert.Contains("# existing config", contents);
-        Assert.Contains("# Added by get-aspire-cli*.sh script", contents);
-        Assert.Contains("$HOME/.aspire/bin", contents);
+    private static string GetRepoPath(string relativePath)
+    {
+        var repoRoot = Aspire.Templates.Tests.TestUtils.FindRepoRoot()?.FullName
+            ?? throw new InvalidOperationException("Could not find repository root");
+
+        return Path.Combine(repoRoot, relativePath);
     }
 
     #endregion

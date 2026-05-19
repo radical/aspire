@@ -577,7 +577,7 @@ public class PRScriptToolModeTests(ITestOutputHelper testOutput)
 
     [Fact]
     [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
-    public async Task Bash_ToolMode_ExplicitInstallPathAddsToolPathToPath()
+    public async Task Bash_ToolMode_ExplicitInstallPathPrintsSessionOnlyActivationHint()
     {
         using var env = new TestEnvironment();
         var localDir = Path.Combine(env.TempDirectory, "artifacts");
@@ -594,7 +594,11 @@ public class PRScriptToolModeTests(ITestOutputHelper testOutput)
 
         result.EnsureSuccessful();
         Assert.Contains($"dotnet tool install --tool-path {expectedToolPath} Aspire.Cli", result.Output);
-        Assert.Contains($"Would add {expectedToolPath} to PATH", result.Output);
+        Assert.Contains("Leaving PATH unchanged; use the activation hint below for this install.", result.Output);
+        Assert.Contains($"Run Aspire directly: {expectedToolPath}/aspire", result.Output);
+        Assert.Contains($"For this shell only, run: export PATH=\"{expectedToolPath}:$PATH\"", result.Output);
+        Assert.DoesNotContain("Would add", result.Output);
+        Assert.DoesNotContain("Add to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ----------------------------------------------------------------------
@@ -1104,7 +1108,7 @@ public class PRScriptToolModeTests(ITestOutputHelper testOutput)
 
     [Fact]
     [RequiresTools(["pwsh"])]
-    public async Task Ps_ToolMode_ExplicitInstallPathAddsToolPathToPath()
+    public async Task Ps_ToolMode_ExplicitInstallPathUsesCurrentSessionPathOnly()
     {
         using var env = new TestEnvironment();
         var localDir = Path.Combine(env.TempDirectory, "artifacts");
@@ -1121,7 +1125,10 @@ public class PRScriptToolModeTests(ITestOutputHelper testOutput)
 
         result.EnsureSuccessful();
         Assert.Contains($"dotnet tool install --tool-path {expectedToolPath} Aspire.Cli", result.Output);
-        Assert.Contains(expectedToolPath, result.Output);
+        Assert.Contains($"Add {expectedToolPath} to current session", result.Output);
+        Assert.Contains("The aspire cli is now available for use in this session.", result.Output);
+        Assert.DoesNotContain("Add to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SetEnvironmentVariable", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ----------------------------------------------------------------------

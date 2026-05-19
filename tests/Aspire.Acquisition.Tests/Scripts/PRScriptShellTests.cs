@@ -553,13 +553,11 @@ public class PRScriptShellTests(ITestOutputHelper testOutput)
             $"Expected no sidecar to be written under --dry-run, but found one at {sidecarPath}");
     }
 
-    // PR-route install prints the PATH-activation hint to stdout so users
-    // know how to add <prefix>/dogfood/pr-<N>/bin to their shell profile.
-    //
-    // Hint must carry the literal "$HOME" form, not the pre-expanded absolute path,
-    // so the profile line is portable across users.
+    // PR-route install prints a session-only activation hint to stdout.
+    // The direct invocation must carry the literal "$HOME" form, not the
+    // pre-expanded absolute path, so the hint is portable across users.
     [Fact]
-    public async Task DryRun_PRRoute_PrintsPathHintToStdout()
+    public async Task DryRun_PRRoute_PrintsSessionOnlyActivationHintToStdout()
     {
         using var env = new TestEnvironment();
         using var cmd = await CreateCommandWithMockGhAsync(env);
@@ -567,11 +565,14 @@ public class PRScriptShellTests(ITestOutputHelper testOutput)
         var result = await cmd.ExecuteAsync("99999", "--dry-run", "--skip-path");
 
         result.EnsureSuccessful();
-        var hintLine = ExtractShellProfileHintLine(result.Output);
-        Assert.Contains("export PATH=", hintLine);
-        Assert.Contains(Path.Combine("dogfood", "pr-99999", "bin"), hintLine);
-        Assert.Contains("$HOME/.aspire/dogfood/pr-99999/bin", hintLine);
-        Assert.DoesNotContain(env.MockHome, hintLine);
+        var directRunLine = ExtractDirectRunHintLine(result.Output);
+        Assert.Contains(Path.Combine("dogfood", "pr-99999", "bin", "aspire"), directRunLine);
+        Assert.Contains("$HOME/.aspire/dogfood/pr-99999/bin/aspire", directRunLine);
+        Assert.DoesNotContain(env.MockHome, directRunLine);
+        Assert.Contains("For this shell only, run: export PATH=", result.Output);
+        Assert.DoesNotContain("Add this to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add the following to ~/.bashrc", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -584,23 +585,26 @@ public class PRScriptShellTests(ITestOutputHelper testOutput)
         var result = await cmd.ExecuteAsync("99999", "--dry-run", "--skip-path", "--install-path", customPath);
 
         result.EnsureSuccessful();
-        var hintLine = ExtractShellProfileHintLine(result.Output);
-        Assert.Contains($"{customPath}/dogfood/pr-99999/bin", hintLine);
-        Assert.DoesNotContain("$HOME", hintLine);
+        var directRunLine = ExtractDirectRunHintLine(result.Output);
+        Assert.Contains($"{customPath}/dogfood/pr-99999/bin/aspire", directRunLine);
+        Assert.DoesNotContain("$HOME", directRunLine);
+        Assert.DoesNotContain("Add this to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add the following to ~/.bashrc", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ExtractShellProfileHintLine(string output)
+    private static string ExtractDirectRunHintLine(string output)
     {
         foreach (var rawLine in output.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
-            if (line.Contains("Add to your shell profile:", StringComparison.Ordinal))
+            if (line.Contains("Run Aspire directly:", StringComparison.Ordinal))
             {
                 return line;
             }
         }
 
-        Assert.Fail($"Expected an 'Add to your shell profile:' line in output, but none was emitted. Output was:\n{output}");
+        Assert.Fail($"Expected a 'Run Aspire directly:' line in output, but none was emitted. Output was:\n{output}");
         return string.Empty;
     }
 

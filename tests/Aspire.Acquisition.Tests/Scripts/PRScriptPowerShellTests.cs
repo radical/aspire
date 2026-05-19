@@ -478,16 +478,12 @@ public class PRScriptPowerShellTests(ITestOutputHelper testOutput)
             $"Expected no sidecar to be written under -WhatIf, but found one at {sidecarPath}");
     }
 
-    // PR-route install prints the PATH-activation hint via Write-Host. The
-    // OS path separator keeps the line valid on both Windows (;) and Unix (:).
-    // The new-PATH expression must be double-quoted so PowerShell expands
-    // `$env:PATH` when the user pastes the line into their profile — single
-    // quotes would assign the literal text and clobber PATH.
-    //
-    // Separator before `$env:PATH` must be [System.IO.Path]::PathSeparator — a
-    // hard-coded ":" or ";" breaks the hint on the opposite platform.
+    // PR-route install prints a session-only activation hint via Write-Host. The
+    // direct invocation names the PR-route binary, and the current-session PATH
+    // command uses the OS path separator so the line is valid on both Windows
+    // (;) and Unix (:).
     [Fact]
-    public async Task WhatIf_PRRoute_PrintsPathHintToStdout()
+    public async Task WhatIf_PRRoute_PrintsSessionOnlyActivationHintToStdout()
     {
         using var env = new TestEnvironment();
         using var cmd = await CreateCommandWithMockGhAsync(env);
@@ -495,18 +491,15 @@ public class PRScriptPowerShellTests(ITestOutputHelper testOutput)
         var result = await cmd.ExecuteAsync("-PRNumber", "99999", "-SkipPath", "-WhatIf");
 
         result.EnsureSuccessful();
-        var hintLine = ExtractShellProfileHintLine(result.Output);
-        Assert.Contains("$env:PATH", hintLine);
-        Assert.Contains(Path.Combine("dogfood", "pr-99999", "bin"), hintLine);
+        var directRunLine = ExtractDirectRunHintLine(result.Output);
         var binDir = Path.Combine(env.MockHome, ".aspire", "dogfood", "pr-99999", "bin");
-        // The assignment value must be wrapped in double quotes so that
-        // $env:PATH expands at user-paste time. Single quotes would make the
-        // user's PATH become the literal string "...bin;$env:PATH".
-        Assert.Contains($"\"{binDir}", hintLine);
-        Assert.DoesNotContain($"'{binDir}", hintLine);
-        // Separator joining the new bin dir to `$env:PATH` must come from
-        // [System.IO.Path]::PathSeparator, not a hard-coded ":" / ";".
-        Assert.Contains($"{binDir}{Path.PathSeparator}$env:PATH", hintLine);
+        var binaryName = OperatingSystem.IsWindows() ? "aspire.exe" : "aspire";
+        Assert.Contains(Path.Combine(binDir, binaryName), directRunLine);
+        Assert.Contains("For this shell only, run:", result.Output);
+        Assert.Contains($"{binDir}{Path.PathSeparator}$env:PATH", result.Output);
+        Assert.DoesNotContain("Add this to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add the following to ~/.bashrc", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -519,25 +512,29 @@ public class PRScriptPowerShellTests(ITestOutputHelper testOutput)
         var result = await cmd.ExecuteAsync("-PRNumber", "99999", "-SkipPath", "-WhatIf", "-InstallPath", customPath);
 
         result.EnsureSuccessful();
-        var hintLine = ExtractShellProfileHintLine(result.Output);
+        var directRunLine = ExtractDirectRunHintLine(result.Output);
         var binDir = Path.Combine(customPath, "dogfood", "pr-99999", "bin");
-        Assert.Contains($"\"{binDir}", hintLine);
-        Assert.Contains($"{binDir}{Path.PathSeparator}$env:PATH", hintLine);
-        Assert.DoesNotContain(Path.Combine(env.MockHome, ".aspire", "dogfood", "pr-99999", "bin"), hintLine);
+        var binaryName = OperatingSystem.IsWindows() ? "aspire.exe" : "aspire";
+        Assert.Contains(Path.Combine(binDir, binaryName), directRunLine);
+        Assert.Contains($"{binDir}{Path.PathSeparator}$env:PATH", result.Output);
+        Assert.DoesNotContain(Path.Combine(env.MockHome, ".aspire", "dogfood", "pr-99999", "bin"), directRunLine);
+        Assert.DoesNotContain("Add this to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add the following to ~/.bashrc", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Add to your shell profile", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ExtractShellProfileHintLine(string output)
+    private static string ExtractDirectRunHintLine(string output)
     {
         foreach (var rawLine in output.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
-            if (line.Contains("Add to your shell profile:", StringComparison.Ordinal))
+            if (line.Contains("Run Aspire directly:", StringComparison.Ordinal))
             {
                 return line;
             }
         }
 
-        Assert.Fail($"Expected an 'Add to your shell profile:' line in output, but none was emitted. Output was:\n{output}");
+        Assert.Fail($"Expected a 'Run Aspire directly:' line in output, but none was emitted. Output was:\n{output}");
         return string.Empty;
     }
 
