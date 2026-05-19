@@ -70,7 +70,9 @@ internal sealed class InstallationDiscovery : IInstallationDiscovery
         // identifier the install scripts wrote, not the C# enum name. For
         // sidecars with an unrecognized source value we surface the raw
         // string so users see "(unknown: future-route)" rather than nothing.
-        var route = sidecar?.Source.ToWireString() ?? sidecar?.RawSource;
+        // Route through the shared helper so an empty RawSource collapses to
+        // null and the JSON shape of `--self` matches the full discovery walk.
+        var route = sidecar is not null ? GetRouteFromSidecar(sidecar) : null;
 
         return new InstallationInfo
         {

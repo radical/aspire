@@ -37,8 +37,8 @@ internal abstract record InstallSidecarReadResult(string SidecarPath)
 /// <summary>
 /// Reads the install-route sidecar (<c>.aspire-install.json</c>) that an
 /// install route writes next to the CLI binary. The sidecar identifies the
-    /// installation route so callers (e.g. <c>BundleService</c>,
-    /// <c>aspire doctor</c>, <c>aspire uninstall</c>) can branch behavior without
+/// installation route so callers (e.g. <c>BundleService</c>,
+/// <c>aspire doctor</c>, <c>aspire uninstall</c>) can branch behavior without
 /// path-shape heuristics.
 /// </summary>
 /// <remarks>

@@ -80,6 +80,9 @@ internal sealed class DogfoodInstallationCandidateSource : IInstallationCandidat
             var subdirCount = 0;
             foreach (var prDir in InstallationCandidateSourceHelpers.EnumerateDirectoriesSafe(dogfoodRoot, context.Logger))
             {
+                // Match the per-step cancellation cadence of the dotnet-tool-store source so
+                // Ctrl+C on a slow dogfood root doesn't have to wait for the whole walk.
+                context.CancellationToken.ThrowIfCancellationRequested();
                 subdirCount++;
                 var binDir = Path.Combine(prDir, "bin");
                 var binary = Path.Combine(binDir, context.AspireBinaryName);
