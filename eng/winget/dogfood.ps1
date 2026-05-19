@@ -239,51 +239,69 @@ if (-not $Force) {
     }
 }
 
-$installerManifestPath = Get-InstallerManifestPath -Path $ManifestPath
-$version = Get-ManifestVersion -ManifestPath $installerManifestPath
+# Stage the .yaml manifest files into a clean temp directory before calling winget.
+# `winget validate --manifest <dir>` and `winget install --manifest <dir>` treat every
+# file in the directory as a multi-file manifest. The CI artifact ships dogfood.ps1
+# alongside the yaml files, so pointing winget at the artifact directly fails with
+# "The manifest does not contain a valid root. File: dogfood.ps1". Staging also keeps
+# Set-LocalInstallerUrls's rewrites out of the user's artifact so reruns are idempotent.
+$stagedManifestDir = Join-Path ([System.IO.Path]::GetTempPath()) ("aspire-winget-manifest-" + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $stagedManifestDir -Force | Out-Null
 
-if (-not $ArchiveRoot) {
-    $ArchiveRoot = Get-DefaultArchiveRoot -Version $version
+try {
+    foreach ($f in $manifestFiles) {
+        Copy-Item -Path $f.FullName -Destination (Join-Path $stagedManifestDir $f.Name) -Force
+    }
+
+    $installerManifestPath = Get-InstallerManifestPath -Path $stagedManifestDir
+    $version = Get-ManifestVersion -ManifestPath $installerManifestPath
+
+    if (-not $ArchiveRoot) {
+        $ArchiveRoot = Get-DefaultArchiveRoot -Version $version
+    }
+
+    if ($ArchiveRoot) {
+        $ArchiveRoot = (Resolve-Path $ArchiveRoot).Path
+        Write-Host "Using local native archive artifacts from: $ArchiveRoot"
+        Set-LocalInstallerUrls -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version
+    } else {
+        Write-Host "No local native archive artifacts found; installing with URLs from the manifests."
+    }
+    Write-Host ""
+
+    # Enable local manifest files
+    Write-Host "Enabling local manifest files in winget settings..."
+    winget settings --enable LocalManifestFiles
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to enable local manifests. You may need to run this as Administrator."
+    }
+
+    # Validate
+    Write-Host ""
+    Write-Host "Validating manifests..."
+    winget validate --manifest $stagedManifestDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Manifest validation failed. Fix the manifests and try again."
+        exit $LASTEXITCODE
+    }
+    Write-Host "Validation passed."
+
+    # Install
+    Write-Host ""
+    Write-Host "Installing Aspire CLI from local manifest..."
+    $installArgs = @("install", "--manifest", $stagedManifestDir, "--accept-package-agreements", "--accept-source-agreements")
+    if ($Force) {
+        $installArgs += "--force"
+    }
+
+    winget @installArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Installation failed with exit code $LASTEXITCODE"
+        exit $LASTEXITCODE
+    }
 }
-
-if ($ArchiveRoot) {
-    $ArchiveRoot = (Resolve-Path $ArchiveRoot).Path
-    Write-Host "Using local native archive artifacts from: $ArchiveRoot"
-    Set-LocalInstallerUrls -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version
-} else {
-    Write-Host "No local native archive artifacts found; installing with URLs from the manifests."
-}
-Write-Host ""
-
-# Enable local manifest files
-Write-Host "Enabling local manifest files in winget settings..."
-winget settings --enable LocalManifestFiles
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Failed to enable local manifests. You may need to run this as Administrator."
-}
-
-# Validate
-Write-Host ""
-Write-Host "Validating manifests..."
-winget validate --manifest $ManifestPath
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Manifest validation failed. Fix the manifests and try again."
-    exit $LASTEXITCODE
-}
-Write-Host "Validation passed."
-
-# Install
-Write-Host ""
-Write-Host "Installing Aspire CLI from local manifest..."
-$installArgs = @("install", "--manifest", $ManifestPath, "--accept-package-agreements", "--accept-source-agreements")
-if ($Force) {
-    $installArgs += "--force"
-}
-
-winget @installArgs
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Installation failed with exit code $LASTEXITCODE"
-    exit $LASTEXITCODE
+finally {
+    Remove-Item -Path $stagedManifestDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Refresh PATH

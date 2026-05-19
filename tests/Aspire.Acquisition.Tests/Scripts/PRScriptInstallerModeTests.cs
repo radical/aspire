@@ -143,16 +143,45 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
             set -euo pipefail
             echo "$*" >> "{{wingetLog}}"
 
-            case "${1:-}" in
+            cmd="${1:-}"
+            shift || true
+
+            case "$cmd" in
               list)
                 exit 1
                 ;;
-              settings|validate|install|uninstall)
+              settings|uninstall)
+                exit 0
+                ;;
+              validate|install)
+                # Real winget treats every file in --manifest <dir> as a multi-file manifest
+                # and rejects non-yaml files (e.g. "The manifest does not contain a valid root.
+                # File: dogfood.ps1"). Mirror that so regressions on the manifest-staging logic
+                # in dogfood.ps1 are caught here.
+                manifest_dir=""
+                while [ $# -gt 0 ]; do
+                  if [ "$1" = "--manifest" ]; then
+                    manifest_dir="${2:-}"
+                    break
+                  fi
+                  shift
+                done
+                if [ -n "$manifest_dir" ] && [ -d "$manifest_dir" ]; then
+                  while IFS= read -r f; do
+                    case "$f" in
+                      *.yaml|*.yml) ;;
+                      *)
+                        echo "Mock winget: non-yaml file in manifest dir: $f" >&2
+                        exit 1
+                        ;;
+                    esac
+                  done < <(find "$manifest_dir" -mindepth 1 -maxdepth 1 -type f)
+                fi
                 exit 0
                 ;;
             esac
 
-            echo "unexpected winget command: $*" >&2
+            echo "unexpected winget command: $cmd $*" >&2
             exit 1
             """);
         FileHelper.MakeExecutable(wingetPath);
