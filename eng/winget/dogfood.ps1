@@ -229,6 +229,45 @@ function Get-FreeLoopbackPort {
     }
 }
 
+function Show-LatestWinGetDiagLog {
+    param([string]$Reason = '')
+
+    # Real winget writes per-invocation diag logs to
+    # %LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir
+    # When `winget install --manifest` exits non-zero, the diag log is almost always
+    # the only place that says *why* (the console output is often truncated or empty,
+    # and `winget` exit codes like 0x8A150001 are generic). Print the newest log to
+    # stderr so dogfood failures are diagnosable without separately hunting it down.
+    #
+    # Tests set ASPIRE_TEST_MODE=true and run a mock winget that doesn't produce diag
+    # logs, so skip this in test mode to avoid emitting unrelated stale logs.
+    if ($env:ASPIRE_TEST_MODE -eq 'true') {
+        return
+    }
+
+    $diagDir = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+    if (-not (Test-Path -LiteralPath $diagDir)) {
+        Write-Host "(no winget diag dir at $diagDir)"
+        return
+    }
+
+    $log = Get-ChildItem -LiteralPath $diagDir -Filter 'WinGet-*.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $log) {
+        Write-Host "(no WinGet-*.log files in $diagDir)"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "=== winget diag log ($Reason) ==="
+    Write-Host "  $($log.FullName)"
+    Write-Host ""
+    Get-Content -LiteralPath $log.FullName | ForEach-Object { Write-Host "  $_" }
+    Write-Host "=== end winget diag log ==="
+    Write-Host ""
+}
+
 function Resolve-ArchiveFileMap {
     param(
         [string]$ResolvedArchiveRoot,
@@ -451,8 +490,10 @@ try {
 
     winget @installArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Installation failed with exit code $LASTEXITCODE"
-        exit $LASTEXITCODE
+        $wingetExitCode = $LASTEXITCODE
+        Show-LatestWinGetDiagLog -Reason "winget exit code $wingetExitCode"
+        Write-Error "Installation failed with exit code $wingetExitCode"
+        exit $wingetExitCode
     }
 }
 finally {
