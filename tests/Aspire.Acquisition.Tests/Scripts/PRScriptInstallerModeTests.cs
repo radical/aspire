@@ -53,13 +53,22 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
     // Builds the realistic PR-channel layout that prepare-manifest-artifact.ps1 produces:
     // an installer.yaml with two Installers entries (https:// URLs and a placeholder
     // SHA256 of all zeros) co-located with dogfood.ps1, plus fake aspire-cli-win-*
-    // archives in a sibling directory that -ArchiveRoot will point at.
+    // archives. The archives are nested under <archive-root>/Debug/Shipping/ to mirror
+    // what `gh run download cli-native-archives-<rid>` produces — that artifact is
+    // uploaded with `path: artifacts/packages/**/aspire-cli*` in
+    // .github/workflows/build-cli-native-archives.yml, so the `**/` glob preserves the
+    // Debug/Shipping/ directory structure. dogfood.ps1's HTTP server is required to
+    // serve files regardless of how deep they are under -ArchiveRoot; a flat fixture
+    // hid that requirement and let a real-world 404 ship.
     private static async Task<(string ManifestDir, string ArchiveRoot)> CreateWinGetPrChannelArtifactAsync(string root, string version = "13.3.0")
     {
         var manifestDir = Path.Combine(root, "installer-winget");
         var archiveRoot = Path.Combine(root, "installer-native-archives");
+        // Archives live under Debug/Shipping/ when `gh run download` extracts the
+        // cli-native-archives-<rid> artifact — see comment above.
+        var archiveDir = Path.Combine(archiveRoot, "Debug", "Shipping");
         Directory.CreateDirectory(manifestDir);
-        Directory.CreateDirectory(archiveRoot);
+        Directory.CreateDirectory(archiveDir);
 
         var placeholder = new string('0', 64);
         var installerYaml = $$"""
@@ -87,8 +96,8 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         await File.WriteAllTextAsync(Path.Combine(manifestDir, "dogfood.ps1"), "exit 0\n");
 
         // Distinct fake bytes per RID so SHA256 differences flow into the mock install check.
-        await File.WriteAllTextAsync(Path.Combine(archiveRoot, $"aspire-cli-win-x64-{version}.zip"), $"fake-x64-{version}");
-        await File.WriteAllTextAsync(Path.Combine(archiveRoot, $"aspire-cli-win-arm64-{version}.zip"), $"fake-arm64-{version}");
+        await File.WriteAllTextAsync(Path.Combine(archiveDir, $"aspire-cli-win-x64-{version}.zip"), $"fake-x64-{version}");
+        await File.WriteAllTextAsync(Path.Combine(archiveDir, $"aspire-cli-win-arm64-{version}.zip"), $"fake-arm64-{version}");
 
         return (manifestDir, archiveRoot);
     }
@@ -632,7 +641,7 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
 
         // Tamper the archive *after* the manifest's placeholder hash was written. The
         // refreshed hash must reflect the new bytes for ``winget install`` to succeed.
-        var x64Archive = Path.Combine(archiveRoot, "aspire-cli-win-x64-13.3.0.zip");
+        var x64Archive = Path.Combine(archiveRoot, "Debug", "Shipping", "aspire-cli-win-x64-13.3.0.zip");
         await File.WriteAllTextAsync(x64Archive, "post-generate-mutated-x64-bytes");
 
         var mockBinDir = await CreateMockWinGetBinAsync(env, aspireExitCode: 0);

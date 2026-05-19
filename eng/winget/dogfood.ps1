@@ -127,7 +127,11 @@ function Get-DefaultArchiveRoot {
 }
 
 function Start-LocalArchiveServer {
-    param([string]$ArchiveRoot)
+    param(
+        # Map of <archive filename> → <absolute path on disk>. Only these names are
+        # serveable; anything else returns 404.
+        [hashtable]$FileMap
+    )
 
     # WinGet downloads InstallerUrl payloads via WinINet's InternetOpenUrl(), which
     # only supports http/https/ftp — not file://. So we serve the local archives over
@@ -153,7 +157,7 @@ function Start-LocalArchiveServer {
     $ps = [powershell]::Create()
     $ps.Runspace = $runspace
     [void]$ps.AddScript({
-        param($Listener, $ArchiveRoot)
+        param($Listener, $FileMap)
         while ($Listener.IsListening) {
             try {
                 $context = $Listener.GetContext()
@@ -163,11 +167,8 @@ function Start-LocalArchiveServer {
 
             try {
                 $requestedName = [System.IO.Path]::GetFileName([System.Uri]::UnescapeDataString($context.Request.Url.AbsolutePath))
-                $filePath = Join-Path $ArchiveRoot $requestedName
-                if ((Test-Path -LiteralPath $filePath -PathType Leaf) -and
-                    # Defend against path traversal: requested name must not contain separators.
-                    -not $requestedName.Contains([IO.Path]::DirectorySeparatorChar) -and
-                    -not $requestedName.Contains([IO.Path]::AltDirectorySeparatorChar)) {
+                if ($FileMap.ContainsKey($requestedName)) {
+                    $filePath = $FileMap[$requestedName]
                     $bytes = [System.IO.File]::ReadAllBytes($filePath)
                     $context.Response.ContentType = 'application/octet-stream'
                     $context.Response.ContentLength64 = $bytes.LongLength
@@ -181,7 +182,7 @@ function Start-LocalArchiveServer {
                 try { $context.Response.Close() } catch { }
             }
         }
-    }).AddArgument($listener).AddArgument((Resolve-Path $ArchiveRoot).ProviderPath)
+    }).AddArgument($listener).AddArgument($FileMap)
 
     $asyncResult = $ps.BeginInvoke()
 
@@ -228,30 +229,46 @@ function Get-FreeLoopbackPort {
     }
 }
 
+function Resolve-ArchiveFileMap {
+    param(
+        [string]$ResolvedArchiveRoot,
+        [string]$Version
+    )
+
+    # The PR-channel CI artifact extracts under <archive-root>/Debug/Shipping/, not
+    # the root of the artifact directory. Find-Archive scans recursively to locate
+    # the actual on-disk path. This returns:
+    #   filename → absolute path  (e.g. "aspire-cli-win-x64-13.4.0-pr.X.gSHA.zip"
+    #                              → "C:\...\Debug\Shipping\aspire-cli-win-x64-13.4.0-pr.X.gSHA.zip")
+    $archives = @{}
+    foreach ($arch in @("x64", "arm64")) {
+        $archiveName = "aspire-cli-win-$arch-$Version.zip"
+        $archives[$archiveName] = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName $archiveName
+    }
+    return $archives
+}
+
 function Set-LocalInstallerSources {
     param(
         [string]$InstallerManifestPath,
-        [string]$ResolvedArchiveRoot,
-        [string]$Version,
+        [hashtable]$ArchiveFileMap,
         [string]$BaseUri
     )
-
-    $archiveByArchitecture = @{
-        "x64"   = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName "aspire-cli-win-x64-$Version.zip"
-        "arm64" = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName "aspire-cli-win-arm64-$Version.zip"
-    }
 
     # winget install hashes the downloaded payload and compares it with the recorded
     # InstallerSha256, so we have to refresh the hash whenever we redirect InstallerUrl
     # at a local archive. PR-channel manifests in particular ship with the placeholder
     # ("0" * 64) baked in by generate-manifests.ps1's -SkipUrlValidation path, and that
     # hash never matches a real build.
+    $archiveByArchitecture = @{}
     $sha256ByArchitecture = @{}
     $urlByArchitecture = @{}
-    foreach ($arch in $archiveByArchitecture.Keys) {
-        $archivePath = $archiveByArchitecture[$arch]
+    foreach ($name in $ArchiveFileMap.Keys) {
+        $archivePath = $ArchiveFileMap[$name]
+        $arch = if ($name -match 'aspire-cli-win-(x64|arm64)-') { $Matches[1] } else { continue }
+        $archiveByArchitecture[$arch] = $archivePath
         $sha256ByArchitecture[$arch] = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToUpperInvariant()
-        $urlByArchitecture[$arch] = "$BaseUri/$([System.IO.Path]::GetFileName($archivePath))"
+        $urlByArchitecture[$arch] = "$BaseUri/$name"
     }
 
     $currentArchitecture = $null
@@ -408,11 +425,20 @@ try {
         # winget's downloader is WinINet (InternetOpenUrl), which only supports
         # http/https/ftp/gopher — not file://. Serve the local archives over a loopback
         # HTTP listener and rewrite InstallerUrl to point at it.
+        #
+        # The PR-channel artifact is laid out as <ArchiveRoot>/Debug/Shipping/*.zip,
+        # so we resolve archive paths via Find-Archive (recursive) and serve the same
+        # map from the listener — otherwise the listener would 404 on the manifest's
+        # rewritten URL because the file isn't at the root of $ArchiveRoot.
+        $archiveFileMap = Resolve-ArchiveFileMap -ResolvedArchiveRoot $ArchiveRoot -Version $version
         Write-Host ""
         Write-Host "Starting local archive server..."
-        $archiveServer = Start-LocalArchiveServer -ArchiveRoot $ArchiveRoot
-        Write-Host "  Serving $ArchiveRoot at $($archiveServer.BaseUri)"
-        Set-LocalInstallerSources -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version -BaseUri $archiveServer.BaseUri
+        $archiveServer = Start-LocalArchiveServer -FileMap $archiveFileMap
+        Write-Host "  Serving $($archiveFileMap.Count) archive(s) at $($archiveServer.BaseUri)"
+        foreach ($name in $archiveFileMap.Keys) {
+            Write-Host "    $name -> $($archiveFileMap[$name])"
+        }
+        Set-LocalInstallerSources -InstallerManifestPath $installerManifestPath -ArchiveFileMap $archiveFileMap -BaseUri $archiveServer.BaseUri
     }
 
     # Install
