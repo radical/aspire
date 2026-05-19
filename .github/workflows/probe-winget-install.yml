@@ -1,0 +1,102 @@
+name: Probe — get-aspire-cli-pr.ps1 winget install on windows-latest
+
+# One-shot diagnostic workflow. Runs the same `iex ... get-aspire-cli-pr.ps1 ... -InstallMode winget`
+# command an Aspire developer would run locally, captures winget's diag logs and the
+# console transcript, and uploads them as artifacts. Used to determine whether a
+# specific PR's portable+zip+loopback install reproduces on a clean Windows runner.
+
+on:
+  # `gh workflow run` requires the workflow file to be present on the default branch,
+  # which this probe is intentionally not. Trigger on push to the probe branch so the
+  # workflow runs once whenever a new probe is pushed; this avoids polluting the fork's
+  # default branch with diagnostic-only YAML.
+  push:
+    branches:
+      - 'ankj/probe-winget-install*'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number on dotnet/aspire (or microsoft/aspire) to install from'
+        required: true
+        default: '17115'
+      script_branch:
+        description: 'radical/aspire branch hosting get-aspire-cli-pr.ps1'
+        required: true
+        default: 'radical/installer-manifests'
+
+env:
+  # Hardcoded defaults used when triggered via push (no dispatch inputs available).
+  PROBE_PR_NUMBER: '17115'
+  PROBE_SCRIPT_BRANCH: 'radical/installer-manifests'
+
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Show host environment
+        shell: pwsh
+        run: |
+          Write-Host "OS: $((Get-CimInstance Win32_OperatingSystem).Caption) $((Get-CimInstance Win32_OperatingSystem).Version)"
+          $w = (winget --version) 2>&1
+          Write-Host "winget: $w"
+          Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+          Write-Host "Whoami: $(whoami) (admin token? $((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)))"
+
+      - name: Run get-aspire-cli-pr.ps1 -InstallMode winget
+        id: install
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number || env.PROBE_PR_NUMBER }}
+          SCRIPT_BRANCH: ${{ inputs.script_branch || env.PROBE_SCRIPT_BRANCH }}
+        run: |
+          $url = "https://raw.githubusercontent.com/radical/aspire/$env:SCRIPT_BRANCH/eng/scripts/get-aspire-cli-pr.ps1"
+          Write-Host "Fetching script: $url"
+          Write-Host "PR number: $env:PR_NUMBER"
+          $script = irm $url
+          # Capture both stdout and stderr to a transcript file.
+          Start-Transcript -Path "$env:GITHUB_WORKSPACE\install-transcript.txt" -Force | Out-Null
+          try {
+            iex "& { $script } $env:PR_NUMBER -InstallMode winget"
+            $exit = $LASTEXITCODE
+          } catch {
+            Write-Host "Caught exception: $_"
+            $exit = 1
+          } finally {
+            Stop-Transcript | Out-Null
+          }
+          Write-Host "Final exit code: $exit"
+          "install_exit_code=$exit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Collect winget diag logs
+        if: always()
+        shell: pwsh
+        run: |
+          $dest = "$env:GITHUB_WORKSPACE\winget-diag-logs"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $src = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
+          if (Test-Path $src) {
+            Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
+            $count = (Get-ChildItem $dest -File).Count
+            Write-Host "Copied $count log file(s)"
+          } else {
+            Write-Host "No winget DiagOutputDir at $src"
+          }
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winget-probe-pr${{ inputs.pr_number || env.PROBE_PR_NUMBER }}
+          path: |
+            ${{ github.workspace }}/install-transcript.txt
+            ${{ github.workspace }}/winget-diag-logs
+
+      - name: Fail job if install failed
+        if: steps.install.outputs.install_exit_code != '0'
+        shell: pwsh
+        run: |
+          Write-Host "::warning::winget install failed with exit code ${{ steps.install.outputs.install_exit_code }} — see uploaded artifacts."
+          exit ${{ steps.install.outputs.install_exit_code }}
