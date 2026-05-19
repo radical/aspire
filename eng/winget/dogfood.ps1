@@ -144,6 +144,16 @@ function Set-LocalInstallerUrls {
         "arm64" = Find-Archive -Root $ResolvedArchiveRoot -ArchiveName "aspire-cli-win-arm64-$Version.zip"
     }
 
+    # winget install verifies the recorded InstallerSha256 against the actual file
+    # contents, so we have to refresh the hash whenever we redirect InstallerUrl at a
+    # local archive. PR-channel manifests in particular ship with the placeholder
+    # ("0" * 64) baked in by generate-manifests.ps1's -SkipUrlValidation path, and that
+    # hash never matches a real build.
+    $sha256ByArchitecture = @{}
+    foreach ($arch in $archiveByArchitecture.Keys) {
+        $sha256ByArchitecture[$arch] = (Get-FileHash -Path $archiveByArchitecture[$arch] -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+
     $currentArchitecture = $null
     $updatedLines = foreach ($line in Get-Content -Path $InstallerManifestPath) {
         if ($line -match '^\s*-\s*Architecture:\s*(\S+)\s*$') {
@@ -154,6 +164,11 @@ function Set-LocalInstallerUrls {
 
         if ($line -match '^(\s*)InstallerUrl:\s*' -and $currentArchitecture -and $archiveByArchitecture.ContainsKey($currentArchitecture)) {
             "$($Matches[1])InstallerUrl: $(ConvertTo-FileUri -Path $archiveByArchitecture[$currentArchitecture])"
+            continue
+        }
+
+        if ($line -match '^(\s*)InstallerSha256:\s*' -and $currentArchitecture -and $sha256ByArchitecture.ContainsKey($currentArchitecture)) {
+            "$($Matches[1])InstallerSha256: $($sha256ByArchitecture[$currentArchitecture])"
             continue
         }
 
@@ -263,7 +278,6 @@ try {
     if ($ArchiveRoot) {
         $ArchiveRoot = (Resolve-Path $ArchiveRoot).Path
         Write-Host "Using local native archive artifacts from: $ArchiveRoot"
-        Set-LocalInstallerUrls -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version
     } else {
         Write-Host "No local native archive artifacts found; installing with URLs from the manifests."
     }
@@ -276,7 +290,11 @@ try {
         Write-Warning "Failed to enable local manifests. You may need to run this as Administrator."
     }
 
-    # Validate
+    # Validate the manifest BEFORE we rewrite InstallerUrl/InstallerSha256 to point at
+    # local archives. winget's schema requires InstallerUrl to match ^https?://, so a
+    # rewritten file:// manifest fails ``winget validate``. winget install does its own
+    # (more permissive) validation and accepts file:// URLs when LocalManifestFiles is
+    # enabled, so we still validate the pristine yaml and install the rewritten copy.
     Write-Host ""
     Write-Host "Validating manifests..."
     winget validate --manifest $stagedManifestDir
@@ -285,6 +303,10 @@ try {
         exit $LASTEXITCODE
     }
     Write-Host "Validation passed."
+
+    if ($ArchiveRoot) {
+        Set-LocalInstallerUrls -InstallerManifestPath $installerManifestPath -ResolvedArchiveRoot $ArchiveRoot -Version $version
+    }
 
     # Install
     Write-Host ""

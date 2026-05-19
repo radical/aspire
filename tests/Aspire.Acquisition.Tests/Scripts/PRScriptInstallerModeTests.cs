@@ -50,6 +50,49 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         return root;
     }
 
+    // Builds the realistic PR-channel layout that prepare-manifest-artifact.ps1 produces:
+    // an installer.yaml with two Installers entries (https:// URLs and a placeholder
+    // SHA256 of all zeros) co-located with dogfood.ps1, plus fake aspire-cli-win-*
+    // archives in a sibling directory that -ArchiveRoot will point at.
+    private static async Task<(string ManifestDir, string ArchiveRoot)> CreateWinGetPrChannelArtifactAsync(string root, string version = "13.3.0")
+    {
+        var manifestDir = Path.Combine(root, "installer-winget");
+        var archiveRoot = Path.Combine(root, "installer-native-archives");
+        Directory.CreateDirectory(manifestDir);
+        Directory.CreateDirectory(archiveRoot);
+
+        var placeholder = new string('0', 64);
+        var installerYaml = $$"""
+            # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+            PackageIdentifier: Microsoft.Aspire
+            PackageVersion: "{{version}}"
+            InstallerType: zip
+            NestedInstallerType: portable
+            NestedInstallerFiles:
+            - RelativeFilePath: aspire.exe
+              PortableCommandAlias: aspire
+            Installers:
+            - Architecture: x64
+              InstallerUrl: https://ci.dot.net/public/aspire/{{version}}/aspire-cli-win-x64-{{version}}.zip
+              InstallerSha256: {{placeholder}}
+            - Architecture: arm64
+              InstallerUrl: https://ci.dot.net/public/aspire/{{version}}/aspire-cli-win-arm64-{{version}}.zip
+              InstallerSha256: {{placeholder}}
+            ManifestType: installer
+            ManifestVersion: 1.10.0
+            """;
+        await File.WriteAllTextAsync(Path.Combine(manifestDir, "Microsoft.Aspire.installer.yaml"), installerYaml);
+        await File.WriteAllTextAsync(Path.Combine(manifestDir, "Microsoft.Aspire.yaml"), $"PackageIdentifier: Microsoft.Aspire\nPackageVersion: {version}\nManifestType: version\nManifestVersion: 1.10.0\n");
+        await File.WriteAllTextAsync(Path.Combine(manifestDir, "Microsoft.Aspire.locale.en-US.yaml"), $"PackageIdentifier: Microsoft.Aspire\nPackageVersion: {version}\nPackageLocale: en-US\nManifestType: defaultLocale\nManifestVersion: 1.10.0\n");
+        await File.WriteAllTextAsync(Path.Combine(manifestDir, "dogfood.ps1"), "exit 0\n");
+
+        // Distinct fake bytes per RID so SHA256 differences flow into the mock install check.
+        await File.WriteAllTextAsync(Path.Combine(archiveRoot, $"aspire-cli-win-x64-{version}.zip"), $"fake-x64-{version}");
+        await File.WriteAllTextAsync(Path.Combine(archiveRoot, $"aspire-cli-win-arm64-{version}.zip"), $"fake-arm64-{version}");
+
+        return (manifestDir, archiveRoot);
+    }
+
     private static async Task<string> CreateMockHomebrewBinAsync(TestEnvironment env, int aspireExitCode)
     {
         var mockBinDir = Path.Combine(env.TempDirectory, "mock-homebrew-bin");
@@ -176,6 +219,65 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
                         ;;
                     esac
                   done < <(find "$manifest_dir" -mindepth 1 -maxdepth 1 -type f)
+                fi
+
+                installer_yaml=""
+                if [ -n "$manifest_dir" ] && [ -d "$manifest_dir" ]; then
+                  installer_yaml="$(find "$manifest_dir" -mindepth 1 -maxdepth 1 -type f -name '*.installer.yaml' | head -n 1)"
+                fi
+
+                if [ "$cmd" = "validate" ] && [ -n "$installer_yaml" ]; then
+                  # WinGet's installer schema requires InstallerUrl to match ^https?://.
+                  # Reject file:// URLs the way real ``winget validate`` does (see
+                  # https://learn.microsoft.com/windows/package-manager/package/manifest).
+                  while IFS= read -r url; do
+                    case "$url" in
+                      http://*|https://*) ;;
+                      *)
+                        echo "Mock winget validate: InstallerUrl does not match ^https?://: $url" >&2
+                        exit 1
+                        ;;
+                    esac
+                  done < <(grep -E '^\s*InstallerUrl:' "$installer_yaml" | sed -E 's/^\s*InstallerUrl:\s*//')
+                fi
+
+                if [ "$cmd" = "install" ] && [ -n "$installer_yaml" ]; then
+                  # winget install hashes the actual file referenced by InstallerUrl and
+                  # compares with the manifest's InstallerSha256. Mirror that so regressions
+                  # on Set-LocalInstallerUrls's hash refresh (PR manifests ship with a
+                  # placeholder hash of all zeros) are caught.
+                  current_url=""
+                  while IFS= read -r line; do
+                    case "$line" in
+                      *InstallerUrl:*)
+                        current_url="$(echo "$line" | sed -E 's/^\s*InstallerUrl:\s*//')"
+                        ;;
+                      *InstallerSha256:*)
+                        recorded="$(echo "$line" | sed -E 's/^\s*InstallerSha256:\s*//' | tr '[:lower:]' '[:upper:]')"
+                        if [ -n "$current_url" ]; then
+                          case "$current_url" in
+                            file://*)
+                              local_path="${current_url#file://}"
+                              # file:///C:/... on Windows: drop a leading slash before the drive letter.
+                              case "$local_path" in
+                                /[A-Za-z]:*) local_path="${local_path#/}";;
+                              esac
+                              if [ -f "$local_path" ]; then
+                                actual="$(sha256sum "$local_path" | awk '{print toupper($1)}')"
+                                if [ "$actual" != "$recorded" ]; then
+                                  echo "Mock winget install: InstallerSha256 mismatch for $current_url" >&2
+                                  echo "  expected: $recorded" >&2
+                                  echo "  actual:   $actual" >&2
+                                  exit 1
+                                fi
+                              fi
+                              ;;
+                          esac
+                        fi
+                        current_url=""
+                        ;;
+                    esac
+                  done < "$installer_yaml"
                 fi
                 exit 0
                 ;;
@@ -474,5 +576,64 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("Failed to verify Aspire CLI installation", result.Output);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    [SkipOnPlatform(TestPlatforms.Windows, "Uses Unix mock executables")]
+    public async Task PowerShell_WinGetDogfood_ArchiveRoot_ValidatesPristineAndInstallsRewrittenManifest()
+    {
+        // This mirrors get-aspire-cli-pr.ps1 -InstallMode WinGet's invocation of
+        // dogfood.ps1 -ArchiveRoot. Two end-to-end behaviours have to hold:
+        //   1. ``winget validate`` runs against the pristine https:// URLs (the schema
+        //      rejects file:// URLs, so the rewrite must happen *after* validate).
+        //   2. ``Set-LocalInstallerUrls`` rewrites both InstallerUrl AND InstallerSha256
+        //      (PR-channel manifests ship with a placeholder hash of all zeros, so
+        //      install fails hash verification unless the hash is refreshed).
+        using var env = new TestEnvironment();
+        var (manifestDir, archiveRoot) = await CreateWinGetPrChannelArtifactAsync(env.TempDirectory);
+        var mockBinDir = await CreateMockWinGetBinAsync(env, aspireExitCode: 0);
+        using var cmd = new ScriptToolCommand("eng/winget/dogfood.ps1", env, _testOutput);
+        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}");
+
+        var result = await cmd.ExecuteAsync("-ManifestPath", manifestDir, "-ArchiveRoot", archiveRoot);
+
+        result.EnsureSuccessful();
+
+        var wingetLog = await File.ReadAllTextAsync(Path.Combine(env.TempDirectory, "winget.log"));
+        Assert.Contains("validate --manifest", wingetLog);
+        Assert.Contains("install --manifest", wingetLog);
+
+        // The pristine manifest in the artifact directory must be untouched (re-runnable).
+        var originalInstaller = await File.ReadAllTextAsync(Path.Combine(manifestDir, "Microsoft.Aspire.installer.yaml"));
+        Assert.Contains("https://ci.dot.net/", originalInstaller);
+        Assert.Contains(new string('0', 64), originalInstaller);
+        Assert.DoesNotContain("file://", originalInstaller);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    [SkipOnPlatform(TestPlatforms.Windows, "Uses Unix mock executables")]
+    public async Task PowerShell_WinGetDogfood_ArchiveRoot_FailsWhenArchiveBytesChange()
+    {
+        // Guard against silent regressions: if Set-LocalInstallerUrls ever stops
+        // refreshing InstallerSha256, the mock winget install will accept whatever the
+        // manifest happens to contain. By mutating the archive after the manifest is
+        // generated, we force the rewritten hash to differ from any baked-in value.
+        using var env = new TestEnvironment();
+        var (manifestDir, archiveRoot) = await CreateWinGetPrChannelArtifactAsync(env.TempDirectory);
+
+        // Tamper the archive *after* the manifest's placeholder hash was written. The
+        // refreshed hash must reflect the new bytes for ``winget install`` to succeed.
+        var x64Archive = Path.Combine(archiveRoot, "aspire-cli-win-x64-13.3.0.zip");
+        await File.WriteAllTextAsync(x64Archive, "post-generate-mutated-x64-bytes");
+
+        var mockBinDir = await CreateMockWinGetBinAsync(env, aspireExitCode: 0);
+        using var cmd = new ScriptToolCommand("eng/winget/dogfood.ps1", env, _testOutput);
+        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}");
+
+        var result = await cmd.ExecuteAsync("-ManifestPath", manifestDir, "-ArchiveRoot", archiveRoot);
+
+        result.EnsureSuccessful();
     }
 }
