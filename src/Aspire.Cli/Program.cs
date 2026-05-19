@@ -31,6 +31,7 @@ using Aspire.Cli.Mcp;
 using Aspire.Cli.Documentation.Docs;
 using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
+using Aspire.Cli.Processes;
 using Aspire.Cli.Profiling;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
@@ -299,7 +300,7 @@ public class Program
         var globalSettingsFilePath = GetGlobalSettingsPath(startupContext.Logger);
         var globalSettingsFile = new FileInfo(globalSettingsFilePath);
         var workingDirectory = new DirectoryInfo(Environment.CurrentDirectory);
-        ConfigurationHelper.RegisterSettingsFiles(builder.Configuration, workingDirectory, globalSettingsFile);
+        ConfigurationHelper.RegisterSettingsFiles(builder.Configuration, workingDirectory, globalSettingsFile, startupContext.Logger);
 
         TrySetLocaleOverride(LocaleHelpers.GetLocaleOverride(builder.Configuration), startupContext.Logger, startupContext.ErrorWriter);
         WarnIfGlobalSettingsContainAppHostPath(globalSettingsFile, startupContext.ErrorWriter);
@@ -374,7 +375,9 @@ public class Program
         builder.Services.AddSingleton<IFeatures, Features>();
         builder.Services.AddTelemetryServices();
         builder.Services.AddTransient<IProcessExecutionFactory, ProcessExecutionFactory>();
+        builder.Services.AddSingleton<IDetachedProcessLauncher, DefaultDetachedProcessLauncher>();
         builder.Services.AddTransient<LayoutProcessRunner>();
+        builder.Services.AddTransient<ProcessShutdownService>();
 
         // Register certificate tool runner - uses native CertificateManager directly (no subprocess needed)
         builder.Services.AddSingleton(sp => CertificateManager.Create(sp.GetRequiredService<ILogger<NativeCertificateToolRunner>>()));

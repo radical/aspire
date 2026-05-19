@@ -83,7 +83,7 @@ internal sealed class UpdateCommand : BaseCommand
         AddNonInteractiveRequiresYesValidator(this, s_yesOption);
 
         // Customize description based on whether staging channel is enabled
-        var isStagingEnabled = KnownFeatures.IsStagingChannelEnabled(_features, _configuration);
+        var isStagingEnabled = IsStagingChannelAvailable();
 
         _channelOption = new Option<string?>("--channel")
         {
@@ -203,13 +203,36 @@ internal sealed class UpdateCommand : BaseCommand
 
             var allChannels = await InteractionService.ShowStatusAsync(
                 UpdateCommandStrings.CheckingForUpdates,
-                async () => await _packagingService.GetChannelsAsync(cancellationToken));
+                async () => await _packagingService.GetChannelsAsync(cancellationToken, channelName));
 
             if (!string.IsNullOrWhiteSpace(channelName))
             {
                 // Try to find a channel matching the provided channel/quality
-                channel = allChannels.FirstOrDefault(c => string.Equals(c.Name, channelName, StringComparison.OrdinalIgnoreCase))
-                    ?? throw new ChannelNotFoundException($"No channel found matching '{channelName}'. Valid options are: {string.Join(", ", allChannels.Select(c => c.Name))}");
+                var matchedChannel = allChannels.FirstOrDefault(c => string.Equals(c.Name, channelName, StringComparisons.ChannelName));
+                if (matchedChannel is null)
+                {
+                    // When the user explicitly asked for the 'staging' channel and the packaging
+                    // service refused to synthesize it (daily/local/pr-N CLI without an override),
+                    // surface the packaging-service reason instead of the generic "no channel
+                    // matching" message — the generic message hides the actual fix from the user.
+                    // See https://github.com/microsoft/aspire/issues/16652.
+                    if (string.Equals(channelName, PackageChannelNames.Staging, StringComparisons.ChannelName))
+                    {
+                        var stagingUnavailableReason = _packagingService.GetStagingChannelUnavailableReason();
+                        if (stagingUnavailableReason is not null)
+                        {
+                            throw new ChannelNotFoundException(stagingUnavailableReason);
+                        }
+                    }
+
+                    throw new ChannelNotFoundException(string.Format(
+                        CultureInfo.CurrentCulture,
+                        UpdateCommandStrings.NoChannelFoundMatching,
+                        channelName,
+                        string.Join(", ", allChannels.Select(c => c.Name))));
+                }
+
+                channel = matchedChannel;
 
                 if (channelFromConfig)
                 {
@@ -240,9 +263,9 @@ internal sealed class UpdateCommand : BaseCommand
                 var identityChannel = ExecutionContext.IdentityChannel;
                 PackageChannel? identityMatch = null;
                 if (!string.IsNullOrWhiteSpace(identityChannel)
-                    && !string.Equals(identityChannel, PackageChannelNames.Local, StringComparison.OrdinalIgnoreCase))
+                    && !string.Equals(identityChannel, PackageChannelNames.Local, StringComparisons.ChannelName))
                 {
-                    identityMatch = allChannels.FirstOrDefault(c => string.Equals(c.Name, identityChannel, StringComparison.OrdinalIgnoreCase));
+                    identityMatch = allChannels.FirstOrDefault(c => string.Equals(c.Name, identityChannel, StringComparisons.ChannelName));
                 }
 
                 if (identityMatch is not null)
@@ -359,6 +382,12 @@ internal sealed class UpdateCommand : BaseCommand
         return CommandResult.FromExitCode(0);
     }
 
+    private bool IsStagingChannelAvailable()
+    {
+        return KnownFeatures.IsStagingChannelEnabled(_features, _configuration)
+            || string.Equals(ExecutionContext.IdentityChannel, PackageChannelNames.Staging, StringComparisons.ChannelName);
+    }
+
     private async Task<CommandResult> ExecuteSelfUpdateAsync(ParseResult parseResult, CancellationToken cancellationToken, string? selectedChannel = null)
     {
         var channel = selectedChannel ?? parseResult.GetValue(_channelOption) ?? parseResult.GetValue(_qualityOption);
@@ -369,7 +398,7 @@ internal sealed class UpdateCommand : BaseCommand
         // aspire.config.json, not from any global setting.
         if (string.IsNullOrEmpty(channel))
         {
-            var isStagingEnabled = KnownFeatures.IsStagingChannelEnabled(_features, _configuration);
+            var isStagingEnabled = IsStagingChannelAvailable();
             var channels = isStagingEnabled
                 ? new[] { PackageChannelNames.Stable, PackageChannelNames.Staging, PackageChannelNames.Daily }
                 : new[] { PackageChannelNames.Stable, PackageChannelNames.Daily };
