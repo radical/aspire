@@ -97,8 +97,11 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         await File.WriteAllTextAsync(Path.Combine(manifestDir, "dogfood.ps1"), "exit 0\n");
 
         // Distinct fake bytes per RID so SHA256 differences flow into the mock install check.
-        await File.WriteAllTextAsync(Path.Combine(archiveDir, $"aspire-cli-win-x64-{version}.zip"), $"fake-x64-{version}");
-        await File.WriteAllTextAsync(Path.Combine(archiveDir, $"aspire-cli-win-arm64-{version}.zip"), $"fake-arm64-{version}");
+        // Real zips with a stub aspire.exe at the root, mirroring the contract real winget
+        // expects (NestedInstallerFiles[].RelativeFilePath must exist after extraction).
+        // The mock winget extracts these and checks the contract — see CreateMockWinGetBinAsync.
+        await WriteRealAspireWinGetZipAsync(Path.Combine(archiveDir, $"aspire-cli-win-x64-{version}.zip"), $"stub-x64-{version}");
+        await WriteRealAspireWinGetZipAsync(Path.Combine(archiveDir, $"aspire-cli-win-arm64-{version}.zip"), $"stub-arm64-{version}");
 
         return (manifestDir, archiveRoot);
     }
@@ -193,6 +196,11 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
     //     InstallerSha256. This catches both schemes real winget can't fetch (real
     //     winget uses WinINet's InternetOpenUrl which doesn't support file://) and
     //     stale InstallerSha256 entries — both bugs we have already shipped in PRs.
+    //   * `install` honors the manifest-vs-archive contract: for InstallerType: zip
+    //     it extracts the downloaded zip and requires every NestedInstallerFiles[]
+    //     .RelativeFilePath to exist after extraction. Real winget fails at this step
+    //     with an opaque error (observed 0x8A150001 with no diag-log line beyond
+    //     "Started applying motw"); catching it here makes the failure attributable.
     private static async Task<string> CreateMockWinGetBinAsync(TestEnvironment env, int aspireExitCode)
     {
         if (!OperatingSystem.IsWindows())
@@ -251,12 +259,17 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
 
             $entries = @()
             $current = $null
+            $nestedFiles = @()
             foreach ($line in Get-Content -LiteralPath $installerYaml.FullName) {
                 if ($line -match '^\s*InstallerUrl:\s*(\S+)\s*$') {
                     if ($current) { $entries += [pscustomobject]$current }
                     $current = @{ Url = $Matches[1]; Sha = $null }
                 } elseif ($line -match '^\s*InstallerSha256:\s*(\S+)\s*$' -and $current) {
                     $current.Sha = $Matches[1].ToUpperInvariant()
+                } elseif ($line -match '^\s*-?\s*RelativeFilePath:\s*(\S+)\s*$') {
+                    # NestedInstallerFiles is shared across all Installers in the manifest,
+                    # not per-entry. Collect them once and apply to every downloaded zip.
+                    $nestedFiles += $Matches[1]
                 }
             }
             if ($current) { $entries += [pscustomobject]$current }
@@ -275,6 +288,8 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
             if ($cmd -eq 'install') {
                 foreach ($e in $entries) {
                     $tmp = New-TemporaryFile
+                    $renamedZip = $null
+                    $extractDir = $null
                     try {
                         try {
                             Invoke-WebRequest -Uri $e.Url -OutFile $tmp.FullName -UseBasicParsing -TimeoutSec 30 | Out-Null
@@ -287,8 +302,45 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
                             Write-Error "Mock winget install: InstallerSha256 mismatch for $($e.Url) (expected $($e.Sha), got $actual)"
                             exit 1
                         }
+
+                        # Manifest-vs-archive contract: for InstallerType: zip with
+                        # NestedInstallerType: portable, real winget extracts the zip
+                        # and requires every NestedInstallerFiles[].RelativeFilePath to
+                        # exist after extraction. If it doesn't, real winget fails at
+                        # install time with an opaque error (we observed 0x8A150001
+                        # with no diag-log line beyond "Started applying motw"). Catch
+                        # the contract violation here so the failure is attributable.
+                        if ($nestedFiles.Count -gt 0) {
+                            $renamedZip = "$($tmp.FullName).zip"
+                            Move-Item -LiteralPath $tmp.FullName -Destination $renamedZip
+                            $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+                            New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+                            try {
+                                Expand-Archive -LiteralPath $renamedZip -DestinationPath $extractDir -Force
+                            } catch {
+                                Write-Error "Mock winget install: failed to extract $($e.Url): $_"
+                                exit 1
+                            }
+                            foreach ($rel in $nestedFiles) {
+                                # RelativeFilePath uses '/' as separator in YAML even on Windows.
+                                $relNative = $rel -replace '/', [System.IO.Path]::DirectorySeparatorChar
+                                $expected = Join-Path $extractDir $relNative
+                                if (-not (Test-Path -LiteralPath $expected)) {
+                                    Write-Error "Mock winget install: NestedInstallerFiles entry '$rel' is missing from extracted archive $($e.Url)"
+                                    exit 1
+                                }
+                            }
+                        }
                     } finally {
-                        Remove-Item -LiteralPath $tmp.FullName -ErrorAction SilentlyContinue
+                        if ($extractDir -and (Test-Path -LiteralPath $extractDir)) {
+                            Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                        if ($renamedZip -and (Test-Path -LiteralPath $renamedZip)) {
+                            Remove-Item -LiteralPath $renamedZip -Force -ErrorAction SilentlyContinue
+                        }
+                        if (Test-Path -LiteralPath $tmp.FullName) {
+                            Remove-Item -LiteralPath $tmp.FullName -ErrorAction SilentlyContinue
+                        }
                     }
                 }
             }
@@ -325,14 +377,61 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
     {
         var archiveDir = Path.Combine(root, "Debug", "Shipping");
         Directory.CreateDirectory(archiveDir);
-        await File.WriteAllTextAsync(Path.Combine(archiveDir, "aspire-cli-win-x64-13.3.0.zip"), "fake x64 archive");
-        await File.WriteAllTextAsync(Path.Combine(archiveDir, "aspire-cli-win-arm64-13.3.0.zip"), "fake arm64 archive");
+        // Real zips with a stub aspire.exe at the root so prepare-manifest-artifact.ps1
+        // sees a valid archive layout and downstream contract tests (extraction +
+        // NestedInstallerFiles lookup) work against the same fixture.
+        await WriteRealAspireWinGetZipAsync(Path.Combine(archiveDir, "aspire-cli-win-x64-13.3.0.zip"), "stub-x64-13.3.0");
+        await WriteRealAspireWinGetZipAsync(Path.Combine(archiveDir, "aspire-cli-win-arm64-13.3.0.zip"), "stub-arm64-13.3.0");
     }
 
     private static async Task<string> GetSha256HexAsync(string path)
     {
         var bytes = await File.ReadAllBytesAsync(path);
         return Convert.ToHexString(SHA256.HashData(bytes));
+    }
+
+    // Writes a real .zip containing a stub `aspire.exe` at the root, matching the
+    // top-level layout of the real aspire-cli-win-*.zip artifacts. The bytes are
+    // tiny stubs — winget and our tests only care about the extraction layout
+    // (NestedInstallerFiles[].RelativeFilePath = aspire.exe), not signed binary
+    // content. The `aspireExeContent` argument is hashed into the zip so callers
+    // can produce zips with distinct SHA256 hashes per RID.
+    private static async Task WriteRealAspireWinGetZipAsync(string path, string aspireExeContent)
+    {
+        var parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+
+        await using var fs = File.Create(path);
+        using var archive = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create);
+        var entry = archive.CreateEntry("aspire.exe", System.IO.Compression.CompressionLevel.NoCompression);
+        await using var s = entry.Open();
+        await s.WriteAsync(System.Text.Encoding.UTF8.GetBytes(aspireExeContent));
+    }
+
+    // Parses NestedInstallerFiles[].RelativeFilePath entries from an installer manifest
+    // YAML. Uses a regex instead of a YAML parser to avoid pulling in YamlDotNet just
+    // for the test project (we already do regex parsing of InstallerUrl/InstallerSha256
+    // elsewhere in this file and in the mock winget script).
+    private static IReadOnlyList<string> ParseRelativeFilePaths(string installerYaml)
+    {
+        var paths = new List<string>();
+        foreach (var rawLine in installerYaml.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var m = System.Text.RegularExpressions.Regex.Match(line, @"^\s*-?\s*RelativeFilePath:\s*(\S+)\s*$");
+            if (m.Success)
+            {
+                paths.Add(m.Groups[1].Value);
+            }
+        }
+        return paths;
     }
 
     [Fact]
@@ -721,8 +820,11 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
 
         // Tamper the archive *after* the manifest's placeholder hash was written. The
         // refreshed hash must reflect the new bytes for ``winget install`` to succeed.
+        // We replace with a valid zip (still extractable, still satisfies the
+        // NestedInstallerFiles contract) but with different stub contents — so only
+        // the hash refresh is being exercised, not the extraction layout check.
         var x64Archive = Path.Combine(archiveRoot, "Debug", "Shipping", "aspire-cli-win-x64-13.3.0.zip");
-        await File.WriteAllTextAsync(x64Archive, "post-generate-mutated-x64-bytes");
+        await WriteRealAspireWinGetZipAsync(x64Archive, "post-generate-mutated-x64-bytes");
 
         var mockBinDir = await CreateMockWinGetBinAsync(env, aspireExitCode: 0);
         using var cmd = new ScriptToolCommand("eng/winget/dogfood.ps1", env, _testOutput);
@@ -731,5 +833,91 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         var result = await cmd.ExecuteAsync("-ManifestPath", manifestDir, "-ArchiveRoot", archiveRoot);
 
         result.EnsureSuccessful();
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task PowerShell_PrepareWinGetManifest_NestedInstallerFiles_MatchArchiveContents()
+    {
+        // Manifest-vs-archive contract: real winget extracts InstallerUrl's zip at
+        // install time and looks for every NestedInstallerFiles[].RelativeFilePath in
+        // the extracted contents. If the prepare-manifest-artifact.ps1 template ever
+        // drifts away from the actual archive layout — wrong RelativeFilePath, wrong
+        // CWD, missing file — real winget fails at install time with an opaque error
+        // (we observed 0x8A150001 with no diag-log line beyond "Started applying motw").
+        //
+        // This test runs the real prepare script against real zips and checks the
+        // contract holds end-to-end without needing winget itself, so it can run on
+        // Linux CI as a fast deterministic gate.
+        using var env = new TestEnvironment();
+        var archiveRoot = Path.Combine(env.TempDirectory, "archives");
+        var archiveDir = Path.Combine(archiveRoot, "Debug", "Shipping");
+        Directory.CreateDirectory(archiveDir);
+        var x64Zip = Path.Combine(archiveDir, "aspire-cli-win-x64-13.3.0.zip");
+        var arm64Zip = Path.Combine(archiveDir, "aspire-cli-win-arm64-13.3.0.zip");
+        await WriteRealAspireWinGetZipAsync(x64Zip, "stub-x64-13.3.0");
+        await WriteRealAspireWinGetZipAsync(arm64Zip, "stub-arm64-13.3.0");
+
+        var outputDir = Path.Combine(env.TempDirectory, "winget-output");
+        using var cmd = new ScriptToolCommand("eng/winget/prepare-manifest-artifact.ps1", env, _testOutput);
+
+        var result = await cmd.ExecuteAsync(
+            "-Channel", "prerelease",
+            "-ArchiveRoot", archiveRoot,
+            "-OutputPath", outputDir,
+            "-ValidationMode", "GenerateOnly");
+
+        result.EnsureSuccessful();
+
+        var installerYaml = await File.ReadAllTextAsync(Path.Combine(outputDir, "Microsoft.Aspire.installer.yaml"));
+        var relativeFilePaths = ParseRelativeFilePaths(installerYaml);
+        Assert.NotEmpty(relativeFilePaths);
+
+        foreach (var archive in new[] { x64Zip, arm64Zip })
+        {
+            var extractDir = Path.Combine(env.TempDirectory, $"extract-{Path.GetFileNameWithoutExtension(archive)}");
+            System.IO.Compression.ZipFile.ExtractToDirectory(archive, extractDir);
+            foreach (var rel in relativeFilePaths)
+            {
+                var expected = Path.Combine(extractDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                Assert.True(File.Exists(expected),
+                    $"NestedInstallerFiles entry '{rel}' from {Path.GetFileName(archive)} not found at {expected}. Manifest disagrees with archive contents.");
+            }
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    [SkipOnPlatform(TestPlatforms.Linux | TestPlatforms.OSX | TestPlatforms.FreeBSD, "winget is Windows-only")]
+    public async Task PowerShell_WinGetDogfood_ArchiveRoot_FailsWhenNestedInstallerFileMissingFromArchive()
+    {
+        // Companion to PowerShell_PrepareWinGetManifest_NestedInstallerFiles_MatchArchiveContents:
+        // exercises the same contract from the install side. The manifest declares
+        // NestedInstallerFiles: [RelativeFilePath: aspire.exe] but the served zip is
+        // rebuilt with only a sentinel file, no aspire.exe. Real winget would fail at
+        // install time with an opaque error (after the InstallerSha256 verify step);
+        // the mock catches the same contract violation deterministically with an
+        // attributable error message.
+        using var env = new TestEnvironment();
+        var (manifestDir, archiveRoot) = await CreateWinGetPrChannelArtifactAsync(env.TempDirectory);
+
+        var x64Archive = Path.Combine(archiveRoot, "Debug", "Shipping", "aspire-cli-win-x64-13.3.0.zip");
+        File.Delete(x64Archive);
+        await using (var fs = File.Create(x64Archive))
+        using (var archive = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            var entry = archive.CreateEntry("not-aspire.exe", System.IO.Compression.CompressionLevel.NoCompression);
+            await using var s = entry.Open();
+            await s.WriteAsync(System.Text.Encoding.UTF8.GetBytes("sentinel"));
+        }
+
+        var mockBinDir = await CreateMockWinGetBinAsync(env, aspireExitCode: 0);
+        using var cmd = new ScriptToolCommand("eng/winget/dogfood.ps1", env, _testOutput);
+        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}");
+
+        var result = await cmd.ExecuteAsync("-ManifestPath", manifestDir, "-ArchiveRoot", archiveRoot);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("NestedInstallerFiles entry 'aspire.exe' is missing", result.Output);
     }
 }
