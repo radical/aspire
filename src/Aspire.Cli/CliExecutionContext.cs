@@ -5,7 +5,7 @@ using System.CommandLine;
 
 namespace Aspire.Cli;
 
-internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, DirectoryInfo hivesDirectory, DirectoryInfo cacheDirectory, DirectoryInfo sdksDirectory, DirectoryInfo logsDirectory, string logFilePath, bool debugMode = false, IReadOnlyDictionary<string, string?>? environmentVariables = null, DirectoryInfo? homeDirectory = null, DirectoryInfo? packagesDirectory = null, string identityChannel = "local")
+internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, DirectoryInfo hivesDirectory, DirectoryInfo cacheDirectory, DirectoryInfo sdksDirectory, DirectoryInfo logsDirectory, string logFilePath, bool debugMode = false, IReadOnlyDictionary<string, string?>? environmentVariables = null, DirectoryInfo? homeDirectory = null, DirectoryInfo? packagesDirectory = null, string identityChannel = "local", DirectoryInfo? aspireHomeDirectory = null)
 {
     public DirectoryInfo WorkingDirectory { get; } = workingDirectory;
     public DirectoryInfo HivesDirectory { get; } = hivesDirectory;
@@ -61,6 +61,12 @@ internal sealed class CliExecutionContext(DirectoryInfo workingDirectory, Direct
     public string? AppHostCliLogFilePath { get; set; }
 
     public DirectoryInfo HomeDirectory { get; } = homeDirectory ?? new DirectoryInfo(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>
+    /// Gets the Aspire state root used for route-specific install layouts.
+    /// </summary>
+    public DirectoryInfo AspireHomeDirectory { get; } = aspireHomeDirectory ?? new DirectoryInfo(Path.Combine(homeDirectory?.FullName ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aspire"));
+
     public bool DebugMode { get; } = debugMode;
 
     /// <summary>
