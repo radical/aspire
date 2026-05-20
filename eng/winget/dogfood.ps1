@@ -268,46 +268,86 @@ function Show-LatestWinGetDiagLog {
     Write-Host ""
 }
 
-function Confirm-AspireBinaryRuns {
+function Find-AspireBinaryOnPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string]$ExpectedVersion
     )
 
-    # Some Windows environments (corp-managed laptops where IAttachmentExecute /
-    # IOfficeAntiVirus interception fails) cause `winget install --manifest` to
-    # return a non-zero exit code (typically -1978335231 = 0x8A150001) even when
-    # the install completed end-to-end. Don't rely on `winget list` to disambiguate:
-    # winget's installed-package store can keep stale entries from prior partial
-    # installs even after winget rolls back the file copy, so it returns false
-    # positives.
+    # Walks the freshly-refreshed PATH (machine+user from the registry, which
+    # picks up the dir winget added during portable install) for every aspire.exe
+    # and runs it. Returns the FIRST one whose --version output matches
+    # $ExpectedVersion. If none match, returns the first aspire.exe found so the
+    # caller can warn about PATH shadowing without losing the diagnostic. Returns
+    # $null if no aspire.exe is on PATH at all.
     #
-    # Instead, refresh PATH from the registry (winget updates user PATH during
-    # portable installs) and confirm that *some* aspire.exe on PATH reports the
-    # expected version. That is the user-observable definition of "installed".
+    # This serves two callers:
     #
-    # In test mode the mock winget doesn't drop a real aspire.exe on PATH at the
-    # manifest's PackageVersion, so short-circuit to $false and let the existing
-    # exit-code-driven failure path handle the negative tests it already covers.
+    #  - Post-install fallback: some Windows environments (corp-managed machines
+    #    hitting winget bug https://github.com/microsoft/winget-cli/issues/6230)
+    #    cause `winget install --manifest` to return -1978335231 (0x8A150001)
+    #    even when the install completed end-to-end. A successful version match
+    #    here means the binary is really deployed despite winget's exit code.
+    #    Don't fall back to `winget list` for this — winget's installed-package
+    #    store keeps stale entries from prior partial installs even after a
+    #    rollback, so it returns false positives.
+    #
+    #  - Post-install verification: an older aspire.exe earlier on PATH (e.g.
+    #    from a previous get-aspire-cli install) would shadow the winget-installed
+    #    binary if we just used Get-Command. Walking PATH for a version match
+    #    finds the freshly-installed binary even when it isn't first.
+    #
+    # Returns: $null OR [pscustomobject]@{
+    #   Path                  = full path to aspire.exe (or .cmd in test mode)
+    #   Version               = trimmed --version output
+    #   ExitCode              = aspire --version exit code
+    #   ExpectedVersionMatched= $true iff Version contains $ExpectedVersion
+    # }
+    #
+    # In test mode the mock aspire.cmd's --version output ("mock aspire version")
+    # does not match any real PackageVersion. Fall back to Get-Command so the
+    # test-mode verification assertions still fire on the mock.
     if ($env:ASPIRE_TEST_MODE -eq 'true') {
-        return $false
+        $cmd = Get-Command aspire -ErrorAction SilentlyContinue
+        if (-not $cmd) { return $null }
+        $output = & $cmd.Source --version 2>&1
+        $exitCode = $LASTEXITCODE
+        $versionString = ($output | Out-String).Trim()
+        return [pscustomobject]@{
+            Path                   = $cmd.Source
+            Version                = $versionString
+            ExitCode               = $exitCode
+            ExpectedVersionMatched = $false
+        }
     }
 
     $newPath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $firstFound = $null
     foreach ($dir in ($newPath -split ';' | Where-Object { $_ })) {
         $candidate = Join-Path $dir 'aspire.exe'
         if (-not (Test-Path -LiteralPath $candidate)) { continue }
         try {
-            $versionOutput = & $candidate --version 2>&1
+            $output = & $candidate --version 2>&1
+            $exitCode = $LASTEXITCODE
         } catch {
             continue
         }
-        if ($versionOutput -match [regex]::Escape($ExpectedVersion)) {
-            return $true
+        $versionString = ($output | Out-String).Trim()
+        $info = [pscustomobject]@{
+            Path                   = $candidate
+            Version                = $versionString
+            ExitCode               = $exitCode
+            ExpectedVersionMatched = ($versionString -match [regex]::Escape($ExpectedVersion))
+        }
+        if ($info.ExpectedVersionMatched) {
+            return $info
+        }
+        if (-not $firstFound) {
+            $firstFound = $info
         }
     }
-    return $false
+    return $firstFound
 }
 
 function Resolve-ArchiveFileMap {
@@ -537,26 +577,33 @@ try {
         Write-Host ""
         Write-Host "winget install succeeded."
     }
-    elseif (Confirm-AspireBinaryRuns -ExpectedVersion $version) {
-        # winget exited non-zero but an aspire.exe on PATH reports the expected
-        # version. See Confirm-AspireBinaryRuns for context — this surfaces on
-        # corp-managed Windows machines where winget's post-install
-        # Mark-of-the-Web step fails even though the install completed.
-        Write-Host ""
-        Write-Warning @"
-winget reported failure (exit code $wingetExitCode) but aspire $version is on PATH and runs.
-This typically means winget's post-install Mark-of-the-Web step (IAttachmentExecute) failed
-on this machine — common on corporate-managed Windows machines. The CLI itself is installed.
+    else {
+        $installInfo = Find-AspireBinaryOnPath -ExpectedVersion $version
+        if ($installInfo -and $installInfo.ExpectedVersionMatched) {
+            # winget exited non-zero but an aspire.exe on PATH reports the expected
+            # version. See Find-AspireBinaryOnPath for context — this surfaces on
+            # machines hitting winget bug
+            # https://github.com/microsoft/winget-cli/issues/6230 (the post-install
+            # Mark-of-the-Web step in winget's DownloadFlow aborts even though the
+            # install completed). Fixed in v1.29.140-preview+.
+            Write-Host ""
+            Write-Warning @"
+winget reported failure (exit code $wingetExitCode) but aspire $version is installed at:
+  $($installInfo.Path)
+This is winget-cli bug https://github.com/microsoft/winget-cli/issues/6230 (post-install
+Mark-of-the-Web step fails on some machines, fixed in winget v1.29.140-preview+). The CLI
+itself is deployed.
 
 Verify with:
     aspire --version
 (You may need to open a new shell to pick up the updated PATH.)
 "@
-    }
-    else {
-        Show-LatestWinGetDiagLog -Reason "winget exit code $wingetExitCode"
-        Write-Error "Installation failed with exit code $wingetExitCode"
-        exit $wingetExitCode
+        }
+        else {
+            Show-LatestWinGetDiagLog -Reason "winget exit code $wingetExitCode"
+            Write-Error "Installation failed with exit code $wingetExitCode"
+            exit $wingetExitCode
+        }
     }
 }
 finally {
@@ -572,29 +619,38 @@ if ($env:ASPIRE_TEST_MODE -ne 'true') {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
-# Verify in a new process to pick up PATH changes
+# Verify by walking PATH for the just-installed binary (matched by version), so
+# an older aspire.exe earlier on PATH can't masquerade as the freshly-installed
+# one. See Find-AspireBinaryOnPath for the matching strategy.
 Write-Host ""
 Write-Host "Verifying installation..."
-$verifyResult = pwsh -NoProfile -Command '
-    $cmd = Get-Command aspire -ErrorAction SilentlyContinue
-    if (-not $cmd) { Write-Error "aspire not found in PATH"; exit 1 }
-    Write-Host "  Path:    $($cmd.Source)"
-    $v = & aspire --version 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-Error "aspire --version failed: $v"; exit $LASTEXITCODE }
-    Write-Host "  Version: $v"
-' 2>&1
+$verifyInfo = Find-AspireBinaryOnPath -ExpectedVersion $version
 
-$verifyExitCode = $LASTEXITCODE
-if ($verifyExitCode -eq 0) {
-    Write-Host $verifyResult
+if (-not $verifyInfo) {
     Write-Host ""
-    Write-Host "Installed successfully!"
-} else {
-    Write-Host $verifyResult
-    Write-Host ""
-    Write-Error "Failed to verify Aspire CLI installation."
-    exit $verifyExitCode
+    Write-Error "Failed to verify Aspire CLI installation: aspire not found in PATH."
+    exit 1
 }
+
+Write-Host "  Path:    $($verifyInfo.Path)"
+Write-Host "  Version: $($verifyInfo.Version)"
+
+if ($verifyInfo.ExitCode -ne 0) {
+    Write-Host ""
+    Write-Error "Failed to verify Aspire CLI installation: 'aspire --version' exited with code $($verifyInfo.ExitCode)."
+    exit $verifyInfo.ExitCode
+}
+
+if ($env:ASPIRE_TEST_MODE -ne 'true' -and -not $verifyInfo.ExpectedVersionMatched) {
+    Write-Warning @"
+Reported version does not match the just-installed manifest version ($version).
+An older aspire.exe at the path above is shadowing the winget-installed binary on PATH.
+Either reorder PATH so the winget-installed location wins, or uninstall the older copy.
+"@
+}
+
+Write-Host ""
+Write-Host "Installed successfully!"
 
 Write-Host ""
 Write-Host "To uninstall: .\dogfood.ps1 -Uninstall"
