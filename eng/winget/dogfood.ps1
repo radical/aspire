@@ -268,6 +268,48 @@ function Show-LatestWinGetDiagLog {
     Write-Host ""
 }
 
+function Confirm-AspireBinaryRuns {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$ExpectedVersion
+    )
+
+    # Some Windows environments (corp-managed laptops where IAttachmentExecute /
+    # IOfficeAntiVirus interception fails) cause `winget install --manifest` to
+    # return a non-zero exit code (typically -1978335231 = 0x8A150001) even when
+    # the install completed end-to-end. Don't rely on `winget list` to disambiguate:
+    # winget's installed-package store can keep stale entries from prior partial
+    # installs even after winget rolls back the file copy, so it returns false
+    # positives.
+    #
+    # Instead, refresh PATH from the registry (winget updates user PATH during
+    # portable installs) and confirm that *some* aspire.exe on PATH reports the
+    # expected version. That is the user-observable definition of "installed".
+    #
+    # In test mode the mock winget doesn't drop a real aspire.exe on PATH at the
+    # manifest's PackageVersion, so short-circuit to $false and let the existing
+    # exit-code-driven failure path handle the negative tests it already covers.
+    if ($env:ASPIRE_TEST_MODE -eq 'true') {
+        return $false
+    }
+
+    $newPath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+               [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    foreach ($dir in ($newPath -split ';' | Where-Object { $_ })) {
+        $candidate = Join-Path $dir 'aspire.exe'
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        try {
+            $versionOutput = & $candidate --version 2>&1
+        } catch {
+            continue
+        }
+        if ($versionOutput -match [regex]::Escape($ExpectedVersion)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Resolve-ArchiveFileMap {
     param(
         [string]$ResolvedArchiveRoot,
@@ -489,8 +531,29 @@ try {
     }
 
     winget @installArgs
-    if ($LASTEXITCODE -ne 0) {
-        $wingetExitCode = $LASTEXITCODE
+    $wingetExitCode = $LASTEXITCODE
+
+    if ($wingetExitCode -eq 0) {
+        Write-Host ""
+        Write-Host "winget install succeeded."
+    }
+    elseif (Confirm-AspireBinaryRuns -ExpectedVersion $version) {
+        # winget exited non-zero but an aspire.exe on PATH reports the expected
+        # version. See Confirm-AspireBinaryRuns for context — this surfaces on
+        # corp-managed Windows machines where winget's post-install
+        # Mark-of-the-Web step fails even though the install completed.
+        Write-Host ""
+        Write-Warning @"
+winget reported failure (exit code $wingetExitCode) but aspire $version is on PATH and runs.
+This typically means winget's post-install Mark-of-the-Web step (IAttachmentExecute) failed
+on this machine — common on corporate-managed Windows machines. The CLI itself is installed.
+
+Verify with:
+    aspire --version
+(You may need to open a new shell to pick up the updated PATH.)
+"@
+    }
+    else {
         Show-LatestWinGetDiagLog -Reason "winget exit code $wingetExitCode"
         Write-Error "Installation failed with exit code $wingetExitCode"
         exit $wingetExitCode
