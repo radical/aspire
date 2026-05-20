@@ -43,6 +43,16 @@ jobs:
           --output-dir "${GITHUB_WORKSPACE}/artifacts/installers/homebrew-cask"
           --validation-mode Offline
 
+      - name: Dogfood install (real winget install)
+        if: ${{ inputs.installer == 'winget' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:GITHUB_WORKSPACE/eng/winget/dogfood.ps1" `
+            -ManifestPath "$env:GITHUB_WORKSPACE/artifacts/installers/winget-manifests" `
+            -ArchiveRoot  "$env:GITHUB_WORKSPACE/native-archives" `
+            -Force
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
