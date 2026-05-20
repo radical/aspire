@@ -53,6 +53,15 @@ jobs:
             -ArchiveRoot  "$env:GITHUB_WORKSPACE/native-archives" `
             -Force
 
+      - name: Dogfood install (real brew install)
+        if: ${{ inputs.installer == 'homebrew' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          eng/homebrew/dogfood.sh \
+            --archive-root "${GITHUB_WORKSPACE}/native-archives" \
+            "${GITHUB_WORKSPACE}/artifacts/installers/homebrew-cask/aspire.rb"
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
