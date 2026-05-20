@@ -350,6 +350,52 @@ function Find-AspireBinaryOnPath {
     return $firstFound
 }
 
+function Test-WinGetVersionForMotwFix {
+    [CmdletBinding()]
+    param()
+
+    # winget-cli bug https://github.com/microsoft/winget-cli/issues/6230: portable
+    # installs exit -1978335231 (0x8A150001) at the post-install IAttachmentExecute
+    # Mark-of-the-Web step on some machines, even when the binary is deployed end-to-end.
+    # Fixed in v1.29.140-preview by https://github.com/microsoft/winget-cli/pull/6127;
+    # last broken stable release is v1.28.240 (2026-04-17).
+    #
+    # The failure is environmental (interaction with AV / IOfficeAntiVirus) and not every
+    # < 1.29.140 install actually trips it, so this is a soft warning, not a hard gate.
+    # Find-AspireBinaryOnPath in the post-install fallback already recovers from the
+    # case where winget exits non-zero but the binary IS deployed.
+    if ($env:ASPIRE_TEST_MODE -eq 'true') {
+        return
+    }
+
+    try {
+        $versionOutput = (winget --version 2>&1) | Out-String
+    } catch {
+        return
+    }
+    $trimmed = $versionOutput.Trim()
+    # winget --version output: "v1.29.170-preview" or "v1.28.240"
+    if ($trimmed -notmatch '^v(\d+\.\d+\.\d+)') {
+        return
+    }
+    $parsed = $null
+    if (-not [Version]::TryParse($Matches[1], [ref]$parsed)) {
+        return
+    }
+    if ($parsed -lt [Version]'1.29.140') {
+        Write-Warning @"
+Local winget is $trimmed. Versions older than v1.29.140-preview can fail portable
+installs with exit code -1978335231 (0x8A150001) at the post-install Mark-of-the-Web
+step even when the binary is fully deployed. See:
+  https://github.com/microsoft/winget-cli/issues/6230
+
+If the install below fails with that exit code, upgrade winget to v1.29.140-preview
+or newer. Pre-release builds are available at:
+  https://github.com/microsoft/winget-cli/releases
+"@
+    }
+}
+
 function Resolve-ArchiveFileMap {
     param(
         [string]$ResolvedArchiveRoot,
@@ -484,6 +530,8 @@ foreach ($f in $manifestFiles) {
 }
 Write-Host ""
 
+Test-WinGetVersionForMotwFix
+
 if (-not $Force) {
     $existingInstall = winget list --id Microsoft.Aspire --accept-source-agreements 2>&1
     if ($LASTEXITCODE -eq 0 -and $existingInstall -match "Microsoft\.Aspire") {
@@ -593,6 +641,9 @@ winget reported failure (exit code $wingetExitCode) but aspire $version is insta
 This is winget-cli bug https://github.com/microsoft/winget-cli/issues/6230 (post-install
 Mark-of-the-Web step fails on some machines, fixed in winget v1.29.140-preview+). The CLI
 itself is deployed.
+
+To avoid this on future installs, upgrade winget. Pre-release builds are at:
+  https://github.com/microsoft/winget-cli/releases
 
 Verify with:
     aspire --version
