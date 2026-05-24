@@ -16,6 +16,99 @@ namespace Aspire.Cli.Tests.Commands;
 public class InstallsCommandTests(ITestOutputHelper outputHelper)
 {
     [Fact]
+    public async Task InstallsSelf_Json_ReturnsOnlyRunningInstallation()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.OutputTextWriter = outputWriter;
+            options.DisableAnsi = true;
+        });
+        services.Replace(ServiceDescriptor.Singleton<IInstallationDiscovery>(_ => new FakeInstallationDiscovery(
+            new InstallationInfo
+            {
+                Path = "/usr/local/bin/aspire",
+                CanonicalPath = "/usr/local/bin/aspire",
+                Version = "13.0.0",
+                Channel = "stable",
+                Route = "script",
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Ok,
+            },
+            [
+                new InstallationInfo
+                {
+                    Path = "/peer/aspire",
+                    CanonicalPath = "/peer/aspire",
+                    Version = "13.1.0-preview",
+                    Channel = "pr-1234",
+                    Route = "pr",
+                    PathStatus = InstallationPathStatus.Shadowed,
+                    Status = InstallationInfoStatus.Ok,
+                }
+            ])));
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("installs --self --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var installations = JsonNode.Parse(string.Join(Environment.NewLine, outputWriter.Logs))!.AsArray();
+        var row = Assert.Single(installations);
+        Assert.Equal("/usr/local/bin/aspire", row!["path"]!.GetValue<string>());
+        Assert.Equal("13.0.0", row["version"]!.GetValue<string>());
+        Assert.Equal("stable", row["channel"]!.GetValue<string>());
+        Assert.Equal("script", row["route"]!.GetValue<string>());
+        Assert.Equal(InstallationPathStatus.Active, row["pathStatus"]!.GetValue<string>());
+        Assert.Equal(InstallationInfoStatus.Ok, row["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task InstallsSelf_List_ReturnsOnlyRunningInstallationWithoutChecks()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.OutputTextWriter = outputWriter;
+            options.DisableAnsi = true;
+        });
+        services.Replace(ServiceDescriptor.Singleton<IInstallationDiscovery>(_ => new FakeInstallationDiscovery(
+            new InstallationInfo
+            {
+                Path = "/usr/local/bin/aspire",
+                Version = "13.0.0",
+                Channel = "stable",
+                Route = "script",
+                PathStatus = "custom[red]status[/]",
+                Status = InstallationInfoStatus.Ok,
+            },
+            [
+                new InstallationInfo
+                {
+                    Path = "/peer/aspire",
+                    Status = InstallationInfoStatus.Ok,
+                }
+            ])));
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("installs --self");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var output = string.Join(Environment.NewLine, outputWriter.Logs);
+        Assert.Contains("/usr/local/bin/aspire", output, StringComparison.Ordinal);
+        Assert.Contains("custom[red]status[/]", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("/peer/aspire", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Summary:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task InstallsList_ShowsDiscoveredInstallsAndOrphanHives()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);

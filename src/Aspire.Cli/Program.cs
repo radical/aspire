@@ -703,7 +703,7 @@ public class Program
 
             // Don't persist the sentinel for informational commands (--version, --help, etc.)
             // or for machine-readable invocations (--format json, including the hidden
-            // `doctor --self --format json` peer probe). Otherwise an automation invocation
+            // `installs --self --format json` peer probe). Otherwise an automation invocation
             // or peer probe — which deliberately suppressed the user-facing notice — would
             // silently consume the first-run slot, and the next interactive invocation by
             // the same user would never see the telemetry notice.

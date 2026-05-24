@@ -429,7 +429,7 @@ public class InstallationDiscoveryDiscoverAllTests(ITestOutputHelper outputHelpe
         // the path-based derivation can't help. The version string, on the
         // other hand, IS baked at build time as `<x.y.z>-pr.<N>.<hash>` —
         // discovery should fall back to that signal so older brew peers,
-        // which don't recognize the `doctor --self` self-describe contract,
+        // which don't recognize the `installs --self` self-describe contract,
         // still surface their channel instead of "(unknown)".
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var brewDir = Path.Combine(workspace.WorkspaceRoot.FullName, "Caskroom", "aspire", "13.4.0-pr.17115.gcd700928");
@@ -439,7 +439,7 @@ public class InstallationDiscoveryDiscoverAllTests(ITestOutputHelper outputHelpe
 
         var probe = new FakePeerInstallProbe(new Dictionary<string, PeerProbeResult>
         {
-            // Older brew peer: doctor --self unsupported, so the probe
+            // Older brew peer: installs --self unsupported, so the probe
             // took the --version fallback path and reported version only.
             [binary] = new PeerProbeResult.Ok(new InstallationInfo
             {

@@ -240,7 +240,7 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
                         // Final attempt: derive the channel from the peer's
                         // reported version. This is the only signal we have
                         // for older peers that don't recognize the
-                        // `doctor --self` self-describe contract — they
+                        // `installs --self` self-describe contract — they
                         // fall through to the `--version` floor in the
                         // probe and can't report their channel directly,
                         // but the assembly's InformationalVersion has it
@@ -360,7 +360,7 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
     /// Like <see cref="TryDerivePrChannel(string)"/>, this is a purely
     /// cosmetic enrichment for the user-facing table. It rescues the
     /// channel column for peers that don't recognize the
-    /// <c>doctor --self</c> self-describe contract: those fall through to
+    /// <c>installs --self</c> self-describe contract: those fall through to
     /// the <c>--version</c> floor in the probe and can't report their
     /// channel directly, but their assembly's InformationalVersion has
     /// the PR number baked in regardless of route.

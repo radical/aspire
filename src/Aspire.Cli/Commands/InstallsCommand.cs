@@ -14,15 +14,73 @@ using Spectre.Console;
 
 namespace Aspire.Cli.Commands;
 
-internal sealed class InstallsCommand : ParentCommand
+internal sealed class InstallsCommand : BaseCommand
 {
     internal override HelpGroup HelpGroup => HelpGroup.ToolsAndConfiguration;
+
+    private static readonly Option<InstallsOutputFormat> s_formatOption = new("--format")
+    {
+        Description = "The output format.",
+        Hidden = true
+    };
+
+    private static readonly Option<bool> s_selfOption = new("--self")
+    {
+        Hidden = true
+    };
+
+    private readonly IInstallationDiscovery _installationDiscovery;
+    private readonly ILogger _logger;
 
     public InstallsCommand(CliCleanupService cleanupService, IInstallationDiscovery installationDiscovery, IInteractionService interactionService, IFeatures features, ICliUpdateNotifier updateNotifier, CliExecutionContext executionContext, AspireCliTelemetry telemetry, ILogger<InstallsCommand> logger)
         : base("installs", "Manage Aspire CLI installs", features, updateNotifier, executionContext, interactionService, telemetry)
     {
+        _installationDiscovery = installationDiscovery;
+        _logger = logger;
+        Options.Add(s_formatOption);
+        Options.Add(s_selfOption);
         Subcommands.Add(new ListCommand(cleanupService, installationDiscovery, interactionService, features, updateNotifier, executionContext, telemetry, logger));
         Subcommands.Add(new UninstallSubCommand(cleanupService, installationDiscovery, interactionService, features, updateNotifier, executionContext, telemetry, logger));
+    }
+
+    protected override Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
+    {
+        if (!parseResult.GetValue(s_selfOption))
+        {
+            return Task.FromResult(CommandResult.DisplayHelp());
+        }
+
+        var self = InstallationInfoOutput.DescribeSelfSafely(_installationDiscovery, _logger);
+        if (parseResult.GetValue(s_formatOption) == InstallsOutputFormat.Json)
+        {
+            var json = JsonSerializer.Serialize(self.ToArray(), JsonSourceGenerationContext.RelaxedEscaping.InstallationInfoArray);
+            InteractionService.DisplayRawText(json, ConsoleOutput.Standard);
+        }
+        else
+        {
+            foreach (var install in self)
+            {
+                InteractionService.DisplayMarkdown("**self**");
+                DisplaySelfField("Status", install.Status);
+                DisplaySelfField("Channel", install.Channel);
+                DisplaySelfField("Route", install.Route);
+                DisplaySelfField("Version", install.Version);
+                DisplaySelfField("Path", install.Path);
+                DisplaySelfField("On PATH", install.PathStatus);
+            }
+        }
+
+        return Task.FromResult(CommandResult.Success());
+    }
+
+    private void DisplaySelfField(string name, string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return;
+        }
+
+        InteractionService.DisplayPlainText($"  {name,-8} {value}");
     }
 
     private sealed class ListCommand : BaseCommand

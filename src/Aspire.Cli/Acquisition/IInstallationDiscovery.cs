@@ -11,13 +11,13 @@ namespace Aspire.Cli.Acquisition;
 /// <list type="bullet">
 ///   <item>
 ///     <description><see cref="DescribeSelf"/> — cheap path that describes
-///     only the currently running CLI. No process spawning, no filesystem
-///     walks. Used by the hidden <c>aspire doctor --self</c> peer-probe path.</description>
+    ///     only the currently running CLI. No process spawning, no filesystem
+    ///     walks. Used by the hidden <c>aspire installs --self</c> peer-probe path.</description>
 ///   </item>
 ///   <item>
 ///     <description><see cref="DiscoverAllAsync"/> — walks <c>$PATH</c> plus
 ///     well-known install prefixes and asks each peer with required install
-///     metadata to self-describe via a child <c>aspire doctor --self --format json</c>
+    ///     metadata to self-describe via a child <c>aspire installs --self --format json</c>
 ///     call. Used by the default <c>aspire doctor</c> path.</description>
 ///   </item>
 /// </list>
