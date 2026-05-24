@@ -32,7 +32,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = "/usr/local/bin/aspire",
                 Version = "13.0.0",
                 Channel = "stable",
-                Route = "script",
+                Source = "script",
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok,
             },
@@ -43,7 +43,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                     CanonicalPath = "/peer/aspire",
                     Version = "13.1.0-preview",
                     Channel = "pr-1234",
-                    Route = "pr",
+                    Source = "pr",
                     PathStatus = InstallationPathStatus.Shadowed,
                     Status = InstallationInfoStatus.Ok,
                 }
@@ -61,7 +61,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("/usr/local/bin/aspire", row!["path"]!.GetValue<string>());
         Assert.Equal("13.0.0", row["version"]!.GetValue<string>());
         Assert.Equal("stable", row["channel"]!.GetValue<string>());
-        Assert.Equal("script", row["route"]!.GetValue<string>());
+        Assert.Equal("script", row["source"]!.GetValue<string>());
         Assert.Equal(InstallationPathStatus.Active, row["pathStatus"]!.GetValue<string>());
         Assert.Equal(InstallationInfoStatus.Ok, row["status"]!.GetValue<string>());
     }
@@ -82,7 +82,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 Path = "/usr/local/bin/aspire",
                 Version = "13.0.0",
                 Channel = "stable",
-                Route = "script",
+                Source = "script",
                 PathStatus = "custom[red]status[/]",
                 Status = InstallationInfoStatus.Ok,
             },
@@ -128,7 +128,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = Path.Combine(aspireHome, "bin", "aspire"),
                 Version = "13.2.0",
                 Channel = "stable",
-                Route = "script",
+                Source = "script",
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok
             })));
@@ -169,7 +169,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = Path.Combine(aspireHome, "bin", "aspire"),
                 Version = "13.2.0",
                 Channel = "stable",
-                Route = "script",
+                Source = "script",
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok
             })));
@@ -219,7 +219,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = Path.Combine(aspireHome, "bin", "aspire"),
                 Version = "13.2.0",
                 Channel = "stable",
-                Route = "script",
+                Source = "script",
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok
             },
@@ -229,7 +229,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                     Path = Path.Combine(aspireHome, "broken", "aspire"),
                     CanonicalPath = Path.Combine(aspireHome, "broken", "aspire"),
                     Channel = "daily",
-                    Route = "script",
+                    Source = "script",
                     PathStatus = InstallationPathStatus.Shadowed,
                     Status = InstallationInfoStatus.Failed,
                     StatusReason = "peer probe failed"
@@ -270,8 +270,8 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("dotnet-tool", "dotnet-tool", "Managed by dotnet tool; use: dotnet tool uninstall")]
     [InlineData("winget", "winget", "Managed by WinGet; use: winget uninstall")]
-    [InlineData("brew", "brew", "Managed by Homebrew; use: brew uninstall")]
-    public async Task InstallsList_ManagedInstalls_ShowPackageManagerCleanupHint(string route, string expectedManagedBy, string expectedHint)
+    [InlineData("homebrew", "homebrew", "Managed by Homebrew; use: brew uninstall")]
+    public async Task InstallsList_ManagedInstalls_ShowPackageManagerCleanupHint(string source, string expectedManagedBy, string expectedHint)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var aspireHome = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
@@ -285,11 +285,11 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
         services.Replace(ServiceDescriptor.Singleton<IInstallationDiscovery>(_ => new FakeInstallationDiscovery(
             new InstallationInfo
             {
-                Path = Path.Combine(aspireHome, route, "aspire"),
-                CanonicalPath = Path.Combine(aspireHome, route, "aspire"),
+                Path = Path.Combine(aspireHome, source, "aspire"),
+                CanonicalPath = Path.Combine(aspireHome, source, "aspire"),
                 Version = "13.2.0",
                 Channel = "stable",
-                Route = route,
+                Source = source,
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok
             })));
@@ -311,8 +311,8 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
     [InlineData("script", null, "script", "Use: aspire installs uninstall script")]
     [InlineData("pr", "pr-17416", "pr", "Use: aspire installs uninstall pr-17416")]
     [InlineData("localhive", "local", "localhive", "Use: aspire installs uninstall local")]
-    [InlineData("future-route", "future", "future-route", "Use: aspire installs uninstall future")]
-    public async Task InstallsList_AspireOwnedAndUnknownRoutes_UseAspireCleanupHint(string route, string? channel, string expectedKind, string expectedHint)
+    [InlineData("future-source", "future", "future-source", "Use: aspire installs uninstall future")]
+    public async Task InstallsList_AspireOwnedAndUnknownSources_UseAspireCleanupHint(string source, string? channel, string expectedKind, string expectedHint)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var aspireHome = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
@@ -326,11 +326,11 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
         services.Replace(ServiceDescriptor.Singleton<IInstallationDiscovery>(_ => new FakeInstallationDiscovery(
             new InstallationInfo
             {
-                Path = Path.Combine(aspireHome, route, "aspire"),
-                CanonicalPath = Path.Combine(aspireHome, route, "aspire"),
+                Path = Path.Combine(aspireHome, source, "aspire"),
+                CanonicalPath = Path.Combine(aspireHome, source, "aspire"),
                 Version = "13.2.0",
                 Channel = channel,
-                Route = route,
+                Source = source,
                 PathStatus = InstallationPathStatus.NotOnPath,
                 Status = InstallationInfoStatus.Ok
             })));
@@ -349,10 +349,10 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("dotnet-tool", "dotnet-tool")]
+    [InlineData("dotnet-tool", "dotnet")]
     [InlineData("winget", "winget")]
-    [InlineData("brew", "brew")]
-    public async Task InstallsUninstall_ManagedInstalls_AreDenied(string route, string expectedManagedBy)
+    [InlineData("homebrew", "brew")]
+    public async Task InstallsUninstall_ManagedInstalls_AreDenied(string source, string expectedCommand)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var aspireHome = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
@@ -366,11 +366,11 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
         services.Replace(ServiceDescriptor.Singleton<IInstallationDiscovery>(_ => new FakeInstallationDiscovery(
             new InstallationInfo
             {
-                Path = Path.Combine(aspireHome, route, "aspire"),
-                CanonicalPath = Path.Combine(aspireHome, route, "aspire"),
+                Path = Path.Combine(aspireHome, source, "aspire"),
+                CanonicalPath = Path.Combine(aspireHome, source, "aspire"),
                 Version = "13.2.0",
                 Channel = "stable",
-                Route = route,
+                Source = source,
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok
             })));
@@ -384,7 +384,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.True(Directory.Exists(Path.Combine(aspireHome, "hives", "stable")));
         Assert.Empty(testInteractionService.BooleanPromptCalls);
-        Assert.Contains(testInteractionService.DisplayedErrors, e => e.Contains($"use: {expectedManagedBy.Split('-')[0]}", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(testInteractionService.DisplayedErrors, e => e.Contains($"use: {expectedCommand}", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -453,7 +453,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = Path.Combine(aspireHome, "daily", "aspire"),
                 Version = "13.2.0",
                 Channel = "daily",
-                Route = "script",
+                Source = "script",
                 PathStatus = InstallationPathStatus.Shadowed,
                 Status = InstallationInfoStatus.Ok
             },
@@ -464,7 +464,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                     CanonicalPath = Path.Combine(aspireHome, "bin", "aspire"),
                     Version = "13.2.0",
                     Channel = "stable",
-                    Route = "script",
+                    Source = "script",
                     PathStatus = InstallationPathStatus.Active,
                     Status = InstallationInfoStatus.Ok
                 }
@@ -504,7 +504,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = "/opt/homebrew/Cellar/dotnet/10.0.107/libexec/dotnet",
                 Version = "13.2.0",
                 Channel = "local",
-                Route = null,
+                Source = null,
                 PathStatus = InstallationPathStatus.NotOnPath,
                 Status = InstallationInfoStatus.Ok
             },
@@ -515,7 +515,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                     CanonicalPath = Path.Combine(aspireHome, "bin", "aspire"),
                     Version = "13.2.0",
                     Channel = "local",
-                    Route = "localhive",
+                    Source = "localhive",
                     PathStatus = InstallationPathStatus.Active,
                     Status = InstallationInfoStatus.Ok
                 },
@@ -525,7 +525,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                     CanonicalPath = Path.Combine(aspireHome, "dogfood", "pr-1", "bin", "aspire"),
                     Version = "13.2.0",
                     Channel = "local",
-                    Route = "localhive",
+                    Source = "localhive",
                     PathStatus = InstallationPathStatus.Shadowed,
                     Status = InstallationInfoStatus.Ok
                 }
@@ -561,7 +561,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = "/opt/homebrew/Cellar/dotnet/10.0.107/libexec/dotnet",
                 Version = "13.2.0",
                 Channel = "local",
-                Route = null,
+                Source = null,
                 PathStatus = InstallationPathStatus.NotOnPath,
                 Status = InstallationInfoStatus.Ok
             },
@@ -572,7 +572,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                     CanonicalPath = Path.Combine(aspireHome, "bin", "aspire"),
                     Version = "13.2.0",
                     Channel = "local",
-                    Route = "localhive",
+                    Source = "localhive",
                     PathStatus = InstallationPathStatus.Active,
                     Status = InstallationInfoStatus.Ok
                 }
@@ -646,7 +646,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
                 CanonicalPath = Path.Combine(aspireHome, "dogfood", "pr-17416", "bin", "aspire"),
                 Version = "13.2.0",
                 Channel = "pr-17416",
-                Route = "pr",
+                Source = "pr",
                 PathStatus = InstallationPathStatus.Active,
                 Status = InstallationInfoStatus.Ok
             })));

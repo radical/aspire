@@ -30,16 +30,18 @@ internal sealed class InstallsCommand : BaseCommand
     };
 
     private readonly IInstallationDiscovery _installationDiscovery;
+    private readonly WingetFirstRunProbe _wingetFirstRunProbe;
     private readonly ILogger _logger;
 
-    public InstallsCommand(CliCleanupService cleanupService, IInstallationDiscovery installationDiscovery, IInteractionService interactionService, IFeatures features, ICliUpdateNotifier updateNotifier, CliExecutionContext executionContext, AspireCliTelemetry telemetry, ILogger<InstallsCommand> logger)
+    public InstallsCommand(CliCleanupService cleanupService, IInstallationDiscovery installationDiscovery, WingetFirstRunProbe wingetFirstRunProbe, IInteractionService interactionService, IFeatures features, ICliUpdateNotifier updateNotifier, CliExecutionContext executionContext, AspireCliTelemetry telemetry, ILogger<InstallsCommand> logger)
         : base("installs", "Manage Aspire CLI installs", features, updateNotifier, executionContext, interactionService, telemetry)
     {
         _installationDiscovery = installationDiscovery;
+        _wingetFirstRunProbe = wingetFirstRunProbe;
         _logger = logger;
         Options.Add(s_formatOption);
         Options.Add(s_selfOption);
-        Subcommands.Add(new ListCommand(cleanupService, installationDiscovery, interactionService, features, updateNotifier, executionContext, telemetry, logger));
+        Subcommands.Add(new ListCommand(cleanupService, installationDiscovery, wingetFirstRunProbe, interactionService, features, updateNotifier, executionContext, telemetry, logger));
         Subcommands.Add(new UninstallSubCommand(cleanupService, installationDiscovery, interactionService, features, updateNotifier, executionContext, telemetry, logger));
     }
 
@@ -63,7 +65,7 @@ internal sealed class InstallsCommand : BaseCommand
                 InteractionService.DisplayMarkdown("**self**");
                 DisplaySelfField("Status", install.Status);
                 DisplaySelfField("Channel", install.Channel);
-                DisplaySelfField("Route", install.Route);
+                DisplaySelfField("Source", install.Source);
                 DisplaySelfField("Version", install.Version);
                 DisplaySelfField("Path", install.Path);
                 DisplaySelfField("On PATH", install.PathStatus);
@@ -92,19 +94,22 @@ internal sealed class InstallsCommand : BaseCommand
 
         private readonly CliCleanupService _cleanupService;
         private readonly IInstallationDiscovery _installationDiscovery;
+        private readonly WingetFirstRunProbe _wingetFirstRunProbe;
         private readonly ILogger _logger;
 
-        public ListCommand(CliCleanupService cleanupService, IInstallationDiscovery installationDiscovery, IInteractionService interactionService, IFeatures features, ICliUpdateNotifier updateNotifier, CliExecutionContext executionContext, AspireCliTelemetry telemetry, ILogger logger)
+        public ListCommand(CliCleanupService cleanupService, IInstallationDiscovery installationDiscovery, WingetFirstRunProbe wingetFirstRunProbe, IInteractionService interactionService, IFeatures features, ICliUpdateNotifier updateNotifier, CliExecutionContext executionContext, AspireCliTelemetry telemetry, ILogger logger)
             : base("list", "List Aspire CLI installs and orphan hives", features, updateNotifier, executionContext, interactionService, telemetry)
         {
             _cleanupService = cleanupService;
             _installationDiscovery = installationDiscovery;
+            _wingetFirstRunProbe = wingetFirstRunProbe;
             _logger = logger;
             Options.Add(s_formatOption);
         }
 
         protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
         {
+            RunWingetFirstRunProbe(_wingetFirstRunProbe, _logger);
             var rows = await BuildRowsAsync(_cleanupService, _installationDiscovery, _logger, cancellationToken);
             if (parseResult.GetValue(s_formatOption) == InstallsOutputFormat.Json)
             {
@@ -142,6 +147,18 @@ internal sealed class InstallsCommand : BaseCommand
         }
     }
 
+    private static void RunWingetFirstRunProbe(WingetFirstRunProbe wingetFirstRunProbe, ILogger logger)
+    {
+        try
+        {
+            InstallationInfoOutput.RunWingetFirstRunProbe(wingetFirstRunProbe);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not run the winget first-run install sidecar probe before install listing.");
+        }
+    }
+
     private static async Task<List<InstallListItem>> BuildRowsAsync(CliCleanupService cleanupService, IInstallationDiscovery installationDiscovery, ILogger logger, CancellationToken cancellationToken)
     {
         var discoveredInstalls = (await installationDiscovery.DiscoverAllAsync(cancellationToken))
@@ -166,7 +183,7 @@ internal sealed class InstallsCommand : BaseCommand
             var cleanupHint = GetCleanupHint(install, id);
             var managedBy = GetManagedBy(install);
             logger.LogDebug(
-                "Classified install path '{Path}' as id '{Id}', kind '{Kind}', channel '{Channel}', status '{Status}', hive '{Hive}', managedBy '{ManagedBy}', cleanup '{CleanupHint}'. Route='{Route}', pathStatus='{PathStatus}', discoveryStatus='{DiscoveryStatus}', reason='{Reason}'.",
+                "Classified install path '{Path}' as id '{Id}', kind '{Kind}', channel '{Channel}', status '{Status}', hive '{Hive}', managedBy '{ManagedBy}', cleanup '{CleanupHint}'. Source='{Source}', pathStatus='{PathStatus}', discoveryStatus='{DiscoveryStatus}', reason='{Reason}'.",
                 install.Path,
                 id,
                 kind,
@@ -175,7 +192,7 @@ internal sealed class InstallsCommand : BaseCommand
                 hive ?? "(none)",
                 managedBy ?? "(none)",
                 cleanupHint,
-                install.Route ?? "(none)",
+                install.Source ?? "(none)",
                 install.PathStatus,
                 install.Status,
                 install.StatusReason ?? "(none)");
@@ -211,7 +228,7 @@ internal sealed class InstallsCommand : BaseCommand
 
     private static string GetInstallId(InstallationInfo install)
     {
-        if (install.Route is "script")
+        if (install.Source is "script")
         {
             return "script";
         }
@@ -221,14 +238,14 @@ internal sealed class InstallsCommand : BaseCommand
             return install.Channel;
         }
 
-        return install.Route ?? install.Path;
+        return install.Source ?? install.Path;
     }
 
     private static bool IsDisplayableInstall(InstallationInfo install, ILogger logger)
     {
-        if (!string.IsNullOrEmpty(install.Route))
+        if (!string.IsNullOrEmpty(install.Source))
         {
-            logger.LogDebug("Including install path '{Path}' because it has route '{Route}'.", install.Path, install.Route);
+            logger.LogDebug("Including install path '{Path}' because it has source '{Source}'.", install.Path, install.Source);
             return true;
         }
 
@@ -236,7 +253,7 @@ internal sealed class InstallsCommand : BaseCommand
         var isAspireBinary = fileName is "aspire" or "aspire.exe";
         if (!isAspireBinary)
         {
-            logger.LogDebug("Ignoring discovery row path '{Path}' because it has no install route and the resolved filename '{FileName}' is not an Aspire CLI binary.", install.Path, fileName);
+            logger.LogDebug("Ignoring discovery row path '{Path}' because it has no install source and the resolved filename '{FileName}' is not an Aspire CLI binary.", install.Path, fileName);
         }
 
         return isAspireBinary;
@@ -268,23 +285,23 @@ internal sealed class InstallsCommand : BaseCommand
     }
 
     private static string GetInstallKind(InstallationInfo install)
-        => install.Route ?? "unknown";
+        => install.Source ?? "unknown";
 
     private static string GetCleanupHint(InstallationInfo install, string id)
-        => install.Route switch
+        => install.Source switch
         {
             "dotnet-tool" => "Managed by dotnet tool; use: dotnet tool uninstall",
             "winget" => "Managed by WinGet; use: winget uninstall",
-            "brew" => "Managed by Homebrew; use: brew uninstall",
+            "homebrew" => "Managed by Homebrew; use: brew uninstall",
             _ => $"Use: aspire installs uninstall {id}"
         };
 
     private static string? GetManagedBy(InstallationInfo install)
-        => install.Route switch
+        => install.Source switch
         {
             "dotnet-tool" => "dotnet-tool",
             "winget" => "winget",
-            "brew" => "brew",
+            "homebrew" => "homebrew",
             _ => null
         };
 

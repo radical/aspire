@@ -453,8 +453,8 @@ if [[ $SKIP_CLI -eq 0 ]]; then
     fi
     mkdir -p "$CLI_BIN_DIR"
 
-    # Copy all files from the publish directory (CLI and its dependencies)
-    if ! cp -f "$CLI_PUBLISH_DIR"/* "$CLI_BIN_DIR"/; then
+    # Copy all files and satellite resource directories from the publish directory.
+    if ! cp -Rf "$CLI_PUBLISH_DIR"/. "$CLI_BIN_DIR"/; then
       error "Failed to copy CLI files from $CLI_PUBLISH_DIR to $CLI_BIN_DIR"
       exit 1
     fi
@@ -466,10 +466,10 @@ if [[ $SKIP_CLI -eq 0 ]]; then
       exit 1
     fi
 
-    # Stamp the install-route sidecar so `aspire info` / `aspire uninstall`
-    # can identify this binary as a locally-built (`localhive`) install.
-    # The format matches docs/specs/install-routes.md exactly; localhive
-    # shares the script-route layout (binary under <prefix>/bin/, bundle
+    # Stamp the install-source sidecar so install discovery can identify this
+    # binary as a locally-built (`localhive`) install.
+    # The format matches docs/specs/install-sources.md exactly; localhive
+    # shares the script-source layout (binary under <prefix>/bin/, bundle
     # extracted at parent-of-bin).
     printf '%s' '{"source":"localhive"}' > "$CLI_BIN_DIR/.aspire-install.json"
 

@@ -1676,18 +1676,18 @@ function Test-InstallerModeEnvironment {
             if ($Script:HostOS -ne 'osx') {
                 throw "-InstallMode Homebrew can only be executed on macOS. Use -WhatIf to preview downloads from another OS."
             }
-            if (-not (Get-Command brew -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Command Homebrew -ErrorAction SilentlyContinue)) {
                 throw "-InstallMode Homebrew requires Homebrew (brew) to install the generated cask artifact."
             }
         }
     }
 }
 
-# Writes the PR-route install-source sidecar (.aspire-install.json) next to
+# Writes the PR-source install-source sidecar (.aspire-install.json) next to
 # the installed binary. Under -WhatIf, prints the target path and skips the
 # write so a real user's sidecar is never overwritten by a describe pass.
-# Authorship contract: docs/specs/install-routes.md.
-function Write-PRRouteSidecar {
+# Authorship contract: docs/specs/install-sources.md.
+function Write-PRSourceSidecar {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $true)]
@@ -1701,12 +1701,12 @@ function Write-PRRouteSidecar {
     $sidecarPath = Join-Path $sidecarDir '.aspire-install.json'
     $sidecarContent = "{""source"":""pr""}`n"
 
-    if ($PSCmdlet.ShouldProcess($sidecarPath, "Write route sidecar")) {
+    if ($PSCmdlet.ShouldProcess($sidecarPath, "Write source sidecar")) {
         [System.IO.Directory]::CreateDirectory($sidecarDir) | Out-Null
         [System.IO.File]::WriteAllText($sidecarPath, $sidecarContent)
     }
     else {
-        Write-Host "What if: Route sidecar would be written to: $sidecarPath"
+        Write-Host "What if: Source sidecar would be written to: $sidecarPath"
     }
 }
 
@@ -1845,8 +1845,8 @@ function Start-InstallFromLocalDir {
     Write-Message "Installing from local directory: $LocalDirPath" -Level Info
 
     # Set installation paths.
-    # PR-route installs are isolated under <prefix>/dogfood/pr-<N>/bin so they don't
-    # collide with the script-route prefix or with other PR installs. Hives remain shared
+    # PR-source installs are isolated under <prefix>/dogfood/pr-<N>/bin so they don't
+    # collide with the script-source prefix or with other PR installs. Hives remain shared
     # under <prefix>/hives/<label>/packages.
     $cliBinDir = if ($PRNumber -gt 0) {
         Join-Path (Join-Path (Join-Path $resolvedInstallPrefix "dogfood") "pr-$PRNumber") "bin"
@@ -1935,7 +1935,7 @@ function Start-InstallFromLocalDir {
     # PR installs from archives get a sidecar; --local-dir installs are unmanaged,
     # and dotnet-tool packages embed their own source=dotnet-tool sidecar.
     if (-not $HiveOnly -and $InstallMode -eq 'Archive' -and $PRNumber -gt 0) {
-        Write-PRRouteSidecar -InstallPrefix $resolvedInstallPrefix -PRNumber $PRNumber
+        Write-PRSourceSidecar -InstallPrefix $resolvedInstallPrefix -PRNumber $PRNumber
     }
 
     # Update PATH environment variables
@@ -1981,8 +1981,8 @@ function Start-DownloadAndInstall {
     Write-Message "Using workflow run https://github.com/$Script:Repository/actions/runs/$runId" -Level Info
 
     # Set installation paths.
-    # PR-route installs are isolated under <prefix>/dogfood/pr-<N>/bin so they don't
-    # collide with the script-route prefix or with other PR installs. Hives remain shared
+    # PR-source installs are isolated under <prefix>/dogfood/pr-<N>/bin so they don't
+    # collide with the script-source prefix or with other PR installs. Hives remain shared
     # under <prefix>/hives/<label>/packages.
     $cliBinDir = if ($PRNumber -gt 0) {
         Join-Path (Join-Path (Join-Path $resolvedInstallPrefix "dogfood") "pr-$PRNumber") "bin"
@@ -2071,7 +2071,7 @@ function Start-DownloadAndInstall {
     }
 
     if (-not $HiveOnly -and $InstallMode -eq 'Archive' -and $PRNumber -gt 0) {
-        Write-PRRouteSidecar -InstallPrefix $resolvedInstallPrefix -PRNumber $PRNumber
+        Write-PRSourceSidecar -InstallPrefix $resolvedInstallPrefix -PRNumber $PRNumber
     }
 
     # Update PATH environment variables
