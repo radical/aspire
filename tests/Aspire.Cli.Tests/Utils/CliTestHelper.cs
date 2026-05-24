@@ -26,6 +26,7 @@ using Aspire.Cli.Telemetry;
 using Aspire.Cli.Templating;
 using Aspire.Cli.Tests.Telemetry;
 using Aspire.Cli.Tests.TestServices;
+using Aspire.Cli.Uninstall;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -229,6 +230,9 @@ internal static class CliTestHelper
         services.AddTransient<DoCommand>();
         services.AddTransient<PublishCommand>();
         services.AddTransient<ConfigCommand>();
+        services.AddTransient<InstallsCommand>();
+        services.AddTransient<HivesCommand>();
+        services.AddTransient<UninstallCommand>();
         services.AddTransient<CacheCommand>();
         services.AddTransient<CertificatesCommand>();
         services.AddTransient<CertificatesCleanCommand>();
@@ -277,6 +281,7 @@ internal static class CliTestHelper
         services.AddTransient<RenderCommand>();
 #endif
         services.AddTransient(options.AppHostBackchannelFactory);
+        services.AddTransient<CliCleanupService>();
 
         return services;
     }

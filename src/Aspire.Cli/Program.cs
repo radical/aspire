@@ -528,6 +528,9 @@ public class Program
         builder.Services.AddTransient<AddCommand>();
         builder.Services.AddTransient<PublishCommand>();
         builder.Services.AddTransient<ConfigCommand>();
+        builder.Services.AddTransient<InstallsCommand>();
+        builder.Services.AddTransient<HivesCommand>();
+        builder.Services.AddTransient<UninstallCommand>();
         builder.Services.AddTransient<CacheCommand>();
         builder.Services.AddTransient<CertificatesCommand>();
         builder.Services.AddTransient<CertificatesCleanCommand>();
@@ -577,6 +580,7 @@ public class Program
 #endif
         builder.Services.AddTransient<RootCommand>();
         builder.Services.AddTransient<ExtensionInternalCommand>();
+        builder.Services.AddTransient<Uninstall.CliCleanupService>();
 
         var app = builder.Build();
         return app;
