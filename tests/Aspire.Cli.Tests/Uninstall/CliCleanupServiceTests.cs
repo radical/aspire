@@ -87,4 +87,65 @@ public class CliCleanupServiceTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.True(Directory.Exists(escape), "Hive delete must reject the path-traversal name before any deletion runs.");
     }
+
+    [Fact]
+    public void DeleteFileSystemInfoUnlessRunningFromTarget_RunningInsideTarget_ReturnsFailedWithSafetyMessage()
+    {
+        // Regression net for the "running CLI inside the deletion target"
+        // safety. If currentProcessPath resolves to a path under target,
+        // the helper must refuse to delete and surface a Failed operation —
+        // otherwise running `aspire uninstall` from inside the dogfood
+        // install would attempt to recursively delete its own directory tree.
+        using var temp = new TestTempDirectory();
+        var target = new DirectoryInfo(Path.Combine(temp.Path, "dogfood", "pr-999"));
+        target.Create();
+        Directory.CreateDirectory(Path.Combine(target.FullName, "bin"));
+        var fakeProcessInsideTarget = Path.Combine(target.FullName, "bin", "aspire");
+        File.WriteAllText(fakeProcessInsideTarget, string.Empty);
+
+        var op = CliCleanupService.DeleteFileSystemInfoUnlessRunningFromTarget(
+            target,
+            currentProcessPath: fakeProcessInsideTarget,
+            dryRun: false);
+
+        Assert.Equal(CleanupOperationStatus.Failed, op.Status);
+        Assert.Contains("running CLI is inside this target", op.Reason, StringComparison.Ordinal);
+        Assert.True(target.Exists, "Helper must NOT delete the target when the running CLI is inside it.");
+    }
+
+    [Fact]
+    public void DeleteFileSystemInfoUnlessRunningFromTarget_RunningOutsideTarget_DeletesDirectory()
+    {
+        using var temp = new TestTempDirectory();
+        var target = new DirectoryInfo(Path.Combine(temp.Path, "hives", "pr-999"));
+        target.Create();
+        File.WriteAllText(Path.Combine(target.FullName, "marker"), string.Empty);
+        var outsidePath = Path.Combine(temp.Path, "elsewhere", "aspire");
+        Directory.CreateDirectory(Path.GetDirectoryName(outsidePath)!);
+        File.WriteAllText(outsidePath, string.Empty);
+
+        var op = CliCleanupService.DeleteFileSystemInfoUnlessRunningFromTarget(
+            target,
+            currentProcessPath: outsidePath,
+            dryRun: false);
+
+        Assert.Equal(CleanupOperationStatus.Removed, op.Status);
+        Assert.False(Directory.Exists(target.FullName));
+    }
+
+    [Fact]
+    public void DeleteFileSystemInfoUnlessRunningFromTarget_DryRun_DoesNotDelete()
+    {
+        using var temp = new TestTempDirectory();
+        var target = new DirectoryInfo(Path.Combine(temp.Path, "hives", "pr-999"));
+        target.Create();
+
+        var op = CliCleanupService.DeleteFileSystemInfoUnlessRunningFromTarget(
+            target,
+            currentProcessPath: null,
+            dryRun: true);
+
+        Assert.Equal(CleanupOperationStatus.WouldRemove, op.Status);
+        Assert.True(target.Exists);
+    }
 }

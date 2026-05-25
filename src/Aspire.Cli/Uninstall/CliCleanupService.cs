@@ -104,7 +104,8 @@ internal sealed partial class CliCleanupService(CliExecutionContext executionCon
             return new CleanupResult(operations, HasFailures: true);
         }
 
-        operations.Add(await DeleteDirectoryAsync(hiveDirectory, dryRun, cancellationToken));
+        var currentProcessPath = CliPathHelper.ResolveSymlinkToFullPath(Environment.ProcessPath);
+        operations.Add(await DeleteDirectoryAsync(hiveDirectory, currentProcessPath, dryRun, cancellationToken));
         return new CleanupResult(operations, operations.Any(o => o.Status is CleanupOperationStatus.Failed));
     }
 
@@ -122,7 +123,7 @@ internal sealed partial class CliCleanupService(CliExecutionContext executionCon
             }
 
             var hiveDirectory = GetHiveDirectory(channel);
-            operations.Add(await DeleteDirectoryAsync(hiveDirectory, dryRun, cancellationToken));
+            operations.Add(await DeleteDirectoryAsync(hiveDirectory, currentProcessPath, dryRun, cancellationToken));
 
             if (IsPrChannel(channel))
             {
@@ -138,10 +139,7 @@ internal sealed partial class CliCleanupService(CliExecutionContext executionCon
 
         if (removeSharedInstall)
         {
-            foreach (var target in GetSharedInstallTargets())
-            {
-                operations.Add(DeleteFileSystemInfoUnlessRunningFromTarget(target, currentProcessPath, dryRun));
-            }
+            AddSharedInstallOperations(currentProcessPath, dryRun, operations);
         }
         else if (channels.Any(IsSharedScriptChannel) && SharedInstallExists())
         {
@@ -199,46 +197,86 @@ internal sealed partial class CliCleanupService(CliExecutionContext executionCon
         => new(Path.Combine(AspireHomeDirectory.FullName, "bin"));
 
     private bool SharedInstallExists()
-        => GetSharedInstallTargets().Any(t => t.Exists);
+        => EnumerateBaseSharedInstallTargets().Any(t => t.Exists);
 
-    private IEnumerable<FileSystemInfo> GetSharedInstallTargets()
+    private IEnumerable<FileSystemInfo> EnumerateBaseSharedInstallTargets()
     {
         var binDirectory = GetSharedBinDirectory();
         var binaryPath = Path.Combine(binDirectory.FullName, OperatingSystem.IsWindows() ? "aspire.exe" : "aspire");
         yield return new FileInfo(binaryPath);
         yield return new FileInfo(Path.Combine(binDirectory.FullName, ".aspire-install.json"));
-        var bundleDirectory = new DirectoryInfo(Path.Combine(AspireHomeDirectory.FullName, BundleDiscovery.BundleDirectoryName));
-        if (TryGetBundleVersionTarget(bundleDirectory, out var bundleVersionTarget))
-        {
-            yield return bundleVersionTarget;
-        }
-        yield return bundleDirectory;
+        yield return new DirectoryInfo(Path.Combine(AspireHomeDirectory.FullName, BundleDiscovery.BundleDirectoryName));
     }
 
-    private bool TryGetBundleVersionTarget(DirectoryInfo bundleDirectory, out DirectoryInfo target)
+    private void AddSharedInstallOperations(string? currentProcessPath, bool dryRun, List<CleanupOperation> operations)
     {
-        target = null!;
+        // Resolve the bundle symlink target BEFORE deleting the base targets:
+        // EnumerateBaseSharedInstallTargets yields the bundle symlink itself,
+        // and once it is deleted ResolveLinkTarget can no longer recover the
+        // versions/<v>/ tree it pointed at, which would silently strand that
+        // tree on disk.
+        var bundleDirectory = new DirectoryInfo(Path.Combine(AspireHomeDirectory.FullName, BundleDiscovery.BundleDirectoryName));
+        var bundleVersionResult = ResolveBundleVersionTarget(bundleDirectory);
+
+        foreach (var target in EnumerateBaseSharedInstallTargets())
+        {
+            operations.Add(DeleteFileSystemInfoUnlessRunningFromTarget(target, currentProcessPath, dryRun));
+        }
+
+        switch (bundleVersionResult)
+        {
+            case BundleVersionTargetResult.Target target:
+                // Skip if another aspire process holds an active lease on this
+                // bundle version. Matches BundleService.TryCleanupStaleVersions
+                // which refuses to delete leased entries.
+                if (BundleVersionLease.HasActiveLease(target.Directory.FullName))
+                {
+                    operations.Add(CleanupOperation.Skipped(
+                        target.Directory.FullName,
+                        "Another running CLI / AppHost holds an active lease on this bundle version. Stop those processes and re-run cleanup."));
+                }
+                else
+                {
+                    operations.Add(DeleteFileSystemInfoUnlessRunningFromTarget(target.Directory, currentProcessPath, dryRun));
+                }
+                break;
+            case BundleVersionTargetResult.NotApplicable:
+                break;
+            case BundleVersionTargetResult.ResolveFailed failure:
+                operations.Add(CleanupOperation.Failed(bundleDirectory.FullName, $"Could not resolve bundle link target to clean up versions/<v>/: {failure.Reason}"));
+                break;
+        }
+    }
+
+    private BundleVersionTargetResult ResolveBundleVersionTarget(DirectoryInfo bundleDirectory)
+    {
         try
         {
             var resolvedTarget = bundleDirectory.ResolveLinkTarget(returnFinalTarget: true);
             if (resolvedTarget is not DirectoryInfo targetDirectory)
             {
-                return false;
+                return new BundleVersionTargetResult.NotApplicable();
             }
 
             var versionsDirectory = new DirectoryInfo(Path.Combine(AspireHomeDirectory.FullName, BundleService.VersionsDirectoryName));
             if (!IsPathUnderTarget(targetDirectory.FullName, versionsDirectory.FullName))
             {
-                return false;
+                return new BundleVersionTargetResult.NotApplicable();
             }
 
-            target = targetDirectory;
-            return true;
+            return new BundleVersionTargetResult.Target(targetDirectory);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or System.Security.SecurityException)
         {
-            return false;
+            return new BundleVersionTargetResult.ResolveFailed(ex.Message);
         }
+    }
+
+    private abstract record BundleVersionTargetResult
+    {
+        internal sealed record Target(DirectoryInfo Directory) : BundleVersionTargetResult;
+        internal sealed record NotApplicable : BundleVersionTargetResult;
+        internal sealed record ResolveFailed(string Reason) : BundleVersionTargetResult;
     }
 
     private static bool IsPrChannel(string channel)
@@ -253,7 +291,7 @@ internal sealed partial class CliCleanupService(CliExecutionContext executionCon
     private static CleanupOperation DeleteDirectoryUnlessRunningFromTarget(DirectoryInfo directory, string? currentProcessPath, bool dryRun)
         => DeleteFileSystemInfoUnlessRunningFromTarget(directory, currentProcessPath, dryRun);
 
-    private static CleanupOperation DeleteFileSystemInfoUnlessRunningFromTarget(FileSystemInfo target, string? currentProcessPath, bool dryRun)
+    internal static CleanupOperation DeleteFileSystemInfoUnlessRunningFromTarget(FileSystemInfo target, string? currentProcessPath, bool dryRun)
     {
         if (!target.Exists)
         {
@@ -290,10 +328,10 @@ internal sealed partial class CliCleanupService(CliExecutionContext executionCon
         }
     }
 
-    private static Task<CleanupOperation> DeleteDirectoryAsync(DirectoryInfo directory, bool dryRun, CancellationToken cancellationToken)
+    private static Task<CleanupOperation> DeleteDirectoryAsync(DirectoryInfo directory, string? currentProcessPath, bool dryRun, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(DeleteFileSystemInfoUnlessRunningFromTarget(directory, currentProcessPath: null, dryRun));
+        return Task.FromResult(DeleteFileSystemInfoUnlessRunningFromTarget(directory, currentProcessPath, dryRun));
     }
 
     private static bool IsPathUnderTarget(string path, string targetPath)

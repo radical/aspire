@@ -906,15 +906,28 @@ function Remove-CleanupPath {
 
     if (-not (Test-Path -LiteralPath $Path)) {
         Write-Message "skipped: $Path (does not exist)" -Level Info
-        return
+        return $true
     }
 
     if ($PSCmdlet.ShouldProcess($Path, "Remove $Description")) {
-        Remove-Item -LiteralPath $Path -Recurse -Force
-        Write-Message "removed: $Path" -Level Info
+        try {
+            # Without -ErrorAction Stop, Remove-Item failures (permission
+            # denied, file in use, etc.) are non-terminating errors. Without
+            # the explicit try/catch, execution would fall through to the
+            # "removed:" log line below, hiding the failure and producing a
+            # success-looking exit while the path is still on disk.
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            Write-Message "removed: $Path" -Level Info
+            return $true
+        }
+        catch {
+            Write-Message "failed: $Path ($($_.Exception.Message))" -Level Error
+            return $false
+        }
     }
     else {
         Write-Message "What if: would remove ${Description}: $Path" -Level Info
+        return $true
     }
 }
 
