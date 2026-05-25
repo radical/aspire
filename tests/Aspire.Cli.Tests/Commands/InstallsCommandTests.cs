@@ -270,7 +270,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("dotnet-tool", "dotnet-tool", "Managed by dotnet tool; use: dotnet tool uninstall")]
     [InlineData("winget", "winget", "Managed by WinGet; use: winget uninstall")]
-    [InlineData("homebrew", "homebrew", "Managed by Homebrew; use: brew uninstall")]
+    [InlineData("brew", "homebrew", "Managed by Homebrew; use: brew uninstall")]
     public async Task InstallsList_ManagedInstalls_ShowPackageManagerCleanupHint(string source, string expectedManagedBy, string expectedHint)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -351,7 +351,7 @@ public class InstallsCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("dotnet-tool", "dotnet")]
     [InlineData("winget", "winget")]
-    [InlineData("homebrew", "brew")]
+    [InlineData("brew", "brew")]
     public async Task InstallsUninstall_ManagedInstalls_AreDenied(string source, string expectedCommand)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
