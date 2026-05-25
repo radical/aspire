@@ -213,6 +213,25 @@ quality_to_channel() {
     esac
 }
 
+# Restrict channel / hive names to a safe identifier set: this value is
+# concatenated into $aspire_home/hives/<channel> and then passed to `rm -rf`,
+# so any path separator or `..` segment would let the removal escape the hives
+# directory. Mirrors localhive.sh's is_valid_hivename and the CLI's
+# CliCleanupService.IsValidHiveName.
+is_valid_uninstall_channel() {
+    local s="$1"
+    if [[ -z "$s" ]]; then
+        return 1
+    fi
+    if [[ ! "$s" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        return 1
+    fi
+    if [[ "$s" == *".."* ]]; then
+        return 1
+    fi
+    return 0
+}
+
 remove_path() {
     local path="$1"
     local description="${2:-$path}"
@@ -275,6 +294,10 @@ run_uninstall() {
         fi
         if [[ -z "$channel" ]]; then
             say_error "Uninstall requires --channel or --all when the channel cannot be inferred."
+            return 1
+        fi
+        if ! is_valid_uninstall_channel "$channel"; then
+            say_error "Invalid --channel value '$channel'. Channel names must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators or '..'."
             return 1
         fi
         channels+=("$channel")

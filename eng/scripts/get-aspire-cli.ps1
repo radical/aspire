@@ -828,6 +828,19 @@ function Remove-CleanupPath {
     }
 }
 
+# Restrict channel / hive names to a safe identifier set: this value is
+# joined into $aspireHome\hives\<channel> and then passed to Remove-Item
+# -Recurse, so any path separator or '..' segment would let the removal
+# escape the hives directory. Mirrors localhive.ps1's Test-HiveName and the
+# CLI's CliCleanupService.IsValidHiveName.
+function Test-UninstallChannel {
+    param([string]$ChannelName)
+    if ([string]::IsNullOrEmpty($ChannelName)) { return $false }
+    if ($ChannelName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { return $false }
+    if ($ChannelName.Contains('..')) { return $false }
+    return $true
+}
+
 function Get-BundleVersionTarget {
     [CmdletBinding()]
     param(
@@ -899,6 +912,9 @@ function Start-AspireCliUninstall {
         }
         if ([string]::IsNullOrWhiteSpace($targetChannel)) {
             throw "Uninstall requires -Channel or -All when the channel cannot be inferred."
+        }
+        if (-not (Test-UninstallChannel -ChannelName $targetChannel)) {
+            throw "Invalid -Channel value '$targetChannel'. Channel names must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators or '..'."
         }
         $channels = @($targetChannel)
     }

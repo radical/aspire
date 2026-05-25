@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.RegularExpressions;
 using Aspire.Cli.Bundles;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Utils;
@@ -8,9 +9,33 @@ using Aspire.Shared;
 
 namespace Aspire.Cli.Uninstall;
 
-internal sealed class CliCleanupService(CliExecutionContext executionContext, IConfigurationService configurationService)
+internal sealed partial class CliCleanupService(CliExecutionContext executionContext, IConfigurationService configurationService)
 {
     private static readonly StringComparison s_pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    // Hive / channel names are concatenated into HivesDirectory/<name> and
+    // dogfood/<name> and then passed to Directory.Delete(recursive: true), so
+    // any path separator, leading dot, or `..` segment would let the removal
+    // target escape the hives directory. Mirrors localhive.{sh,ps1}'s
+    // is_valid_hivename / Test-HiveName so the same names are accepted across
+    // CLI and installer tooling.
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
+    private static partial Regex SafeHiveNameRegex();
+
+    internal static bool IsValidHiveName(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        if (name.Contains("..", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return SafeHiveNameRegex().IsMatch(name);
+    }
 
     public DirectoryInfo AspireHomeDirectory => executionContext.HivesDirectory.Parent ?? executionContext.AspireHomeDirectory;
 
@@ -21,18 +46,30 @@ internal sealed class CliCleanupService(CliExecutionContext executionContext, IC
             return [];
         }
 
+        // Filter to names that pass IsValidHiveName so GetDogfoodDirectory
+        // doesn't throw on non-standard manually-created directories like
+        // ".hidden" or names with separators (the filesystem can hold them
+        // even though our producers don't write them).
         return executionContext.HivesDirectory
             .EnumerateDirectories()
+            .Where(d => IsValidHiveName(d.Name))
             .OrderBy(d => d.Name, StringComparer.Ordinal)
             .Select(d => new HiveInfo(d.Name, d.FullName, GetDogfoodDirectory(d.Name).Exists))
             .ToList();
     }
 
     public string GetHivePath(string channel)
-        => GetHiveDirectory(channel).FullName;
+    {
+        if (!IsValidHiveName(channel))
+        {
+            throw new ArgumentException("Invalid hive name.", nameof(channel));
+        }
+
+        return GetHiveDirectory(channel).FullName;
+    }
 
     public bool HasHive(string channel)
-        => GetHiveDirectory(channel).Exists;
+        => IsValidHiveName(channel) && GetHiveDirectory(channel).Exists;
 
     public IReadOnlyList<string> ExpandChannels(string? channel, bool all)
     {
@@ -50,6 +87,12 @@ internal sealed class CliCleanupService(CliExecutionContext executionContext, IC
     public async Task<CleanupResult> DeleteHiveAsync(string channel, bool force, bool dryRun, CancellationToken cancellationToken)
     {
         var operations = new List<CleanupOperation>();
+        if (!IsValidHiveName(channel))
+        {
+            operations.Add(CleanupOperation.Failed(channel ?? string.Empty, "Invalid hive name. Hive names must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators or '..'."));
+            return new CleanupResult(operations, HasFailures: true);
+        }
+
         var hiveDirectory = GetHiveDirectory(channel);
         var dogfoodDirectory = GetDogfoodDirectory(channel);
 
@@ -72,6 +115,12 @@ internal sealed class CliCleanupService(CliExecutionContext executionContext, IC
 
         foreach (var channel in channels)
         {
+            if (!IsValidHiveName(channel))
+            {
+                operations.Add(CleanupOperation.Failed(channel ?? string.Empty, "Invalid hive name. Hive names must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators or '..'."));
+                continue;
+            }
+
             var hiveDirectory = GetHiveDirectory(channel);
             operations.Add(await DeleteDirectoryAsync(hiveDirectory, dryRun, cancellationToken));
 
@@ -124,10 +173,27 @@ internal sealed class CliCleanupService(CliExecutionContext executionContext, IC
     }
 
     private DirectoryInfo GetHiveDirectory(string channel)
-        => new(Path.Combine(executionContext.HivesDirectory.FullName, channel));
+    {
+        if (!IsValidHiveName(channel))
+        {
+            // Defense in depth: callers should validate first (and surface a
+            // friendlier error), but if they don't we refuse to compose a
+            // path that could escape HivesDirectory.
+            throw new ArgumentException("Invalid hive name.", nameof(channel));
+        }
+
+        return new(Path.Combine(executionContext.HivesDirectory.FullName, channel));
+    }
 
     private DirectoryInfo GetDogfoodDirectory(string channel)
-        => new(Path.Combine(AspireHomeDirectory.FullName, "dogfood", channel));
+    {
+        if (!IsValidHiveName(channel))
+        {
+            throw new ArgumentException("Invalid hive name.", nameof(channel));
+        }
+
+        return new(Path.Combine(AspireHomeDirectory.FullName, "dogfood", channel));
+    }
 
     private DirectoryInfo GetSharedBinDirectory()
         => new(Path.Combine(AspireHomeDirectory.FullName, "bin"));

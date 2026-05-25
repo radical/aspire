@@ -60,6 +60,12 @@ internal sealed class UninstallCommand : BaseCommand
                 (!string.IsNullOrWhiteSpace(channel) && all))
             {
                 result.AddError("Specify exactly one of --channel or --all.");
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(channel) && !CliCleanupService.IsValidHiveName(channel))
+            {
+                result.AddError("Invalid --channel value. Channel names must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators or '..'.");
             }
         });
     }

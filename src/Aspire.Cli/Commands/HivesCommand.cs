@@ -92,6 +92,11 @@ internal sealed class HivesCommand : ParentCommand
                 return CommandResult.Failure(CliExitCodes.InvalidCommand, "A hive name is required.");
             }
 
+            if (!CliCleanupService.IsValidHiveName(name))
+            {
+                return CommandResult.Failure(CliExitCodes.InvalidCommand, "Invalid hive name. Hive names must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators or '..'.");
+            }
+
             var dryRun = parseResult.GetValue(s_dryRunOption);
             var yes = parseResult.GetValue(s_yesOption);
             if (!dryRun && !yes && !await InteractionService.PromptConfirmAsync($"Delete Aspire CLI hive '{name}'?", cancellationToken: cancellationToken))
