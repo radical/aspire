@@ -1676,7 +1676,7 @@ function Test-InstallerModeEnvironment {
             if ($Script:HostOS -ne 'osx') {
                 throw "-InstallMode Homebrew can only be executed on macOS. Use -WhatIf to preview downloads from another OS."
             }
-            if (-not (Get-Command Homebrew -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Command brew -ErrorAction SilentlyContinue)) {
                 throw "-InstallMode Homebrew requires Homebrew (brew) to install the generated cask artifact."
             }
         }

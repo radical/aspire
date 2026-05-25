@@ -1399,7 +1399,7 @@ validate_installer_mode_environment() {
                 say_error "--install-mode homebrew can only be executed on macOS. Use --dry-run to preview downloads from another OS."
                 return 1
             fi
-            if ! command -v Homebrew >/dev/null 2>&1; then
+            if ! command -v brew >/dev/null 2>&1; then
                 say_error "--install-mode homebrew requires Homebrew (brew) to install the generated cask artifact."
                 return 1
             fi
