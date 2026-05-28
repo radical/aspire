@@ -9,6 +9,7 @@
 # Options:
 #   -c, --configuration   Build configuration: Release or Debug
 #   -n, --name            Hive name (default: local)
+#       --channel         AspireCliChannel baked into the CLI binary (default: staging)
 #   -o, --output          Output directory for portable layout (instead of $HOME/.aspire)
 #   -r, --rid             Target RID for cross-platform builds (e.g. linux-x64)
 #   -v, --versionsuffix   Prerelease version suffix (default: auto-generates local.YYYYMMDD.tHHmmss)
@@ -36,6 +37,7 @@ Usage:
 Options:
   -c, --configuration   Build configuration: Release or Debug
   -n, --name            Hive name (default: local)
+      --channel         AspireCliChannel baked into the CLI binary (default: staging)
   -o, --output          Output directory for portable layout (instead of \$HOME/.aspire)
   -r, --rid             Target RID for cross-platform builds (e.g. linux-x64)
   -v, --versionsuffix   Prerelease version suffix (default: auto-generates local.YYYYMMDD.tHHmmss)
@@ -90,6 +92,7 @@ OUTPUT_DIR=""
 TARGET_RID=""
 ARCHIVE=0
 BUNDLE_PAYLOAD_ARCHIVE=""
+CLI_CHANNEL="staging"
 is_valid_versionsuffix() {
   local s="$1"
   # Must be dot-separated identifiers containing only 0-9A-Za-z- per SemVer2.
@@ -157,6 +160,9 @@ while [[ $# -gt 0 ]]; do
       SKIP_BUNDLE=1; shift ;;
     --native-aot)
       NATIVE_AOT=1; shift ;;
+    --channel)
+      if [[ $# -lt 2 ]]; then error "Missing value for $1"; exit 1; fi
+      CLI_CHANNEL="$2"; shift 2 ;;
     --)
       shift; break ;;
     Release|Debug|release|debug)
@@ -230,10 +236,17 @@ if [[ $NATIVE_AOT -eq 0 ]]; then
   AOT_ARG="/p:PublishAot=false"
 fi
 
+# Only pass AspireCliChannel when explicitly set (non-empty); passing an empty
+# value would override the csproj default and bake a blank channel into the binary.
+CLI_CHANNEL_ARG=""
+if [[ -n "$CLI_CHANNEL" ]]; then
+  CLI_CHANNEL_ARG="/p:AspireCliChannel=$CLI_CHANNEL"
+fi
+
 if [ -n "$CONFIG" ]; then
   log "Building and packing NuGet packages [-c $CONFIG] with versionsuffix '$VERSION_SUFFIX'"
   # Single invocation: restore + build + pack to ensure all Build-triggered targets run and packages are produced.
-  "$REPO_ROOT/build.sh" --restore --build --pack -c "$CONFIG" /p:VersionSuffix="$VERSION_SUFFIX" /p:SkipTestProjects=true /p:SkipPlaygroundProjects=true $AOT_ARG
+  "$REPO_ROOT/build.sh" --restore --build --pack -bl -c "$CONFIG" $CLI_CHANNEL_ARG /p:VersionSuffix="$VERSION_SUFFIX" /p:SkipTestProjects=true /p:SkipPlaygroundProjects=true $AOT_ARG
   PKG_DIR="$REPO_ROOT/artifacts/packages/$CONFIG/Shipping"
   if [ ! -d "$PKG_DIR" ]; then
     error "Could not find packages path $PKG_DIR for CONFIG=$CONFIG"
@@ -241,7 +254,7 @@ if [ -n "$CONFIG" ]; then
   fi
 else
   log "Building and packing NuGet packages [-c Release] with versionsuffix '$VERSION_SUFFIX'"
-  "$REPO_ROOT/build.sh" --restore --build --pack -c Release /p:VersionSuffix="$VERSION_SUFFIX" /p:SkipTestProjects=true /p:SkipPlaygroundProjects=true $AOT_ARG
+  "$REPO_ROOT/build.sh" --restore --build --pack -bl -c Release $CLI_CHANNEL_ARG /p:VersionSuffix="$VERSION_SUFFIX" /p:SkipTestProjects=true /p:SkipPlaygroundProjects=true $AOT_ARG
   PKG_DIR="$REPO_ROOT/artifacts/packages/Release/Shipping"
   if [ ! -d "$PKG_DIR" ]; then
     error "Could not find packages path $PKG_DIR for CONFIG=Release"
@@ -356,13 +369,13 @@ if [[ $SKIP_BUNDLE -eq 0 ]]; then
   if [[ $NATIVE_AOT -eq 1 ]]; then
     log "Building bundle (aspire-managed + DCP + native AOT CLI)..."
     set +e
-    dotnet build "$BUNDLE_PROJ" -c "$EFFECTIVE_CONFIG" "/p:VersionSuffix=$VERSION_SUFFIX" "/p:TargetRid=$BUNDLE_RID"
+    dotnet build "$BUNDLE_PROJ" -c "$EFFECTIVE_CONFIG" "/p:VersionSuffix=$VERSION_SUFFIX" "/p:TargetRid=$BUNDLE_RID" $CLI_CHANNEL_ARG
     rc=$?
     set -e
   else
     log "Building bundle (aspire-managed + DCP)..."
     set +e
-    dotnet build "$BUNDLE_PROJ" -c "$EFFECTIVE_CONFIG" /p:SkipNativeBuild=true "/p:VersionSuffix=$VERSION_SUFFIX" "/p:TargetRid=$BUNDLE_RID"
+    dotnet build "$BUNDLE_PROJ" -c "$EFFECTIVE_CONFIG" /p:SkipNativeBuild=true "/p:VersionSuffix=$VERSION_SUFFIX" "/p:TargetRid=$BUNDLE_RID" $CLI_CHANNEL_ARG
     rc=$?
     set -e
   fi
@@ -396,7 +409,7 @@ if [[ $SKIP_CLI -eq 0 ]]; then
     log "Publishing Aspire CLI for target RID: $TARGET_RID"
     CLI_PROJ="$REPO_ROOT/src/Aspire.Cli/Aspire.Cli.csproj"
     CLI_PUBLISH_DIR="$REPO_ROOT/artifacts/bin/Aspire.Cli/$EFFECTIVE_CONFIG/net10.0/$TARGET_RID/publish"
-    PUBLISH_ARGS=(-c "$EFFECTIVE_CONFIG" -r "$TARGET_RID" --self-contained /p:PublishAot=false /p:PublishSingleFile=true "/p:VersionSuffix=$VERSION_SUFFIX")
+    PUBLISH_ARGS=(-c "$EFFECTIVE_CONFIG" -r "$TARGET_RID" --self-contained /p:PublishAot=false /p:PublishSingleFile=true "/p:VersionSuffix=$VERSION_SUFFIX" $CLI_CHANNEL_ARG)
     if [[ -n "$BUNDLE_PAYLOAD_ARCHIVE" ]]; then
       PUBLISH_ARGS+=("/p:BundlePayloadPath=$BUNDLE_PAYLOAD_ARCHIVE")
     fi
@@ -416,7 +429,7 @@ if [[ $SKIP_CLI -eq 0 ]]; then
       CLI_PUBLISH_DIR="$REPO_ROOT/artifacts/bin/Aspire.Cli.Tool/$EFFECTIVE_CONFIG/net10.0/$BUNDLE_RID/publish"
       log "Publishing Aspire CLI (dotnet tool, native AOT) with embedded bundle payload..."
       set +e
-      dotnet publish "$CLI_PROJ" -c "$EFFECTIVE_CONFIG" -r "$BUNDLE_RID" "/p:VersionSuffix=$VERSION_SUFFIX" "/p:BundlePayloadPath=$BUNDLE_PAYLOAD_ARCHIVE"
+      dotnet publish "$CLI_PROJ" -c "$EFFECTIVE_CONFIG" -r "$BUNDLE_RID" "/p:VersionSuffix=$VERSION_SUFFIX" "/p:BundlePayloadPath=$BUNDLE_PAYLOAD_ARCHIVE" $CLI_CHANNEL_ARG
       rc=$?
       set -e
       if [[ $rc -ne 0 ]]; then

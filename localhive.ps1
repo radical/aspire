@@ -32,6 +32,9 @@
 .PARAMETER NativeAot
   Build and install the native AOT CLI (self-extracting binary with embedded bundle) instead of the dotnet tool version.
 
+.PARAMETER Channel
+  AspireCliChannel value baked into the CLI binary (default: staging).
+
 .PARAMETER Help
   Show help and exit.
 
@@ -77,6 +80,8 @@ param(
   [switch] $SkipBundle,
 
   [switch] $NativeAot,
+
+  [string] $Channel = 'staging',
 
   [Alias('h')]
   [switch] $Help
@@ -220,9 +225,13 @@ $effectiveConfig = if ($Configuration) { $Configuration } else { 'Release' }
 # Skip native AOT during pack unless user will build it separately via -NativeAot + Bundle.proj
 $aotArg = if (-not $NativeAot) { "/p:PublishAot=false" } else { "" }
 
+# Only pass AspireCliChannel when explicitly set (non-empty); passing an empty
+# value would override the csproj default and bake a blank channel into the binary.
+$channelArg = if ($Channel) { "/p:AspireCliChannel=$Channel" } else { $null }
+
 if ($Configuration) {
   Write-Log "Building and packing NuGet packages [-c $Configuration] with versionsuffix '$VersionSuffix'"
-  & $buildScript -restore -build -pack -c $Configuration "/p:VersionSuffix=$VersionSuffix" "/p:SkipTestProjects=true" "/p:SkipPlaygroundProjects=true" $aotArg
+  & $buildScript -restore -build -pack -c $Configuration $channelArg "/p:VersionSuffix=$VersionSuffix" "/p:SkipTestProjects=true" "/p:SkipPlaygroundProjects=true" $aotArg
   if ($LASTEXITCODE -ne 0) {
     Write-Err "Build failed for configuration $Configuration."
     exit 1
@@ -235,7 +244,7 @@ if ($Configuration) {
 }
 else {
   Write-Log "Building and packing NuGet packages [-c Release] with versionsuffix '$VersionSuffix'"
-  & $buildScript -restore -build -pack -c Release "/p:VersionSuffix=$VersionSuffix" "/p:SkipTestProjects=true" "/p:SkipPlaygroundProjects=true" $aotArg
+  & $buildScript -restore -build -pack -c Release $channelArg "/p:VersionSuffix=$VersionSuffix" "/p:SkipTestProjects=true" "/p:SkipPlaygroundProjects=true" $aotArg
   if ($LASTEXITCODE -ne 0) {
     Write-Err "Build failed for configuration Release."
     exit 1
@@ -363,7 +372,7 @@ if (-not $SkipBundle) {
   }
 
   Write-Log "Building bundle (aspire-managed + DCP$(if ($NativeAot) { ' + native AOT CLI' }))..."
-  $buildArgs = @($bundleProjPath, '-c', $effectiveConfig, "/p:VersionSuffix=$VersionSuffix", "/p:TargetRid=$bundleRid")
+  $buildArgs = @($bundleProjPath, '-c', $effectiveConfig, $channelArg, "/p:VersionSuffix=$VersionSuffix", "/p:TargetRid=$bundleRid")
   if (-not $NativeAot) {
     $buildArgs += '/p:SkipNativeBuild=true'
   }
@@ -401,7 +410,7 @@ if (-not $SkipCli) {
     Write-Log "Publishing Aspire CLI for target RID: $Rid"
     $cliProj = Join-Path $RepoRoot "src" "Aspire.Cli" "Aspire.Cli.csproj"
     $cliPublishDir = Join-Path $RepoRoot "artifacts" "bin" "Aspire.Cli" $effectiveConfig "net10.0" $Rid "publish"
-    $publishArgs = @($cliProj, '-c', $effectiveConfig, '-r', $Rid, '--self-contained', '/p:PublishAot=false', '/p:PublishSingleFile=true', "/p:VersionSuffix=$VersionSuffix")
+    $publishArgs = @($cliProj, '-c', $effectiveConfig, '-r', $Rid, '--self-contained', '/p:PublishAot=false', '/p:PublishSingleFile=true', $channelArg, "/p:VersionSuffix=$VersionSuffix")
     if ($bundlePayloadArchive) {
       $publishArgs += "/p:BundlePayloadPath=$($bundlePayloadArchive.FullName)"
     }
@@ -417,7 +426,7 @@ if (-not $SkipCli) {
       # Publish output is RID-specific when we pass -r, so the path includes $bundleRid.
       $cliPublishDir = Join-Path $RepoRoot "artifacts" "bin" "Aspire.Cli.Tool" $effectiveConfig "net10.0" $bundleRid "publish"
       Write-Log "Publishing Aspire CLI (dotnet tool, native AOT) with embedded bundle payload..."
-      & dotnet publish $cliProj -c $effectiveConfig -r $bundleRid "/p:VersionSuffix=$VersionSuffix" "/p:BundlePayloadPath=$($bundlePayloadArchive.FullName)"
+      & dotnet publish $cliProj -c $effectiveConfig -r $bundleRid $channelArg "/p:VersionSuffix=$VersionSuffix" "/p:BundlePayloadPath=$($bundlePayloadArchive.FullName)"
       if ($LASTEXITCODE -ne 0) {
         Write-Err "CLI publish with embedded bundle failed."
         exit 1

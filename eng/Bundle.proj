@@ -49,6 +49,10 @@
     <!-- Forward VersionSuffix to Exec-invoked dotnet commands (MSBuild properties don't flow to child processes) -->
     <_VersionSuffixArg Condition="'$(VersionSuffix)' != ''">/p:VersionSuffix=$(VersionSuffix)</_VersionSuffixArg>
 
+    <!-- Forward AspireCliChannel to Exec-invoked dotnet publish so the baked channel identity
+         propagates through Bundle.proj's _PublishNativeCli target (which uses Exec, not <MSBuild>). -->
+    <_AspireCliChannelArg Condition="'$(AspireCliChannel)' != ''">/p:AspireCliChannel=$(AspireCliChannel)</_AspireCliChannelArg>
+
     <!-- Binlog arguments for dotnet commands -->
     <_BinlogArg Condition="'$(ContinuousIntegrationBuild)' == 'true'">-bl:$(ArtifactsLogDir)</_BinlogArg>
   </PropertyGroup>
@@ -91,7 +95,7 @@
       <_BundleArchivePath>$(ArtifactsDir)bundle\aspire-$(BundleVersion)-$(TargetRid).tar.gz</_BundleArchivePath>
     </PropertyGroup>
     <Message Importance="high" Text="Publishing native AOT CLI with embedded bundle: $(_BundleArchivePath)" />
-    <Exec Command="dotnet publish &quot;$(CliProjectPath)&quot; -c $(Configuration) -r $(TargetRid) /p:BundlePayloadPath=&quot;$(_BundleArchivePath)&quot; $(_VersionSuffixArg) $(_CliBinlog)" />
+    <Exec Command="dotnet publish &quot;$(CliProjectPath)&quot; -c $(Configuration) -r $(TargetRid) /p:BundlePayloadPath=&quot;$(_BundleArchivePath)&quot; $(_VersionSuffixArg) $(_AspireCliChannelArg) $(_CliBinlog)" />
   </Target>
 
   <Target Name="_PublishManagedProjects" Condition="'$(SkipManagedBuild)' != 'true'">
