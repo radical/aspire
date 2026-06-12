@@ -752,6 +752,61 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task ForceRerunAllSkipsCancelledJobsButRerunsGenuineFailures()
+    {
+        // A cancellation is not a genuine failure (jobs are cancelled when the run is
+        // cancelled or a sibling fails under fail-fast), so force mode must not let a
+        // cancellation trigger a rerun. A genuine failure in the same run still does.
+        WorkflowJob cancelled = CreateJob(id: 1, name: "Tests / Sample / Sample (ubuntu-latest)", conclusion: "cancelled", failedSteps: ["Run tests"]);
+        WorkflowJob failed = CreateJob(id: 2, name: "Tests / Sample / Sample (windows-latest)", conclusion: "failure", failedSteps: ["Run tests"]);
+
+        AnalyzeFailedJobsResult forced = await AnalyzeJobsAsync(
+            [cancelled, failed],
+            new Dictionary<string, string>
+            {
+                [cancelled.Id.ToString()] = "The operation was canceled.",
+                [failed.Id.ToString()] = "Process completed with exit code 1.",
+            },
+            forceRerunAll: true);
+
+        AnalyzedJob retryable = Assert.Single(forced.RetryableJobs);
+        Assert.Equal(failed.Id, retryable.Id);
+
+        AnalyzedJob skipped = Assert.Single(forced.SkippedJobs);
+        Assert.Equal(cancelled.Id, skipped.Id);
+        Assert.Contains("cancelled", skipped.Reason);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task ForceRerunAllIsNotEligibleWhenOnlyCancelledJobsFailed()
+    {
+        // If every failed job was cancelled, force mode leaves zero retryable jobs, so a
+        // rerun must not be triggered.
+        WorkflowJob cancelled = CreateJob(conclusion: "cancelled", failedSteps: ["Run tests"]);
+
+        AnalyzeFailedJobsResult forced = await AnalyzeJobsAsync(
+            [cancelled],
+            new Dictionary<string, string> { [cancelled.Id.ToString()] = "The operation was canceled." },
+            forceRerunAll: true);
+
+        Assert.Empty(forced.RetryableJobs);
+        Assert.Single(forced.SkippedJobs);
+
+        bool eligible = await InvokeHarnessAsync<bool>(
+            "computeRerunEligibility",
+            new
+            {
+                retryableCount = forced.RetryableJobs.Length,
+                runAttempt = 1,
+                forceRerunAll = true
+            });
+
+        Assert.False(eligible);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task ForceRerunAllBypassesTheJobCountCapButKeepsTheAttemptCap()
     {
         bool eligibleAboveCap = await InvokeHarnessAsync<bool>(

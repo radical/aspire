@@ -5,13 +5,19 @@
 // computeRerunEligibility, computeRerunExecutionEligibility, and rerunMatchedJobs
 // makes the workflow rerun EVERY failed CI job for a run when enabled (via the YAML
 // `FORCE_RERUN_ALL` env var), bypassing:
-//   1. the 4-pass transient-failure classification (every non-ignored failed job
-//      becomes retryable), and
+//   1. the transient-failure classification (annotation allowlists, infrastructure /
+//      network log overrides, and configurable job-log patterns) — every failed,
+//      non-ignored job becomes retryable, EXCEPT cancelled jobs (see below), and
 //   2. the retryable-job-count cap in computeRerunEligibility.
 // It deliberately KEEPS the open-PR requirement (reruns only fire for runs that have
 // a currently-open associated PR — there is no point spending CI on closed/merged
 // PRs), the attempt cap (up to 3 auto-reruns / 4 total attempts), the aggregator-job
 // exclusion (ignoredJobs), and the failureConclusions filter.
+// Cancellations never trigger a rerun: a job is typically `cancelled` when the run is
+// cancelled or a sibling job failed under fail-fast, so a cancellation is not a genuine
+// failure worth retrying. Run-level cancellation is already excluded by the YAML trigger
+// (it only fires on `workflow_run.conclusion == 'failure'`); force mode additionally
+// excludes job-level `cancelled` results so a cancellation alone never forces a rerun.
 // The transient-classification rules and the patterns config are left intact behind
 // this flag. `forceRerunAll` defaults to false everywhere so the existing unit tests
 // keep exercising the normal classification/eligibility behavior.
@@ -466,12 +472,26 @@ async function analyzeFailedJobs({
     const skippedJobs = [];
     const jobFailurePatterns = retryPatternsConfig?.jobFailurePatterns;
 
-    // FORCE_RERUN_ALL: skip every classification pass and mark all
-    // failed (non-ignored) jobs as retryable. The failureConclusions / ignoredJobs
-    // filtering above still defines what counts as a failed CI job. See the
-    // file-level comment for how to disable.
+    // FORCE_RERUN_ALL: skip the transient-failure classification and mark every
+    // failed (non-ignored) job as retryable. The failureConclusions / ignoredJobs
+    // filtering above still defines what counts as a failed CI job. Cancelled jobs are
+    // the one exception: a cancellation is not a genuine failure (jobs are cancelled
+    // when the run is cancelled or a sibling fails under fail-fast), so cancelled jobs
+    // are treated as skipped and never trigger a rerun on their own. See the file-level
+    // comment for how to disable.
     if (forceRerunAll) {
         for (const job of failedJobs) {
+            if (job.conclusion === 'cancelled') {
+                skippedJobs.push({
+                    id: job.id,
+                    name: job.name,
+                    htmlUrl: job.html_url || null,
+                    failedSteps: getFailedSteps(job),
+                    reason: 'Force-rerun mode: job was cancelled; cancellations do not trigger a rerun.',
+                });
+                continue;
+            }
+
             retryableJobs.push({
                 id: job.id,
                 name: job.name,

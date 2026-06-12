@@ -191,11 +191,11 @@ When a rerun is requested, GitHub reruns **all** failed jobs for that attempt �
 
 > **For-now behavior:** the workflow reruns every failed CI job, not just transient-looking ones. This stays in place until CI auto-rerun patterns are improved (e.g. agents curating the transient-failure rules). Disable it by flipping the flag (see below); the classification rules are kept intact behind it.
 
-The workflow currently runs in **force mode**, enabled by the `FORCE_RERUN_ALL: 'true'` environment variable set on both jobs in [`auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml). In force mode the workflow requests a rerun on **any** failed CI run that has a currently-open associated PR, regardless of whether the failure looks transient.
+The workflow currently runs in **force mode**, enabled by the `FORCE_RERUN_ALL: 'true'` environment variable set on both jobs in [`auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml). In force mode the workflow requests a rerun on **any** genuinely-failed CI run that has a currently-open associated PR, regardless of whether the failure looks transient.
 
 **Force mode bypasses:**
 
-1. **Transient-failure classification** — every failed (non-ignored) job is treated as retryable; the 4-pass analysis is skipped entirely.
+1. **Transient-failure classification** — every failed (non-ignored) job is treated as retryable; the annotation-allowlist, infrastructure/network-log-override, and configurable job-log-pattern analysis is skipped entirely.
 2. **The retryable-job-count cap** — the `≤ 5 retryable jobs` rail is not applied.
 
 **Force mode keeps:**
@@ -203,6 +203,7 @@ The workflow currently runs in **force mode**, enabled by the `FORCE_RERUN_ALL: 
 - **The open-PR requirement** — a rerun only fires for a run that has a currently-open associated PR. Runs with no associated PR, or where every associated PR is closed/merged, are still skipped. There is no value in spending CI on an inactive PR, so force mode does not bypass this.
 - **The attempt cap** — reruns still only fire from source attempts 1–3 (up to 3 automatic reruns / 4 total attempts). This is unchanged.
 - **The aggregator-job exclusion** (`Final Results`, `Tests / Final Test Results`) and the `failureConclusions` filter — these define what counts as a failed CI job, not an eligibility rule.
+- **Cancellation is not a failure** — a `cancelled` job never triggers a rerun on its own (jobs are cancelled when the run is cancelled or a sibling fails under fail-fast). Run-level cancellation is already excluded by the trigger (the workflow only fires on `workflow_run.conclusion == 'failure'`); force mode additionally treats job-level `cancelled` results as skipped. A run whose only failures are cancellations is not rerun.
 
 The classification rules and [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) config are left fully intact; force mode is gated behind an optional `forceRerunAll` flag (default `false`), so the normal behavior is preserved when it is off.
 
