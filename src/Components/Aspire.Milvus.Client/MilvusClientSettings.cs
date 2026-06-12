@@ -1,6 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+// Probe change to exercise selective CI (test-trigger-map): a no-op edit to a single
+// component so the selector picks a small subset instead of the full matrix.
+
 using System.Data.Common;
 
 namespace Aspire.Milvus.Client;
