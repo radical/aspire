@@ -13,7 +13,7 @@ The Aspire release process uses two main automation components:
    - Publishes Aspire CLI npm packages through ESRP/MicroBuild.
    - Promotes the build to the GA channel via darc.
    - Submits WinGet manifest PRs.
-   - Optionally validates the Homebrew cask against the live GitHub release when `SkipHomebrewValidation=false` (cask version bumps themselves are submitted by upstream autobump; see [Installer channels](#installer-channels)).
+   - Optionally validates the Homebrew cask against the live GitHub release when `SkipHomebrewValidation=false`, and—when `SkipHomebrewPublish=false`—opens a version-bump PR against our own tap `microsoft/homebrew-aspire`. The upstream `Homebrew/homebrew-cask` cask is bumped separately by upstream autobump (see [Installer channels](#installer-channels)).
    - Optionally publishes the signed VS Code extension to the Visual Studio Marketplace.
    - Dispatches the GitHub Actions workflow below as the `aspire-repo-bot` GitHub App and waits for it to complete.
    - Uploads `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the GitHub Release as the `aspire-repo-bot`.
@@ -38,7 +38,7 @@ Aspire ships through several channels. The release pipeline either submits the b
 |---------|------------------------------|------------------|
 | **NuGet** (libraries, AppHost SDK, `Aspire.Cli` tool packages) | `release-publish-nuget` pushes to NuGet.org | This document |
 | **WinGet** (`winget install Microsoft.Aspire`) | `release-publish-nuget` submits manifest PRs to `microsoft/winget-pkgs` via `wingetcreate` | [`eng/winget/README.md`](../eng/winget/README.md) |
-| **Homebrew cask** (`brew install --cask aspire`) | Upstream Homebrew/homebrew-cask's [autobump workflow](https://github.com/Homebrew/homebrew-cask/blob/master/.github/workflows/autobump.yml) opens the bump PR on a 3-hour schedule, detecting the new version via the cask's `livecheck` block. `release-publish-nuget` validates the cask against the live GitHub release after asset upload only when `SkipHomebrewValidation=false` (skipped by default). | [`eng/homebrew/README.md`](../eng/homebrew/README.md) |
+| **Homebrew cask** (`brew install --cask aspire`) | Upstream Homebrew/homebrew-cask's [autobump workflow](https://github.com/Homebrew/homebrew-cask/blob/master/.github/workflows/autobump.yml) opens the bump PR on a 3-hour schedule, detecting the new version via the cask's `livecheck` block. Separately, our own tap `microsoft/homebrew-aspire` (`brew install microsoft/aspire/aspire`) is bumped by `release-publish-nuget` when `SkipHomebrewPublish=false`, which opens a PR rewriting only the version + sha256 in `Casks/a/aspire.rb`. `release-publish-nuget` also validates the cask against the live GitHub release after asset upload when `SkipHomebrewValidation=false` (skipped by default). | [`eng/homebrew/README.md`](../eng/homebrew/README.md) |
 | **`dotnet tool install -g Aspire.Cli`** | `release-publish-nuget` pushes the per-RID `Aspire.Cli.*.nupkg` packages to NuGet.org alongside the libraries | [`docs/specs/install-routes.md`](specs/install-routes.md) |
 | **Install script** (`get-aspire-cli.sh` / `.ps1`) | No separate publication — the script downloads directly from the GitHub release assets attached in Step 1 | [`docs/specs/install-routes.md`](specs/install-routes.md), `eng/scripts/get-aspire-cli.*` |
 
@@ -97,6 +97,7 @@ Before starting a release:
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow. | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading `aspire-cli-*` assets to the GitHub release. | `false` |
    | `SkipHomebrewValidation` | Set `false` to run Homebrew cask validation against the live GitHub release. | `true` |
+   | `SkipHomebrewPublish` | Set `false` to open a version-bump PR against our tap `microsoft/homebrew-aspire`. Requires `SkipHomebrewValidation=false` too, since the publish job runs only after validation succeeds. | `false` |
    | `SkipVSCodeExtensionPublish` | Set `false` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace. | `true` |
    | `NpmPublishOwners` | Comma-separated ESRP owner aliases or emails. Overrides must include `joperezr` or `ankj`, matching the required owner aliases in `eng/pipelines/release-publish-nuget.yml`. | `joperezr,ankj` |
    | `NpmPublishApprovers` | Single ESRP approver alias or email. The approver must be a Microsoft address and must not overlap owners. | `adamratzman` |
@@ -106,7 +107,7 @@ Before starting a release:
 4. Select the **Resources** button in the bottom right, then select the source build from the `aspire-build` dropdown.
    - The picker shows all recent builds from the `microsoft-aspire` pipeline regardless of branch. Pick the build that corresponds to the release branch and version you intend to ship.
    - Each build's tags are shown alongside its number. Verify the `release-version - X.Y.Z` tag matches the version you intend to ship before clicking **Run**. If the tag is missing, either re-run the source build after the tag-emitting change in `azure-pipelines.yml` is on that release branch or pass an explicit `ReleaseVersion` override.
-5. Click **Run** and monitor the pipeline. The final stage (`GitHubTasks`) dispatches `release-github-tasks.yml`, waits for it to complete, and uploads the `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the newly-created GitHub release. If `SkipHomebrewValidation=false`, it also validates the Homebrew cask against that live release. The AzDO pipeline only succeeds if the enabled GitHub tasks, asset upload, and optional Homebrew validation succeed.
+5. Click **Run** and monitor the pipeline. The final stage (`GitHubTasks`) dispatches `release-github-tasks.yml`, waits for it to complete, and uploads the `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the newly-created GitHub release. If `SkipHomebrewValidation=false`, it also validates the Homebrew cask against that live release; if `SkipHomebrewPublish=false` (and validation succeeded), it then opens a version-bump PR against our tap `microsoft/homebrew-aspire`. The AzDO pipeline only succeeds if the enabled GitHub tasks, asset upload, and optional Homebrew validation/publish succeed.
 6. Verify packages appear on NuGet.org and npm, and verify that the `aspire-cli-*` archives are attached to the GitHub release.
 
 To publish only the VS Code extension after merging an extension release PR, run the same `release-publish-nuget` pipeline, select the signed source build from that merge, and set:
@@ -122,6 +123,7 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `SkipChannelPromotion` | `true` |
 | `SkipWinGetPublish` | `true` |
 | `SkipHomebrewValidation` | `true` |
+| `SkipHomebrewPublish` | `true` |
 | `SkipGitHubTasks` | `true` |
 | `SkipReleaseAssets` | `true` |
 | `SkipVSCodeExtensionPublish` | `false` |
@@ -157,7 +159,7 @@ Run this step only when releasing the VS Code extension independently of the nor
 
 The GitHub workflow is normally dispatched by the AzDO pipeline as the `aspire-repo-bot` GitHub App, with its `authorize` job bypassed for the bot. If a GitHub-side step fails partway through and you need to re-run only the GitHub work, you can:
 
-1. Re-run the AzDO pipeline with completed AzDO-side work skipped, such as `SkipNuGetPublish`, `SkipNpmRidPublish`, `SkipNpmPointerPublish`, `SkipChannelPromotion`, `SkipWinGetPublish`, `SkipHomebrewValidation`, and `SkipReleaseAssets` set as appropriate, keeping `SkipGitHubTasks: false`. The `GitHubTasks` stage will dispatch the workflow again with the right inputs, and the workflow's own `skip_*` idempotency makes the completed steps no-ops.
+1. Re-run the AzDO pipeline with completed AzDO-side work skipped, such as `SkipNuGetPublish`, `SkipNpmRidPublish`, `SkipNpmPointerPublish`, `SkipChannelPromotion`, `SkipWinGetPublish`, `SkipHomebrewValidation`, `SkipHomebrewPublish`, and `SkipReleaseAssets` set as appropriate, keeping `SkipGitHubTasks: false`. The `GitHubTasks` stage will dispatch the workflow again with the right inputs, and the workflow's own `skip_*` idempotency makes the completed steps no-ops.
 2. Or, navigate to Actions → **Release GitHub Tasks**, click **Run workflow**, and fill in the parameters manually:
 
    | Parameter | Description | Example |
@@ -207,7 +209,7 @@ Both automations are designed to be idempotent and safe to re-run.
 | MicroBuild npm Publish | Check the ESRP release result. If RID packages published but the pointer package did not, re-run with `SkipNuGetPublish: true`, `SkipNpmRidPublish: true`, `SkipNpmPointerPublish: false`, and `SkipChannelPromotion: true`; do not set `SkipNpmPointerPublish` until the pointer package is published. |
 | Validate Published npm Package from Registry | Confirm the pointer package is visible on npm and that `npm install -g @microsoft/aspire-cli@<version>` works. If registry propagation is slow, re-run with completed publish steps skipped after the package is visible. |
 | Promote Build to Channel | Re-run with completed publish steps skipped. |
-| WinGet publishing / Homebrew validation | Re-run with the corresponding skip flags for completed work. |
+| WinGet publishing / Homebrew validation & tap publish | Re-run with the corresponding skip flags for completed work. The tap-publish PR step is idempotent: it updates the existing `update-aspire-<version>` PR rather than opening a duplicate. |
 | Publish VS Code Extension to Marketplace | Check that `aspire-vscode-extension` contains one `.vsix`, `.manifest`, and `.signature.p7s`; verify `VscePublishToken` in `Aspire-Release-Secrets` has Marketplace: Manage scope; re-run with the already-completed `Skip*` flags set to `true`. |
 | GitHubTasks dispatch | Re-run with completed AzDO-side work skipped and `SkipGitHubTasks: false`; set `SkipReleaseAssets` according to whether release asset upload already completed. |
 | Release asset upload | Re-run with `SkipGitHubTasks: true` and `SkipReleaseAssets: false` after the GitHub release exists. |
@@ -340,6 +342,7 @@ Azure DevOps release-publish-nuget.yml
      -> dispatch release-github-tasks.yml as aspire-repo-bot
      -> upload aspire-cli-* assets to the GitHub release
      -> validate Homebrew cask against the live release (only when SkipHomebrewValidation=false)
+     -> open cask-bump PR against microsoft/homebrew-aspire (only when SkipHomebrewPublish=false)
 
 GitHub release-github-tasks.yml
   -> create tag

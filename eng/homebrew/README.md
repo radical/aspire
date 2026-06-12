@@ -2,12 +2,16 @@
 
 ## Overview
 
-Aspire CLI is distributed via [Homebrew Cask](https://docs.brew.sh/Cask-Cookbook) for macOS (arm64 and x64). Cask PRs are submitted to the upstream [Homebrew/homebrew-cask](https://github.com/Homebrew/homebrew-cask) repository.
+Aspire CLI is distributed via [Homebrew Cask](https://docs.brew.sh/Cask-Cookbook) for macOS (arm64 and x64) through two independent paths:
+
+- **Upstream [Homebrew/homebrew-cask](https://github.com/Homebrew/homebrew-cask)** — `brew install --cask aspire`. Version bumps are opened by upstream's autobump workflow (see "Submission: upstream autobump"). Aspire does **not** push to this repo.
+- **Our own tap [microsoft/homebrew-aspire](https://github.com/microsoft/homebrew-aspire)** — `brew install microsoft/aspire/aspire` (after `brew tap microsoft/aspire`). The cask lives at `Casks/a/aspire.rb`. On a production release the `release-publish-nuget` pipeline opens a version-bump PR against this tap (see "Submission: Aspire-owned tap").
 
 ### Install commands
 
 ```bash
-brew install --cask aspire              # stable
+brew install --cask aspire              # stable, via upstream Homebrew/homebrew-cask
+brew install microsoft/aspire/aspire    # stable, via the Aspire-owned tap
 ```
 
 ## Contents
@@ -25,6 +29,7 @@ brew install --cask aspire              # stable
 | File | Description |
 |---|---|
 | `eng/pipelines/templates/prepare-homebrew-cask.yml` | Generates, styles, validates, audits, and tests the cask |
+| `eng/pipelines/templates/publish-homebrew.yml` | Opens a version-bump PR against the Aspire-owned tap `microsoft/homebrew-aspire` |
 
 ## Supported Platforms
 
@@ -63,10 +68,11 @@ what `brew install` fetches from the GitHub release URL.
 
 - **URL templating**: `url "...osx-#{arch}-#{version}.tar.gz"` — a single line instead of nested `on_macos do / if Hardware::CPU.arm?` blocks
 - **Official repo path**: Casks can be submitted to `Homebrew/homebrew-cask` for `brew install aspire` without a tap
-- **Stable-only release flow**: only the stable `aspire` cask is shipped
-  via `Homebrew/homebrew-cask`. A prerelease cask shipped via an
-  Aspire-owned tap remains a possible future option; the artifact that
-  the prepare stage emits would be the input to such a future publisher.
+- **Stable-only release flow**: only the stable `aspire` cask is shipped, via
+  both `Homebrew/homebrew-cask` (autobump) and the Aspire-owned tap
+  `microsoft/homebrew-aspire` (release-pipeline PR). A separate prerelease cask
+  remains a possible future option; the artifact that the prepare stage emits
+  (`homebrew-cask-prerelease`) would be the input to such a future publisher.
 
 ## CI Pipeline
 
@@ -74,7 +80,7 @@ what `brew install` fetches from the GitHub release URL.
 |---|---|---|---|
 | `.github/workflows/tests.yml` | Prerelease casks (artifacts only) | — | — |
 | `azure-pipelines.yml` (prepare stage) | Stable or prerelease casks (artifacts only) | — | — |
-| `release-publish-nuget.yml` (release) | — | Stable cask, LiveRelease mode (only when `SkipHomebrewValidation=false`) | — (autobump handles bumps; see below) |
+| `release-publish-nuget.yml` (release) | — | Stable cask, LiveRelease mode (only when `SkipHomebrewValidation=false`) | PR to our tap `microsoft/homebrew-aspire` when `SkipHomebrewPublish=false`; upstream `Homebrew/homebrew-cask` bumps are handled by autobump (see below) |
 
 The release pipeline's `HomebrewValidateJob` runs `validate-cask-artifact.sh`
 in LiveRelease mode against the cask emitted by the source build, after the
@@ -88,6 +94,48 @@ users running `brew install aspire`, or block Homebrew/homebrew-cask's
 autobump PR a few hours later. Gated by `SkipHomebrewValidation`, which
 defaults to `true`; the job only runs when `SkipHomebrewValidation=false`
 (opt in per release, or when re-running after a partial failure).
+
+### Submission: Aspire-owned tap
+
+On a production release the `release-publish-nuget` pipeline's
+`HomebrewPublishJob` opens (or updates) a version-bump PR against our own tap
+[`microsoft/homebrew-aspire`](https://github.com/microsoft/homebrew-aspire),
+file `Casks/a/aspire.rb`, via `eng/pipelines/templates/publish-homebrew.yml`.
+
+How it works:
+
+- The tap's `Casks/a/aspire.rb` is the **source of truth** for the cask file.
+  The job fetches it via the GitHub API and rewrites **only** the `version "…"`
+  line and the two `sha256 arm:/intel:` values. Every other stanza (zap,
+  postflight, livecheck, depends_on, comments) is preserved byte-for-byte.
+- The new version and sha256 values come from the release's already-validated
+  cask artifact (`homebrew-cask-stable/aspire.rb`, the same artifact
+  `HomebrewValidateJob` validates).
+- The change is pushed to a branch `update-aspire-<version>` **directly on the
+  tap** (same repo — there is no fork), and a normal (non-draft) PR titled
+  `Update aspire to <version>` is opened against `main`. An existing open PR for
+  that branch is updated rather than duplicated, and if the tap already matches
+  the version the job logs "no changes" and exits 0 (idempotent).
+
+Gating:
+
+- Gated by `SkipHomebrewPublish` (defaults to `false`). The job also
+  `dependsOn` `HomebrewValidateJob` and only runs when validation **succeeded**,
+  so a publish run opts in to both `SkipHomebrewValidation=false` and
+  `SkipHomebrewPublish=false`.
+- The PR is only opened on a production branch (`_IsProductionBranch=true`) with
+  `DryRun=false`; otherwise the submit step is skipped.
+
+This flow targets the Aspire-owned tap **only**. It never forks, branches, or
+pushes to `Homebrew/homebrew-cask` (or any `Homebrew/homebrew-*` repo) — those
+bumps are handled entirely by upstream autobump, described next.
+
+> **Prerequisite:** the `aspire-bot` GitHub App must be installed on
+> `microsoft/homebrew-aspire` with `contents: write` and
+> `pull_requests: write` permissions. The job mints an installation token
+> scoped to the tap via `eng/pipelines/scripts/Get-AspireBotInstallationToken.ps1`;
+> without the installation, the token mint fails with HTTP 404 on
+> `GET /repos/microsoft/homebrew-aspire/installation`.
 
 ### Submission: upstream autobump
 
