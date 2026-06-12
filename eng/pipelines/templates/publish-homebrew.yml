@@ -1,0 +1,243 @@
+# Reusable steps template that bumps the Aspire cask in OUR OWN Homebrew tap,
+# microsoft/homebrew-aspire, by opening a pull request against it.
+#
+# Scope: this template ONLY targets microsoft/homebrew-aspire. It never forks,
+# branches, or pushes to Homebrew/homebrew-cask or any other Homebrew/homebrew-*
+# repository — upstream version bumps continue to be handled by upstream's own
+# autobump workflow (see eng/homebrew/README.md "Submission: upstream autobump").
+#
+# The tap's Casks/a/aspire.rb is the SOURCE OF TRUTH for the cask file. This
+# template fetches that file as-is and rewrites ONLY the `version "…"` line and
+# the two `sha256 arm:/intel:` values, preserving every other stanza (zap,
+# postflight, livecheck, depends_on, comments, …) byte-for-byte. The new values
+# come from the build's already-validated cask artifact (homebrew-cask-stable).
+#
+# PREREQUISITE: the `aspire-bot` GitHub App must be installed on
+# microsoft/homebrew-aspire with `contents: write` and `pull_requests: write`
+# permissions. Without the installation, the installation-token mint in
+# Get-AspireBotInstallationToken.ps1 fails with HTTP 404 on
+# GET /repos/microsoft/homebrew-aspire/installation.
+
+parameters:
+  - name: caskArtifactPath
+    type: string
+    displayName: 'Directory containing the validated aspire.rb cask artifact (homebrew-cask-stable)'
+  - name: dryRun
+    type: boolean
+    default: false
+    displayName: 'Skip the actual PR submission (preview only)'
+
+steps:
+  # Read the new version + sha256 values from the validated build artifact.
+  # This is the SAME artifact (homebrew-cask-stable / aspire.rb) that
+  # HomebrewValidateJob downloads and validates earlier in the stage, so the
+  # values are already known-good by the time we get here.
+  - pwsh: |
+      $ErrorActionPreference = 'Stop'
+      $caskDir = '${{ parameters.caskArtifactPath }}'
+      $caskPath = Join-Path $caskDir 'aspire.rb'
+
+      Write-Host "Reading validated cask artifact: $caskPath"
+      if (!(Test-Path $caskPath)) {
+        Write-Host "##[error]Cask artifact not found: $caskPath"
+        Get-ChildItem -Path $caskDir -ErrorAction SilentlyContinue | Format-Table Name
+        exit 1
+      }
+
+      $artifact = Get-Content -Raw $caskPath
+
+      # The artifact is generated from eng/homebrew/aspire.rb.template, so its
+      # version + sha256 lines have a known shape:
+      #   version "13.4.4"
+      #   sha256 arm:   "<64 hex>",
+      #          intel: "<64 hex>"
+      $versionMatch = [regex]::Match($artifact, '(?m)^\s*version\s+"([^"]+)"')
+      $armMatch     = [regex]::Match($artifact, '(?m)arm:\s*"([0-9a-fA-F]{64})"')
+      $intelMatch   = [regex]::Match($artifact, '(?m)intel:\s*"([0-9a-fA-F]{64})"')
+
+      if (-not $versionMatch.Success) { Write-Error "Could not extract version from cask artifact."; exit 1 }
+      if (-not $armMatch.Success)     { Write-Error "Could not extract arm sha256 from cask artifact."; exit 1 }
+      if (-not $intelMatch.Success)   { Write-Error "Could not extract intel sha256 from cask artifact."; exit 1 }
+
+      $version  = $versionMatch.Groups[1].Value
+      $armSha    = $armMatch.Groups[1].Value.ToLowerInvariant()
+      $intelSha  = $intelMatch.Groups[1].Value.ToLowerInvariant()
+
+      Write-Host "Cask version : $version"
+      Write-Host "arm sha256   : $armSha"
+      Write-Host "intel sha256 : $intelSha"
+
+      Write-Host "##vso[task.setvariable variable=HomebrewVersion]$version"
+      Write-Host "##vso[task.setvariable variable=HomebrewArmSha]$armSha"
+      Write-Host "##vso[task.setvariable variable=HomebrewIntelSha]$intelSha"
+
+      Write-Host "Note: the next step opens the PR only on a production branch with dryRun=false; otherwise it is skipped."
+    displayName: '🟣Read version + sha256 from cask artifact'
+
+  # Open (or update) the cask-bump PR against microsoft/homebrew-aspire.
+  #
+  # Guard: only submit from production branches with dryRun=false. 1ES PT branch
+  # validation surfaces off-branch submissions only as a non-blocking warning,
+  # which is too easy to miss; a hard condition stops accidental PRs from
+  # feature, fork, or dogfood branches. _IsProductionBranch is defined in
+  # eng/pipelines/common-variables.yml.
+  - pwsh: |
+      $ErrorActionPreference = 'Stop'
+
+      $owner    = 'microsoft'
+      $repo     = 'homebrew-aspire'
+      $caskApiPath = 'Casks/a/aspire.rb'   # path within the tap; ASCII-only, no URI escaping needed
+      $version  = '$(HomebrewVersion)'
+      $armSha    = '$(HomebrewArmSha)'
+      $intelSha  = '$(HomebrewIntelSha)'
+      $branchName = "update-aspire-$version"
+
+      if ([string]::IsNullOrWhiteSpace($version) -or [string]::IsNullOrWhiteSpace($armSha) -or [string]::IsNullOrWhiteSpace($intelSha)) {
+        Write-Error "Missing version/arm/intel from the previous step."
+        exit 1
+      }
+
+      $appId = $env:ASPIRE_BOT_APP_ID
+      $pem   = $env:ASPIRE_BOT_PRIVATE_KEY
+      if ([string]::IsNullOrWhiteSpace($appId) -or [string]::IsNullOrWhiteSpace($pem)) {
+        Write-Error "ASPIRE_BOT_APP_ID / ASPIRE_BOT_PRIVATE_KEY are not set. Check the Aspire-Release-Secrets variable group."
+        exit 1
+      }
+
+      # Mint an installation token scoped to the tap. If the aspire-bot App is not
+      # installed on microsoft/homebrew-aspire (contents:write + pull_requests:write),
+      # this fails with HTTP 404 on GET /repos/microsoft/homebrew-aspire/installation.
+      $tokenScript = Join-Path '$(Build.SourcesDirectory)' 'eng/pipelines/scripts/Get-AspireBotInstallationToken.ps1'
+      $token = (& $tokenScript -AppId $appId -PrivateKeyPem $pem -Owner $owner -Repo $repo).Trim()
+      if ([string]::IsNullOrWhiteSpace($token)) {
+        Write-Error "Failed to mint installation token for $owner/$repo. Is the aspire-bot App installed on the tap?"
+        exit 1
+      }
+
+      $headers = @{
+        Authorization          = "Bearer $token"
+        Accept                 = 'application/vnd.github+json'
+        'User-Agent'           = 'aspire-release-pipeline'
+        'X-GitHub-Api-Version' = '2022-11-28'
+      }
+
+      function Get-StatusCode {
+        param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+        if ($null -ne $ErrorRecord.Exception.Response) {
+          return [int]$ErrorRecord.Exception.Response.StatusCode
+        }
+        return $null
+      }
+
+      function Invoke-GitHubApi {
+        param([string]$Method, [string]$Uri, [object]$Body)
+        $params = @{ Method = $Method; Uri = $Uri; Headers = $headers; ErrorAction = 'Stop' }
+        if ($null -ne $Body) {
+          $params.Body = ($Body | ConvertTo-Json -Depth 10)
+          $params.ContentType = 'application/json'
+        }
+        return Invoke-RestMethod @params
+      }
+
+      $repoApi = "https://api.github.com/repos/$owner/$repo"
+      $repoInfo = Invoke-GitHubApi -Method Get -Uri $repoApi -Body $null
+      $defaultBranch = $repoInfo.default_branch
+      Write-Host "Tap default branch: $defaultBranch"
+
+      # Fetch the current cask file from the tap — this is the source of truth.
+      $currentFile = Invoke-GitHubApi -Method Get -Uri "$repoApi/contents/$caskApiPath?ref=$defaultBranch" -Body $null
+      $currentSha = $currentFile.sha
+      $currentContent = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($currentFile.content -replace '\s', ''))) -replace "`r`n", "`n"
+
+      # Rewrite ONLY the version line and the two sha256 values. Every other byte
+      # of the tap's cask (zap, postflight, livecheck, depends_on, comments, …) is
+      # preserved exactly. Each replace is capped at the first (only) occurrence.
+      $versionRegex = [regex]'(?m)^(\s*version\s+")[^"]*(")'
+      $armRegex     = [regex]'(arm:\s*")[0-9a-fA-F]{64}(")'
+      $intelRegex   = [regex]'(intel:\s*")[0-9a-fA-F]{64}(")'
+
+      if (-not $versionRegex.IsMatch($currentContent)) { Write-Error "version line not found in tap cask; aborting to avoid a malformed bump."; exit 1 }
+      if (-not $armRegex.IsMatch($currentContent))     { Write-Error "arm sha256 not found in tap cask; aborting."; exit 1 }
+      if (-not $intelRegex.IsMatch($currentContent))   { Write-Error "intel sha256 not found in tap cask; aborting."; exit 1 }
+
+      $newContent = $versionRegex.Replace($currentContent, "`${1}$version`${2}", 1)
+      $newContent = $armRegex.Replace($newContent, "`${1}$armSha`${2}", 1)
+      $newContent = $intelRegex.Replace($newContent, "`${1}$intelSha`${2}", 1)
+
+      if ($newContent -eq $currentContent) {
+        Write-Host "No changes: the tap already matches aspire $version. Nothing to submit."
+        exit 0
+      }
+
+      Write-Host "=== Proposed cask changes ==="
+      Compare-Object ($currentContent -split "`n") ($newContent -split "`n") |
+        ForEach-Object { Write-Host ("{0} {1}" -f $_.SideIndicator, $_.InputObject) }
+      Write-Host "============================="
+
+      # Create or force-reset the bump branch directly on the tap (same repo, NO fork).
+      $baseRef = Invoke-GitHubApi -Method Get -Uri "$repoApi/git/ref/heads/$defaultBranch" -Body $null
+      $baseSha = $baseRef.object.sha
+      $branchRefUri = "$repoApi/git/refs/heads/$branchName"
+      try {
+        Invoke-GitHubApi -Method Get -Uri $branchRefUri -Body $null | Out-Null
+        Invoke-GitHubApi -Method Patch -Uri $branchRefUri -Body @{ sha = $baseSha; force = $true } | Out-Null
+        Write-Host "Reset branch $branchName to $defaultBranch ($baseSha)"
+      }
+      catch {
+        if ((Get-StatusCode -ErrorRecord $_) -eq 404) {
+          Invoke-GitHubApi -Method Post -Uri "$repoApi/git/refs" -Body @{ ref = "refs/heads/$branchName"; sha = $baseSha } | Out-Null
+          Write-Host "Created branch $branchName from $defaultBranch ($baseSha)"
+        }
+        else { throw }
+      }
+
+      # The branch now points at the base commit, so the file blob sha there equals
+      # the one we fetched from the default branch. Use it as the update sha.
+      $putBody = @{
+        message = "Update aspire to $version"
+        content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newContent))
+        branch  = $branchName
+        sha     = $currentSha
+      }
+      $putResult = Invoke-GitHubApi -Method Put -Uri "$repoApi/contents/$caskApiPath" -Body $putBody
+      Write-Host "Committed $caskApiPath on $branchName ($($putResult.commit.sha))"
+
+      $prTitle = "Update aspire to $version"
+      $prBody = @(
+        "Bumps the Aspire cask to version ``$version``.",
+        "",
+        "- ``version`` -> ``$version``",
+        "- ``sha256 arm:`` -> ``$armSha``",
+        "- ``sha256 intel:`` -> ``$intelSha``",
+        "",
+        "Opened by the Aspire release pipeline (aspire-bot). The version and",
+        "sha256 values come from the release's validated ``homebrew-cask-stable``",
+        "artifact; all other cask stanzas are preserved from this tap unchanged."
+      ) -join "`n"
+
+      # Reuse an existing open PR for this head branch instead of opening a duplicate.
+      $existingOpen = @(Invoke-GitHubApi -Method Get -Uri "$repoApi/pulls?head=$($owner):$branchName&state=open" -Body $null) | Select-Object -First 1
+      if ($existingOpen) {
+        $updated = Invoke-GitHubApi -Method Patch -Uri "$repoApi/pulls/$($existingOpen.number)" -Body @{ title = $prTitle; body = $prBody }
+        Write-Host "Updated existing PR #$($existingOpen.number): $($updated.html_url)"
+      }
+      else {
+        $created = Invoke-GitHubApi -Method Post -Uri "$repoApi/pulls" -Body @{
+          title = $prTitle
+          body  = $prBody
+          head  = $branchName
+          base  = $defaultBranch
+          draft = $false
+        }
+        Write-Host "Opened PR #$($created.number): $($created.html_url)"
+      }
+    displayName: '🟣Open cask-bump PR against microsoft/homebrew-aspire'
+    condition: |
+      and(
+        succeeded(),
+        eq('${{ parameters.dryRun }}', 'false'),
+        eq(variables['_IsProductionBranch'], 'true')
+      )
+    env:
+      ASPIRE_BOT_APP_ID: $(aspire-bot-app-id)
+      ASPIRE_BOT_PRIVATE_KEY: $(aspire-bot-private-key)

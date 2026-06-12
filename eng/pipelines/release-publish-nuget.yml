@@ -4,8 +4,9 @@
 # 1. Downloads signed packages from a specified build
 # 2. Publishes packages to NuGet.org and npm
 # 3. Promotes the build to the Aspire GA channel via darc
-# 4. Submits WinGet manifests and, when SkipHomebrewValidation=false,
-#    validates the Homebrew cask
+# 4. Submits WinGet manifests; when SkipHomebrewValidation=false, validates the
+#    Homebrew cask; and when SkipHomebrewPublish=false, opens a cask-bump PR
+#    against our own tap microsoft/homebrew-aspire
 # 5. Optionally publishes the signed VS Code extension to the Marketplace
 # 6. Dispatches the release-github-tasks GitHub Actions workflow as the
 #    aspire-repo-bot GitHub App (tag, GitHub Release, merge-back PR,
@@ -88,6 +89,11 @@ parameters:
     displayName: '[Advanced] Skip Homebrew cask validation against live GitHub release (default; set false to opt in)'
     type: boolean
     default: true
+
+  - name: SkipHomebrewPublish
+    displayName: '[Advanced] Skip opening the Homebrew cask-bump PR against microsoft/homebrew-aspire (default; set false to opt in)'
+    type: boolean
+    default: false
 
   # Azure DevOps manual string parameters cannot be left blank. Keep these
   # defaults valid for unattended queue submissions: the owners must include a
@@ -2112,6 +2118,14 @@ extends:
                   } else {
                     Write-Host " (validates cask against live GH release after asset upload)"
                   }
+                  Write-Host "║ Homebrew Pub:   ${{ parameters.SkipHomebrewPublish }}" -NoNewline
+                  if ("${{ parameters.SkipHomebrewPublish }}" -eq "true") {
+                    Write-Host " (SKIPPED)"
+                  } elseif ("${{ parameters.DryRun }}" -eq "true") {
+                    Write-Host " (preview only; no PR opened in dry-run)"
+                  } else {
+                    Write-Host " (opens cask-bump PR against microsoft/homebrew-aspire after validation)"
+                  }
                   Write-Host "║ VS Code Ext:    ${{ parameters.SkipVSCodeExtensionPublish }}" -NoNewline
                   if ("${{ parameters.SkipVSCodeExtensionPublish }}" -eq "true") {
                     Write-Host " (SKIPPED)"
@@ -2348,9 +2362,17 @@ extends:
       #      yet. Catches problems that would otherwise only surface to
       #      end users (or block Homebrew/homebrew-cask's autobump PR).
       #
+      #   4. HomebrewPublishJob — opens (or updates) a version-bump PR against
+      #      OUR OWN tap microsoft/homebrew-aspire (Casks/a/aspire.rb), rewriting
+      #      only the version + sha256 values from the validated cask artifact.
+      #      It targets the Aspire-owned tap exclusively and never touches the
+      #      upstream Homebrew/homebrew-cask repo, whose bumps are still handled
+      #      by upstream autobump. Runs only after HomebrewValidateJob succeeds.
+      #
       # Each job has its own skip flag (SkipGitHubTasks / SkipReleaseAssets /
-      # SkipHomebrewValidation) so partial-failure re-runs can recover any
-      # piece independently. Skipping all three skips the stage entirely.
+      # SkipHomebrewValidation / SkipHomebrewPublish) so partial-failure re-runs
+      # can recover any piece independently. Skipping all of them skips the
+      # stage entirely.
       #
       # DryRun behavior: this stage still runs when DryRun=true. DryRun is
       # propagated to the GH workflow as dry_run=true (keeps it from
@@ -2382,7 +2404,8 @@ extends:
             or(
               eq('${{ parameters.SkipGitHubTasks }}', 'false'),
               eq('${{ parameters.SkipReleaseAssets }}', 'false'),
-              eq('${{ parameters.SkipHomebrewValidation }}', 'false')
+              eq('${{ parameters.SkipHomebrewValidation }}', 'false'),
+              eq('${{ parameters.SkipHomebrewPublish }}', 'false')
             )
           )
         jobs:
@@ -2671,3 +2694,50 @@ extends:
                     --channel stable \
                     --validation-mode LiveRelease
                 displayName: '🟣Validate cask against live GitHub release'
+
+          # Open (or update) a version-bump PR against OUR OWN Homebrew tap,
+          # microsoft/homebrew-aspire (Casks/a/aspire.rb). This is distinct from
+          # the upstream Homebrew/homebrew-cask flow, which is bumped by upstream
+          # autobump and is NOT touched here. The job rewrites only the version +
+          # sha256 values (read from the validated homebrew-cask-stable artifact)
+          # and preserves every other cask stanza from the tap unchanged.
+          #
+          # dependsOn HomebrewValidateJob and gated on its success (not 'Skipped'):
+          # we only bump the tap once the cask has been validated against the live
+          # GitHub release, so to publish a release manager opts in to BOTH
+          # SkipHomebrewValidation=false and SkipHomebrewPublish=false.
+          #
+          # Runs on the Windows 1ES pool (same as PublishReleaseAssetsJob): the job
+          # only needs pwsh (for the GitHub App token mint via RSA.ImportFromPem)
+          # and network — no `brew`. No ESRP publish here, so the auto-injected
+          # publish auth task is disabled like the sibling token-minting jobs.
+          - job: HomebrewPublishJob
+            displayName: 'Publish Homebrew Cask bump to microsoft/homebrew-aspire'
+            dependsOn: HomebrewValidateJob
+            condition: |
+              and(
+                eq('${{ parameters.SkipHomebrewPublish }}', 'false'),
+                in(dependencies.HomebrewValidateJob.result, 'Succeeded', 'SucceededWithIssues')
+              )
+            timeoutInMinutes: 30
+            pool:
+              name: NetCore1ESPool-Internal
+              image: windows.vs2026preview.scout.amd64
+              os: windows
+            templateContext:
+              mb:
+                publish:
+                  enabled: false
+            steps:
+              - checkout: self
+                displayName: 'Checkout repo (for publish-homebrew template + token helper)'
+                fetchDepth: 1
+
+              - download: aspire-build
+                displayName: 'Download Homebrew Cask from Source Build'
+                artifact: homebrew-cask-stable
+
+              - template: /eng/pipelines/templates/publish-homebrew.yml@self
+                parameters:
+                  caskArtifactPath: '$(Pipeline.Workspace)/aspire-build/homebrew-cask-stable'
+                  dryRun: ${{ parameters.DryRun }}
