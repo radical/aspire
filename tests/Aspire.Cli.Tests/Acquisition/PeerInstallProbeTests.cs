@@ -4,6 +4,7 @@
 using Aspire.Cli.Acquisition;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 
 namespace Aspire.Cli.Tests.Acquisition;
@@ -73,25 +74,37 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
     }
 
     [Fact]
-    public async Task ProbeAsync_InvokesPeerWithDoctorSelfFormatJson()
+    public async Task ProbeAsync_InvokesPeerWithInfoSelfFormatJson()
     {
         // The peer must be asked to describe ONLY itself. Without --self,
-        // `aspire doctor` would run full installation discovery and the peer would
-        // recursively probe back into us — and into every other peer it
-        // finds — turning a single discovery invocation into a fan-out bounded
-        // only by the per-level timeout. `--format json` selects the
+        // `aspire --info` would run full installation discovery and the peer
+        // would recursively probe back into us — and into every other peer
+        // it finds — turning a single discovery invocation into a fan-out
+        // bounded only by the per-level timeout. `--format json` selects the
         // machine-readable contract because the human-readable table is the
         // default when `--format` is omitted.
+        //
+        // The scripted peer accepts ONLY the new `--info --self --format
+        // json` contract (see FakePeerScript.BuildArgvRecorder) and would
+        // exit 127 for `doctor`/`--version`, so a successful Ok result here,
+        // together with a one-line argv log, proves the probe both calls the
+        // new contract first AND stops there without falling back.
         using var fakePeer = FakePeerScript.BuildArgvRecorder(outputHelper);
 
         var probe = CreateProbeWithGenerousTimeout();
         var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
 
-        AssertProbeOk(result);
+        var ok = AssertProbeOk(result);
+        Assert.Equal("1.0.0", ok.Info.Version);
+        Assert.Equal("stable", ok.Info.Channel);
+        Assert.Equal("script", ok.Info.Route);
+        Assert.Equal(InstallationPathStatus.Active, ok.Info.PathStatus);
+        Assert.Equal(InstallationInfoStatus.Ok, ok.Info.Status);
+
         Assert.NotNull(fakePeer.ArgvFile);
         Assert.True(File.Exists(fakePeer.ArgvFile), $"Expected argv recorder file at {fakePeer.ArgvFile} to exist.");
         var argv = await File.ReadAllLinesAsync(fakePeer.ArgvFile, TestContext.Current.CancellationToken);
-        Assert.Equal(["doctor", "--self", "--format", "json"], argv);
+        Assert.Equal(["--info", "--self", "--format", "json"], argv);
     }
 
     [Fact]
@@ -353,6 +366,180 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
         Assert.Equal("9.0.0", ok.Info.Version);
     }
 
+    [Theory]
+    [InlineData("{}",                       "object without installations")]
+    [InlineData("""{"installations":42}""", "installations not an array")]
+    [InlineData("42",                       "bare number")]
+    [InlineData("\"oops\"",                 "bare string")]
+    [InlineData("null",                     "bare null")]
+    public async Task ProbeAsync_PeerEmitsWrongRootKind_FallsBackToVersion(string doctorStdout, string kind)
+    {
+        // Neither the bare-array new contract nor the legacy
+        // {"installations": [...]} envelope matches these payloads, so
+        // TryParseRichProbeResult must treat them the same as malformed/empty
+        // JSON: fall through to --version rather than throwing.
+        _ = kind; // surfaced in test name for debuggability
+        using var fakePeer = FakePeerScript.BuildDoctorOrVersion(
+            outputHelper,
+            doctorStdout: doctorStdout,
+            doctorExitCode: 0,
+            versionStdout: "9.0.0\n",
+            versionExitCode: 0);
+
+        var probe = CreateProbeWithGenerousTimeout();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+        var ok = AssertProbeOk(result);
+        Assert.Equal("9.0.0", ok.Info.Version);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_InfoFailsLegacyValid_InvokesExactlyInfoThenDoctorAndKeepsRichMetadata()
+    {
+        // The peer doesn't understand --info --self (e.g. an older build):
+        // the probe must fall through to the legacy doctor --self contract
+        // and still surface its channel/route/status metadata — not just a
+        // bare version string. --version must never be spawned once the
+        // legacy attempt already produced a usable row.
+        using var fakePeer = FakePeerScript.BuildThreeStage(
+            outputHelper,
+            info: StageResponse.Fail(exitCode: 127),
+            doctor: new StageResponse(
+                Stdout: """{"checks":[],"summary":{"passed":0,"warnings":0,"failed":0},"installations":[{"path":"/peer/aspire","version":"12.5.0","channel":"staging","route":"nightly","pathStatus":"shadowed","status":"ok"}]}""",
+                ExitCode: 0),
+            version: new StageResponse("9.9.9\n", 0));
+
+        var probe = CreateProbeWithGenerousTimeout();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+        var ok = AssertProbeOk(result);
+        Assert.Equal("12.5.0", ok.Info.Version);
+        Assert.Equal("staging", ok.Info.Channel);
+        Assert.Equal("nightly", ok.Info.Route);
+        Assert.Equal(InstallationPathStatus.Shadowed, ok.Info.PathStatus);
+        Assert.Equal(InstallationInfoStatus.Ok, ok.Info.Status);
+
+        Assert.NotNull(fakePeer.InvocationLog);
+        var invocations = await File.ReadAllLinesAsync(fakePeer.InvocationLog, TestContext.Current.CancellationToken);
+        Assert.Equal(["--info", "doctor"], invocations);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_BothRichStagesFailVersionValid_InvokesAllThreeStagesAndReturnsVersionOnly()
+    {
+        // Both self-describe contracts fail (peer predates both); the probe
+        // must fall all the way through to --version and surface only a
+        // version string, with the two failed rich attempts and the version
+        // attempt each spawned exactly once, in order.
+        using var fakePeer = FakePeerScript.BuildThreeStage(
+            outputHelper,
+            info: StageResponse.Fail(exitCode: 127),
+            doctor: StageResponse.Fail(exitCode: 127),
+            version: new StageResponse("13.4.0-pr.16817.g790d6fa3\n", 0));
+
+        var probe = CreateProbeWithGenerousTimeout();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+        var ok = AssertProbeOk(result);
+        Assert.Equal("13.4.0-pr.16817.g790d6fa3", ok.Info.Version);
+        // Unknown metadata the --version floor can't report stays null/default
+        // rather than being invented.
+        Assert.Null(ok.Info.Channel);
+        Assert.Null(ok.Info.Route);
+        Assert.Null(ok.Info.CanonicalPath);
+
+        Assert.NotNull(fakePeer.InvocationLog);
+        var invocations = await File.ReadAllLinesAsync(fakePeer.InvocationLog, TestContext.Current.CancellationToken);
+        Assert.Equal(["--info", "doctor", "--version"], invocations);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_InfoStageRowHasBothSourceAndRoute_SourceWins()
+    {
+        // The new --info --self contract uses "source"; the legacy doctor
+        // contract uses "route". InstallationInfoParser.Parse already prefers
+        // "source", but this proves it end-to-end through the probe's first
+        // (new-contract) stage specifically, for a row that (unusually)
+        // carries both properties.
+        using var fakePeer = FakePeerScript.BuildThreeStage(
+            outputHelper,
+            info: new StageResponse(
+                Stdout: """[{"path":"/peer/aspire","version":"1.2.3","source":"winget","route":"script","status":"ok"}]""",
+                ExitCode: 0),
+            doctor: StageResponse.Fail(),
+            version: StageResponse.Fail());
+
+        var probe = CreateProbeWithGenerousTimeout();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+        var ok = AssertProbeOk(result);
+        Assert.Equal("winget", ok.Info.Route);
+
+        // A successful new-contract row must not trigger doctor/--version.
+        Assert.NotNull(fakePeer.InvocationLog);
+        var invocations = await File.ReadAllLinesAsync(fakePeer.InvocationLog, TestContext.Current.CancellationToken);
+        Assert.Equal(["--info"], invocations);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_SharedBudget_LaterStageDoesNotGetAFreshTimeoutAfterAnEarlierStageStalls()
+    {
+        // Regression guard for the shared-budget contract: all three
+        // compatibility attempts must draw from ONE total timeout, not a
+        // fresh timeout each. Values below are chosen with generous margins
+        // (not tight millisecond math) so the assertions distinguish a
+        // correct shared budget from a per-stage-reset bug without being
+        // sensitive to ordinary process-spawn jitter:
+        //
+        //   - probe timeout: 1500ms
+        //   - --info: sleeps 1000ms, then fails -> ~500ms of shared budget
+        //     remains for the doctor attempt.
+        //   - doctor: sleeps 1000ms, then WOULD succeed with a valid rich
+        //     row -- but only if it gets that full 1000ms. A correct shared
+        //     budget gives it only the ~500ms remaining, so the timeout
+        //     fires and it is killed before responding. A buggy
+        //     reset-per-stage implementation would instead give doctor a
+        //     fresh 1500ms slice, in which its 1000ms delay comfortably
+        //     succeeds -- flipping the result from Failed to Ok.
+        //   - --version: configured to succeed instantly if spawned at all,
+        //     so if it DOES get spawned (proving the budget was NOT
+        //     exhausted by the doctor stage), the test can tell from the
+        //     invocation log rather than from a subtler timing difference.
+        var timeout = TimeSpan.FromMilliseconds(1500);
+        using var fakePeer = FakePeerScript.BuildThreeStage(
+            outputHelper,
+            info: new StageResponse(string.Empty, 1, DelayMs: 1000),
+            doctor: new StageResponse(
+                Stdout: """[{"path":"/peer/aspire","version":"1.0.0","status":"ok"}]""",
+                ExitCode: 0,
+                DelayMs: 1000),
+            version: new StageResponse("9.0.0\n", 0));
+
+        var probe = new PeerInstallProbe(timeout, ProbeLogger);
+        var sw = Stopwatch.StartNew();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+        sw.Stop();
+
+        // Primary evidence: the doctor stage's would-be success was NOT
+        // honored, because it didn't get a fresh budget.
+        var failed = Assert.IsType<PeerProbeResult.Failed>(result);
+        Assert.Contains("timed out", failed.Reason, StringComparison.OrdinalIgnoreCase);
+
+        // Primary evidence: --version never spawned once the shared budget
+        // was already exhausted by --info + doctor.
+        Assert.NotNull(fakePeer.InvocationLog);
+        var invocations = await File.ReadAllLinesAsync(fakePeer.InvocationLog, TestContext.Current.CancellationToken);
+        Assert.Equal(["--info", "doctor"], invocations);
+
+        // Secondary sanity bound (generous margin): total elapsed stays in
+        // the neighborhood of ONE budget, not the ~2.5s two fresh budgets
+        // (--info's real 1000ms sleep + a fresh 1500ms for doctor) would
+        // produce, and nowhere near the ~3.5s three fresh budgets/stages
+        // would take if --version were also given a full reset.
+        Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(2500),
+            $"Expected elapsed time to stay near the one shared {timeout} budget, not balloon toward per-stage resets; took {sw.Elapsed}.");
+    }
+
     [Fact]
     public async Task ProbeAsync_PeerHangs_TimesOutAndReturnsFailed()
     {
@@ -509,9 +696,10 @@ internal static class FakePeerScript
 
     /// <summary>
     /// Builds a script that records each positional argument (one per line)
-    /// to an in-workspace file and then emits a minimal valid doctor JSON so
-    /// the probe completes via the primary path without falling back to
-    /// <c>--version</c>. The recorded argv file path is exposed on the
+    /// to an in-workspace file and then emits a minimal valid <c>--info
+    /// --self --format json</c> bare-array JSON so the probe completes via
+    /// the new-contract primary path without falling back to <c>doctor</c>
+    /// or <c>--version</c>. The recorded argv file path is exposed on the
     /// returned <see cref="FakeScriptResult.ArgvFile"/>.
     /// </summary>
     internal static FakeScriptResult BuildArgvRecorder(ITestOutputHelper outputHelper)
@@ -536,6 +724,44 @@ internal static class FakePeerScript
 
         DumpScript(outputHelper, path, content);
         return new FakeScriptResult(path, workspace, ArgvFile: argvFile);
+    }
+
+    /// <summary>
+    /// Builds a script that responds independently to each of the three
+    /// probe stages (<c>--info</c>, <c>doctor</c>, <c>--version</c>),
+    /// dispatching on the first argument, and appends the dispatched stage
+    /// token to an in-workspace invocation log file on every call — so a
+    /// test can assert exactly which stages were spawned and in what order,
+    /// even when a stage responds with a transport failure rather than a
+    /// distinguishable stdout. The log file path is exposed on the returned
+    /// <see cref="FakeScriptResult.InvocationLog"/>.
+    /// </summary>
+    internal static FakeScriptResult BuildThreeStage(
+        ITestOutputHelper outputHelper,
+        StageResponse info,
+        StageResponse doctor,
+        StageResponse version)
+    {
+        var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var invocationLog = Path.Combine(workspace.WorkspaceRoot.FullName, "invocations.txt");
+        var path = OperatingSystem.IsWindows()
+            ? Path.Combine(workspace.WorkspaceRoot.FullName, "peer.cmd")
+            : Path.Combine(workspace.WorkspaceRoot.FullName, "peer");
+
+        var body = ScriptBody.ThreeStage(invocationLog, info, doctor, version);
+        var content = OperatingSystem.IsWindows() ? body.RenderBatch() : body.RenderShell();
+        File.WriteAllText(path, content);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        }
+
+        DumpScript(outputHelper, path, content);
+        return new FakeScriptResult(path, workspace, InvocationLog: invocationLog);
     }
 
     private static FakeScriptResult BuildInternal(ITestOutputHelper outputHelper, ScriptBody body)
@@ -574,9 +800,20 @@ internal static class FakePeerScript
     }
 }
 
-internal sealed record FakeScriptResult(string Path, TemporaryWorkspace Workspace, string? ArgvFile = null) : IDisposable
+internal sealed record FakeScriptResult(string Path, TemporaryWorkspace Workspace, string? ArgvFile = null, string? InvocationLog = null) : IDisposable
 {
     public void Dispose() => Workspace.Dispose();
+}
+
+/// <summary>
+/// Configures one stage's response for <see cref="ScriptBody.ThreeStage"/>:
+/// what stdout/exit code the peer returns for that stage, and an optional
+/// delay (in milliseconds) before responding, used to model a slow peer for
+/// shared-budget tests.
+/// </summary>
+internal readonly record struct StageResponse(string Stdout, int ExitCode, int DelayMs = 0)
+{
+    internal static StageResponse Fail(int exitCode = 1) => new(string.Empty, exitCode);
 }
 
 internal abstract record ScriptBody
@@ -591,6 +828,8 @@ internal abstract record ScriptBody
     public static ScriptBody DoctorOrVersion(string doctorStdout, int doctorExitCode, string versionStdout, int versionExitCode)
         => new DoctorOrVersionScript(doctorStdout, doctorExitCode, versionStdout, versionExitCode);
     public static ScriptBody ArgvRecorder(string argvFile) => new ArgvRecorderScript(argvFile);
+    public static ScriptBody ThreeStage(string invocationLogFile, StageResponse info, StageResponse doctor, StageResponse version)
+        => new ThreeStageScript(invocationLogFile, info, doctor, version);
 
     private sealed record EmitExit(string Stdout, string Stderr, int ExitCode) : ScriptBody
     {
@@ -733,10 +972,11 @@ internal abstract record ScriptBody
 
     private sealed record ArgvRecorderScript(string ArgvFile) : ScriptBody
     {
-        // Minimal valid doctor JSON: enough for the probe to take the primary
-        // path (no fallback to --version), so the recorded argv reflects the
-        // first invocation only.
-        private const string DoctorJson = """{"checks":[],"summary":{"passed":0,"warnings":0,"failed":0},"installations":[{"path":"/peer/aspire","version":"1.0.0","status":"ok"}]}""";
+        // Minimal valid `--info --self --format json` bare-array JSON: enough
+        // for the probe to take the new-contract primary path (no fallback
+        // to doctor/--version), so the recorded argv reflects the first
+        // invocation only.
+        private const string InfoJson = """[{"path":"/peer/aspire","canonicalPath":"/peer/aspire-canonical","version":"1.0.0","channel":"stable","source":"script","pathStatus":"active","status":"ok"}]""";
 
         public override string RenderShell()
         {
@@ -749,7 +989,7 @@ internal abstract record ScriptBody
                       printf '%s\n' "$a" >> "{{ArgvFile}}"
                     done
                     cat <<'__ASPIRE_PEER_EOF__'
-                    {{DoctorJson}}
+                    {{InfoJson}}
                     __ASPIRE_PEER_EOF__
                     exit 0
                     """;
@@ -768,10 +1008,94 @@ internal abstract record ScriptBody
             sb.AppendLine("shift");
             sb.AppendLine("goto :loop");
             sb.AppendLine(":emit");
-            sb.AppendLine($"echo {DoctorJson}");
+            sb.AppendLine($"echo {InfoJson}");
             sb.AppendLine("exit /b 0");
             return sb.ToString();
         }
+    }
+
+    private sealed record ThreeStageScript(
+        string InvocationLogFile,
+        StageResponse Info,
+        StageResponse Doctor,
+        StageResponse Version) : ScriptBody
+    {
+        public override string RenderShell()
+        {
+            return $$"""
+                    #!/bin/sh
+                    printf '%s\n' "$1" >> "{{InvocationLogFile}}"
+                    if [ "$1" = "--info" ]; then
+                    {{RenderShellStage(Info)}}
+                    fi
+                    if [ "$1" = "doctor" ]; then
+                    {{RenderShellStage(Doctor)}}
+                    fi
+                    if [ "$1" = "--version" ]; then
+                    {{RenderShellStage(Version)}}
+                    fi
+                    exit 127
+                    """;
+        }
+
+        public override string RenderBatch()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("@echo off");
+            sb.AppendLine($"echo %~1>>\"{InvocationLogFile}\"");
+            sb.AppendLine("if \"%~1\"==\"--info\" goto :info");
+            sb.AppendLine("if \"%~1\"==\"doctor\" goto :doctor");
+            sb.AppendLine("if \"%~1\"==\"--version\" goto :version");
+            sb.AppendLine("exit /b 127");
+            sb.AppendLine(":info");
+            AppendBatchStage(sb, Info);
+            sb.AppendLine(":doctor");
+            AppendBatchStage(sb, Doctor);
+            sb.AppendLine(":version");
+            AppendBatchStage(sb, Version);
+            return sb.ToString();
+        }
+
+        // Renders one stage's body inside a shell `if` block: an optional
+        // fractional-second sleep (for shared-budget tests that need a peer
+        // to take a controlled amount of time before responding), then the
+        // scripted stdout and exit code.
+        private static string RenderShellStage(StageResponse stage)
+        {
+            var sb = new StringBuilder();
+            if (stage.DelayMs > 0)
+            {
+                sb.AppendLine($"  sleep {FormatSleepSeconds(stage.DelayMs)}");
+            }
+
+            sb.AppendLine("  cat <<'__ASPIRE_STAGE_EOF__'");
+            sb.AppendLine(stage.Stdout);
+            sb.AppendLine("__ASPIRE_STAGE_EOF__");
+            sb.Append("  exit ").Append(stage.ExitCode.ToString(CultureInfo.InvariantCulture));
+            return sb.ToString();
+        }
+
+        private static void AppendBatchStage(StringBuilder sb, StageResponse stage)
+        {
+            if (stage.DelayMs > 0)
+            {
+                // `ping` only resolves whole-second delays; round up so a
+                // configured sub-second delay never becomes a no-op on
+                // Windows.
+                var seconds = Math.Max(1, (int)Math.Ceiling(stage.DelayMs / 1000.0));
+                sb.AppendLine($"ping -n {seconds + 1} 127.0.0.1 > nul");
+            }
+
+            foreach (var line in stage.Stdout.Split('\n'))
+            {
+                sb.Append("echo ").AppendLine(line.TrimEnd('\r'));
+            }
+
+            sb.AppendLine($"exit /b {stage.ExitCode}");
+        }
+
+        private static string FormatSleepSeconds(int delayMs)
+            => (delayMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
     }
 
     private static string RenderShellStderr(string stderr)

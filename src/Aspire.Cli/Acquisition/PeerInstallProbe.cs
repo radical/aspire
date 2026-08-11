@@ -11,10 +11,14 @@ using Microsoft.Extensions.Logging;
 namespace Aspire.Cli.Acquisition;
 
 /// <summary>
-/// Default <see cref="IPeerInstallProbe"/>. Spawns the peer with
-/// <c>doctor --self --format json</c>, enforces a hard timeout, captures stdout
-/// up to a byte cap, and kills the entire process tree on timeout so a
-/// hung peer cannot survive past the parent's lifetime.
+/// Default <see cref="IPeerInstallProbe"/>. Spawns the peer, in order, with
+/// <c>--info --self --format json</c> (current self-describe contract),
+/// <c>doctor --self --format json</c> (legacy compatibility fallback for peers
+/// that predate <c>--info --self</c>), and <c>--version</c> (compatibility
+/// floor for peers that predate both self-describe contracts). All three
+/// attempts share a single wall-clock timeout budget, capture stdout up to a
+/// byte cap, and kill the entire process tree on timeout so a hung peer
+/// cannot survive past the parent's lifetime.
 /// </summary>
 /// <remarks>
 /// Uses <see cref="Process"/> directly rather than the project's
@@ -26,11 +30,18 @@ namespace Aspire.Cli.Acquisition;
 /// </remarks>
 internal sealed class PeerInstallProbe : IPeerInstallProbe
 {
-    /// <summary>Maximum wall-clock time we wait for a peer to respond.</summary>
+    /// <summary>
+    /// Maximum wall-clock time we wait for a peer to respond, shared across
+    /// all compatibility attempts (see <see cref="ProbeAsync"/>).
+    /// </summary>
     /// <remarks>
     /// 5 seconds is a generous budget for a native-AOT CLI to start, read
     /// its assembly metadata, write 1 KB of JSON, and exit. A peer slower
     /// than that is almost certainly broken; faster than that is the norm.
+    /// This is a single shared budget, not a per-attempt one: <see cref="ProbeAsync"/>
+    /// tries up to three invocations of the peer, and a peer that stalls on
+    /// the first one cannot buy itself extra wall-clock time by having later
+    /// attempts "reset" the clock — see <see cref="SpawnWithBudgetAsync"/>.
     /// </remarks>
     internal static readonly TimeSpan s_defaultTimeout = TimeSpan.FromSeconds(5);
 
@@ -63,6 +74,28 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
         _logger = logger;
     }
 
+    /// <summary>
+    /// `--info --self --format json`: the current self-describe contract.
+    /// Emits a bare JSON array (see <c>InstallationInfoOutput</c>) with one
+    /// row using <c>source</c> for the install route.
+    /// </summary>
+    private static readonly string[] s_infoArgs = ["--info", "--self", "--format", "json"];
+
+    /// <summary>
+    /// `doctor --self --format json`: the legacy self-describe contract,
+    /// kept as a compatibility fallback for peers built before <c>--info --self</c>
+    /// existed. Wraps the same row shape inside an <c>installations</c>
+    /// envelope alongside health checks, and uses <c>route</c> for the
+    /// install route.
+    /// </summary>
+    private static readonly string[] s_doctorArgs = ["doctor", "--self", "--format", "json"];
+
+    /// <summary>
+    /// `--version`: the compatibility floor. Supported by every Aspire CLI
+    /// build ever shipped, but reports only a version string.
+    /// </summary>
+    private static readonly string[] s_versionArgs = ["--version"];
+
     /// <inheritdoc />
     public async Task<PeerProbeResult> ProbeAsync(string binaryPath, CancellationToken cancellationToken)
     {
@@ -71,74 +104,115 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             return new PeerProbeResult.Failed("Binary not found.");
         }
 
-        // Primary path: ask the peer to self-describe via `doctor --self --format json`.
+        // All three attempts below share this single stopwatch-based budget:
+        // the total wall-clock time we wait for ANY usable answer from this
+        // peer is `_timeout`, not `_timeout` per attempt. See
+        // SpawnWithBudgetAsync.
+        var budget = Stopwatch.StartNew();
+
+        // Attempt 1: ask the peer to self-describe via `--info --self --format json`.
         // `--self` is required: without it the peer would run a full discovery
         // walk and probe back into us (and into every other peer it finds),
         // turning a single discovery invocation into a recursive fan-out
         // bounded only by the per-level timeout. `--format json` is
         // required so the peer emits a machine-readable row (the human
         // table layout is the default when `--format` is omitted).
-        var primary = await SpawnAndCaptureAsync(binaryPath, ["doctor", "--self", "--format", "json"], cancellationToken).ConfigureAwait(false);
-        if (primary.Cancelled)
+        var info = await SpawnWithBudgetAsync(binaryPath, s_infoArgs, budget, cancellationToken).ConfigureAwait(false);
+        if (info.Cancelled)
         {
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (primary.Failure is { } primaryFailure)
+        if (info.ExitCode == 0 && TryParseRichProbeResult(binaryPath, info.Stdout, out var infoResult))
         {
-            return new PeerProbeResult.Failed(primaryFailure);
+            return new PeerProbeResult.Ok(infoResult);
         }
 
-        if (primary.ExitCode == 0 && TryParseRichProbeResult(binaryPath, primary.Stdout, out var primaryInfo))
-        {
-            return new PeerProbeResult.Ok(primaryInfo);
-        }
-
-        // Fallback path. We reach here for:
-        //   - peer exited non-zero (common: peer predates `doctor --self`
-        //     and System.CommandLine rejected the unknown option),
-        //   - peer emitted blank/whitespace-only stdout,
-        //   - peer emitted JSON we couldn't parse as the expected rich shape.
-        // Older peers without `doctor --self` can't report their channel
-        // here, but `InstallationDiscovery` recovers `pr-<N>` from the
-        // reported informational version string so the user-facing table
-        // still shows the channel for PR builds.
-        var fallback = await SpawnAndCaptureAsync(binaryPath, ["--version"], cancellationToken).ConfigureAwait(false);
-        if (fallback.Cancelled)
+        // Attempt 2: `doctor --self --format json`, the legacy self-describe
+        // contract for peers built before `--info --self` existed. We reach
+        // here for the same reasons attempt 1 can fail (non-zero exit, no
+        // stdout, unparseable/wrong-shape JSON) as well as the peer simply
+        // predating `--info --self` (System.CommandLine rejects the unknown
+        // option and the peer exits non-zero).
+        var doctor = await SpawnWithBudgetAsync(binaryPath, s_doctorArgs, budget, cancellationToken).ConfigureAwait(false);
+        if (doctor.Cancelled)
         {
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (fallback.Failure is not null)
+        if (doctor.ExitCode == 0 && TryParseRichProbeResult(binaryPath, doctor.Stdout, out var doctorResult))
         {
-            // Surface the rich-probe failure reason because it tells the user why
-            // the richer path didn't work; the version fallback failing on top is
-            // a secondary symptom.
-            return new PeerProbeResult.Failed(DescribePrimaryFailure(primary, alsoTriedVersion: true));
+            return new PeerProbeResult.Ok(doctorResult);
         }
 
-        if (fallback.ExitCode != 0)
+        // Attempt 3: `--version`, the compatibility floor. Peers this old
+        // can't report their channel/route here, but `InstallationDiscovery`
+        // recovers `pr-<N>` from the reported informational version string
+        // so the user-facing table still shows the channel for PR builds.
+        var version = await SpawnWithBudgetAsync(binaryPath, s_versionArgs, budget, cancellationToken).ConfigureAwait(false);
+        if (version.Cancelled)
         {
-            return new PeerProbeResult.Failed(DescribePrimaryFailure(primary, alsoTriedVersion: true));
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
-        var versionLine = ExtractVersionLine(fallback.Stdout);
-        if (string.IsNullOrEmpty(versionLine))
+        if (version.ExitCode == 0)
         {
-            return new PeerProbeResult.Failed(DescribePrimaryFailure(primary, alsoTriedVersion: true));
+            var versionLine = ExtractVersionLine(version.Stdout);
+            if (!string.IsNullOrEmpty(versionLine))
+            {
+                // Partial install details: version only. Route is overlaid by
+                // InstallationDiscovery from the locally-readable sidecar.
+                // Channel intentionally null — we can't read assembly
+                // metadata from outside an AOT binary, and the older peer
+                // has no surface that exposes its channel.
+                return new PeerProbeResult.Ok(new InstallationInfo
+                {
+                    Path = binaryPath,
+                    Version = versionLine,
+                    Status = InstallationInfoStatus.Ok,
+                });
+            }
         }
 
-        // Partial install details: version only. Route is overlaid by InstallationDiscovery
-        // from the locally-readable sidecar. Channel intentionally null — we can't
-        // read assembly metadata
-        // from outside an AOT binary, and the older peer has no surface that
-        // exposes its channel.
-        return new PeerProbeResult.Ok(new InstallationInfo
+        // All three attempts failed to produce a usable result. Describe the
+        // doctor-stage result: `doctor --self` is the most broadly-supported
+        // rich self-describe contract we tried, so its failure reason
+        // (non-zero exit, captured stderr, or a shared-budget timeout) is the
+        // most useful single reason to surface. The `--info` attempt's own
+        // failure is intentionally not surfaced separately: for peers old
+        // enough to not support `--info --self`, it's just "unrecognized
+        // option" noise, and for peers that do support it, a failure there
+        // almost always means the doctor attempt right after it fails
+        // identically.
+        return new PeerProbeResult.Failed(DescribeFailure(doctor));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="arguments"/> against the peer, provided the
+    /// shared per-peer <see cref="_timeout"/> budget has time left. Computes
+    /// the remaining slice of the budget from <paramref name="budget"/> (a
+    /// stopwatch started once at the top of <see cref="ProbeAsync"/>) so
+    /// three sequential attempts cannot each claim a fresh <see cref="_timeout"/>
+    /// worth of wall-clock time. If the budget is already exhausted, returns
+    /// a synthetic timeout failure without starting another process — a
+    /// peer that stalls the first attempt cannot buy a second and third full
+    /// budget by having later attempts "reset" the clock.
+    /// </summary>
+    private async Task<SpawnResult> SpawnWithBudgetAsync(string binaryPath, string[] arguments, Stopwatch budget, CancellationToken cancellationToken)
+    {
+        var remaining = _timeout - budget.Elapsed;
+        if (remaining <= TimeSpan.Zero)
         {
-            Path = binaryPath,
-            Version = versionLine,
-            Status = InstallationInfoStatus.Ok,
-        });
+            return new SpawnResult(
+                ExitCode: -1,
+                Stdout: string.Empty,
+                Stderr: string.Empty,
+                StderrTruncated: false,
+                Failure: $"Peer probe timed out after {_timeout.TotalSeconds:F1}s.",
+                Cancelled: false);
+        }
+
+        return await SpawnAndCaptureAsync(binaryPath, arguments, remaining, cancellationToken).ConfigureAwait(false);
     }
 
     private bool TryParseRichProbeResult(string binaryPath, string stdout, out InstallationInfo info)
@@ -195,7 +269,21 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
     /// structured result describing exit code, captured output, and any
     /// transport-level failure (process couldn't start, etc.).
     /// </summary>
-    private async Task<SpawnResult> SpawnAndCaptureAsync(string binaryPath, string[] arguments, CancellationToken cancellationToken)
+    /// <param name="binaryPath">Path to the peer executable to spawn.</param>
+    /// <param name="arguments">Arguments to pass to the peer.</param>
+    /// <param name="timeout">
+    /// The wall-clock budget for THIS attempt, computed by
+    /// <see cref="SpawnWithBudgetAsync"/> as the remaining slice of the
+    /// shared per-peer <see cref="_timeout"/>. Deliberately distinct from
+    /// <see cref="_timeout"/> itself, which is used only to compose the
+    /// timeout failure message below: the message always describes the
+    /// total per-peer budget the caller configured, not the (possibly much
+    /// smaller) remaining slice this particular attempt got — a "timed out
+    /// after 0.3s" message would be misleading if the peer actually got the
+    /// full 5s budget spread across three attempts.
+    /// </param>
+    /// <param name="cancellationToken">Propagated to the process wait/kill and capture paths.</param>
+    private async Task<SpawnResult> SpawnAndCaptureAsync(string binaryPath, string[] arguments, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -234,7 +322,7 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
 
         var result = await ProcessCaptureRunner.RunAsync(
             startInfo,
-            _timeout,
+            timeout,
             CapturePeerOutputAsync,
             static () => new PeerProcessOutput(string.Empty, string.Empty, StderrTruncated: false),
             _logger,
@@ -248,6 +336,9 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             ProcessCaptureFailureKind.CaptureFailed => result.FailureMessage is { Length: > 0 } message
                 ? $"Could not capture peer process output: {message}"
                 : "Could not capture peer process output.",
+            // See the `timeout` parameter doc comment above: this always
+            // reports the total shared per-peer budget, not the remaining
+            // slice passed to ProcessCaptureRunner for this attempt.
             ProcessCaptureFailureKind.TimedOut => $"Peer probe timed out after {_timeout.TotalSeconds:F1}s.",
             _ => null,
         };
@@ -262,22 +353,24 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
     }
 
     /// <summary>
-    /// Composes a user-facing reason for a probe failure. When the
-    /// <c>--version</c> fallback was also attempted, prefix the message so
-    /// users see both attempts in one row.
+    /// Composes a user-facing reason from the doctor-stage result when all
+    /// three probe attempts fail. Always appends a "(and --version
+    /// fallback)" suffix: by the time this is called, the info attempt has
+    /// already failed too, but the version attempt is the only one that ran
+    /// AFTER the result this message describes.
     /// </summary>
-    private static string DescribePrimaryFailure(SpawnResult primary, bool alsoTriedVersion)
+    private static string DescribeFailure(SpawnResult doctor)
     {
-        var suffix = alsoTriedVersion ? " (and --version fallback)" : string.Empty;
-        if (primary.Failure is { } reason)
+        const string suffix = " (and --version fallback)";
+        if (doctor.Failure is { } reason)
         {
-            return FoldStderrIntoReason(reason + suffix, primary);
+            return FoldStderrIntoReason(reason + suffix, doctor);
         }
-        if (primary.ExitCode != 0)
+        if (doctor.ExitCode != 0)
         {
-            return FoldStderrIntoReason($"Peer exited with code {primary.ExitCode}{suffix}.", primary);
+            return FoldStderrIntoReason($"Peer exited with code {doctor.ExitCode}{suffix}.", doctor);
         }
-        return FoldStderrIntoReason($"Peer produced no usable output{suffix}.", primary);
+        return FoldStderrIntoReason($"Peer produced no usable output{suffix}.", doctor);
     }
 
     /// <summary>
