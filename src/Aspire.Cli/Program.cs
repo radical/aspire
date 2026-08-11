@@ -502,6 +502,7 @@ public class Program
         builder.Services.AddSingleton<IInstallationCandidateSource, DogfoodInstallationCandidateSource>();
         builder.Services.AddSingleton<IInstallationCandidateSource, DotnetToolStoreInstallationCandidateSource>();
         builder.Services.AddSingleton<IInstallationDiscovery, InstallationDiscovery>();
+        builder.Services.AddSingleton<HiveEnumerator>();
         builder.Services.AddSingleton<IBundleService, BundleService>();
         builder.Services.AddSingleton<ProfileCaptureService>();
         builder.Services.AddSingleton<IAppHostServerProjectFactory, AppHostServerProjectFactory>();
@@ -672,6 +673,7 @@ public class Program
 #if DEBUG
         builder.Services.AddTransient<RenderCommand>();
 #endif
+        builder.Services.AddTransient<InfoOptionAction>();
         builder.Services.AddTransient<RootCommand>();
         builder.Services.AddTransient<ExtensionInternalCommand>();
 

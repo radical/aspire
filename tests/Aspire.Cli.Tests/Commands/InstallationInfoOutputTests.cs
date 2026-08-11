@@ -4,13 +4,17 @@
 using System.Text.Json;
 using Aspire.Cli.Acquisition;
 using Aspire.Cli.Commands;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
+using Aspire.Cli.Tests.Utils;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace Aspire.Cli.Tests.Commands;
 
-public class InstallationInfoOutputTests
+public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
 {
     // ---------------------------------------------------------------------------
     // Aggregate-discovery timeout: updated for the new InstallationDiscoveryResult return type
@@ -408,5 +412,238 @@ public class InstallationInfoOutputTests
         var info = InstallationInfoParser.Parse(element);
 
         Assert.Equal("brew", info.Route);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Human rendering: BuildHumanRenderable
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public void BuildHumanRenderable_MapsLocalizedStatusesAndPathStatuses()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        var rows = new[]
+        {
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                Path = "/usr/local/bin/aspire",
+                PathStatus = InstallationPathStatus.NotOnPath,
+                Status = InstallationInfoStatus.NotProbed,
+            },
+        };
+
+        var plainText = RenderToPlainConsole(InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows));
+        outputHelper.WriteLine(plainText);
+
+        // Localized human text, not the raw wire tokens.
+        Assert.Contains(InfoOptionStrings.PathStatusNotOnPath, plainText, StringComparison.Ordinal);
+        Assert.Contains(InfoOptionStrings.StatusNotProbed, plainText, StringComparison.Ordinal);
+        Assert.DoesNotContain(InstallationPathStatus.NotOnPath, plainText, StringComparison.Ordinal);
+        Assert.DoesNotContain(InstallationInfoStatus.NotProbed, plainText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_PreservesHostileMarkupLikeValues_WithoutInterpretation()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "[blue]daily", identityVersion: "13.4.0");
+        var rows = new[]
+        {
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                Path = @"C:\tools\[red]aspire.exe",
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Failed,
+                StatusReason = "Missing [yellow]install metadata[/]",
+            },
+        };
+
+        var plainText = RenderToPlainConsole(InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows));
+        outputHelper.WriteLine(plainText);
+
+        // Hostile/peer-supplied values must survive verbatim as plain text — never
+        // interpreted as Spectre markup tags (which would strip/colorize them or throw).
+        Assert.Contains("[blue]daily", plainText, StringComparison.Ordinal);
+        Assert.Contains(@"C:\tools\[red]aspire.exe", plainText, StringComparison.Ordinal);
+        Assert.Contains("Missing [yellow]install metadata[/]", plainText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_UsesFixedWidthLabelColumn_ValuesAlignAcrossDifferentLabelLengths()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        var rows = new[]
+        {
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                Source = "peer-source-marker",
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Ok,
+            },
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                Version = "peer-version-marker",
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Ok,
+            },
+        };
+
+        var plainText = RenderToPlainConsole(InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows));
+        outputHelper.WriteLine(plainText);
+
+        var lines = plainText.Split('\n');
+        // "Source" (6 chars) and "Version" (7 chars) have different label lengths, but the
+        // fixed-width label column (sized from every possible label, e.g. "Canonical path")
+        // must still align both values' starting columns identically.
+        var sourceLine = Assert.Single(lines, l => l.Contains("peer-source-marker", StringComparison.Ordinal));
+        var versionLine = Assert.Single(lines, l => l.Contains("peer-version-marker", StringComparison.Ordinal));
+        Assert.Equal(
+            sourceLine.IndexOf("peer-source-marker", StringComparison.Ordinal),
+            versionLine.IndexOf("peer-version-marker", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_WrappedLongValue_ContinuationIndentedToValueColumn()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        var longReason = string.Join(' ', Enumerable.Repeat("word", 40));
+        var rows = new[]
+        {
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Failed,
+                StatusReason = longReason,
+            },
+        };
+
+        // A narrow console forces the long reason value to wrap across multiple lines.
+        var plainText = RenderToPlainConsole(
+            InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows),
+            width: 40);
+        outputHelper.WriteLine(plainText);
+
+        var lines = plainText.Split('\n');
+        var reasonLineIndex = Array.FindIndex(lines, l => l.Contains("word", StringComparison.Ordinal));
+        Assert.True(reasonLineIndex >= 0, "Expected to find a line containing the wrapped reason text.");
+
+        var reasonLine = lines[reasonLineIndex];
+        var valueColumnStart = reasonLine.IndexOf("word", StringComparison.Ordinal);
+
+        // The wrap must have actually occurred (otherwise this test isn't exercising anything).
+        var continuationLine = lines[reasonLineIndex + 1];
+        Assert.Contains("word", continuationLine, StringComparison.Ordinal);
+
+        // The continuation line's text must start at the same column as the first line's
+        // value (i.e., indented past the indent + label columns), not at column 0 and not
+        // bleeding into the label column — this is what a bordered table or naive wrap would
+        // get wrong.
+        var continuationValueStart = continuationLine.IndexOf("word", StringComparison.Ordinal);
+        Assert.Equal(valueColumnStart, continuationValueStart);
+        Assert.True(valueColumnStart > 0, "Value column must not start at column 0 — the indent/label columns precede it.");
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_OmitsUnavailableNullableFields()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        var rows = new[]
+        {
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                Path = "/usr/local/bin/aspire",
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Ok,
+                // Version, Channel, Hive, CanonicalPath, Source, StatusReason all null/absent.
+            },
+        };
+
+        var plainText = RenderToPlainConsole(InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows));
+        outputHelper.WriteLine(plainText);
+
+        // The top identity section always shows "Version"/"Channel" for the running CLI, so
+        // scope the "omitted when absent" assertions to the per-row installation subsection.
+        var installationsHeadingIndex = plainText.IndexOf(InfoOptionStrings.InstallationsHeading, StringComparison.Ordinal);
+        Assert.True(installationsHeadingIndex >= 0, "Expected to find the Installations heading.");
+        var installationSection = plainText[installationsHeadingIndex..];
+
+        Assert.DoesNotContain(InfoOptionStrings.VersionLabel, installationSection, StringComparison.Ordinal);
+        Assert.DoesNotContain(InfoOptionStrings.ChannelLabel, installationSection, StringComparison.Ordinal);
+        Assert.DoesNotContain(InfoOptionStrings.HiveLabel, installationSection, StringComparison.Ordinal);
+        Assert.DoesNotContain(InfoOptionStrings.CanonicalPathLabel, installationSection, StringComparison.Ordinal);
+        Assert.DoesNotContain(InfoOptionStrings.SourceLabel, installationSection, StringComparison.Ordinal);
+        Assert.DoesNotContain(InfoOptionStrings.ReasonLabel, installationSection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_RendersUnbordered_NoTableBoxDrawingCharacters()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        var rows = new[]
+        {
+            new InfoInstallation
+            {
+                Kind = InfoInstallationKind.Installation,
+                Path = "/usr/local/bin/aspire",
+                PathStatus = InstallationPathStatus.Active,
+                Status = InstallationInfoStatus.Ok,
+            },
+        };
+
+        var plainText = RenderToPlainConsole(InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows));
+        outputHelper.WriteLine(plainText);
+
+        // A bordered Table (the doctor-command rendering style) would emit box-drawing
+        // characters such as ┌─┬─┐│├┼┤└┴┘. The --info renderer must use an unbordered
+        // Grid/Rows instead.
+        foreach (var boxChar in new[] { '┌', '┬', '┐', '│', '├', '┼', '┤', '└', '┴', '┘', '─' })
+        {
+            Assert.DoesNotContain(boxChar, plainText);
+        }
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_IdentitySection_ShowsRunningCliVersionAndChannel()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "staging", identityVersion: "9.9.9");
+
+        var plainText = RenderToPlainConsole(
+            InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows: []));
+        outputHelper.WriteLine(plainText);
+
+        Assert.Contains(InfoOptionStrings.InfoHeading, plainText, StringComparison.Ordinal);
+        Assert.Contains("9.9.9", plainText, StringComparison.Ordinal);
+        Assert.Contains("staging", plainText, StringComparison.Ordinal);
+    }
+
+    private static string RenderToPlainConsole(IRenderable renderable, int width = int.MaxValue)
+    {
+        var writer = new StringWriter();
+        var console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            Interactive = InteractionSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(writer),
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }
+        });
+
+        console.Profile.Width = width;
+        console.Profile.Capabilities.Links = false;
+        console.Write(renderable);
+
+        return writer.ToString().Replace("\r\n", "\n");
     }
 }

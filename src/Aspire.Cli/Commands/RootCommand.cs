@@ -93,6 +93,22 @@ internal sealed class RootCommand : BaseRootCommand
         DefaultValueFactory = _ => DefaultCaptureProfileDelaySeconds
     };
 
+    public static readonly Option<bool> InfoOption = new("--info")
+    {
+        Description = InfoOptionStrings.InfoOptionDescription,
+    };
+
+    public static readonly Option<bool> SelfOption = new("--self")
+    {
+        Hidden = true,
+    };
+
+    public static readonly Option<InfoOutputFormat> FormatOption = new("--format")
+    {
+        Description = InfoOptionStrings.FormatOptionDescription,
+        DefaultValueFactory = _ => InfoOutputFormat.List,
+    };
+
     /// <summary>
     /// Global options that should be passed through to child CLI processes when spawning.
     /// Add new global options here to ensure they are forwarded during detached mode execution.
@@ -169,6 +185,7 @@ internal sealed class RootCommand : BaseRootCommand
 #endif
         ExtensionInternalCommand extensionInternalCommand,
         IBundleService bundleService,
+        InfoOptionAction infoOptionAction,
         IInteractionService interactionService,
         IFeatures features,
         IAnsiConsole ansiConsole,
@@ -191,10 +208,43 @@ internal sealed class RootCommand : BaseRootCommand
         Options.Add(CaptureProfileOption);
         Options.Add(CaptureProfileOutputOption);
         Options.Add(CaptureProfileDelayOption);
+        Options.Add(InfoOption);
+        Options.Add(SelfOption);
+        Options.Add(FormatOption);
+
+        // --self and --format are only meaningful alongside --info; without it they'd
+        // silently do nothing (or, for --self, be indistinguishable from a subcommand
+        // that also happens to declare its own --self option). GetResult(...).Implicit
+        // is false only when the user actually typed the option, so an unspecified
+        // --format (which carries a DefaultValueFactory) does not trigger this error.
+        Validators.Add(result =>
+        {
+            if (result.GetValue(InfoOption))
+            {
+                return;
+            }
+
+            if (result.GetResult(SelfOption) is { Implicit: false })
+            {
+                result.AddError(InfoOptionStrings.SelfRequiresInfo);
+            }
+
+            if (result.GetResult(FormatOption) is { Implicit: false })
+            {
+                result.AddError(InfoOptionStrings.FormatRequiresInfo);
+            }
+        });
 
         // Handle standalone 'aspire' or 'aspire --banner' (no subcommand)
         this.SetAction((Func<ParseResult, CancellationToken, Task<int>>)((context, cancellationToken) =>
         {
+            if (context.GetValue(InfoOption))
+            {
+                var selfOnly = context.GetValue(SelfOption);
+                var format = context.GetValue(FormatOption);
+                return infoOptionAction.ExecuteAsync(selfOnly, format, cancellationToken);
+            }
+
             var bannerRequested = context.GetValue(BannerOption);
             if (bannerRequested)
             {

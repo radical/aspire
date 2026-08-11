@@ -4,9 +4,12 @@
 using System.Globalization;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Acquisition;
+using Aspire.Cli.Interaction;
 using Aspire.Cli.Resources;
+using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace Aspire.Cli.Commands;
 
@@ -234,7 +237,7 @@ internal static class InstallationInfoOutput
         {
             var reason = string.Format(
                 CultureInfo.CurrentCulture,
-                DoctorCommandStrings.InstallationDiscoveryTimedOutReasonFormat,
+                InfoOptionStrings.InstallationDiscoveryTimedOutReasonFormat,
                 timeout.TotalSeconds);
             logger.LogWarning("Aspire CLI installation discovery timed out after {TimeoutSeconds} seconds.", timeout.TotalSeconds);
             return new InstallationDiscoveryResult([], AggregateFailureReason: reason);
@@ -270,7 +273,7 @@ internal static class InstallationInfoOutput
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not discover Aspire CLI installations for doctor output.");
-            return new InstallationDiscoveryResult([], AggregateFailureReason: DoctorCommandStrings.InstallationDiscoveryFailedReason);
+            return new InstallationDiscoveryResult([], AggregateFailureReason: InfoOptionStrings.InstallationDiscoveryFailedReason);
         }
     }
 
@@ -332,9 +335,7 @@ internal static class InstallationInfoOutput
 
         // Build a lookup of channel → hive path, restricted to valid channel names so that
         // stale or manually-created directories with arbitrary names don't trigger false matches.
-        var hivesByChannel = hiveList
-            .Where(h => IdentityChannelReader.IsValidChannel(h.Name))
-            .ToDictionary(h => h.Name, h => h.Path, StringComparer.OrdinalIgnoreCase);
+        var hivesByChannel = BuildHivesByChannel(hiveList);
 
         // Track which hive channels were successfully correlated with an installation so
         // the remainder can be emitted as orphan-hive rows.
@@ -407,8 +408,191 @@ internal static class InstallationInfoOutput
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not describe the running Aspire CLI installation for info self-probe output.");
-            return CreateInfoDiscoveryFailedRow(DoctorCommandStrings.InstallationDiscoveryFailedReason);
+            return CreateInfoDiscoveryFailedRow(InfoOptionStrings.InstallationDiscoveryFailedReason);
         }
+    }
+
+    /// <summary>
+    /// Builds a lookup of valid-identity-channel-name → hive path (OrdinalIgnoreCase),
+    /// shared by <see cref="BuildInfoRows"/> (full discovery) and <c>--self</c> callers
+    /// so both paths correlate hives identically.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> BuildHivesByChannel(IEnumerable<HiveInfo> hives)
+    {
+        return hives
+            .Where(h => IdentityChannelReader.IsValidChannel(h.Name))
+            .ToDictionary(h => h.Name, h => h.Path, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // -------------------------------------------------------------------------
+    // Human rendering (aspire --info)
+    // -------------------------------------------------------------------------
+
+    // Fixed-width label column: computed from every label the renderer can emit
+    // (not just the ones present in a given row) so alignment is guaranteed
+    // document-wide, regardless of which fields happen to populate a particular
+    // installation.
+    private static readonly string[] s_infoLabels =
+    [
+        InfoOptionStrings.SourceLabel,
+        InfoOptionStrings.PathLabel,
+        InfoOptionStrings.CanonicalPathLabel,
+        InfoOptionStrings.VersionLabel,
+        InfoOptionStrings.ChannelLabel,
+        InfoOptionStrings.HiveLabel,
+        InfoOptionStrings.PathStatusLabel,
+        InfoOptionStrings.StatusLabel,
+        InfoOptionStrings.ReasonLabel,
+    ];
+
+    /// <summary>
+    /// Renders the <c>aspire --info</c> human-readable output — the running CLI's
+    /// version/channel followed by one subsection per row in <paramref name="rows"/> —
+    /// through <see cref="IInteractionService.DisplayRenderable"/>.
+    /// </summary>
+    internal static void DisplayHumanReadable(
+        IInteractionService interactionService,
+        CliExecutionContext executionContext,
+        IReadOnlyList<InfoInstallation> rows)
+    {
+        interactionService.DisplayRenderable(BuildHumanRenderable(interactionService.SupportsLinks, executionContext, rows));
+    }
+
+    /// <summary>
+    /// Builds the unbordered <see cref="Rows"/> renderable for <c>aspire --info</c>'s
+    /// human output. A top-level <see cref="Rows"/> holds bold <see cref="Markup"/>
+    /// section headings interleaved with per-section field <see cref="Grid"/>s (a
+    /// 2-character indent column, a fixed-width label column, and a wrapping value
+    /// column) — headings cannot share a grid with field rows because a fixed-width
+    /// first column would truncate/wrap them.
+    /// </summary>
+    internal static IRenderable BuildHumanRenderable(
+        bool supportsLinks,
+        CliExecutionContext executionContext,
+        IReadOnlyList<InfoInstallation> rows)
+    {
+        var labelWidth = s_infoLabels.Max(label => label.Length);
+
+        var renderables = new List<IRenderable>
+        {
+            new Markup($"[bold]{InfoOptionStrings.InfoHeading.EscapeMarkup()}[/]"),
+        };
+
+        var identityGrid = CreateInfoFieldGrid(labelWidth);
+        AddInfoFieldIfPresent(identityGrid, InfoOptionStrings.VersionLabel, executionContext.IdentityVersion);
+        AddInfoFieldIfPresent(identityGrid, InfoOptionStrings.ChannelLabel, executionContext.IdentityChannel);
+        renderables.Add(identityGrid);
+
+        renderables.Add(Text.Empty);
+        renderables.Add(new Markup($"[bold]{InfoOptionStrings.InstallationsHeading.EscapeMarkup()}[/]"));
+
+        var installationIndex = 0;
+        foreach (var row in rows)
+        {
+            renderables.Add(Text.Empty);
+
+            var heading = row.Kind switch
+            {
+                InfoInstallationKind.OrphanHive => InfoOptionStrings.OrphanHiveHeading,
+                InfoInstallationKind.DiscoveryFailed => InfoOptionStrings.DiscoveryFailureHeading,
+                _ => string.Format(CultureInfo.CurrentCulture, InfoOptionStrings.InstallationHeadingFormat, ++installationIndex),
+            };
+            renderables.Add(new Markup($"[bold]{heading.EscapeMarkup()}[/]"));
+
+            var grid = CreateInfoFieldGrid(labelWidth);
+            AddInfoFieldIfPresent(grid, InfoOptionStrings.SourceLabel, row.Source);
+
+            var hasPath = row.Path is { Length: > 0 };
+            if (hasPath)
+            {
+                AddInfoField(grid, InfoOptionStrings.PathLabel, MarkupHelpers.SafeFileLink(supportsLinks, row.Path!));
+            }
+
+            // Only show CanonicalPath when it meaningfully differs from Path — otherwise
+            // it's pure duplication of the row directly above it.
+            if (row.CanonicalPath is { Length: > 0 } canonicalPath &&
+                (!hasPath || !string.Equals(row.Path, canonicalPath, StringComparison.Ordinal)))
+            {
+                AddInfoField(grid, InfoOptionStrings.CanonicalPathLabel, MarkupHelpers.SafeFileLink(supportsLinks, canonicalPath));
+            }
+
+            AddInfoFieldIfPresent(grid, InfoOptionStrings.VersionLabel, row.Version);
+            AddInfoFieldIfPresent(grid, InfoOptionStrings.ChannelLabel, row.Channel);
+
+            if (row.Hive is { Length: > 0 } hive)
+            {
+                AddInfoField(grid, InfoOptionStrings.HiveLabel, MarkupHelpers.SafeFileLink(supportsLinks, hive));
+            }
+
+            AddInfoField(grid, InfoOptionStrings.PathStatusLabel, MapPathStatusDisplay(row.PathStatus));
+            AddInfoField(grid, InfoOptionStrings.StatusLabel, MapStatusDisplay(row.Status));
+            AddInfoFieldIfPresent(grid, InfoOptionStrings.ReasonLabel, row.StatusReason);
+
+            renderables.Add(grid);
+        }
+
+        return new Rows(renderables);
+    }
+
+    private static Grid CreateInfoFieldGrid(int labelWidth)
+    {
+        var grid = new Grid();
+        grid.AddColumn(new GridColumn { Width = 2, NoWrap = true, Padding = new Padding(0) });
+        grid.AddColumn(new GridColumn { Width = labelWidth, NoWrap = true, Padding = new Padding(0, 0, 1, 0) });
+        grid.AddColumn(new GridColumn { Padding = new Padding(0) });
+        return grid;
+    }
+
+    // Values are already-escaped markup fragments (via EscapeMarkup() or
+    // MarkupHelpers.SafeFileLink, both of which always escape peer/environment-derived
+    // text) by the time they reach this helper.
+    private static void AddInfoField(Grid grid, string label, string value)
+    {
+        grid.AddRow(
+            new Markup(string.Empty),
+            new Markup(label.EscapeMarkup()),
+            new Markup(value));
+    }
+
+    private static void AddInfoFieldIfPresent(Grid grid, string label, string? rawValue)
+    {
+        if (rawValue is { Length: > 0 })
+        {
+            AddInfoField(grid, label, rawValue.EscapeMarkup());
+        }
+    }
+
+    /// <summary>
+    /// Maps an <see cref="InstallationInfoStatus"/> wire value to escaped, localized
+    /// human text. Unknown values fall back to escaped raw text rather than throwing,
+    /// since the value may originate from a peer CLI of a different version.
+    /// </summary>
+    private static string MapStatusDisplay(string status)
+    {
+        return status switch
+        {
+            InstallationInfoStatus.Ok => InfoOptionStrings.StatusOk,
+            InstallationInfoStatus.NotProbed => InfoOptionStrings.StatusNotProbed,
+            InstallationInfoStatus.Failed => InfoOptionStrings.StatusFailed,
+            InstallationInfoStatus.NoInstallFound => InfoOptionStrings.StatusNoInstallFound,
+            _ => status.EscapeMarkup(),
+        };
+    }
+
+    /// <summary>
+    /// Maps an <see cref="InstallationPathStatus"/> wire value to escaped, localized
+    /// human text. Unknown values fall back to escaped raw text rather than throwing,
+    /// since the value may originate from a peer CLI of a different version.
+    /// </summary>
+    private static string MapPathStatusDisplay(string pathStatus)
+    {
+        return pathStatus switch
+        {
+            InstallationPathStatus.Active => InfoOptionStrings.PathStatusActive,
+            InstallationPathStatus.Shadowed => InfoOptionStrings.PathStatusShadowed,
+            InstallationPathStatus.NotOnPath => InfoOptionStrings.PathStatusNotOnPath,
+            _ => pathStatus.EscapeMarkup(),
+        };
     }
 
     // -------------------------------------------------------------------------

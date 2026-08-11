@@ -228,6 +228,102 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
+    [InlineData("--info")]
+    [InlineData("--info --format list")]
+    [InlineData("--info --format json")]
+    [InlineData("--info --self --format json")]
+    public void InfoOption_ParsesWithSelfAndFormat(string commandLine)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse(commandLine);
+
+        Assert.Empty(result.Errors);
+        Assert.True(result.GetValue(RootCommand.InfoOption));
+    }
+
+    [Fact]
+    public void SelfOption_WithoutInfo_IsRejected()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("--self");
+
+        Assert.NotEmpty(result.Errors);
+    }
+
+    [Fact]
+    public void FormatOption_WithoutInfo_IsRejected()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("--format json");
+
+        Assert.NotEmpty(result.Errors);
+    }
+
+    [Fact]
+    public void DoctorCommand_InfoOption_IsRejected()
+    {
+        // --info is root-local and non-recursive: it must not be reachable through
+        // subcommands, so `doctor --info` should fail to parse rather than silently
+        // being accepted (and ignored) by the doctor subcommand.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("doctor --info");
+
+        Assert.NotEmpty(result.Errors);
+    }
+
+    [Fact]
+    public void DoctorCommand_SelfOption_UsesSubcommandLocalOptionNotRoot()
+    {
+        // The root --self option is non-recursive, so it must not leak into
+        // subcommands. DoctorCommand already declares its own separate hidden
+        // --self option (pre-dating this change and left untouched here; its
+        // cleanup is deferred to a later task), so "doctor --self" continues
+        // to parse successfully through that subcommand-local option rather
+        // than the new root one.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("doctor --self");
+
+        Assert.Empty(result.Errors);
+        Assert.False(result.GetValue(RootCommand.SelfOption));
+    }
+
+    [Fact]
+    public void DoctorCommand_FormatOption_StillParsesLocally()
+    {
+        // doctor --format is DoctorCommand's own subcommand-local Option<OutputFormat>,
+        // distinct from the root Option<InfoOutputFormat>. It must continue to parse
+        // unaffected by the new root-level --format option.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("doctor --format json");
+
+        Assert.Empty(result.Errors);
+    }
+
+    [Theory]
     [InlineData("1", true)]
     [InlineData("true", true)]
     [InlineData("TRUE", true)]
