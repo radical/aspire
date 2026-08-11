@@ -571,10 +571,10 @@ internal static class InstallationInfoOutput
     {
         return status switch
         {
-            InstallationInfoStatus.Ok => InfoOptionStrings.StatusOk,
-            InstallationInfoStatus.NotProbed => InfoOptionStrings.StatusNotProbed,
-            InstallationInfoStatus.Failed => InfoOptionStrings.StatusFailed,
-            InstallationInfoStatus.NoInstallFound => InfoOptionStrings.StatusNoInstallFound,
+            InstallationInfoStatus.Ok => InfoOptionStrings.StatusOk.EscapeMarkup(),
+            InstallationInfoStatus.NotProbed => InfoOptionStrings.StatusNotProbed.EscapeMarkup(),
+            InstallationInfoStatus.Failed => InfoOptionStrings.StatusFailed.EscapeMarkup(),
+            InstallationInfoStatus.NoInstallFound => InfoOptionStrings.StatusNoInstallFound.EscapeMarkup(),
             _ => status.EscapeMarkup(),
         };
     }
@@ -588,9 +588,9 @@ internal static class InstallationInfoOutput
     {
         return pathStatus switch
         {
-            InstallationPathStatus.Active => InfoOptionStrings.PathStatusActive,
-            InstallationPathStatus.Shadowed => InfoOptionStrings.PathStatusShadowed,
-            InstallationPathStatus.NotOnPath => InfoOptionStrings.PathStatusNotOnPath,
+            InstallationPathStatus.Active => InfoOptionStrings.PathStatusActive.EscapeMarkup(),
+            InstallationPathStatus.Shadowed => InfoOptionStrings.PathStatusShadowed.EscapeMarkup(),
+            InstallationPathStatus.NotOnPath => InfoOptionStrings.PathStatusNotOnPath.EscapeMarkup(),
             _ => pathStatus.EscapeMarkup(),
         };
     }

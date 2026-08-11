@@ -204,6 +204,80 @@ public class InfoOptionActionTests(ITestOutputHelper outputHelper)
     }
 
     // ---------------------------------------------------------------------------
+    // Non-ASCII regression: paths and channels must be literal, not \uXXXX
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ExecuteAsync_FullJson_NonAsciiPath_LiteralNotEscaped()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var self = new InstallationInfo
+        {
+            Path = "/home/日本語/aspire",
+            CanonicalPath = "/home/日本語/aspire",
+            Version = "13.4.0",
+            Channel = "café",
+            Route = "script",
+            PathStatus = InstallationPathStatus.Active,
+            Status = InstallationInfoStatus.Ok,
+        };
+        var discovery = new FakeInstallationDiscovery(self);
+        var interactionService = new TestInteractionService();
+        var action = CreateAction(workspace, discovery, interactionService, out _);
+
+        await action.ExecuteAsync(selfOnly: false, InfoOutputFormat.Json, TestContext.Current.CancellationToken);
+
+        var json = Assert.Single(interactionService.DisplayedPlainText);
+
+        // Must contain the literal multibyte characters, never \uXXXX sequences.
+        Assert.Contains("日本語", json, StringComparison.Ordinal);
+        Assert.Contains("café", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u", json, StringComparison.Ordinal);
+
+        // Must still parse to the expected shape.
+        var output = JsonSerializer.Deserialize(json, JsonSourceGenerationContext.Default.InfoOutput);
+        Assert.NotNull(output);
+        var install = Assert.Single(output.Installs);
+        Assert.Equal("/home/日本語/aspire", install.Path);
+        Assert.Equal("café", install.Channel);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SelfJson_NonAsciiPath_LiteralNotEscaped()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var self = new InstallationInfo
+        {
+            Path = "/home/日本語/aspire",
+            CanonicalPath = "/home/日本語/aspire",
+            Version = "13.4.0",
+            Channel = "café",
+            Route = "script",
+            PathStatus = InstallationPathStatus.Active,
+            Status = InstallationInfoStatus.Ok,
+        };
+        var discovery = new FakeInstallationDiscovery(self);
+        var interactionService = new TestInteractionService();
+        var action = CreateAction(workspace, discovery, interactionService, out _);
+
+        await action.ExecuteAsync(selfOnly: true, InfoOutputFormat.Json, TestContext.Current.CancellationToken);
+
+        var json = Assert.Single(interactionService.DisplayedPlainText);
+
+        // Must contain the literal multibyte characters, never \uXXXX sequences.
+        Assert.Contains("日本語", json, StringComparison.Ordinal);
+        Assert.Contains("café", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u", json, StringComparison.Ordinal);
+
+        // Must still parse to the expected shape.
+        var installs = JsonSerializer.Deserialize(json, JsonSourceGenerationContext.Default.InfoInstallationArray);
+        Assert.NotNull(installs);
+        var only = Assert.Single(installs);
+        Assert.Equal("/home/日本語/aspire", only.Path);
+        Assert.Equal("café", only.Channel);
+    }
+
+    // ---------------------------------------------------------------------------
     // Caller cancellation propagates
     // ---------------------------------------------------------------------------
 

@@ -99,7 +99,7 @@ internal sealed class InfoOptionAction
             // Self mode's JSON contract is a bare array, not the {version, channel,
             // installs} envelope: there is exactly one row and no aggregate metadata
             // to report alongside it.
-            json = JsonSerializer.Serialize(rows.ToArray(), JsonSourceGenerationContext.Default.InfoInstallationArray);
+            json = JsonSerializer.Serialize(rows.ToArray(), JsonSourceGenerationContext.RelaxedEscaping.InfoInstallationArray);
         }
         else
         {
@@ -109,7 +109,7 @@ internal sealed class InfoOptionAction
                 Channel = _executionContext.IdentityChannel,
                 Installs = rows.ToArray(),
             };
-            json = JsonSerializer.Serialize(output, JsonSourceGenerationContext.Default.InfoOutput);
+            json = JsonSerializer.Serialize(output, JsonSourceGenerationContext.RelaxedEscaping.InfoOutput);
         }
 
         _interactionService.DisplayPlainText(json);
