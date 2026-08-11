@@ -650,6 +650,10 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         yield return new object[] { true, new[] { "doctor", "--help" } };
         yield return new object[] { true, new[] { "run", "-h" } };
 
+        // True: explicit "=true"/"true" forms of --info behave the same as the bare flag.
+        yield return new object[] { true, new[] { "--info=true" } };
+        yield return new object[] { true, new[] { "--info", "true" } };
+
         // False: --info that is not a real root option, either because it belongs to a
         // subcommand, appears after the "--" app-argument delimiter, or is consumed as
         // the *value* of a preceding value-taking root option (long name and alias).
@@ -659,8 +663,14 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         yield return new object[] { false, new[] { "--capture-profile-delay", "--info", "run" } };
         yield return new object[] { false, new[] { "--log-level", "--info", "run" } };
         yield return new object[] { false, new[] { "-l", "--info", "run" } };
+        yield return new object[] { false, new[] { "--format", "--info", "run" } };
         yield return new object[] { false, new[] { "run", "--format", "json" } };
         yield return new object[] { false, new[] { "run" } };
+
+        // False: explicit "=false"/"false" forms of --info must NOT be treated as informational,
+        // even though the token "--info" is literally present.
+        yield return new object[] { false, new[] { "--info=false" } };
+        yield return new object[] { false, new[] { "--info", "false" } };
     }
 
     [Theory]
@@ -668,6 +678,44 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
     public void IsInformationalInvocation_ClassifiesRootInfoAndHelpVersionCorrectly(bool expected, string[] args)
     {
         Assert.Equal(expected, CommonOptionNames.IsInformationalInvocation(args));
+    }
+
+    [Fact]
+    public void ValueTakingRootOptionNames_MatchesRootCommandsActualValueTakingOptions()
+    {
+        // Drift guard: CommonOptionNames.IsInformationalInvocation manually tracks which root
+        // options consume a following token as their value (s_valueTakingRootOptionNames), so that
+        // a value literally equal to "--info" (e.g. `--log-level --info run`) is never
+        // misclassified as a distinct --info flag. If a new value-taking root option is added to
+        // RootCommand without updating that manual list, "--new-option --info run" would silently
+        // misclassify as informational. This test enumerates RootCommand's actual direct options
+        // and fails the moment the two sets diverge.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+
+        // An option "consumes a value" for classifier purposes when it requires at least one
+        // value token (Arity.MinimumNumberOfValues > 0). Bool options (--info, --debug, --self,
+        // etc.) have MinimumNumberOfValues == 0: a bare occurrence is an implicit flag, and they
+        // only optionally consume an explicit "true"/"false" token (handled separately in
+        // IsInformationalInvocation's --info-specific logic), so they are correctly excluded here.
+        var expectedNames = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var option in command.Options)
+        {
+            if (option.Arity.MinimumNumberOfValues > 0)
+            {
+                expectedNames.Add(option.Name);
+                foreach (var alias in option.Aliases)
+                {
+                    expectedNames.Add(alias);
+                }
+            }
+        }
+
+        var actualNames = new SortedSet<string>(CommonOptionNames.ValueTakingRootOptionNamesForTests, StringComparer.Ordinal);
+
+        Assert.Equal(expectedNames, actualNames);
     }
 
     [Theory]

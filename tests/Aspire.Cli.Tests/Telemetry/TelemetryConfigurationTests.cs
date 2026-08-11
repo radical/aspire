@@ -335,6 +335,42 @@ public class TelemetryConfigurationTests
         Assert.True(manager.HasAzureMonitor);
     }
 
+    [Fact]
+    public void AzureMonitor_Enabled_WhenInfoIsValueOfPrecedingFormatOption()
+    {
+        // "--info" here is the value consumed by root --format, not a distinct root --info flag.
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["--format", "--info", "run"]);
+
+        Assert.True(manager.HasAzureMonitor);
+    }
+
+    [Fact]
+    public void AzureMonitor_Enabled_WhenRootInfoExplicitlyFalse()
+    {
+        // "--info=false" and "--info false" are valid Option<bool> forms that explicitly disable
+        // --info, so they must not opt out of telemetry the way a truthy --info does.
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["--info=false"]);
+
+        Assert.True(manager.HasAzureMonitor);
+    }
+
+    [Fact]
+    public void AzureMonitor_Enabled_WhenRootInfoExplicitlyFalseTwoTokenForm()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["--info", "false"]);
+
+        Assert.True(manager.HasAzureMonitor);
+    }
+
     [Theory]
     [InlineData("1")]
     [InlineData("true")]
