@@ -91,11 +91,11 @@ internal sealed class InfoInstallation
     [JsonPropertyName("pathStatus")]
     public required string PathStatus { get; init; }
 
-/// <summary>Lifecycle status for the row. Valid values are the constants on <see cref="InstallationInfoStatus"/>
-/// (<c>ok</c>, <c>notProbed</c>, <c>failed</c>) and <see cref="InstallationInfoStatus.NoInstallFound"/>
-/// (<c>noInstallFound</c>) for <see cref="InfoInstallationKind.OrphanHive"/> rows.</summary>
-[JsonPropertyName("status")]
-public required string Status { get; init; }
+    /// <summary>Lifecycle status for the row. Valid values are the constants on <see cref="InstallationInfoStatus"/>
+    /// (<c>ok</c>, <c>notProbed</c>, <c>failed</c>) and <see cref="InstallationInfoStatus.NoInstallFound"/>
+    /// (<c>noInstallFound</c>) for <see cref="InfoInstallationKind.OrphanHive"/> rows.</summary>
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
 
     /// <summary>Human-readable reason for a non-<c>ok</c> status; omitted when absent.</summary>
     [JsonPropertyName("statusReason")]
