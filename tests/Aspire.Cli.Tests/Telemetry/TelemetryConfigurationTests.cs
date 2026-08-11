@@ -277,6 +277,64 @@ public class TelemetryConfigurationTests
         Assert.False(manager.HasAzureMonitor);
     }
 
+    [Fact]
+    public void AzureMonitor_Disabled_WhenRootInfoFlagProvided()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["--info"]);
+
+        Assert.False(manager.HasAzureMonitor);
+    }
+
+    [Fact]
+    public void AzureMonitor_Disabled_WhenRootInfoSelfJsonFlagsProvided()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["--info", "--self", "--format", "json"]);
+
+        Assert.False(manager.HasAzureMonitor);
+    }
+
+    [Fact]
+    public void AzureMonitor_Enabled_WhenInfoIsDoctorSubcommandArgument()
+    {
+        // "doctor --info" is the doctor subcommand's own (nonexistent) argument, not root
+        // --info, so it must not opt out of telemetry absent any other opt-out setting.
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["doctor", "--info"]);
+
+        Assert.True(manager.HasAzureMonitor);
+    }
+
+    [Fact]
+    public void AzureMonitor_Enabled_WhenInfoIsAppArgumentAfterDelimiter()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["run", "--", "--info"]);
+
+        Assert.True(manager.HasAzureMonitor);
+    }
+
+    [Fact]
+    public void AzureMonitor_Enabled_WhenInfoIsValueOfPrecedingRootOption()
+    {
+        // "--info" here is the value consumed by --log-level, not a distinct root --info flag.
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, ["--log-level", "--info", "run"]);
+
+        Assert.True(manager.HasAzureMonitor);
+    }
+
     [Theory]
     [InlineData("1")]
     [InlineData("true")]

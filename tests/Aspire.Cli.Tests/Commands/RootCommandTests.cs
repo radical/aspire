@@ -633,6 +633,43 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         Assert.True(sentinel.WasCreated);
     }
 
+    public static IEnumerable<object[]> InformationalInvocationCases()
+    {
+        // True: real root --info (and its --self/--format variants), root bool options
+        // preceding --info, and help/version anywhere (including after a subcommand).
+        yield return new object[] { true, new[] { "--info" } };
+        yield return new object[] { true, new[] { "--info", "--format", "json" } };
+        yield return new object[] { true, new[] { "--info", "--self", "--format", "json" } };
+        yield return new object[] { true, new[] { "--non-interactive", "--info" } };
+        yield return new object[] { true, new[] { "--debug", "--info" } };
+        yield return new object[] { true, new[] { "--version" } };
+        yield return new object[] { true, new[] { "-v" } };
+        yield return new object[] { true, new[] { "--help" } };
+        yield return new object[] { true, new[] { "-h" } };
+        yield return new object[] { true, new[] { "-?" } };
+        yield return new object[] { true, new[] { "doctor", "--help" } };
+        yield return new object[] { true, new[] { "run", "-h" } };
+
+        // False: --info that is not a real root option, either because it belongs to a
+        // subcommand, appears after the "--" app-argument delimiter, or is consumed as
+        // the *value* of a preceding value-taking root option (long name and alias).
+        yield return new object[] { false, new[] { "doctor", "--info" } };
+        yield return new object[] { false, new[] { "run", "--", "--info" } };
+        yield return new object[] { false, new[] { "--capture-profile-output", "--info", "run" } };
+        yield return new object[] { false, new[] { "--capture-profile-delay", "--info", "run" } };
+        yield return new object[] { false, new[] { "--log-level", "--info", "run" } };
+        yield return new object[] { false, new[] { "-l", "--info", "run" } };
+        yield return new object[] { false, new[] { "run", "--format", "json" } };
+        yield return new object[] { false, new[] { "run" } };
+    }
+
+    [Theory]
+    [MemberData(nameof(InformationalInvocationCases))]
+    public void IsInformationalInvocation_ClassifiesRootInfoAndHelpVersionCorrectly(bool expected, string[] args)
+    {
+        Assert.Equal(expected, CommonOptionNames.IsInformationalInvocation(args));
+    }
+
     [Theory]
     [InlineData("ps", "--format", "json")]
     [InlineData("ps", "--format=json")]
@@ -657,6 +694,70 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
 
         Assert.False(bannerService.WasBannerDisplayed);
         Assert.False(sentinel.WasCreated);
+    }
+
+    public static IEnumerable<object[]> RootInfoArgsCases()
+    {
+        yield return new object[] { new[] { "--info" } };
+        yield return new object[] { new[] { "--info", "--self", "--format", "json" } };
+    }
+
+    [Theory]
+    [MemberData(nameof(RootInfoArgsCases))]
+    public async Task RootInfo_SuppressesBannerAndTelemetryNoticeAndDoesNotCreateSentinel(string[] args)
+    {
+        // Real root `--info` invocations (list or json format) must not surface any
+        // pre-command output — the banner, the first-run telemetry notice, or the
+        // first-run sentinel side effect — that could precede or intermix with the
+        // --info contract's own output.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var errorWriter = new StringWriter();
+        var sentinel = new TestFirstTimeUseNoticeSentinel { SentinelExists = false };
+        var bannerService = new TestBannerService();
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ErrorTextWriter = errorWriter;
+            options.FirstTimeUseNoticeSentinelFactory = _ => sentinel;
+            options.BannerServiceFactory = _ => bannerService;
+            options.CliHostEnvironmentFactory = _ => TestHelpers.CreateInteractiveHostEnvironment();
+        });
+        using var provider = services.BuildServiceProvider();
+
+        await Program.DisplayFirstTimeUseNoticeIfNeededAsync(provider, args);
+
+        Assert.False(bannerService.WasBannerDisplayed);
+        Assert.False(sentinel.WasCreated);
+        var errorOutput = errorWriter.ToString();
+        Assert.DoesNotContain("Telemetry", errorOutput);
+    }
+
+    [Fact]
+    public async Task DoctorInfo_IsNotTreatedAsInformational_SoBannerAndSentinelBehaveNormally()
+    {
+        // Counterexample to RootInfo_*: "doctor --info" is the doctor subcommand's own
+        // (nonexistent) argument, not root --info, so it must not suppress the normal
+        // first-run experience the way genuine root --info does.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var errorWriter = new StringWriter();
+        var sentinel = new TestFirstTimeUseNoticeSentinel { SentinelExists = false };
+        var bannerService = new TestBannerService();
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ErrorTextWriter = errorWriter;
+            options.FirstTimeUseNoticeSentinelFactory = _ => sentinel;
+            options.BannerServiceFactory = _ => bannerService;
+            options.CliHostEnvironmentFactory = _ => TestHelpers.CreateInteractiveHostEnvironment();
+        });
+        using var provider = services.BuildServiceProvider();
+
+        await Program.DisplayFirstTimeUseNoticeIfNeededAsync(provider, ["doctor", "--info"]);
+
+        Assert.True(bannerService.WasBannerDisplayed);
+        Assert.True(sentinel.WasCreated);
+        var errorOutput = errorWriter.ToString();
+        Assert.Contains("Telemetry", errorOutput);
     }
 
     [Theory]

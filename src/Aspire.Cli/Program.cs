@@ -796,7 +796,7 @@ public class Program
     internal static async Task DisplayFirstTimeUseNoticeIfNeededAsync(IServiceProvider serviceProvider, string[] args, CancellationToken cancellationToken = default)
     {
         var configuration = serviceProvider.GetRequiredService<IConfiguration>();
-        var isInformationalCommand = ContainsRootOption(args, CommonOptionNames.InformationalOptionNames.Contains);
+        var isInformationalCommand = CommonOptionNames.IsInformationalInvocation(args);
         var isMachineReadableOutput = HasMachineReadableOutput(args);
         var noLogo = ContainsRootOption(args, a => a == CommonOptionNames.NoLogo)
             || configuration.GetBool(CliConfigNames.NoLogo, defaultValue: false)
@@ -848,10 +848,11 @@ public class Program
 
         // Surface a notice whenever the CLI is emulating another build via ASPIRE_CLI_* env vars
         // or the install sidecar, so a diagnostic run is never mistaken for a real installed build.
-        // This is independent of first-run/banner state but is suppressed for machine-readable
-        // output so structured payloads stay clean. Written to stderr for the same reason.
+        // This is independent of first-run/banner state but is suppressed for informational
+        // (--version, --help, root --info) and machine-readable invocations so those outputs stay
+        // free of unrelated startup text. Written to stderr for the same reason.
         var executionContext = serviceProvider.GetRequiredService<CliExecutionContext>();
-        if (executionContext.IdentityOverridden && !isMachineReadableOutput)
+        if (executionContext.IdentityOverridden && !isInformationalCommand && !isMachineReadableOutput)
         {
             var consoleEnvironment = serviceProvider.GetRequiredService<ConsoleEnvironment>();
             var interactionService = serviceProvider.GetRequiredService<IInteractionService>();
