@@ -13,7 +13,7 @@ namespace Aspire.Cli.Tests.Commands;
 public class InstallationInfoOutputTests
 {
     // ---------------------------------------------------------------------------
-    // Aggregate-discovery timeout: updated for the new DiscoveryResult return type
+    // Aggregate-discovery timeout: updated for the new InstallationDiscoveryResult return type
     // while preserving the core falsifiability — that a discovery which ignores
     // cancellation is still bounded and the bound surfaces as AggregateFailureReason.
     // ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ public class InstallationInfoOutputTests
             NullLogger.Instance,
             TimeSpan.FromMilliseconds(100),
             TestContext.Current.CancellationToken);
-        DiscoveryResult result;
+        InstallationDiscoveryResult result;
         try
         {
             await discoveryStarted.Task.DefaultTimeout();
@@ -143,33 +143,47 @@ public class InstallationInfoOutputTests
             PathStatus = InstallationPathStatus.Active,
             Status = InstallationInfoStatus.Ok,
         };
-        // Two hives: one matched by the installation's channel, one orphan.
+        // Three hives: one matched by the installation's channel, one orphan with a
+        // valid-but-unmatched channel name (pr-999), and one with an invalid name
+        // that is never a valid channel (some-legacy-dir). Both orphans must appear
+        // as orphan-hive rows and must not be dropped.
         var hives = new[]
         {
             new HiveInfo("stable", "/home/test/.aspire/hives/stable"),
             new HiveInfo("pr-999", "/home/test/.aspire/hives/pr-999"),
+            new HiveInfo("some-legacy-dir", "/home/test/.aspire/hives/some-legacy-dir"),
         };
-        var discoveryResult = new DiscoveryResult([self], AggregateFailureReason: null);
+        var discoveryResult = new InstallationDiscoveryResult([self], AggregateFailureReason: null);
 
         var rows = InstallationInfoOutput.BuildInfoRows(discoveryResult, hives);
 
-        Assert.Equal(2, rows.Length);
+        Assert.Equal(3, rows.Length);
 
         var installRow = Assert.Single(rows, r => r.Kind == InfoInstallationKind.Installation);
         Assert.Equal("/usr/local/bin/aspire", installRow.Path);
         Assert.Equal("/home/test/.aspire/hives/stable", installRow.Hive);
 
-        var orphanRow = Assert.Single(rows, r => r.Kind == InfoInstallationKind.OrphanHive);
-        Assert.Equal("/home/test/.aspire/hives/pr-999", orphanRow.Hive);
-        Assert.Equal(InstallationPathStatus.NotOnPath, orphanRow.PathStatus);
-        Assert.Equal("noInstallFound", orphanRow.Status);
-        Assert.Null(orphanRow.Channel);  // orphan rows carry no synthetic channel
+        var orphanRows = rows.Where(r => r.Kind == InfoInstallationKind.OrphanHive).ToList();
+        Assert.Equal(2, orphanRows.Count);
+
+        // Valid-channel name that no installation claimed: must be an orphan-hive row.
+        var prOrphan = Assert.Single(orphanRows, r => r.Hive == "/home/test/.aspire/hives/pr-999");
+        Assert.Equal(InstallationPathStatus.NotOnPath, prOrphan.PathStatus);
+        Assert.Equal(InstallationInfoStatus.NoInstallFound, prOrphan.Status);
+        Assert.Null(prOrphan.Channel);
+
+        // Invalid-channel name (not a recognised channel): must still be an orphan-hive row,
+        // not silently dropped. The hive directory is real; users need to see it.
+        var legacyOrphan = Assert.Single(orphanRows, r => r.Hive == "/home/test/.aspire/hives/some-legacy-dir");
+        Assert.Equal(InstallationPathStatus.NotOnPath, legacyOrphan.PathStatus);
+        Assert.Equal(InstallationInfoStatus.NoInstallFound, legacyOrphan.Status);
+        Assert.Null(legacyOrphan.Channel);
     }
 
     [Fact]
     public void BuildInfoRows_AggregateFailure_BecomesDiscoveryFailedRow()
     {
-        var discoveryResult = new DiscoveryResult(
+        var discoveryResult = new InstallationDiscoveryResult(
             Installations: [],
             AggregateFailureReason: "discovery exploded");
         var hives = Array.Empty<HiveInfo>();
@@ -195,7 +209,7 @@ public class InstallationInfoOutputTests
             Status = InstallationInfoStatus.Failed,
             StatusReason = "probe timed out",
         };
-        var discoveryResult = new DiscoveryResult([failedPeer], AggregateFailureReason: null);
+        var discoveryResult = new InstallationDiscoveryResult([failedPeer], AggregateFailureReason: null);
         var hives = Array.Empty<HiveInfo>();
 
         var rows = InstallationInfoOutput.BuildInfoRows(discoveryResult, hives);

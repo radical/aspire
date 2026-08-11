@@ -101,7 +101,7 @@ internal sealed record InstallationInfo
 }
 
 /// <summary>
-/// Wire constants for <see cref="InstallationInfo.Status"/>.
+/// Wire constants for <see cref="InstallationInfo.Status"/> and <see cref="Aspire.Cli.Commands.InfoInstallation.Status"/>.
 /// </summary>
 internal static class InstallationInfoStatus
 {
@@ -113,6 +113,12 @@ internal static class InstallationInfoStatus
 
     /// <summary>Probe was attempted, but the peer did not cooperate (timeout, non-zero exit, malformed JSON, etc.).</summary>
     public const string Failed = "failed";
+
+    /// <summary>
+    /// An orphan-hive directory exists on disk, but no installation was found for it.
+    /// Used exclusively on <see cref="Aspire.Cli.Commands.InfoInstallationKind.OrphanHive"/> rows.
+    /// </summary>
+    public const string NoInstallFound = "noInstallFound";
 }
 
 /// <summary>
@@ -161,6 +167,8 @@ internal static class InstallationInfoParser
             CanonicalPath = GetOptionalString("canonicalPath"),
             Version = GetOptionalString("version"),
             Channel = GetOptionalString("channel"),
+            // New `--info --self` peers emit `source`; legacy `doctor` peers emit `route`.
+            // Cross-version discovery must accept both: prefer `source` when present.
             Route = GetOptionalString("source") ?? GetOptionalString("route"),
             PathStatus = pathStatus,
             Status = GetStringOr("status", InstallationInfoStatus.Ok),

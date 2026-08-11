@@ -91,9 +91,11 @@ internal sealed class InfoInstallation
     [JsonPropertyName("pathStatus")]
     public required string PathStatus { get; init; }
 
-    /// <summary>Lifecycle status for the row. See <see cref="InstallationInfoStatus"/>.</summary>
-    [JsonPropertyName("status")]
-    public required string Status { get; init; }
+/// <summary>Lifecycle status for the row. Valid values are the constants on <see cref="InstallationInfoStatus"/>
+/// (<c>ok</c>, <c>notProbed</c>, <c>failed</c>) and <see cref="InstallationInfoStatus.NoInstallFound"/>
+/// (<c>noInstallFound</c>) for <see cref="InfoInstallationKind.OrphanHive"/> rows.</summary>
+[JsonPropertyName("status")]
+public required string Status { get; init; }
 
     /// <summary>Human-readable reason for a non-<c>ok</c> status; omitted when absent.</summary>
     [JsonPropertyName("statusReason")]
@@ -132,7 +134,7 @@ internal static class InfoInstallationKind
 /// threw an unexpected exception. Maps to a single
 /// <see cref="InfoInstallationKind.DiscoveryFailed"/> row in the info output.
 /// </param>
-internal sealed record DiscoveryResult(
+internal sealed record InstallationDiscoveryResult(
     IReadOnlyList<InstallationInfo> Installations,
     string? AggregateFailureReason);
 
@@ -194,14 +196,14 @@ internal static class InstallationInfoOutput
     // New info-output entry points
     // -------------------------------------------------------------------------
 
-    public static Task<DiscoveryResult> DiscoverAllToResultSafelyAsync(
+    public static Task<InstallationDiscoveryResult> DiscoverAllToResultSafelyAsync(
         IInstallationDiscovery discovery,
         WingetFirstRunProbe wingetFirstRunProbe,
         ILogger logger,
         CancellationToken cancellationToken)
         => DiscoverAllToResultSafelyAsync(discovery, wingetFirstRunProbe, logger, s_defaultDiscoveryTimeout, cancellationToken);
 
-    internal static async Task<DiscoveryResult> DiscoverAllToResultSafelyAsync(
+    internal static async Task<InstallationDiscoveryResult> DiscoverAllToResultSafelyAsync(
         IInstallationDiscovery discovery,
         WingetFirstRunProbe wingetFirstRunProbe,
         ILogger logger,
@@ -235,11 +237,11 @@ internal static class InstallationInfoOutput
                 DoctorCommandStrings.InstallationDiscoveryTimedOutReasonFormat,
                 timeout.TotalSeconds);
             logger.LogWarning("Aspire CLI installation discovery timed out after {TimeoutSeconds} seconds.", timeout.TotalSeconds);
-            return new DiscoveryResult([], AggregateFailureReason: reason);
+            return new InstallationDiscoveryResult([], AggregateFailureReason: reason);
         }
     }
 
-    private static async Task<DiscoveryResult> DiscoverAllCoreToResultAsync(
+    private static async Task<InstallationDiscoveryResult> DiscoverAllCoreToResultAsync(
         IInstallationDiscovery discovery,
         WingetFirstRunProbe wingetFirstRunProbe,
         ILogger logger,
@@ -259,7 +261,7 @@ internal static class InstallationInfoOutput
             logger.LogDebug("Discovering Aspire CLI installations for doctor output.");
             var installations = await discovery.DiscoverAllAsync(cancellationToken).ConfigureAwait(false);
             logger.LogDebug("Discovered {InstallationCount} Aspire CLI installation(s) for doctor output.", installations.Count);
-            return new DiscoveryResult(installations, AggregateFailureReason: null);
+            return new InstallationDiscoveryResult(installations, AggregateFailureReason: null);
         }
         catch (OperationCanceledException)
         {
@@ -268,7 +270,7 @@ internal static class InstallationInfoOutput
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not discover Aspire CLI installations for doctor output.");
-            return new DiscoveryResult([], AggregateFailureReason: DoctorCommandStrings.InstallationDiscoveryFailedReason);
+            return new InstallationDiscoveryResult([], AggregateFailureReason: DoctorCommandStrings.InstallationDiscoveryFailedReason);
         }
     }
 
@@ -323,7 +325,7 @@ internal static class InstallationInfoOutput
     /// </list>
     /// </remarks>
     internal static InfoInstallation[] BuildInfoRows(
-        DiscoveryResult discoveryResult,
+        InstallationDiscoveryResult discoveryResult,
         IEnumerable<HiveInfo> hives)
     {
         var hiveList = hives.ToList();
@@ -363,8 +365,12 @@ internal static class InstallationInfoOutput
                 {
                     Kind = InfoInstallationKind.OrphanHive,
                     Hive = hive.Path,
+                    // No binary exists for an orphan hive, so NotOnPath is the
+                    // most accurate value: the hive directory is on disk, but
+                    // the binary it was supposed to contain was never installed
+                    // or has since been removed.
                     PathStatus = InstallationPathStatus.NotOnPath,
-                    Status = "noInstallFound",
+                    Status = InstallationInfoStatus.NoInstallFound,
                     // Orphan rows intentionally carry no synthetic channel field —
                     // the hive name is surfaced via Hive, not Channel.
                 });
@@ -527,6 +533,9 @@ internal static class InstallationInfoOutput
         return new InfoInstallation
         {
             Kind = InfoInstallationKind.DiscoveryFailed,
+            // Discovery-failed rows have no binary to place on PATH, so
+            // NotOnPath is the accurate value even though the row represents
+            // a global failure rather than a per-binary status.
             PathStatus = InstallationPathStatus.NotOnPath,
             Status = InstallationInfoStatus.Failed,
             StatusReason = reason,
