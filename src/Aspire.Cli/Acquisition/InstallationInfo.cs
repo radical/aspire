@@ -161,7 +161,7 @@ internal static class InstallationInfoParser
             CanonicalPath = GetOptionalString("canonicalPath"),
             Version = GetOptionalString("version"),
             Channel = GetOptionalString("channel"),
-            Route = GetOptionalString("route"),
+            Route = GetOptionalString("source") ?? GetOptionalString("route"),
             PathStatus = pathStatus,
             Status = GetStringOr("status", InstallationInfoStatus.Ok),
             StatusReason = GetOptionalString("statusReason"),
