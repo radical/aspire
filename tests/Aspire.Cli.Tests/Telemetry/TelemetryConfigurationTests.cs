@@ -267,6 +267,8 @@ public class TelemetryConfigurationTests
     [InlineData("--help")]
     [InlineData("-h")]
     [InlineData("-?")]
+    [InlineData("/h")]
+    [InlineData("/?")]
     public void AzureMonitor_Disabled_ForAllHelpFlags(string flag)
     {
         var configuration = new ConfigurationBuilder().Build();
@@ -369,6 +371,30 @@ public class TelemetryConfigurationTests
         var manager = new TelemetryManager(configuration, tagsSource, ["--info", "false"]);
 
         Assert.True(manager.HasAzureMonitor);
+    }
+
+    public static IEnumerable<object[]> BoolRootOptionExplicitValuePrecedesInfoCases()
+    {
+        yield return new object[] { new[] { "--debug", "true", "--info" } };
+        yield return new object[] { new[] { "--debug", "false", "--info" } };
+        yield return new object[] { new[] { "-d", "false", "--info" } };
+        yield return new object[] { new[] { "--non-interactive", "false", "--info", "--format", "json" } };
+        yield return new object[] { new[] { "--capture-profile", "true", "--info" } };
+    }
+
+    [Theory]
+    [MemberData(nameof(BoolRootOptionExplicitValuePrecedesInfoCases))]
+    public void AzureMonitor_Disabled_WhenBoolRootOptionExplicitValuePrecedesInfo(string[] args)
+    {
+        // Another root bool option's explicit "true"/"false" value (e.g. `--debug false`) must be
+        // consumed as that option's own value, not mistaken for a subcommand-boundary token, so
+        // root --info that follows is still real and opts out of telemetry.
+        var configuration = new ConfigurationBuilder().Build();
+        var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
+
+        var manager = new TelemetryManager(configuration, tagsSource, args);
+
+        Assert.False(manager.HasAzureMonitor);
     }
 
     [Theory]

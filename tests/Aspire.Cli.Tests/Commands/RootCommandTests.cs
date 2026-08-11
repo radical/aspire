@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Reflection;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
@@ -647,12 +648,35 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         yield return new object[] { true, new[] { "--help" } };
         yield return new object[] { true, new[] { "-h" } };
         yield return new object[] { true, new[] { "-?" } };
+        yield return new object[] { true, new[] { "/h" } };
+        yield return new object[] { true, new[] { "/?" } };
         yield return new object[] { true, new[] { "doctor", "--help" } };
         yield return new object[] { true, new[] { "run", "-h" } };
+        yield return new object[] { true, new[] { "doctor", "/h" } };
+        yield return new object[] { true, new[] { "run", "/?" } };
 
         // True: explicit "=true"/"true" forms of --info behave the same as the bare flag.
         yield return new object[] { true, new[] { "--info=true" } };
         yield return new object[] { true, new[] { "--info", "true" } };
+
+        // True: an explicit true/false value for another root bool option is consumed as that
+        // option's value (not a subcommand boundary), so root --info that follows is still real.
+        // This is the fix for the reported defect: `--debug false --info` was previously stopping
+        // at "false" as if it were a subcommand and returning false.
+        yield return new object[] { true, new[] { "--debug", "true", "--info" } };
+        yield return new object[] { true, new[] { "--debug", "false", "--info" } };
+        yield return new object[] { true, new[] { "-d", "false", "--info" } };
+        yield return new object[] { true, new[] { "--non-interactive", "false", "--info", "--format", "json" } };
+        yield return new object[] { true, new[] { "--capture-profile", "true", "--info" } };
+        yield return new object[] { true, new[] { "--nologo", "false", "--info" } };
+        yield return new object[] { true, new[] { "--banner", "false", "--info" } };
+        yield return new object[] { true, new[] { "--wait-for-debugger", "false", "--info" } };
+        yield return new object[] { true, new[] { "--cli-wait-for-debugger", "false", "--info" } };
+        yield return new object[] { true, new[] { "--start-debug-session", "false", "--info" } };
+        yield return new object[] { true, new[] { "--self", "false", "--info" } };
+        // "--debug=false" is a single token, so it is naturally never confused for a positional
+        // boundary; --info that follows is still real.
+        yield return new object[] { true, new[] { "--debug=false", "--info" } };
 
         // False: --info that is not a real root option, either because it belongs to a
         // subcommand, appears after the "--" app-argument delimiter, or is consumed as
@@ -666,6 +690,10 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         yield return new object[] { false, new[] { "--format", "--info", "run" } };
         yield return new object[] { false, new[] { "run", "--format", "json" } };
         yield return new object[] { false, new[] { "run" } };
+
+        // False: a root bool option's explicit true/false value followed by a real subcommand
+        // (no --info anywhere) correctly hits the subcommand boundary, not the bool value.
+        yield return new object[] { false, new[] { "--debug", "false", "run" } };
 
         // False: explicit "=false"/"false" forms of --info must NOT be treated as informational,
         // even though the token "--info" is literally present.
@@ -698,8 +726,8 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         // An option "consumes a value" for classifier purposes when it requires at least one
         // value token (Arity.MinimumNumberOfValues > 0). Bool options (--info, --debug, --self,
         // etc.) have MinimumNumberOfValues == 0: a bare occurrence is an implicit flag, and they
-        // only optionally consume an explicit "true"/"false" token (handled separately in
-        // IsInformationalInvocation's --info-specific logic), so they are correctly excluded here.
+        // only optionally consume an explicit "true"/"false" token (handled separately by
+        // s_boolRootOptionNames), so they are correctly excluded here.
         var expectedNames = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var option in command.Options)
         {
@@ -714,6 +742,39 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         }
 
         var actualNames = new SortedSet<string>(CommonOptionNames.ValueTakingRootOptionNamesForTests, StringComparer.Ordinal);
+
+        Assert.Equal(expectedNames, actualNames);
+    }
+
+    [Fact]
+    public void BoolRootOptionNames_MatchesRootCommandsActualBoolOptions()
+    {
+        // Drift guard: CommonOptionNames.IsInformationalInvocation manually tracks which root
+        // options are Option<bool> (s_boolRootOptionNames), so that an explicit "true"/"false"
+        // value following one of them (e.g. `--debug false --info`) is consumed as that option's
+        // value rather than mistaken for the positional/subcommand-boundary token. If a new bool
+        // root option is added to RootCommand without updating that manual list, its explicit
+        // value would wrongly be treated as a subcommand boundary and stop classification early.
+        //
+        // Reflection over RootCommand's own public static option fields (rather than a
+        // constructed instance's Options collection) is used here because StartDebugSessionOption
+        // is only conditionally added to Options (only when running as an extension host, see
+        // RootCommand's constructor), so a normal DI-constructed instance would silently omit it
+        // from this check even though the classifier must still handle it.
+        var expectedNames = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var field in typeof(RootCommand).GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly))
+        {
+            if (field.GetValue(null) is System.CommandLine.Option option && option.ValueType == typeof(bool))
+            {
+                expectedNames.Add(option.Name);
+                foreach (var alias in option.Aliases)
+                {
+                    expectedNames.Add(alias);
+                }
+            }
+        }
+
+        var actualNames = new SortedSet<string>(CommonOptionNames.BoolRootOptionNamesForTests, StringComparer.Ordinal);
 
         Assert.Equal(expectedNames, actualNames);
     }

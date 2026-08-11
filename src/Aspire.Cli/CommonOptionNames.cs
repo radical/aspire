@@ -13,6 +13,8 @@ internal static class CommonOptionNames
     public const string Help = "--help";
     public const string HelpShort = "-h";
     public const string HelpAlt = "-?";
+    public const string HelpSlash = "/h";
+    public const string HelpAltSlash = "/?";
     public const string NoLogo = "--nologo";
     public const string Banner = "--banner";
     public const string Debug = "--debug";
@@ -21,22 +23,28 @@ internal static class CommonOptionNames
     public const string WaitForDebugger = "--wait-for-debugger";
     public const string CliWaitForDebugger = "--cli-wait-for-debugger";
     public const string StartDebugSession = "--start-debug-session";
+    public const string CaptureProfile = "--capture-profile";
+    public const string Self = "--self";
     public const string Info = "--info";
 
     /// <summary>
     /// Help/version options that are recognized as informational wherever they appear in the raw
     /// arguments (including after a subcommand, e.g. "doctor --help"). None of these take a value.
+    /// System.CommandLine's default <c>HelpOption</c> registers "/h" and "/?" as aliases alongside
+    /// "-h" and "-?", so both slash forms are recognized here too.
     /// </summary>
-    private static readonly string[] s_helpVersionOptionNames = [Version, VersionShort, Help, HelpShort, HelpAlt];
+    private static readonly string[] s_helpVersionOptionNames =
+        [Version, VersionShort, Help, HelpShort, HelpAlt, HelpSlash, HelpAltSlash];
 
-    // Root options declared by RootCommand (src/Aspire.Cli/Commands/RootCommand.cs) that consume
-    // a following token as their value. Kept in sync manually: DebugLevelOption ("--log-level"/"-l"),
-    // CaptureProfileOutputOption ("--capture-profile-output"), CaptureProfileDelayOption
-    // ("--capture-profile-delay"), and FormatOption ("--format"). Every other root option is a bare
-    // bool flag and never unconditionally consumes a following token (see the explicit-value
-    // handling for --info below). This list exists so a value that is literally "--info"
-    // (e.g. `--log-level --info run`) is recognized as that option's value rather than a distinct
-    // --info flag.
+    // Root options declared by RootCommand (src/Aspire.Cli/Commands/RootCommand.cs) that
+    // *unconditionally* consume a following token as their value. Kept in sync manually:
+    // DebugLevelOption ("--log-level"/"-l"), CaptureProfileOutputOption
+    // ("--capture-profile-output"), CaptureProfileDelayOption ("--capture-profile-delay"), and
+    // FormatOption ("--format"). Every other root option is an Option<bool> flag, which only
+    // *conditionally* consumes a following token when it is a literal "true"/"false" (see
+    // s_boolRootOptionNames below and the explicit-value handling for --info). This list exists
+    // so a value that is literally "--info" (e.g. `--log-level --info run`) is recognized as that
+    // option's value rather than a distinct --info flag.
     //
     // RootCommandTests.ValueTakingRootOptionNames_MatchesRootCommandsActualValueTakingOptions
     // enumerates RootCommand's actual options and fails if this list drifts from reality (e.g. a
@@ -56,6 +64,39 @@ internal static class CommonOptionNames
     /// </summary>
     internal static IReadOnlyCollection<string> ValueTakingRootOptionNamesForTests => s_valueTakingRootOptionNames;
 
+    // All of RootCommand's directly-declared Option<bool> options (name + aliases), including
+    // Info and Self. Real System.CommandLine parsing treats a bare bool option (arity 0..1) as
+    // implicitly true, but also accepts an explicit two-token value: it consumes the following
+    // token as the option's value only when that token literally parses as a bool ("true"/"false",
+    // case-insensitive) — anything else (e.g. a subcommand name or another option) is left alone.
+    // IsRootInfoInvocation mirrors that so an explicit value like `--debug false` isn't
+    // misidentified as the positional/subcommand-boundary token (the original defect this list
+    // fixes: `--debug false --info` was stopping at "false" as if it were a subcommand).
+    //
+    // RootCommandTests.BoolRootOptionNames_MatchesRootCommandsActualBoolOptions enumerates
+    // RootCommand's actual Option<bool> fields and fails if this list drifts from reality (e.g. a
+    // new bool root option is added without updating this array).
+    private static readonly string[] s_boolRootOptionNames =
+    [
+        Debug, DebugShort,
+        NonInteractive,
+        NoLogo,
+        Banner,
+        WaitForDebugger,
+        CliWaitForDebugger,
+        StartDebugSession,
+        CaptureProfile,
+        Self,
+        Info,
+    ];
+
+    /// <summary>
+    /// Test-only view of <see cref="s_boolRootOptionNames"/>, exposed so <c>RootCommandTests</c>
+    /// can assert it stays in sync with RootCommand's actual Option&lt;bool&gt; options without
+    /// reaching into private state via reflection.
+    /// </summary>
+    internal static IReadOnlyCollection<string> BoolRootOptionNamesForTests => s_boolRootOptionNames;
+
     /// <summary>
     /// Determines whether raw process arguments represent an informational invocation that
     /// should opt out of telemetry and suppress first-run/startup output (banner, telemetry
@@ -63,8 +104,9 @@ internal static class CommonOptionNames
     /// </summary>
     /// <remarks>
     /// Help/version options (<see cref="Version"/>, <see cref="VersionShort"/>, <see cref="Help"/>,
-    /// <see cref="HelpShort"/>, <see cref="HelpAlt"/>) are recognized wherever they appear before the
-    /// "--" app-argument delimiter — including after a subcommand, e.g. "doctor --help" — matching
+    /// <see cref="HelpShort"/>, <see cref="HelpAlt"/>, <see cref="HelpSlash"/>,
+    /// <see cref="HelpAltSlash"/>) are recognized wherever they appear before the "--"
+    /// app-argument delimiter — including after a subcommand, e.g. "doctor --help" — matching
     /// existing CLI behavior. They are bare flags that never take a value, so no value-consumption
     /// tracking is required for them, and unlike <see cref="Info"/> they are not sensitive to the
     /// subcommand boundary (only to "--").
@@ -141,6 +183,19 @@ internal static class CommonOptionNames
             {
                 // Consume the next token as this option's value so it is never reconsidered as
                 // a distinct --info flag (e.g. `--log-level --info run`, `--format --info run`).
+                i++;
+                continue;
+            }
+
+            if (separatorIndex < 0 && Array.IndexOf(s_boolRootOptionNames, optionName) >= 0
+                && i + 1 < args.Count && bool.TryParse(args[i + 1], out _))
+            {
+                // A bare bool root option (e.g. --debug, --non-interactive) followed by a
+                // literal "true"/"false" token is that option's explicit value, per
+                // System.CommandLine's own two-token bool parsing (see the --info handling
+                // above). Consume it so it is never mistaken for the positional/subcommand
+                // token below (the original defect: `--debug false --info` was stopping at
+                // "false" as if it were a subcommand boundary).
                 i++;
                 continue;
             }
