@@ -414,6 +414,7 @@ public class Program
             var resolver = sp.GetRequiredService<IIdentityResolver>();
             return BuildCliExecutionContext(
                 startupContext.LoggingOptions.DebugMode,
+                startupContext.LoggingOptions.ConsoleLogLevel,
                 startupContext.LoggingOptions.LogsDirectory,
                 startupContext.LoggingOptions.LogFilePath,
                 resolver);
@@ -695,7 +696,7 @@ public class Program
         return new DirectoryInfo(sdksPath);
     }
 
-    internal static CliExecutionContext BuildCliExecutionContext(bool debugMode, string logsDirectory, string logFilePath, IIdentityResolver identityResolver, string? processPath = null)
+    internal static CliExecutionContext BuildCliExecutionContext(bool debugMode, LogLevel? consoleLogLevel, string logsDirectory, string logFilePath, IIdentityResolver identityResolver, string? processPath = null)
     {
         ArgumentNullException.ThrowIfNull(identityResolver);
 
@@ -740,6 +741,7 @@ public class Program
             identityOverridden: identityOverridden,
             identityPackagesDirectory: identityPackagesDirectory,
             debugMode: debugMode,
+            consoleLogLevel: consoleLogLevel,
             packagesDirectory: packagesDirectory,
             aspireHomeDirectory: aspireHomeDirectory);
     }
