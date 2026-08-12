@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Acquisition;
+using Aspire.Cli.Tests.TestServices;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Globalization;
@@ -15,6 +16,15 @@ namespace Aspire.Cli.Tests.Acquisition;
 /// project — to exercise the timeout / stdout-cap / kill paths against
 /// real process semantics.
 /// </summary>
+/// <remarks>
+/// Joins <see cref="EnvVarMutatingTestCollection"/> because
+/// <c>ProbeAsync_StripsIdentityEnvVarOverridesBeforeSpawningPeer</c> mutates
+/// process-wide <c>ASPIRE_CLI_*</c> environment variables via
+/// <see cref="EnvVarOverride"/>: xUnit runs test classes in parallel by
+/// default, so without this collection another test's own child-process
+/// spawn could transiently observe the poisoned override.
+/// </remarks>
+[Collection(EnvVarMutatingTestCollection.Name)]
 public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
 {
     // Route internal probe diagnostics (LogDebug for "JSON without an
@@ -253,7 +263,13 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
 
         var failed = await ProbeFakeFailureAsync(fakePeer);
 
-        Assert.Equal("Peer exited with code 7 (and --version fallback).", failed.Reason);
+        // FakePeerScript.Build's EmitExit body only recognizes "doctor" as
+        // arg[0]; --info and --version both fall through to its "exit 127"
+        // branch. With no stderr anywhere, none of the three labeled
+        // segments should pick up a "; stderr: " suffix.
+        Assert.Equal(
+            "--info: Peer exited with code 127.; doctor --self: Peer exited with code 7.; --version: Peer exited with code 127.",
+            failed.Reason);
     }
 
     [Fact]
@@ -282,9 +298,11 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
     [Fact]
     public async Task ProbeAsync_BothInfoAndVersionFail_ReturnsFailed()
     {
-        // When both attempts fail, the primary failure reason is what the
-        // user sees (with a (and --version fallback) suffix so they know
-        // we tried).
+        // When every attempt fails, the aggregate reason must retain each
+        // stage's own diagnostic instead of collapsing to a single one.
+        // --info isn't scripted by BuildDoctorOrVersion, so it falls
+        // through that script's "unrecognized option" branch (exit 127);
+        // doctor and --version are both explicitly scripted to fail.
         using var fakePeer = FakePeerScript.BuildDoctorOrVersion(
             outputHelper,
             doctorStdout: string.Empty,
@@ -296,7 +314,9 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
         var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
 
         var failed = Assert.IsType<PeerProbeResult.Failed>(result);
-        Assert.Contains("--version fallback", failed.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--info: Peer exited with code 127.", failed.Reason, StringComparison.Ordinal);
+        Assert.Contains("doctor --self: Peer exited with code 1.", failed.Reason, StringComparison.Ordinal);
+        Assert.Contains("--version: Peer exited with code 1.", failed.Reason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -592,6 +612,119 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
         Assert.True(process.HasExited);
     }
 
+    [Fact]
+    public async Task ProbeAsync_AllStagesFailDifferently_FinalReasonPreservesEachStagesOwnDiagnostic()
+    {
+        // Each stage fails via a DIFFERENT mechanism with a distinctive
+        // fingerprint, so this test is falsifiable: reverting the aggregate
+        // failure reason to only describe the doctor stage (the prior
+        // behavior this PR fixes) would make the --info and --version
+        // assertions below fail, because their fingerprints would never
+        // appear in the reason at all.
+        //
+        //   --info:        real exit code 42 + distinctive stderr (also
+        //                   wrapped in ANSI color codes, to prove
+        //                   sanitization still applies per-stage inside the
+        //                   aggregate, not just in the single-stage case).
+        //   doctor --self:  exits 0 but returns unparsable JSON, so its
+        //                   segment must say WHY (malformed JSON) rather
+        //                   than a generic "no usable output".
+        //   --version:      a different real exit code (13) + a distinct
+        //                   stderr fingerprint containing a raw control
+        //                   character (BEL, \u0007), to prove control
+        //                   characters are stripped from every stage's
+        //                   segment, not just the primary one.
+        using var fakePeer = FakePeerScript.BuildThreeStage(
+            outputHelper,
+            info: new StageResponse(string.Empty, ExitCode: 42, Stderr: "\u001b[31mCAFEF00D-info-exploded\u001b[0m"),
+            doctor: new StageResponse("DEADBEEF-not-json", ExitCode: 0),
+            version: new StageResponse(string.Empty, ExitCode: 13, Stderr: "FEEDFACE-version-exploded\u0007"));
+
+        var probe = CreateProbeWithGenerousTimeout();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+        var failed = Assert.IsType<PeerProbeResult.Failed>(result);
+
+        // --info: its own exit code + sanitized stderr must survive into the
+        // final aggregate instead of being discarded as "unimportant noise"
+        // (the prior behavior this PR fixes).
+        Assert.Contains("--info: Peer exited with code 42", failed.Reason, StringComparison.Ordinal);
+        Assert.Contains("CAFEF00D-info-exploded", failed.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b[31m", failed.Reason, StringComparison.Ordinal);
+
+        // doctor --self: exited 0, so its segment must explain the JSON
+        // parse failure rather than reporting a generic "no usable output".
+        Assert.Contains("doctor --self: Peer returned malformed JSON", failed.Reason, StringComparison.Ordinal);
+
+        // --version: its own distinct exit code + sanitized stderr, with the
+        // raw BEL control character stripped.
+        Assert.Contains("--version: Peer exited with code 13", failed.Reason, StringComparison.Ordinal);
+        Assert.Contains("FEEDFACE-version-exploded", failed.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u0007", failed.Reason, StringComparison.Ordinal);
+
+        // Bounded length and free of any remaining raw control character
+        // (none of the fingerprints above use '\n', so this is a strict
+        // zero-control-character check for this test's inputs).
+        Assert.True(failed.Reason.Length <= 4096,
+            $"Expected the aggregate reason to stay within the bounded cap; was {failed.Reason.Length} chars.");
+        Assert.DoesNotContain(failed.Reason, char.IsControl);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_StripsIdentityEnvVarOverridesBeforeSpawningPeer()
+    {
+        // IdentityResolver.IdentityEnvVarNames is the exact strip-list
+        // PeerInstallProbe applies before spawning any of the three probe
+        // stages (see the strip loop in SpawnAndCaptureAsync). Poison every
+        // one of them in THIS process, then prove none of them reach the
+        // spawned peer: the fake peer script dumps whatever value it
+        // actually observes for each name to a file (so the test asserts
+        // absence directly, not just indirectly through a success/failure
+        // signal), and ALSO emits a poison marker + non-zero exit if it
+        // observes ANY of them set — so a regression that stops stripping
+        // even one override turns this from Ok into Failed.
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var dumpFile = Path.Combine(workspace.WorkspaceRoot.FullName, "identity-env-dump.txt");
+        using var fakePeer = FakePeerScript.BuildIdentityEnvVarLeakProbe(outputHelper, dumpFile, IdentityResolver.IdentityEnvVarNames);
+
+        var overrides = new List<EnvVarOverride>();
+        try
+        {
+            foreach (var name in IdentityResolver.IdentityEnvVarNames)
+            {
+                overrides.Add(new EnvVarOverride(name, $"poison-{name}"));
+            }
+
+            var probe = CreateProbeWithGenerousTimeout();
+            var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+            // A leaked override would make the fake peer emit its poison
+            // marker (non-zero exit) instead of a valid --info row, so a
+            // correct strip makes this Ok, not Failed.
+            var ok = AssertProbeOk(result);
+            Assert.Equal("1.0.0", ok.Info.Version);
+
+            Assert.True(File.Exists(dumpFile), $"Expected identity env dump file at {dumpFile} to exist.");
+            var dumpedLines = await File.ReadAllLinesAsync(dumpFile, TestContext.Current.CancellationToken);
+            foreach (var name in IdentityResolver.IdentityEnvVarNames)
+            {
+                // The dump line is always written (even when the var is
+                // absent, in which case printenv yields an empty value), so
+                // asserting the literal poisoned value is ABSENT is a
+                // direct, per-variable proof rather than an inference from
+                // the overall Ok/Failed outcome above.
+                Assert.DoesNotContain(dumpedLines, line => line.StartsWith($"{name}=poison-", StringComparison.Ordinal));
+            }
+        }
+        finally
+        {
+            foreach (var envVarOverride in overrides)
+            {
+                envVarOverride.Dispose();
+            }
+        }
+    }
+
     private async Task<PeerProbeResult.Failed> ProbeFakeFailureAsync(FakeScriptResult fakePeer)
     {
         // Spawn the production probe against the scripted peer and assert the
@@ -788,6 +921,30 @@ internal static class FakePeerScript
         return new FakeScriptResult(path, workspace);
     }
 
+    /// <summary>
+    /// Builds a script that, for every invocation regardless of arguments,
+    /// dumps the observed value of each name in <paramref name="varNames"/>
+    /// to <paramref name="dumpFile"/> (one <c>NAME=value</c> line per name,
+    /// value empty when unset), then either emits a poison marker and exits
+    /// non-zero if ANY of those names is non-empty in its environment, or a
+    /// valid <c>--info --self --format json</c> row if none of them are.
+    /// Used by <c>ProbeAsync_StripsIdentityEnvVarOverridesBeforeSpawningPeer</c>
+    /// to prove <see cref="PeerInstallProbe"/>'s identity-env-var strip
+    /// actually removes every override before the peer is spawned, rather
+    /// than assuming it from code inspection alone.
+    /// </summary>
+    internal static FakeScriptResult BuildIdentityEnvVarLeakProbe(
+        ITestOutputHelper outputHelper, string dumpFile, IReadOnlyList<string> varNames)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "The identity-env-var leak probe script is POSIX shell only; PeerInstallProbe's strip loop itself is platform-agnostic and is exercised on Windows by the other PeerInstallProbeTests.");
+        }
+
+        return BuildInternal(outputHelper, body: ScriptBody.IdentityEnvVarLeakProbe(dumpFile, varNames));
+    }
+
     // Write the rendered script body to the test output so a failed run's
     // log shows exactly what the probe executed (and where). xUnit only
     // surfaces test output for failing tests, so passing runs aren't
@@ -811,7 +968,7 @@ internal sealed record FakeScriptResult(string Path, TemporaryWorkspace Workspac
 /// delay (in milliseconds) before responding, used to model a slow peer for
 /// shared-budget tests.
 /// </summary>
-internal readonly record struct StageResponse(string Stdout, int ExitCode, int DelayMs = 0)
+internal readonly record struct StageResponse(string Stdout, int ExitCode, int DelayMs = 0, string Stderr = "")
 {
     internal static StageResponse Fail(int exitCode = 1) => new(string.Empty, exitCode);
 }
@@ -830,6 +987,8 @@ internal abstract record ScriptBody
     public static ScriptBody ArgvRecorder(string argvFile) => new ArgvRecorderScript(argvFile);
     public static ScriptBody ThreeStage(string invocationLogFile, StageResponse info, StageResponse doctor, StageResponse version)
         => new ThreeStageScript(invocationLogFile, info, doctor, version);
+    public static ScriptBody IdentityEnvVarLeakProbe(string dumpFile, IReadOnlyList<string> varNames)
+        => new IdentityEnvVarLeakProbeScript(dumpFile, varNames);
 
     private sealed record EmitExit(string Stdout, string Stderr, int ExitCode) : ScriptBody
     {
@@ -1014,6 +1173,51 @@ internal abstract record ScriptBody
         }
     }
 
+    /// <summary>
+    /// For every invocation regardless of arguments: dumps the observed
+    /// value of each name in <see cref="VarNames"/> to <see cref="DumpFile"/>
+    /// (one <c>NAME=value</c> line per name, always written even when the
+    /// value is empty, so a test can assert absence directly rather than
+    /// only inferring it from the poison/Ok outcome below), then either
+    /// emits a poison marker and exits non-zero if ANY of those names is
+    /// non-empty in its environment, or a valid <c>--info --self --format
+    /// json</c> row if none of them are.
+    /// </summary>
+    private sealed record IdentityEnvVarLeakProbeScript(string DumpFile, IReadOnlyList<string> VarNames) : ScriptBody
+    {
+        private const string InfoJson = """[{"path":"/peer/aspire","version":"1.0.0","channel":"stable","source":"script","status":"ok"}]""";
+
+        public override string RenderShell()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("#!/bin/sh");
+            sb.AppendLine($": > \"{DumpFile}\"");
+            sb.AppendLine("LEAKED=0");
+            foreach (var name in VarNames)
+            {
+                sb.AppendLine($"printf '{name}=%s\\n' \"${name}\" >> \"{DumpFile}\"");
+                sb.AppendLine($"if [ -n \"${name}\" ]; then LEAKED=1; fi");
+            }
+
+            sb.AppendLine("if [ \"$LEAKED\" = \"1\" ]; then");
+            // Written to stderr rather than stdout: a leaked override must
+            // make the probe treat this stage as an unusable rich-probe
+            // result (non-zero exit), not as a valid-but-wrong JSON row.
+            sb.AppendLine("  echo 'IDENTITY_ENV_LEAKED' 1>&2");
+            sb.AppendLine("  exit 66");
+            sb.AppendLine("fi");
+            sb.AppendLine("cat <<'__ASPIRE_ENV_PROBE_EOF__'");
+            sb.AppendLine(InfoJson);
+            sb.AppendLine("__ASPIRE_ENV_PROBE_EOF__");
+            sb.AppendLine("exit 0");
+            return sb.ToString();
+        }
+
+        public override string RenderBatch()
+            => throw new PlatformNotSupportedException(
+                "The identity-env-var leak probe script is POSIX shell only; see FakePeerScript.BuildIdentityEnvVarLeakProbe.");
+    }
+
     private sealed record ThreeStageScript(
         string InvocationLogFile,
         StageResponse Info,
@@ -1059,7 +1263,7 @@ internal abstract record ScriptBody
         // Renders one stage's body inside a shell `if` block: an optional
         // fractional-second sleep (for shared-budget tests that need a peer
         // to take a controlled amount of time before responding), then the
-        // scripted stdout and exit code.
+        // scripted stdout, an optional stderr fingerprint, and the exit code.
         private static string RenderShellStage(StageResponse stage)
         {
             var sb = new StringBuilder();
@@ -1071,6 +1275,11 @@ internal abstract record ScriptBody
             sb.AppendLine("  cat <<'__ASPIRE_STAGE_EOF__'");
             sb.AppendLine(stage.Stdout);
             sb.AppendLine("__ASPIRE_STAGE_EOF__");
+            if (stage.Stderr.Length > 0)
+            {
+                sb.AppendLine($"  {RenderShellStderr(stage.Stderr)}");
+            }
+
             sb.Append("  exit ").Append(stage.ExitCode.ToString(CultureInfo.InvariantCulture));
             return sb.ToString();
         }
@@ -1090,6 +1299,8 @@ internal abstract record ScriptBody
             {
                 sb.Append("echo ").AppendLine(line.TrimEnd('\r'));
             }
+
+            AppendBatchStderr(sb, stage.Stderr);
 
             sb.AppendLine($"exit /b {stage.ExitCode}");
         }

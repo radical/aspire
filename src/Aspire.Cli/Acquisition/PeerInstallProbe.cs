@@ -123,7 +123,7 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (info.ExitCode == 0 && TryParseRichProbeResult(binaryPath, info.Stdout, out var infoResult))
+        if (info.ExitCode == 0 && TryParseRichProbeResult(binaryPath, info.Stdout, out var infoResult, out _))
         {
             return new PeerProbeResult.Ok(infoResult);
         }
@@ -140,7 +140,7 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (doctor.ExitCode == 0 && TryParseRichProbeResult(binaryPath, doctor.Stdout, out var doctorResult))
+        if (doctor.ExitCode == 0 && TryParseRichProbeResult(binaryPath, doctor.Stdout, out var doctorResult, out _))
         {
             return new PeerProbeResult.Ok(doctorResult);
         }
@@ -174,17 +174,15 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             }
         }
 
-        // All three attempts failed to produce a usable result. Describe the
-        // doctor-stage result: `doctor --self` is the most broadly-supported
-        // rich self-describe contract we tried, so its failure reason
-        // (non-zero exit, captured stderr, or a shared-budget timeout) is the
-        // most useful single reason to surface. The `--info` attempt's own
-        // failure is intentionally not surfaced separately: for peers old
-        // enough to not support `--info --self`, it's just "unrecognized
-        // option" noise, and for peers that do support it, a failure there
-        // almost always means the doctor attempt right after it fails
-        // identically.
-        return new PeerProbeResult.Failed(DescribeFailure(doctor));
+        // All three attempts failed to produce a usable result. Surface a
+        // per-stage reason for each of them: the --info failure matters on
+        // its own (e.g. a newer peer that supports --info but has a real
+        // bug in it, as opposed to an older peer that simply doesn't
+        // recognize the option), and folding all three into one aggregate
+        // reason lets a caller distinguish "peer doesn't support --info yet"
+        // from "peer is broken across every contract we tried" without
+        // discarding either signal.
+        return new PeerProbeResult.Failed(DescribeFailure(binaryPath, info, doctor, version));
     }
 
     /// <summary>
@@ -215,12 +213,30 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
         return await SpawnAndCaptureAsync(binaryPath, arguments, remaining, cancellationToken).ConfigureAwait(false);
     }
 
-    private bool TryParseRichProbeResult(string binaryPath, string stdout, out InstallationInfo info)
+    /// <summary>
+    /// Tries to parse a rich self-describe response (the <c>--info</c> bare
+    /// array or the legacy <c>doctor</c> <c>{"installations": [...]}</c>
+    /// envelope) out of <paramref name="stdout"/>.
+    /// </summary>
+    /// <param name="binaryPath">Path to the peer executable, used only for diagnostic logging.</param>
+    /// <param name="stdout">The peer's captured stdout to parse.</param>
+    /// <param name="info">On a <see langword="true"/> return, the parsed installation row.</param>
+    /// <param name="failureReason">
+    /// On a <see langword="false"/> return, a short, human-readable
+    /// description of WHY the stdout wasn't usable (empty, malformed JSON,
+    /// or the wrong shape). Callers that only care about the fallback
+    /// decision can discard this with <c>out _</c>; <see cref="DescribeFailure"/>
+    /// uses it to build the final aggregate failure reason so a stage that
+    /// exited 0 but produced garbage is described accurately instead of as
+    /// a generic "no usable output".
+    /// </param>
+    private bool TryParseRichProbeResult(string binaryPath, string stdout, out InstallationInfo info, out string failureReason)
     {
         info = null!;
         if (string.IsNullOrWhiteSpace(stdout))
         {
             _logger.LogDebug("Peer probe at {BinaryPath} produced no rich JSON output.", binaryPath);
+            failureReason = "produced no output";
             return false;
         }
 
@@ -250,15 +266,23 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             if (row is { ValueKind: JsonValueKind.Object } element)
             {
                 info = InstallationInfoParser.Parse(element);
+                failureReason = string.Empty;
                 return true;
             }
 
             _logger.LogDebug("Peer probe at {BinaryPath} returned JSON without an installation row; trying the --version fallback.", binaryPath);
+            failureReason = "returned JSON with no usable installation row";
             return false;
         }
         catch (JsonException ex)
         {
             _logger.LogDebug(ex, "Peer probe at {BinaryPath} returned invalid JSON; trying the --version fallback.", binaryPath);
+            // ex.Message is capped and sanitized: JsonException messages are
+            // normally short plain-ASCII text ("'x' is an invalid start of a
+            // value...at position N"), but nothing guarantees that for every
+            // .NET version, and this text flows into the final aggregate
+            // failure reason surfaced to the caller.
+            failureReason = $"returned malformed JSON: {SanitizeAndCap(ex.Message, MaxJsonErrorMessageLength)}";
             return false;
         }
     }
@@ -353,24 +377,126 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
     }
 
     /// <summary>
-    /// Composes a user-facing reason from the doctor-stage result when all
-    /// three probe attempts fail. Always appends a "(and --version
-    /// fallback)" suffix: by the time this is called, the info attempt has
-    /// already failed too, but the version attempt is the only one that ran
-    /// AFTER the result this message describes.
+    /// Composes a user-facing reason from ALL THREE probe attempts when they
+    /// all fail. Each stage gets its own labeled segment
+    /// (<c>--info: ...; doctor --self: ...; --version: ...</c>) so the
+    /// caller can tell, for example, "peer is a modern build with a real
+    /// --info bug" from "peer is simply old enough to not recognize
+    /// --info" — collapsing all three into a single doctor-only reason (the
+    /// prior behavior) discarded that distinction along with any diagnostic
+    /// that only showed up in the --info or --version stage.
     /// </summary>
-    private static string DescribeFailure(SpawnResult doctor)
+    /// <remarks>
+    /// Each stage's segment is built from the already-sanitized, byte-capped
+    /// <see cref="SpawnResult"/> data (see <see cref="ReadCappedAsync"/> and
+    /// <see cref="SanitizeStderr"/>), so no additional raw peer output enters
+    /// the aggregate here. <see cref="CapReasonLength"/> still bounds the
+    /// final joined string: three stages' worth of (already byte-capped)
+    /// stderr could otherwise sum to multiple megabytes.
+    /// </remarks>
+    private string DescribeFailure(string binaryPath, SpawnResult info, SpawnResult doctor, SpawnResult version)
     {
-        const string suffix = " (and --version fallback)";
-        if (doctor.Failure is { } reason)
+        var combined = string.Join("; ", new[]
         {
-            return FoldStderrIntoReason(reason + suffix, doctor);
-        }
-        if (doctor.ExitCode != 0)
+            DescribeStageFailure("--info", binaryPath, info),
+            DescribeStageFailure("doctor --self", binaryPath, doctor),
+            DescribeVersionStageFailure(version),
+        });
+
+        return CapReasonLength(combined);
+    }
+
+    /// <summary>
+    /// Describes why the <c>--info</c> or <c>doctor --self</c> stage failed
+    /// to produce a usable rich probe result: a transport-level failure
+    /// (couldn't start/capture, or a shared-budget timeout) takes priority
+    /// over the exit code, which takes priority over re-deriving the parse
+    /// failure reason for a stage that exited 0 but returned unusable JSON.
+    /// </summary>
+    private string DescribeStageFailure(string label, string binaryPath, SpawnResult stage)
+    {
+        string reason;
+        if (stage.Failure is { } transportFailure)
         {
-            return FoldStderrIntoReason($"Peer exited with code {doctor.ExitCode}{suffix}.", doctor);
+            reason = transportFailure;
         }
-        return FoldStderrIntoReason($"Peer produced no usable output{suffix}.", doctor);
+        else if (stage.ExitCode != 0)
+        {
+            reason = $"Peer exited with code {stage.ExitCode}.";
+        }
+        else
+        {
+            // Exit 0: this stage only reaches the final failure path when
+            // TryParseRichProbeResult already returned false for it (a
+            // successful parse would have made ProbeAsync return Ok before
+            // ever reaching here). Re-derive the reason so the message says
+            // WHY the JSON was unusable (no output / malformed / wrong
+            // shape) instead of a generic "no usable output".
+            TryParseRichProbeResult(binaryPath, stage.Stdout, out _, out var parseFailureReason);
+            reason = $"Peer {parseFailureReason}.";
+        }
+
+        return $"{label}: {FoldStderrIntoReason(reason, stage)}";
+    }
+
+    /// <summary>
+    /// Describes why the <c>--version</c> stage (the compatibility floor)
+    /// failed. Unlike the rich-probe stages, a zero exit with no extractable
+    /// version line has no further diagnosis to offer beyond that fact.
+    /// </summary>
+    private static string DescribeVersionStageFailure(SpawnResult version)
+    {
+        string reason;
+        if (version.Failure is { } transportFailure)
+        {
+            reason = transportFailure;
+        }
+        else if (version.ExitCode != 0)
+        {
+            reason = $"Peer exited with code {version.ExitCode}.";
+        }
+        else
+        {
+            reason = "Peer produced no usable version string.";
+        }
+
+        return $"--version: {FoldStderrIntoReason(reason, version)}";
+    }
+
+    /// <summary>
+    /// Maximum length of the JSON parse-failure fragment folded from a
+    /// <see cref="JsonException.Message"/> into the aggregate failure
+    /// reason. Independent of <see cref="MaxReasonLength"/>: this bounds one
+    /// exception message, not the whole joined string.
+    /// </summary>
+    private const int MaxJsonErrorMessageLength = 200;
+
+    /// <summary>
+    /// Maximum length of the final aggregate failure reason returned to the
+    /// caller. Each stage's stderr is already capped at <see cref="OutputCap"/>
+    /// (1 MiB) individually; without this final bound, three failing stages
+    /// with near-cap stderr could sum to several megabytes reaching the
+    /// caller (and, from there, potentially a log sink or terminal). A few
+    /// KB is far more than any legitimate diagnostic text needs.
+    /// </summary>
+    private const int MaxReasonLength = 4096;
+
+    private static string CapReasonLength(string reason)
+    {
+        if (reason.Length <= MaxReasonLength)
+        {
+            return reason;
+        }
+
+        return string.Concat(reason.AsSpan(0, MaxReasonLength), "... [truncated]");
+    }
+
+    private static string SanitizeAndCap(string text, int maxLength)
+    {
+        var sanitized = SanitizeStderr(text);
+        return sanitized.Length <= maxLength
+            ? sanitized
+            : string.Concat(sanitized.AsSpan(0, maxLength), "... [truncated]");
     }
 
     /// <summary>
