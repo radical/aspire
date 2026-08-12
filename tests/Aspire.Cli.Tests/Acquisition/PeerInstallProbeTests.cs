@@ -654,6 +654,7 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
     }
 
     [Fact]
+    [SkipOnPlatform(TestPlatforms.Windows, "The identity environment variable leak probe uses a POSIX shell script.")]
     public async Task ProbeAsync_StripsIdentityEnvVarOverridesBeforeSpawningPeer()
     {
         // IdentityResolver.IdentityEnvVarNames is the exact strip-list
