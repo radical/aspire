@@ -478,8 +478,6 @@ The JSON form includes secret values. Do not redirect it to logs or files unless
 
 The `devtools` category surfaces development-tooling recommendations. The `vscode-extension` check only appears when VS Code is detected: it reports `warning` when the [Aspire VS Code extension](https://aka.ms/aspire/vscode-extension) is missing and `pass` when it is installed. Its `metadata` exposes `vsCodeInstalled` (bool), `extensionInstalled` (bool), and `extensionId` (string).
 
-`doctor` reports environment health only. It does not enumerate Aspire CLI installations or hives; use `aspire --info` for that.
-
 ### `aspire config info`
 
 `aspire config info --json` is a hidden tooling command that emits configuration paths, feature metadata, settings schemas, and advertised CLI capabilities:
