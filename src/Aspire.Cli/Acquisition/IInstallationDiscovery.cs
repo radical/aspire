@@ -10,9 +10,11 @@ namespace Aspire.Cli.Acquisition;
 /// Two modes:
 /// <list type="bullet">
 ///   <item>
-///     <description><see cref="DescribeSelf"/> — cheap path that describes
-///     only the currently running CLI. No process spawning, no filesystem
-///     walks. Used by the hidden <c>aspire --info --self</c> peer-probe path.</description>
+///     <description><see cref="DescribeSelf"/> — cheap, in-process path that
+///     describes only the currently running CLI. It reads the install sidecar
+///     and scans <c>$PATH</c> to classify <c>PathStatus</c>, but does not spawn
+///     or probe peers or enumerate installation candidate sources or hives.
+///     Used by the hidden <c>aspire --info --self</c> peer-probe path.</description>
 ///   </item>
 ///   <item>
 ///     <description><see cref="DiscoverAllAsync"/> — walks <c>$PATH</c> plus
