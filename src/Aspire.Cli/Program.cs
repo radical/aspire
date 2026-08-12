@@ -797,6 +797,7 @@ public class Program
     {
         var configuration = serviceProvider.GetRequiredService<IConfiguration>();
         var isInformationalCommand = CommonOptionNames.IsInformationalInvocation(args);
+        var isRootInfoCommand = CommonOptionNames.IsRootInfoInvocation(args);
         var isMachineReadableOutput = HasMachineReadableOutput(args);
         var noLogo = ContainsRootOption(args, a => a == CommonOptionNames.NoLogo)
             || configuration.GetBool(CliConfigNames.NoLogo, defaultValue: false)
@@ -836,7 +837,7 @@ public class Program
 
             // Don't persist the sentinel for informational commands (--version, --help, etc.)
             // or for machine-readable invocations (--format json, including the hidden
-            // `doctor --self --format json` peer probe). Otherwise an automation invocation
+            // `--info --self --format json` peer probe). Otherwise an automation invocation
             // or peer probe — which deliberately suppressed the user-facing notice — would
             // silently consume the first-run slot, and the next interactive invocation by
             // the same user would never see the telemetry notice.
@@ -848,11 +849,13 @@ public class Program
 
         // Surface a notice whenever the CLI is emulating another build via ASPIRE_CLI_* env vars
         // or the install sidecar, so a diagnostic run is never mistaken for a real installed build.
-        // This is independent of first-run/banner state but is suppressed for informational
-        // (--version, --help, root --info) and machine-readable invocations so those outputs stay
-        // free of unrelated startup text. Written to stderr for the same reason.
+        // This is independent of first-run/banner state. Root --info suppresses the notice because
+        // its top-level fields already report the emulated identity, and machine-readable invocations
+        // must remain parseable. Other informational commands still need the notice because their
+        // output does not distinguish runtime identity from the physical binary. Written to stderr
+        // for the same reason.
         var executionContext = serviceProvider.GetRequiredService<CliExecutionContext>();
-        if (executionContext.IdentityOverridden && !isInformationalCommand && !isMachineReadableOutput)
+        if (executionContext.IdentityOverridden && !isRootInfoCommand && !isMachineReadableOutput)
         {
             var consoleEnvironment = serviceProvider.GetRequiredService<ConsoleEnvironment>();
             var interactionService = serviceProvider.GetRequiredService<IInteractionService>();

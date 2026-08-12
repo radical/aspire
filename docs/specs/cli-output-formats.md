@@ -516,6 +516,8 @@ The `devtools` category surfaces development-tooling recommendations. The `vscod
 
 `--info` is a root-level option, not a subcommand: `aspire --info`. It reports the running CLI's own version and channel, plus a bounded discovery of every other Aspire CLI installation and hive directory it can find. `--format list|json` selects the rendering; the default is `list`.
 
+The top-level `version` and `channel` describe the runtime-resolved CLI identity, including any active identity override. The running CLI's `installs[]` row describes the physical binary on disk, which is also the identity emitted by the hidden peer contract. These values can intentionally differ when the current process is emulating another build.
+
 `aspire --info --format json` emits one object:
 
 ```json

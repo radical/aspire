@@ -93,10 +93,7 @@ internal sealed class RootCommand : BaseRootCommand
         DefaultValueFactory = _ => DefaultCaptureProfileDelaySeconds
     };
 
-    public static readonly Option<bool> InfoOption = new("--info")
-    {
-        Description = InfoOptionStrings.InfoOptionDescription,
-    };
+    public static readonly Option<bool> InfoOption = CreateInfoOption();
 
     public static readonly Option<bool> SelfOption = new("--self")
     {
@@ -326,5 +323,26 @@ internal sealed class RootCommand : BaseRootCommand
             }
         }
 
+    }
+
+    private static Option<bool> CreateInfoOption()
+    {
+        var option = new Option<bool>("--info")
+        {
+            Description = InfoOptionStrings.InfoOptionDescription,
+        };
+
+        option.Validators.Add(result =>
+        {
+            if (!result.Implicit
+                && result.GetValueOrDefault<bool>()
+                && result.Parent is System.CommandLine.Parsing.CommandResult commandResult
+                && commandResult.Children.OfType<System.CommandLine.Parsing.CommandResult>().Any())
+            {
+                result.AddError(InfoOptionStrings.InfoCannotBeCombinedWithSubcommand);
+            }
+        });
+
+        return option;
     }
 }

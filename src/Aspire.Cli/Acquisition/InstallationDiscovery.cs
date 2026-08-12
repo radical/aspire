@@ -415,9 +415,8 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
             return channel;
         }
 
-        // Same defensive posture as doctor: a misconfigured dev build
-        // with no AspireCliChannel assembly metadata must not break
-        // aspire doctor.
+        // A misconfigured dev build with no AspireCliChannel assembly metadata
+        // must not break `aspire --info`.
         _logger.LogDebug("Could not read identity channel for InstallationDiscovery: {Error}", error);
         return null;
     }

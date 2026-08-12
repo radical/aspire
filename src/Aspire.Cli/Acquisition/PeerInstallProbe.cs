@@ -334,7 +334,7 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
         // *current* CLI process into pretending it is a different channel /
         // version / commit, or to retarget its emitted nuget.config at a
         // local proxy. Inheriting them into the peer would invert the meaning
-        // of `aspire doctor`: the doctor would observe its own override
+        // of `aspire --info`: the discovery process would observe its own override
         // applied to every peer it inspects and report a false uniformity
         // across installs. The peer should reflect what it *is on disk*, not
         // what the parent process was told to pretend to be. See

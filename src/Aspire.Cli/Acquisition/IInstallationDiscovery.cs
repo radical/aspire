@@ -4,8 +4,7 @@
 namespace Aspire.Cli.Acquisition;
 
 /// <summary>
-/// Discovers Aspire CLI installations on this machine for <c>aspire --info</c>
-/// and <c>aspire doctor</c>.
+/// Discovers Aspire CLI installations on this machine for <c>aspire --info</c>.
 /// </summary>
 /// <remarks>
 /// Two modes:
@@ -22,8 +21,8 @@ namespace Aspire.Cli.Acquisition;
 ///     metadata to self-describe via a child process, trying in order
 ///     <c>--info --self --format json</c> (current contract), <c>doctor --self
 ///     --format json</c> (legacy compatibility fallback), and <c>--version</c>
-///     (compatibility floor). Used by the default <c>aspire --info</c> and
-///     <c>aspire doctor</c> paths.</description>
+///     (compatibility floor). Used by the default <c>aspire --info</c>
+///     path.</description>
 ///   </item>
 /// </list>
 /// </remarks>

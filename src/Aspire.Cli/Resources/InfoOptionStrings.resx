@@ -148,4 +148,7 @@
   <data name="FormatRequiresInfo" xml:space="preserve">
     <value>The --format option can only be used with --info.</value>
   </data>
+  <data name="InfoCannotBeCombinedWithSubcommand" xml:space="preserve">
+    <value>The --info option cannot be combined with a subcommand.</value>
+  </data>
 </root>

@@ -27,9 +27,11 @@ public class InfoOptionActionTests(ITestOutputHelper outputHelper)
         TemporaryWorkspace workspace,
         FakeInstallationDiscovery discovery,
         TestInteractionService interactionService,
-        out CliExecutionContext executionContext)
+        out CliExecutionContext executionContext,
+        string identityChannel = "stable",
+        string identityVersion = "13.4.0")
     {
-        executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        executionContext = workspace.CreateExecutionContext(identityChannel: identityChannel, identityVersion: identityVersion);
         var hiveEnumerator = new HiveEnumerator(executionContext, NullLogger<HiveEnumerator>.Instance);
         var wingetProbe = new WingetFirstRunProbe(new TestWindowsRegistryReader(), NullLogger<WingetFirstRunProbe>.Instance);
 
@@ -53,7 +55,13 @@ public class InfoOptionActionTests(ITestOutputHelper outputHelper)
         var self = CreateSelf();
         var discovery = new FakeInstallationDiscovery(self);
         var interactionService = new TestInteractionService();
-        var action = CreateAction(workspace, discovery, interactionService, out _);
+        var action = CreateAction(
+            workspace,
+            discovery,
+            interactionService,
+            out _,
+            identityChannel: "staging",
+            identityVersion: "13.5.0-emulated");
 
         var exitCode = await action.ExecuteAsync(selfOnly: false, InfoOutputFormat.Json, TestContext.Current.CancellationToken);
 
@@ -62,9 +70,11 @@ public class InfoOptionActionTests(ITestOutputHelper outputHelper)
 
         var output = JsonSerializer.Deserialize(json, JsonSourceGenerationContext.Default.InfoOutput);
         Assert.NotNull(output);
-        Assert.Equal("13.4.0", output.Version);
-        Assert.Equal("stable", output.Channel);
+        Assert.Equal("13.5.0-emulated", output.Version);
+        Assert.Equal("staging", output.Channel);
         var install = Assert.Single(output.Installs);
+        Assert.Equal("13.4.0", install.Version);
+        Assert.Equal("stable", install.Channel);
         Assert.Equal("script", install.Source);
 
         // The full envelope — an object, not a bare array — is the full-mode JSON contract.

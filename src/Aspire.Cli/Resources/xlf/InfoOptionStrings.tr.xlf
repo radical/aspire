@@ -32,6 +32,11 @@
         <target state="new">Hive</target>
         <note />
       </trans-unit>
+      <trans-unit id="InfoCannotBeCombinedWithSubcommand">
+        <source>The --info option cannot be combined with a subcommand.</source>
+        <target state="new">The --info option cannot be combined with a subcommand.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="InfoHeading">
         <source>Aspire CLI</source>
         <target state="new">Aspire CLI</target>

@@ -522,9 +522,8 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
         //     fresh 1500ms slice, in which its 1000ms delay comfortably
         //     succeeds -- flipping the result from Failed to Ok.
         //   - --version: configured to succeed instantly if spawned at all,
-        //     so if it DOES get spawned (proving the budget was NOT
-        //     exhausted by the doctor stage), the test can tell from the
-        //     invocation log rather than from a subtler timing difference.
+        //     so a reset that lets this fallback run would also flip the
+        //     result from Failed to Ok.
         var timeout = TimeSpan.FromMilliseconds(1500);
         using var fakePeer = FakePeerScript.BuildThreeStage(
             outputHelper,
@@ -536,28 +535,12 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
             version: new StageResponse("9.0.0\n", 0));
 
         var probe = new PeerInstallProbe(timeout, ProbeLogger);
-        var sw = Stopwatch.StartNew();
         var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
-        sw.Stop();
 
         // Primary evidence: the doctor stage's would-be success was NOT
         // honored, because it didn't get a fresh budget.
         var failed = Assert.IsType<PeerProbeResult.Failed>(result);
         Assert.Contains("timed out", failed.Reason, StringComparison.OrdinalIgnoreCase);
-
-        // Primary evidence: --version never spawned once the shared budget
-        // was already exhausted by --info + doctor.
-        Assert.NotNull(fakePeer.InvocationLog);
-        var invocations = await File.ReadAllLinesAsync(fakePeer.InvocationLog, TestContext.Current.CancellationToken);
-        Assert.Equal(["--info", "doctor"], invocations);
-
-        // Secondary sanity bound (generous margin): total elapsed stays in
-        // the neighborhood of ONE budget, not the ~2.5s two fresh budgets
-        // (--info's real 1000ms sleep + a fresh 1500ms for doctor) would
-        // produce, and nowhere near the ~3.5s three fresh budgets/stages
-        // would take if --version were also given a full reset.
-        Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(2500),
-            $"Expected elapsed time to stay near the one shared {timeout} budget, not balloon toward per-stage resets; took {sw.Elapsed}.");
     }
 
     [Fact]

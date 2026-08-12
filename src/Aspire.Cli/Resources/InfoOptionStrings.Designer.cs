@@ -10,7 +10,7 @@
 namespace Aspire.Cli.Resources {
     using System;
     
-    
+
     /// <summary>
     ///   A strongly-typed resource class, for looking up localized strings, etc.
     /// </summary>
@@ -299,6 +299,15 @@ namespace Aspire.Cli.Resources {
         public static string FormatRequiresInfo {
             get {
                 return ResourceManager.GetString("FormatRequiresInfo", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to The --info option cannot be combined with a subcommand..
+        /// </summary>
+        public static string InfoCannotBeCombinedWithSubcommand {
+            get {
+                return ResourceManager.GetString("InfoCannotBeCombinedWithSubcommand", resourceCulture);
             }
         }
     }

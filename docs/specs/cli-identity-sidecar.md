@@ -12,7 +12,7 @@ Tracked in PR [#18087](https://github.com/microsoft/aspire/pull/18087). The reso
 - **Telemetry split — done.** Binary `cli.version` / `cli.build_id` are kept; `identity.version` / `identity.channel` (and `identity.commit` when non-empty) are emitted alongside.
 - **`--version` — overridden.** A custom version action (`Commands/IdentityVersionAction.cs`) prints `IdentityVersion` with the optional `IdentityCommit` appended as build metadata (e.g., `13.4.5+73114e86c64aeb9f3f3c7da8e37df1ae4281b27e`), so emulated runs report the emulated version and commit. The non-override output is byte-identical to the System.CommandLine default.
 - **Startup override notice — added.** When `IdentityOverridden` and output is human-readable, a yellow notice on stderr makes a diagnostic run impossible to mistake for a real one.
-- **`aspire doctor` — physical by design.** Doctor reports the *physical* install truth (like `--self`); emulation is surfaced by the startup notice rather than rewiring doctor's assembly-backed channel read (which `DoctorCommandTests` pin). `InstallationDiscovery` and `AspireVersionCheck.TryReadIdentityChannel` are annotated accordingly.
+- **Physical diagnostics — by design.** `aspire --info` installation rows and hidden `--self` output report the physical binary identity, while the full output's top-level fields report the runtime-resolved identity. Doctor's `AspireVersionCheck.TryReadIdentityChannel` also keeps its assembly-backed physical channel read. The startup override notice surfaces emulation on ordinary human command invocations.
 - **`ASPIRE_CLI_PACKAGES` packages-directory override — landed.** Resolves (env → sidecar → null) to `CliExecutionContext.IdentityPackagesDirectory`. When set, `PackagingService.GetChannelsAsync` registers a synthesized channel (named after the identity channel) that routes `Aspire*` to the directory and replaces any same-named channel; a fail-fast guardrail rejects a missing directory or duplicate `Aspire*` versions. Documented for repro workflows by the `cli-channel-debugging` skill.
   - **Resolution honors the override under any emulated channel name — fixed.** `aspire new` template resolution (`TemplateNuGetConfigService`) and `aspire add` package search/version-match (`IntegrationPackageSearchService`, `AddCommand`) previously only searched the synthesized local channel when its name looked like a local build (`local`/`pr-<N>`/`run-<N>` via `VersionHelper.IsLocalBuildChannel`). Emulating `stable`/`staging`/`daily` with `ASPIRE_CLI_PACKAGES` therefore fell back to nuget.org. Resolution now recognizes a channel as locally backed by its **mappings** (`PackageChannel.IsBackedByLocalPackageDirectory` — an `Aspire*` mapping pointing at an existing directory) and treats a set `IdentityPackagesDirectory` as a hive signal, so the override works under every emulated identity.
   - **Buildability caveat (all-local "future release").** A `stable` channel deliberately drops no per-project `NuGet.config`. When the emulated local version is not also on nuget.org, the apphost still cannot **build** until the directory is registered as an *ambient* NuGet source, because MSBuild resolves `Aspire.AppHost.Sdk` before restore and reads only `NuGet.config` sources (it ignores `RestoreAdditionalProjectSources`/`ASPIRE_CLI_PACKAGES`). This mirrors how a real `stable` build relies on nuget.org being ambient; see the `cli-channel-debugging` skill (Scenario 7c).
@@ -106,7 +106,7 @@ Each identity field is resolved **independently** so you can override one and in
    - `nugetServiceIndexOverride` → `null` (no override; callers use the canonical `https://api.nuget.org/v3/index.json`).
    - `packages` → `null` (no override; the CLI uses its normal channel/hive package sources).
 
-The resolver distinguishes four outcomes per field internally: `from-env`, `from-sidecar`, `from-assembly-fallback`, `defaulted-to-local`. The CLI uses these tags to detect an emulated runtime identity and display the startup override notice. `aspire --info --self` deliberately reports the physical installed binary identity used by peer discovery rather than these runtime-resolution sources.
+The resolver distinguishes four outcomes per field internally: `from-env`, `from-sidecar`, `from-assembly-fallback`, `defaulted-to-local`. The CLI uses these tags to detect an emulated runtime identity and display the startup override notice on ordinary human command invocations. `aspire --info` suppresses unrelated startup output; its top-level identity is runtime-resolved, while installation rows deliberately report the physical installed identity used by peer discovery.
 
 ### Env-var scope: process-local, not inherited
 
@@ -126,7 +126,7 @@ We considered shipping a second sidecar (`aspire-cli.identity.json`) so route id
 
 - Every install route already writes `.aspire-install.json`. Adding a second file doubles the per-route write contract and doubles the failure surface (one file written, one not).
 - Route and identity are written together at install time. There is no scenario where one is known and the other is not.
-- Discovery (`aspire doctor`) already reads one sidecar per candidate binary. Reading two doubles the I/O for no signal.
+- Discovery (`aspire --info`) already reads one sidecar per candidate binary. Reading two doubles the I/O for no signal.
 
 The `aspire.config.json` project file was also rejected: it describes what a *project* wants, not what the *CLI binary* is. Conflating the two is precisely the bug class that motivates this spec.
 
@@ -311,7 +311,7 @@ The sidecar is read from `<binaryDir>/.aspire-install.json` — **never from the
 **Env vars are ambient and inheritable** — any parent process, shell rc file, CI matrix entry, IDE launch config, or `env`-prefixed command can set `ASPIRE_CLI_CHANNEL`. They are explicitly **not a security boundary**. To make accidental override visible:
 
 - The resolver tags each field with its source (`from-env` / `from-sidecar` / `from-assembly-fallback` / `defaulted-to-local`).
-- `aspire --info --self` shows the physical installed identity used by peer discovery; the startup override notice separately indicates when runtime identity is emulated.
+- `aspire --info --self` shows the physical installed identity used by peer discovery. Ordinary human command invocations use the startup override notice to indicate when runtime identity is emulated; `aspire --info` instead distinguishes runtime identity in its top-level fields from physical identity in its installation rows.
 - A non-fatal banner is emitted at CLI startup whenever any identity field resolves `from-env` and the resolved channel differs from the sidecar/fallback channel. This is a single line, suppressible via the standard CLI verbosity controls, and is the answer to "why is my CLI behaving like staging when I installed stable?".
 
 The "is env-override gated for stable builds?" question is left as an open question (see below) — the spec leans against gating, but flags the call.
@@ -386,7 +386,7 @@ The resolver and call-site migration land together; the test plan reflects that.
 
 - `PeerInstallProbe` peer spawn under parent `ASPIRE_CLI_CHANNEL=staging` — assert peer's reported identity is its own (sidecar/fallback), not `staging`.
 - AppHost spawn under parent override — assert env vars are stripped from the child unless the opt-in mechanism is set.
-- A negative test: parent sets `ASPIRE_CLI_CHANNEL=staging`, runs `aspire doctor`, every peer row shows its own identity.
+- A negative test: parent sets `ASPIRE_CLI_CHANNEL=staging`, runs `aspire --info`, and every peer row shows its own identity.
 
 **Bootstrap and execution-context tests**:
 

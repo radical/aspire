@@ -28,13 +28,14 @@ internal static class CommonOptionNames
     public const string Info = "--info";
 
     /// <summary>
-    /// Help/version options that are recognized as informational wherever they appear in the raw
-    /// arguments (including after a subcommand, e.g. "doctor --help"). None of these take a value.
+    /// Help and long-version options that are recognized as informational wherever they appear in
+    /// the raw arguments (including after a subcommand, e.g. "doctor --help"). None take a value.
     /// System.CommandLine's default <c>HelpOption</c> registers "/h" and "/?" as aliases alongside
-    /// "-h" and "-?", so both slash forms are recognized here too.
+    /// "-h" and "-?", so both slash forms are recognized here too. The short version alias
+    /// <c>-v</c> is excluded because subcommands can use it for their own options.
     /// </summary>
     private static readonly string[] s_helpVersionOptionNames =
-        [Version, VersionShort, Help, HelpShort, HelpAlt, HelpSlash, HelpAltSlash];
+        [Version, Help, HelpShort, HelpAlt, HelpSlash, HelpAltSlash];
 
     // Root options declared by RootCommand (src/Aspire.Cli/Commands/RootCommand.cs) that
     // *unconditionally* consume a following token as their value. Kept in sync manually:
@@ -103,7 +104,7 @@ internal static class CommonOptionNames
     /// notice, etc.).
     /// </summary>
     /// <remarks>
-    /// Help/version options (<see cref="Version"/>, <see cref="VersionShort"/>, <see cref="Help"/>,
+    /// Help and long-version options (<see cref="Version"/>, <see cref="Help"/>,
     /// <see cref="HelpShort"/>, <see cref="HelpAlt"/>, <see cref="HelpSlash"/>,
     /// <see cref="HelpAltSlash"/>) are recognized wherever they appear before the "--"
     /// app-argument delimiter — including after a subcommand, e.g. "doctor --help" — matching
@@ -111,11 +112,10 @@ internal static class CommonOptionNames
     /// tracking is required for them, and unlike <see cref="Info"/> they are not sensitive to the
     /// subcommand boundary (only to "--").
     ///
-    /// <see cref="Info"/> (<c>--info</c>) is different: it is only a real root option, so it is
-    /// recognized *only* when it appears before any subcommand/positional token or the "--"
-    /// app-argument delimiter. "doctor --info" is the doctor subcommand's own (nonexistent)
-    /// argument, not root --info, and "run -- --info" is an app argument passed through to the
-    /// child process — neither should be treated as informational.
+    /// <see cref="Info"/> (<c>--info</c>) and <see cref="VersionShort"/> (<c>-v</c>) are different:
+    /// they are recognized only before any subcommand/positional token or the "--" app-argument
+    /// delimiter. Subcommands can define their own <c>-v</c> option, and "doctor --info" is the
+    /// doctor subcommand's own (nonexistent) argument rather than root <c>--info</c>.
     /// </remarks>
     public static bool IsInformationalInvocation(IReadOnlyList<string> args)
     {
@@ -133,11 +133,20 @@ internal static class CommonOptionNames
             }
         }
 
-        return IsRootInfoInvocation(args);
+        return IsRootScopedInformationalInvocation(args, includeVersionShort: true);
     }
 
-    private static bool IsRootInfoInvocation(IReadOnlyList<string> args)
+    /// <summary>
+    /// Returns whether the raw arguments request a truthy root-level <c>--info</c> action before
+    /// any subcommand, positional argument, or application-argument delimiter.
+    /// </summary>
+    public static bool IsRootInfoInvocation(IReadOnlyList<string> args)
+        => IsRootScopedInformationalInvocation(args, includeVersionShort: false);
+
+    private static bool IsRootScopedInformationalInvocation(IReadOnlyList<string> args, bool includeVersionShort)
     {
+        var infoRequested = false;
+
         for (var i = 0; i < args.Count; i++)
         {
             var token = args[i];
@@ -153,6 +162,16 @@ internal static class CommonOptionNames
             var separatorIndex = token.IndexOf('=');
             var optionName = separatorIndex >= 0 ? token[..separatorIndex] : token;
 
+            if (optionName == VersionShort)
+            {
+                if (includeVersionShort)
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
             if (optionName == Info)
             {
                 // --info is Option<bool>, so "--info=false"/"--info=true" (and, per
@@ -165,18 +184,20 @@ internal static class CommonOptionNames
                 if (separatorIndex >= 0)
                 {
                     var explicitText = token[(separatorIndex + 1)..];
-                    return !bool.TryParse(explicitText, out var explicitValue) || explicitValue;
+                    infoRequested = !bool.TryParse(explicitText, out var explicitValue) || explicitValue;
+                    continue;
                 }
 
                 if (i + 1 < args.Count && bool.TryParse(args[i + 1], out var nextTokenValue))
                 {
-                    // The next token is consumed as --info's explicit value here (this method
-                    // returns immediately, so there is no risk of misinterpreting it again as a
-                    // distinct flag or a subcommand boundary).
-                    return nextTokenValue;
+                    // Consume the explicit value so it is not reconsidered as a positional token.
+                    infoRequested = nextTokenValue;
+                    i++;
+                    continue;
                 }
 
-                return true;
+                infoRequested = true;
+                continue;
             }
 
             if (separatorIndex < 0 && Array.IndexOf(s_valueTakingRootOptionNames, optionName) >= 0)
@@ -208,6 +229,6 @@ internal static class CommonOptionNames
             }
         }
 
-        return false;
+        return infoRequested;
     }
 }

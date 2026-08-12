@@ -229,11 +229,11 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("--info")]
-    [InlineData("--info --format list")]
-    [InlineData("--info --format json")]
-    [InlineData("--info --self --format json")]
-    public void InfoOption_ParsesWithSelfAndFormat(string commandLine)
+    [InlineData("--info", false, nameof(InfoOutputFormat.List))]
+    [InlineData("--info --format list", false, nameof(InfoOutputFormat.List))]
+    [InlineData("--info --format json", false, nameof(InfoOutputFormat.Json))]
+    [InlineData("--info --self --format json", true, nameof(InfoOutputFormat.Json))]
+    public void InfoOption_ParsesWithSelfAndFormat(string commandLine, bool expectedSelf, string expectedFormat)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
@@ -244,6 +244,8 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Empty(result.Errors);
         Assert.True(result.GetValue(RootCommand.InfoOption));
+        Assert.Equal(expectedSelf, result.GetValue(RootCommand.SelfOption));
+        Assert.Equal(Enum.Parse<InfoOutputFormat>(expectedFormat), result.GetValue(RootCommand.FormatOption));
     }
 
     [Fact]
@@ -324,6 +326,30 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("doctor --format json");
 
         Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public void InfoOption_WithSubcommand_IsRejected()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+
+        Assert.Empty(command.Parse("config list").Errors);
+        Assert.Empty(command.Parse("--info=false config list").Errors);
+        Assert.Empty(command.Parse("--info false config list").Errors);
+
+        AssertInfoRejected("--info config list");
+        AssertInfoRejected("--info=true config list");
+        AssertInfoRejected("--info true config list");
+
+        void AssertInfoRejected(string commandLine)
+        {
+            Assert.Contains(
+                command.Parse(commandLine).Errors,
+                error => error.Message.Contains("--info", StringComparison.Ordinal));
+        }
     }
 
     [Theory]
@@ -684,6 +710,8 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         // subcommand, appears after the "--" app-argument delimiter, or is consumed as
         // the *value* of a preceding value-taking root option (long name and alias).
         yield return new object[] { false, new[] { "doctor", "--info" } };
+        yield return new object[] { false, new[] { "--info", "config", "list" } };
+        yield return new object[] { false, new[] { "terminal", "ps", "-v" } };
         yield return new object[] { false, new[] { "run", "--", "--info" } };
         yield return new object[] { false, new[] { "--capture-profile-output", "--info", "run" } };
         yield return new object[] { false, new[] { "--capture-profile-delay", "--info", "run" } };
@@ -832,6 +860,11 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
             options.FirstTimeUseNoticeSentinelFactory = _ => sentinel;
             options.BannerServiceFactory = _ => bannerService;
             options.CliHostEnvironmentFactory = _ => TestHelpers.CreateInteractiveHostEnvironment();
+            options.CliExecutionContextFactory = _ => TestExecutionContextHelper.CreateExecutionContext(
+                workspace.WorkspaceRoot,
+                identityChannel: "staging",
+                identityVersion: "13.5.0-override",
+                identityOverridden: true);
         });
         using var provider = services.BuildServiceProvider();
 
@@ -841,6 +874,32 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         Assert.False(sentinel.WasCreated);
         var errorOutput = errorWriter.ToString();
         Assert.DoesNotContain("Telemetry", errorOutput);
+        Assert.DoesNotContain("13.5.0-override", errorOutput);
+    }
+
+    [Theory]
+    [InlineData("--version")]
+    [InlineData("-v")]
+    [InlineData("--help")]
+    public async Task OtherInformationalOptions_DisplayIdentityOverrideNotice(string option)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var errorWriter = new StringWriter();
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ErrorTextWriter = errorWriter;
+            options.FirstTimeUseNoticeSentinelFactory = _ => new TestFirstTimeUseNoticeSentinel { SentinelExists = true };
+            options.CliExecutionContextFactory = _ => TestExecutionContextHelper.CreateExecutionContext(
+                workspace.WorkspaceRoot,
+                identityChannel: "staging",
+                identityVersion: "13.5.0-override",
+                identityOverridden: true);
+        });
+        using var provider = services.BuildServiceProvider();
+
+        await Program.DisplayFirstTimeUseNoticeIfNeededAsync(provider, [option]);
+
+        Assert.Contains("13.5.0-override", errorWriter.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
