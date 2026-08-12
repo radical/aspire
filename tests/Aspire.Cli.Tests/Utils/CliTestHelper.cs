@@ -192,7 +192,7 @@ internal static class CliTestHelper
         services.AddSingleton<IInstallSidecarReader, InstallSidecarReader>();
         services.AddSingleton<IPeerInstallProbe, PeerInstallProbe>();
         services.AddSingleton<IInstallationDiscovery, InstallationDiscovery>();
-        services.AddSingleton<HiveEnumerator>();
+        services.AddSingleton<IHiveEnumerator, HiveEnumerator>();
         services.AddSingleton<WingetFirstRunProbe>();
         // Always register the null reader by default so unit tests don't reach into the
         // actual user registry through WingetFirstRunProbe on Windows. Tests that need

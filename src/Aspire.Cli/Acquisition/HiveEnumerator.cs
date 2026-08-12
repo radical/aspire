@@ -18,7 +18,17 @@ internal sealed record HiveInfo(string Name, string Path);
 /// nested subdirectories are both excluded. Yields nothing when the hives root does not
 /// exist or is inaccessible.
 /// </remarks>
-internal sealed class HiveEnumerator(CliExecutionContext executionContext, ILogger<HiveEnumerator> logger)
+internal interface IHiveEnumerator
+{
+    /// <summary>
+    /// Returns a <see cref="HiveInfo"/> for each direct child directory of
+    /// <see cref="CliExecutionContext.HivesDirectory"/>.
+    /// </summary>
+    /// <param name="cancellationToken">Token checked between filesystem entries.</param>
+    IEnumerable<HiveInfo> EnumerateHives(CancellationToken cancellationToken = default);
+}
+
+internal sealed class HiveEnumerator(CliExecutionContext executionContext, ILogger<HiveEnumerator> logger) : IHiveEnumerator
 {
     /// <summary>
     /// Returns a <see cref="HiveInfo"/> for each direct child directory of

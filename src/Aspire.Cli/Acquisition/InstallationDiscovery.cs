@@ -100,9 +100,8 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
             Path = canonicalPath ?? processPath ?? string.Empty,
             CanonicalPath = canonicalPath,
             // physical-binary-version-by-design (see docs/specs/cli-identity-sidecar.md):
-            // the `--self` self-describe contract (shared by `aspire --info --self`
-            // and the legacy `aspire doctor --self`) reports the REAL build installed
-            // on disk, so this must read the assembly's stamped version even when
+            // the `aspire --info --self` contract reports the REAL build installed on
+            // disk, so this must read the assembly's stamped version even when
             // ASPIRE_CLI_VERSION / the sidecar override the CLI's runtime identity.
             // Routing this through CliExecutionContext.IdentityVersion would make
             // the self-describe row lie about what is physically installed.

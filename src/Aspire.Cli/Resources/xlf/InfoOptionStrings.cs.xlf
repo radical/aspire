@@ -12,6 +12,11 @@
         <target state="new">Channel</target>
         <note />
       </trans-unit>
+      <trans-unit id="CurrentInstallationHeadingFormat">
+        <source>Installation {0} (current)</source>
+        <target state="new">Installation {0} (current)</target>
+        <note>{0} is the 1-based index of the running Aspire CLI installation among the rendered rows.</note>
+      </trans-unit>
       <trans-unit id="DiscoveryFailureHeading">
         <source>Installation discovery</source>
         <target state="new">Installation discovery</target>

@@ -31,7 +31,7 @@ internal enum InfoOutputFormat
 internal sealed class InfoOptionAction
 {
     private readonly IInstallationDiscovery _installationDiscovery;
-    private readonly HiveEnumerator _hiveEnumerator;
+    private readonly IHiveEnumerator _hiveEnumerator;
     private readonly WingetFirstRunProbe _wingetFirstRunProbe;
     private readonly CliExecutionContext _executionContext;
     private readonly IInteractionService _interactionService;
@@ -39,7 +39,7 @@ internal sealed class InfoOptionAction
 
     public InfoOptionAction(
         IInstallationDiscovery installationDiscovery,
-        HiveEnumerator hiveEnumerator,
+        IHiveEnumerator hiveEnumerator,
         WingetFirstRunProbe wingetFirstRunProbe,
         CliExecutionContext executionContext,
         IInteractionService interactionService,
@@ -64,19 +64,20 @@ internal sealed class InfoOptionAction
             // Self mode never runs full discovery: it probes only the running CLI,
             // so it stays fast and cannot be affected by peer installations that
             // are slow, broken, or absent.
-            var hivesByChannel = InstallationInfoOutput.BuildHivesByChannel(_hiveEnumerator.EnumerateHives(cancellationToken));
-            var self = InstallationInfoOutput.DescribeSelfAsInfoInstallation(_installationDiscovery, _logger, hivesByChannel);
+            var self = InstallationInfoOutput.DescribeSelfAsInfoInstallation(
+                _installationDiscovery,
+                _logger);
             rows = [self];
         }
         else
         {
             var discoveryResult = await InstallationInfoOutput.DiscoverAllToResultSafelyAsync(
                 _installationDiscovery,
+                _hiveEnumerator,
                 _wingetFirstRunProbe,
                 _logger,
                 cancellationToken).ConfigureAwait(false);
-            var hives = _hiveEnumerator.EnumerateHives(cancellationToken);
-            rows = InstallationInfoOutput.BuildInfoRows(discoveryResult, hives);
+            rows = InstallationInfoOutput.BuildInfoRows(discoveryResult, discoveryResult.Hives);
         }
 
         if (format == InfoOutputFormat.Json)

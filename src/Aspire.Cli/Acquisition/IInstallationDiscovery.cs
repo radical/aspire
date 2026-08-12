@@ -12,8 +12,7 @@ namespace Aspire.Cli.Acquisition;
 ///   <item>
 ///     <description><see cref="DescribeSelf"/> — cheap path that describes
 ///     only the currently running CLI. No process spawning, no filesystem
-///     walks. Used by the hidden <c>--self</c> peer-probe path shared by
-///     <c>aspire --info --self</c> and the legacy <c>aspire doctor --self</c>.</description>
+///     walks. Used by the hidden <c>aspire --info --self</c> peer-probe path.</description>
 ///   </item>
 ///   <item>
 ///     <description><see cref="DiscoverAllAsync"/> — walks <c>$PATH</c> plus

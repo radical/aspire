@@ -532,7 +532,8 @@ The top-level `version` and `channel` describe the runtime-resolved CLI identity
       "source": "script",
       "hive": "/home/user/.aspire/hives/stable",
       "pathStatus": "active",
-      "status": "ok"
+      "status": "ok",
+      "isCurrent": true
     },
     {
       "kind": "orphan-hive",
@@ -566,12 +567,13 @@ The top-level `version` and `channel` describe the runtime-resolved CLI identity
 | `pathStatus` | Relationship between this binary and `$PATH`: `active` (the first `aspire` resolved from `$PATH`), `shadowed` (on `$PATH` but shadowed by an earlier entry), or `notOnPath`. |
 | `status` | Row lifecycle status: `ok`, `notProbed` (listed but not probed), `failed` (probed but did not return usable data), or `noInstallFound` (`orphan-hive` rows only). |
 | `statusReason` | Diagnostic explanation for a non-`ok` status. Omitted when absent. |
+| `isCurrent` | `true` for the running CLI's `installation` row. Omitted from every other row. |
 
 `status` and `pathStatus` are independent axes: a binary can be `active` on `$PATH` while its probe `status` is `failed`, and vice versa. Fields with no value for a given row (for example, `version` on an `orphan-hive` row) are omitted rather than written as `null`.
 
 #### Hidden peer contract: `aspire --info --self --format json`
 
-`aspire --info --self` limits output to the running CLI and stays hidden from `--help`: it exists so other Aspire CLI processes can ask a peer to self-describe, not as a primary user workflow. Its JSON form is a bare array containing exactly one row, using the same shape as an `installs[]` entry — there is no wrapping `version`/`channel` envelope, because the array itself represents a single installation:
+`aspire --info --self` limits output to the running CLI and stays hidden from `--help`: it exists so other Aspire CLI processes can ask a peer to self-describe, not as a primary user workflow. It does not enumerate hive directories. Its JSON form is a bare array containing exactly one row, using the same shape as an `installs[]` entry — there is no wrapping `version`/`channel` envelope, because the array itself represents a single installation:
 
 ```json
 [
@@ -583,7 +585,8 @@ The top-level `version` and `channel` describe the runtime-resolved CLI identity
     "channel": "stable",
     "source": "script",
     "pathStatus": "active",
-    "status": "ok"
+    "status": "ok",
+    "isCurrent": true
   }
 ]
 ```

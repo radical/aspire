@@ -347,7 +347,7 @@ Telemetry remains opt-out via `ASPIRE_CLI_TELEMETRY_OPTOUT` exactly as today; th
 - Removal of the `AspireCliChannel` build-time stamping from non-dotnet-tool publish paths.
 - CI verification that every installer route produces a sidecar with `channel` populated.
 - Telemetry split: `binary.*` vs `identity.*` dimensions.
-- `aspire --info` surfacing physical install identity and the "install-route detected but identity sidecar missing" diagnostic.
+- `aspire --info` surfacing physical install identity. The running CLI remains `ok` when its sidecar is absent and omits `source`; peer candidates without readable install metadata are not executed and report `notProbed` with a diagnostic.
 - Test coverage including the cross-route fallback matrix and peer-probe env-leak tests.
 
 **Out of scope** (tracked separately):

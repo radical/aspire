@@ -72,6 +72,34 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
         Assert.Contains("timed out after", result.AggregateFailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task DiscoverAllToResultSafelyAsync_TimesOutWhenHiveEnumerationDoesNotObserveCancellation()
+    {
+        var self = new InstallationInfo
+        {
+            Path = "/test/aspire",
+            Status = InstallationInfoStatus.Ok,
+        };
+        var discovery = new FakeInstallationDiscovery(self);
+        var hiveEnumerator = new DelayedHiveEnumerator(TimeSpan.FromSeconds(2));
+        var wingetProbe = new WingetFirstRunProbe(
+            new TestWindowsRegistryReader(),
+            NullLogger<WingetFirstRunProbe>.Instance);
+
+        var result = await InstallationInfoOutput.DiscoverAllToResultSafelyAsync(
+            discovery,
+            hiveEnumerator,
+            wingetProbe,
+            NullLogger.Instance,
+            TimeSpan.FromMilliseconds(100),
+            TestContext.Current.CancellationToken).DefaultTimeout();
+
+        Assert.Empty(result.Installations);
+        Assert.Empty(result.Hives);
+        Assert.NotNull(result.AggregateFailureReason);
+        Assert.Contains("timed out after", result.AggregateFailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---------------------------------------------------------------------------
     // MapToInfoInstallation: Route → source, hive correlation, field preservation
     // ---------------------------------------------------------------------------
@@ -190,15 +218,42 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
         var discoveryResult = new InstallationDiscoveryResult(
             Installations: [],
             AggregateFailureReason: "discovery exploded");
-        var hives = Array.Empty<HiveInfo>();
 
-        var rows = InstallationInfoOutput.BuildInfoRows(discoveryResult, hives);
+        static IEnumerable<HiveInfo> FailIfEnumerated()
+        {
+            Assert.Fail("Hive rows must not be evaluated when aggregate discovery fails.");
+            yield break;
+        }
+
+        var rows = InstallationInfoOutput.BuildInfoRows(discoveryResult, FailIfEnumerated());
 
         var single = Assert.Single(rows);
         Assert.Equal(InfoInstallationKind.DiscoveryFailed, single.Kind);
         Assert.Equal(InstallationPathStatus.NotOnPath, single.PathStatus);
         Assert.Equal(InstallationInfoStatus.Failed, single.Status);
         Assert.Equal("discovery exploded", single.StatusReason);
+    }
+
+    [Fact]
+    public void BuildHumanRenderable_MarksRunningInstallationAsCurrent()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var executionContext = workspace.CreateExecutionContext(identityChannel: "stable", identityVersion: "13.4.0");
+        var self = new InstallationInfo
+        {
+            Path = "/usr/local/bin/aspire",
+            Channel = "stable",
+            PathStatus = InstallationPathStatus.Active,
+            Status = InstallationInfoStatus.Ok,
+        };
+        var rows = InstallationInfoOutput.BuildInfoRows(
+            new InstallationDiscoveryResult([self], AggregateFailureReason: null),
+            hives: []);
+
+        var plainText = RenderToPlainConsole(
+            InstallationInfoOutput.BuildHumanRenderable(supportsLinks: false, executionContext, rows));
+
+        Assert.Contains("Installation 1 (current)", plainText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -272,14 +327,14 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
             Status = InstallationInfoStatus.Ok,
         };
         var discovery = new FakeInstallationDiscovery(self);
-        var hivesByChannel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         var row = InstallationInfoOutput.DescribeSelfAsInfoInstallation(
-            discovery, NullLogger.Instance, hivesByChannel);
+            discovery, NullLogger.Instance);
 
         Assert.Equal(InfoInstallationKind.Installation, row.Kind);
         Assert.Equal("/self/aspire", row.Path);
         Assert.Equal("script", row.Source);
+        Assert.True(row.IsCurrent);
     }
 
     [Fact]
@@ -290,10 +345,8 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
         {
             DescribeSelfCallback = () => throw new InvalidOperationException("self probe exploded"),
         };
-        var hivesByChannel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
         var row = InstallationInfoOutput.DescribeSelfAsInfoInstallation(
-            discovery, NullLogger.Instance, hivesByChannel);
+            discovery, NullLogger.Instance);
 
         Assert.Equal(InfoInstallationKind.DiscoveryFailed, row.Kind);
         Assert.Equal(InstallationInfoStatus.Failed, row.Status);
@@ -307,11 +360,9 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
         {
             DescribeSelfCallback = () => throw new OperationCanceledException("cancelled"),
         };
-        var hivesByChannel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
         Assert.Throws<OperationCanceledException>(
             () => InstallationInfoOutput.DescribeSelfAsInfoInstallation(
-                discovery, NullLogger.Instance, hivesByChannel));
+                discovery, NullLogger.Instance));
     }
 
     // ---------------------------------------------------------------------------
@@ -338,6 +389,7 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
                     Hive = "/home/test/.aspire/hives/stable",
                     PathStatus = InstallationPathStatus.Active,
                     Status = InstallationInfoStatus.Ok,
+                    IsCurrent = true,
                 },
             ],
         };

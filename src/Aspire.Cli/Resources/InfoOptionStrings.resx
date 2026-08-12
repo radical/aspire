@@ -74,6 +74,10 @@
     <value>Installation {0}</value>
     <comment>{0} is the 1-based index of the installation among the rendered rows.</comment>
   </data>
+  <data name="CurrentInstallationHeadingFormat" xml:space="preserve">
+    <value>Installation {0} (current)</value>
+    <comment>{0} is the 1-based index of the running Aspire CLI installation among the rendered rows.</comment>
+  </data>
   <data name="OrphanHiveHeading" xml:space="preserve">
     <value>Orphan hive</value>
   </data>

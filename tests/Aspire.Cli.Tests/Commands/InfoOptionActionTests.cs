@@ -80,6 +80,7 @@ public class InfoOptionActionTests(ITestOutputHelper outputHelper)
         // The full envelope — an object, not a bare array — is the full-mode JSON contract.
         using var document = JsonDocument.Parse(json);
         Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        Assert.True(document.RootElement.GetProperty("installs")[0].GetProperty("isCurrent").GetBoolean());
 
         // "source" is the wire field; the legacy "route" name must never appear.
         Assert.Contains("\"source\"", json, StringComparison.Ordinal);
@@ -108,12 +109,30 @@ public class InfoOptionActionTests(ITestOutputHelper outputHelper)
         using var document = JsonDocument.Parse(json);
         Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
         Assert.DoesNotContain("\"installs\"", json, StringComparison.Ordinal);
+        Assert.True(document.RootElement[0].GetProperty("isCurrent").GetBoolean());
 
         var installs = JsonSerializer.Deserialize(json, JsonSourceGenerationContext.Default.InfoInstallationArray);
         Assert.NotNull(installs);
         var only = Assert.Single(installs);
         Assert.Equal("script", only.Source);
         Assert.Equal("/self/bin/aspire", only.Path);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SelfJson_DoesNotEnumerateOrReportHives()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var self = CreateSelf();
+        var discovery = new FakeInstallationDiscovery(self);
+        var interactionService = new TestInteractionService();
+        var action = CreateAction(workspace, discovery, interactionService, out var executionContext);
+        Directory.CreateDirectory(Path.Combine(executionContext.HivesDirectory.FullName, "stable"));
+
+        await action.ExecuteAsync(selfOnly: true, InfoOutputFormat.Json, TestContext.Current.CancellationToken);
+
+        var json = Assert.Single(interactionService.DisplayedPlainText);
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement[0].TryGetProperty("hive", out _));
     }
 
     // ---------------------------------------------------------------------------

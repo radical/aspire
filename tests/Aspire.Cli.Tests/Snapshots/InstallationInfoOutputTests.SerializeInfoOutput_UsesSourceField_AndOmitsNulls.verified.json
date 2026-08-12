@@ -11,7 +11,8 @@
       "source": "path",
       "hive": "/home/test/.aspire/hives/stable",
       "pathStatus": "active",
-      "status": "ok"
+      "status": "ok",
+      "isCurrent": true
     }
   ]
 }

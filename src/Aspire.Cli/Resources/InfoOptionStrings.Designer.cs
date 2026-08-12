@@ -103,6 +103,15 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("InstallationHeadingFormat", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Installation {0} (current).
+        /// </summary>
+        public static string CurrentInstallationHeadingFormat {
+            get {
+                return ResourceManager.GetString("CurrentInstallationHeadingFormat", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///   Looks up a localized string similar to Orphan hive.

@@ -103,6 +103,11 @@ internal sealed class InfoInstallation
     /// <summary>Human-readable reason for a non-<c>ok</c> status; omitted when absent.</summary>
     [JsonPropertyName("statusReason")]
     public string? StatusReason { get; init; }
+
+    /// <summary>Whether this row describes the running Aspire CLI process.</summary>
+    [JsonPropertyName("isCurrent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsCurrent { get; init; }
 }
 
 /// <summary>Wire constants for <see cref="InfoInstallation.Kind"/>.</summary>
@@ -139,7 +144,10 @@ internal static class InfoInstallationKind
 /// </param>
 internal sealed record InstallationDiscoveryResult(
     IReadOnlyList<InstallationInfo> Installations,
-    string? AggregateFailureReason);
+    string? AggregateFailureReason)
+{
+    public IReadOnlyList<HiveInfo> Hives { get; init; } = [];
+}
 
 // ---------------------------------------------------------------------------
 // Main static class
@@ -160,8 +168,46 @@ internal static class InstallationInfoOutput
         CancellationToken cancellationToken)
         => DiscoverAllToResultSafelyAsync(discovery, wingetFirstRunProbe, logger, s_defaultDiscoveryTimeout, cancellationToken);
 
+    public static Task<InstallationDiscoveryResult> DiscoverAllToResultSafelyAsync(
+        IInstallationDiscovery discovery,
+        IHiveEnumerator hiveEnumerator,
+        WingetFirstRunProbe wingetFirstRunProbe,
+        ILogger logger,
+        CancellationToken cancellationToken)
+        => DiscoverAllToResultSafelyAsync(discovery, hiveEnumerator, wingetFirstRunProbe, logger, s_defaultDiscoveryTimeout, cancellationToken);
+
     internal static async Task<InstallationDiscoveryResult> DiscoverAllToResultSafelyAsync(
         IInstallationDiscovery discovery,
+        WingetFirstRunProbe wingetFirstRunProbe,
+        ILogger logger,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => await DiscoverAllToResultWithTimeoutAsync(
+            discovery,
+            hiveEnumerator: null,
+            wingetFirstRunProbe,
+            logger,
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<InstallationDiscoveryResult> DiscoverAllToResultSafelyAsync(
+        IInstallationDiscovery discovery,
+        IHiveEnumerator hiveEnumerator,
+        WingetFirstRunProbe wingetFirstRunProbe,
+        ILogger logger,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => await DiscoverAllToResultWithTimeoutAsync(
+            discovery,
+            hiveEnumerator,
+            wingetFirstRunProbe,
+            logger,
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<InstallationDiscoveryResult> DiscoverAllToResultWithTimeoutAsync(
+        IInstallationDiscovery discovery,
+        IHiveEnumerator? hiveEnumerator,
         WingetFirstRunProbe wingetFirstRunProbe,
         ILogger logger,
         TimeSpan timeout,
@@ -176,7 +222,7 @@ internal static class InstallationInfoOutput
         // a task that continues after WaitAsync times out cannot later produce an
         // unobserved fault.
         var discoveryTask = Task.Run(
-            () => DiscoverAllCoreToResultAsync(discovery, wingetFirstRunProbe, logger, timeoutCts.Token),
+            () => DiscoverAllCoreToResultAsync(discovery, hiveEnumerator, wingetFirstRunProbe, logger, timeoutCts.Token),
             CancellationToken.None);
 
         try
@@ -200,6 +246,7 @@ internal static class InstallationInfoOutput
 
     private static async Task<InstallationDiscoveryResult> DiscoverAllCoreToResultAsync(
         IInstallationDiscovery discovery,
+        IHiveEnumerator? hiveEnumerator,
         WingetFirstRunProbe wingetFirstRunProbe,
         ILogger logger,
         CancellationToken cancellationToken)
@@ -218,7 +265,12 @@ internal static class InstallationInfoOutput
             logger.LogDebug("Discovering Aspire CLI installations for info output.");
             var installations = await discovery.DiscoverAllAsync(cancellationToken).ConfigureAwait(false);
             logger.LogDebug("Discovered {InstallationCount} Aspire CLI installation(s) for info output.", installations.Count);
-            return new InstallationDiscoveryResult(installations, AggregateFailureReason: null);
+            var hives = hiveEnumerator?.EnumerateHives(cancellationToken).ToList() ?? [];
+            logger.LogDebug("Discovered {HiveCount} Aspire CLI hive(s) for info output.", hives.Count);
+            return new InstallationDiscoveryResult(installations, AggregateFailureReason: null)
+            {
+                Hives = hives,
+            };
         }
         catch (OperationCanceledException)
         {
@@ -241,9 +293,11 @@ internal static class InstallationInfoOutput
     /// Pre-built dictionary of valid-channel-name → hive-path (OrdinalIgnoreCase).
     /// Build this once per <see cref="BuildInfoRows"/> call for efficiency.
     /// </param>
+    /// <param name="isCurrent">Whether the row describes the running Aspire CLI process.</param>
     internal static InfoInstallation MapToInfoInstallation(
         InstallationInfo install,
-        IReadOnlyDictionary<string, string> hivesByChannel)
+        IReadOnlyDictionary<string, string> hivesByChannel,
+        bool isCurrent = false)
     {
         // Correlate a hive only when the channel is a well-known identity string.
         // An invalid or missing channel cannot be a reliable hive key.
@@ -267,6 +321,7 @@ internal static class InstallationInfoOutput
             PathStatus = install.PathStatus,
             Status = install.Status,
             StatusReason = install.StatusReason,
+            IsCurrent = isCurrent,
         };
     }
 
@@ -285,6 +340,11 @@ internal static class InstallationInfoOutput
         InstallationDiscoveryResult discoveryResult,
         IEnumerable<HiveInfo> hives)
     {
+        if (discoveryResult.AggregateFailureReason is { } aggregateFailureReason)
+        {
+            return [CreateInfoDiscoveryFailedRow(aggregateFailureReason)];
+        }
+
         var hiveList = hives.ToList();
 
         // Build a lookup of channel → hive path, restricted to valid channel names so that
@@ -297,9 +357,10 @@ internal static class InstallationInfoOutput
 
         var rows = new List<InfoInstallation>(discoveryResult.Installations.Count + hiveList.Count + 1);
 
-        foreach (var install in discoveryResult.Installations)
+        for (var index = 0; index < discoveryResult.Installations.Count; index++)
         {
-            rows.Add(MapToInfoInstallation(install, hivesByChannel));
+            var install = discoveryResult.Installations[index];
+            rows.Add(MapToInfoInstallation(install, hivesByChannel, isCurrent: index == 0));
 
             if (install.Channel is { Length: > 0 } ch &&
                 IdentityChannelReader.IsValidChannel(ch) &&
@@ -332,11 +393,6 @@ internal static class InstallationInfoOutput
             }
         }
 
-        if (discoveryResult.AggregateFailureReason is not null)
-        {
-            rows.Add(CreateInfoDiscoveryFailedRow(discoveryResult.AggregateFailureReason));
-        }
-
         return [.. rows];
     }
 
@@ -348,12 +404,14 @@ internal static class InstallationInfoOutput
     /// </summary>
     internal static InfoInstallation DescribeSelfAsInfoInstallation(
         IInstallationDiscovery discovery,
-        ILogger logger,
-        IReadOnlyDictionary<string, string> hivesByChannel)
+        ILogger logger)
     {
         try
         {
-            return MapToInfoInstallation(discovery.DescribeSelf(), hivesByChannel);
+            return MapToInfoInstallation(
+                discovery.DescribeSelf(),
+                hivesByChannel: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                isCurrent: true);
         }
         catch (OperationCanceledException)
         {
@@ -368,8 +426,7 @@ internal static class InstallationInfoOutput
 
     /// <summary>
     /// Builds a lookup of valid-identity-channel-name → hive path (OrdinalIgnoreCase),
-    /// shared by <see cref="BuildInfoRows"/> (full discovery) and <c>--self</c> callers
-    /// so both paths correlate hives identically.
+    /// used by <see cref="BuildInfoRows"/> to correlate full-discovery rows.
     /// </summary>
     internal static IReadOnlyDictionary<string, string> BuildHivesByChannel(IEnumerable<HiveInfo> hives)
     {
@@ -449,6 +506,7 @@ internal static class InstallationInfoOutput
             {
                 InfoInstallationKind.OrphanHive => InfoOptionStrings.OrphanHiveHeading,
                 InfoInstallationKind.DiscoveryFailed => InfoOptionStrings.DiscoveryFailureHeading,
+                _ when row.IsCurrent => string.Format(CultureInfo.CurrentCulture, InfoOptionStrings.CurrentInstallationHeadingFormat, ++installationIndex),
                 _ => string.Format(CultureInfo.CurrentCulture, InfoOptionStrings.InstallationHeadingFormat, ++installationIndex),
             };
             renderables.Add(new Markup($"[bold]{heading.EscapeMarkup()}[/]"));
@@ -590,4 +648,3 @@ internal static class InstallationInfoOutput
         };
     }
 }
-
