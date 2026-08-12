@@ -7,18 +7,17 @@ using System.Text.Json.Serialization;
 namespace Aspire.Cli.Acquisition;
 
 /// <summary>
-/// Describes one Aspire CLI installation, as surfaced by
-/// <c>aspire doctor --format json</c>. Each entry corresponds to a single
-/// binary either running this process or discovered on the system.
+/// Describes one Aspire CLI installation used by discovery and peer
+/// self-description. Each entry corresponds to a single binary either running
+/// this process or discovered on the system.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The JSON shape is part of the <c>installations</c> property in the
-/// <c>aspire doctor --format json</c> contract. Fields use camelCase wire names via
-/// <see cref="JsonPropertyNameAttribute"/> applied explicitly here so the
-/// schema stays decoupled from the project-wide camelCase policy: another
-/// process may parse this output across CLI versions and we don't want to
-/// rename fields by changing a global option.
+/// The JSON shape is consumed across CLI versions by
+/// <c>aspire --info --self --format json</c> and the legacy
+/// <c>aspire doctor --self --format json</c> fallback. Fields use camelCase
+/// wire names via <see cref="JsonPropertyNameAttribute"/> applied explicitly
+/// here so the schema stays decoupled from the project-wide camelCase policy.
 /// </para>
 /// <para>
 /// Nullable fields may be <see langword="null"/> for any row, including
@@ -137,7 +136,7 @@ internal static class InstallationPathStatus
 }
 
 /// <summary>
-/// Parses rows from the doctor installation discovery wire contract.
+/// Parses rows from the current and legacy peer self-description contracts.
 /// </summary>
 internal static class InstallationInfoParser
 {

@@ -106,17 +106,17 @@ Each identity field is resolved **independently** so you can override one and in
    - `nugetServiceIndexOverride` → `null` (no override; callers use the canonical `https://api.nuget.org/v3/index.json`).
    - `packages` → `null` (no override; the CLI uses its normal channel/hive package sources).
 
-The resolver distinguishes four outcomes per field, each surfaced in `aspire doctor --self`: `from-env`, `from-sidecar`, `from-assembly-fallback`, `defaulted-to-local`. This makes "is my override actually taking effect?" trivially debuggable and prevents the soft-fallback class of bug the critique flagged (a missing installer write silently looking healthy because the resolver fell back to a baked value).
+The resolver distinguishes four outcomes per field internally: `from-env`, `from-sidecar`, `from-assembly-fallback`, `defaulted-to-local`. The CLI uses these tags to detect an emulated runtime identity and display the startup override notice. `aspire --info --self` deliberately reports the physical installed binary identity used by peer discovery rather than these runtime-resolution sources.
 
 ### Env-var scope: process-local, not inherited
 
 `ASPIRE_CLI_CHANNEL`, `ASPIRE_CLI_VERSION`, `ASPIRE_CLI_COMMIT`, `ASPIRE_CLI_NUGET_SERVICE_INDEX`, and `ASPIRE_CLI_PACKAGES` are **deliberately not propagated to child Aspire processes**. The CLI strips them from the environment of:
 
-- Peer Aspire CLIs spawned by `aspire doctor` install discovery (`PeerInstallProbe`).
+- Peer Aspire CLIs spawned by `aspire --info` install discovery (`PeerInstallProbe`).
 - AppHost child processes launched by `aspire run` / `aspire start` and friends, unless the override is also passed via a separate explicit opt-in (TBD; see open questions).
 - Any other Aspire-CLI subprocess invocation.
 
-This is essential because the overrides exist to make a single binary lie about its identity *for this process invocation only*. A peer probe under `ASPIRE_CLI_CHANNEL=staging` set by a user shell must still report each peer's real identity, not the parent's override. Without stripping, `aspire doctor` becomes useless under any developer's shell with the override set.
+This is essential because the overrides exist to make a single binary lie about its identity *for this process invocation only*. A peer probe under `ASPIRE_CLI_CHANNEL=staging` set by a user shell must still report each peer's real identity, not the parent's override. Without stripping, `aspire --info` becomes useless under any developer's shell with the override set.
 
 Stripping happens in the CLI's process-launch helpers (`ProcessExecutionFactory` / `DotNetCliRunner` / `PeerInstallProbe` / etc.) at the env-dictionary construction site, before the child process is started. Tests assert peer identity is preserved when the parent shell has overrides set.
 
@@ -294,9 +294,9 @@ The change lands in three steps so each step is independently shippable:
 
 2. **Installers populate identity.** Each route's sidecar writer is updated to emit `channel` (and `version`/`commit` where cheaply available). Existing sidecars without identity fields continue to work via the terminal fallback. A CI verification job (`eng/scripts/verify-sidecar-identity.{sh,ps1}`) runs in the install-script integration tests and asserts every installed CLI has a sidecar with a populated `channel`. The dotnet-tool first-run probe lands in this step.
 
-3. **Stamping is removed from non-dotnet-tool publish paths.** The csproj keeps the `AssemblyMetadata` item for the dotnet-tool publish only (consumed by the first-run sidecar materializer). All other CI build invocations stop passing `/p:AspireCliChannel=…`. Shared per-RID archives become channel-neutral bytes. The `aspire doctor` "install-route detected but identity sidecar missing" diagnostic lands in this step.
+3. **Stamping is removed from non-dotnet-tool publish paths.** The csproj keeps the `AssemblyMetadata` item for the dotnet-tool publish only (consumed by the first-run sidecar materializer). All other CI build invocations stop passing `/p:AspireCliChannel=…`. Shared per-RID archives become channel-neutral bytes. The `aspire --info` "install-route detected but identity sidecar missing" diagnostic lands in this step.
 
-The three steps are observable from outside the codebase: step 1 changes no behavior; step 2 starts writing extended sidecars (visible in `aspire doctor --self`); step 3 changes the per-RID archive checksum to channel-neutral (visible as the same checksum across stable/staging/daily for the same source SHA, which is itself a CI-asserted invariant going forward).
+The three steps are observable from outside the codebase: step 1 changes no behavior; step 2 starts writing extended sidecars that affect runtime identity and the startup override notice; step 3 changes the per-RID archive checksum to channel-neutral (visible as the same checksum across stable/staging/daily for the same source SHA, which is itself a CI-asserted invariant going forward).
 
 ## Security model
 
@@ -311,7 +311,7 @@ The sidecar is read from `<binaryDir>/.aspire-install.json` — **never from the
 **Env vars are ambient and inheritable** — any parent process, shell rc file, CI matrix entry, IDE launch config, or `env`-prefixed command can set `ASPIRE_CLI_CHANNEL`. They are explicitly **not a security boundary**. To make accidental override visible:
 
 - The resolver tags each field with its source (`from-env` / `from-sidecar` / `from-assembly-fallback` / `defaulted-to-local`).
-- `aspire doctor --self` shows the source per field.
+- `aspire --info --self` shows the physical installed identity used by peer discovery; the startup override notice separately indicates when runtime identity is emulated.
 - A non-fatal banner is emitted at CLI startup whenever any identity field resolves `from-env` and the resolved channel differs from the sidecar/fallback channel. This is a single line, suppressible via the standard CLI verbosity controls, and is the answer to "why is my CLI behaving like staging when I installed stable?".
 
 The "is env-override gated for stable builds?" question is left as an open question (see below) — the spec leans against gating, but flags the call.
@@ -347,7 +347,7 @@ Telemetry remains opt-out via `ASPIRE_CLI_TELEMETRY_OPTOUT` exactly as today; th
 - Removal of the `AspireCliChannel` build-time stamping from non-dotnet-tool publish paths.
 - CI verification that every installer route produces a sidecar with `channel` populated.
 - Telemetry split: `binary.*` vs `identity.*` dimensions.
-- `aspire doctor --self` surfacing per-field resolution source and the "install-route detected but identity sidecar missing" diagnostic.
+- `aspire --info` surfacing physical install identity and the "install-route detected but identity sidecar missing" diagnostic.
 - Test coverage including the cross-route fallback matrix and peer-probe env-leak tests.
 
 **Out of scope** (tracked separately):
@@ -360,7 +360,7 @@ Telemetry remains opt-out via `ASPIRE_CLI_TELEMETRY_OPTOUT` exactly as today; th
 ## Open questions
 
 1. **AppHost env propagation.** Should `ASPIRE_CLI_*` overrides propagate to AppHost child processes by default, only via an explicit opt-in, or never? Argument for propagation: AppHost decisions sometimes key on the parent CLI's identity (e.g., compatibility checks). Argument against: AppHost is not a peer Aspire CLI; conflating the two re-introduces the env-leak class. **Leaning: strip by default, add an `--inherit-cli-identity` opt-in on `aspire run` / `aspire start` if a real consumer surfaces.**
-2. **Doctor surfacing.** Confirmed in this revision — `aspire doctor --self` shows the source per field.
+2. **Information surfacing.** `aspire --info --self` reports physical install identity for peer discovery. Runtime identity overrides remain visible through the startup override notice rather than the peer wire contract.
 3. **Env-override gating on stable builds.** Should `ASPIRE_CLI_*` be honored only when `ASPIRE_CLI_ALLOW_IDENTITY_OVERRIDE=1` is set on binaries whose installed channel is `stable`? Argument for: prevents a customer's shell config from accidentally driving their stable CLI into staging behavior. Argument against: the override is the spec's reason for existing; gating it adds friction to the validation patterns. **Leaning: do not gate, but emit the source-banner whenever identity comes from env, so accidental override is visible.**
 4. **dotnet-tool stamp removal.** Is there a path to removing the `AspireCliChannel` assembly stamp for the dotnet-tool route too, without re-introducing the per-package-cache hazard? One option: ship a per-version, per-channel pre-install sidecar via a Roslyn-style "tools" file extracted by `dotnet tool install` outside the cache. Out of scope for now; tracked as a follow-up if dotnet-tool stamp removal becomes important.
 

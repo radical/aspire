@@ -4,11 +4,9 @@
 namespace Aspire.Cli.Acquisition;
 
 /// <summary>
-/// Where a resolved identity field originated. Surfaced by
-/// <c>aspire doctor --self</c> so an operator can tell at a glance whether an
-/// override is active, which sidecar populated it, or whether the resolver
-/// fell back to the build-time stamp. See
-/// <c>docs/specs/cli-identity-sidecar.md</c>.
+/// Where a resolved identity field originated. The CLI uses this metadata to
+/// detect runtime identity overrides and display the startup override notice.
+/// See <c>docs/specs/cli-identity-sidecar.md</c>.
 /// </summary>
 internal enum IdentitySource
 {
