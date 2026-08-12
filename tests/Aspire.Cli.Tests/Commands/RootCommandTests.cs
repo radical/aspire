@@ -289,23 +289,25 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void DoctorCommand_SelfOption_UsesSubcommandLocalOptionNotRoot()
+    public void DoctorCommand_SelfOption_IsRejected()
     {
         // The root --self option is non-recursive, so it must not leak into
-        // subcommands. DoctorCommand already declares its own separate hidden
-        // --self option (pre-dating this change and left untouched here; its
-        // cleanup is deferred to a later task), so "doctor --self" continues
-        // to parse successfully through that subcommand-local option rather
-        // than the new root one.
+        // subcommands. DoctorCommand no longer declares its own local --self
+        // option either — installation discovery (including the --self
+        // peer-probe surface) is exclusively owned by root `aspire --info`
+        // now — so "doctor --self" must fail parser validation as an
+        // unrecognized option, with or without --format json.
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
 
         var command = provider.GetRequiredService<RootCommand>();
-        var result = command.Parse("doctor --self");
 
-        Assert.Empty(result.Errors);
-        Assert.False(result.GetValue(RootCommand.SelfOption));
+        var result = command.Parse("doctor --self");
+        Assert.NotEmpty(result.Errors);
+
+        var jsonResult = command.Parse("doctor --self --format json");
+        Assert.NotEmpty(jsonResult.Errors);
     }
 
     [Fact]
