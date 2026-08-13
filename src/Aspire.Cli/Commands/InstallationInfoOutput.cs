@@ -138,9 +138,10 @@ internal static class InfoInstallationKind
 /// <see cref="InstallationInfoStatus.Failed"/>). Empty on aggregate failure.
 /// </param>
 /// <param name="AggregateFailureReason">
-/// Non-<see langword="null"/> when <c>DiscoverAll</c> itself timed out or
-/// threw an unexpected exception. Maps to a single
-/// <see cref="InfoInstallationKind.DiscoveryFailed"/> row in the info output.
+/// Non-<see langword="null"/> when installation or hive discovery timed out
+/// or threw an unexpected exception. Maps to a
+/// <see cref="InfoInstallationKind.DiscoveryFailed"/> row in the info output
+/// without discarding any rows completed before the failure.
 /// </param>
 internal sealed record InstallationDiscoveryResult(
     IReadOnlyList<InstallationInfo> Installations,
@@ -218,16 +219,17 @@ internal static class InstallationInfoOutput
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
 
-        // DiscoverAllCoreToResultAsync catches and logs non-cancellation exceptions, so
+        // DiscoverInstallationsCoreToResultAsync catches and logs non-cancellation exceptions, so
         // a task that continues after WaitAsync times out cannot later produce an
         // unobserved fault.
         var discoveryTask = Task.Run(
-            () => DiscoverAllCoreToResultAsync(discovery, hiveEnumerator, wingetFirstRunProbe, logger, timeoutCts.Token),
+            () => DiscoverInstallationsCoreToResultAsync(discovery, wingetFirstRunProbe, logger, timeoutCts.Token),
             CancellationToken.None);
 
+        InstallationDiscoveryResult discoveryResult;
         try
         {
-            return await discoveryTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            discoveryResult = await discoveryTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -242,11 +244,45 @@ internal static class InstallationInfoOutput
             logger.LogWarning("Aspire CLI installation discovery timed out after {TimeoutSeconds} seconds.", timeout.TotalSeconds);
             return new InstallationDiscoveryResult([], AggregateFailureReason: reason);
         }
+
+        if (discoveryResult.AggregateFailureReason is not null || hiveEnumerator is null)
+        {
+            return discoveryResult;
+        }
+
+        // Hive enumeration is secondary diagnostic data. Run it separately so
+        // a slow or broken hive source cannot erase installation rows that the
+        // first phase already completed.
+        var hiveTask = Task.Run(
+            () => EnumerateHivesToResult(hiveEnumerator, logger, timeoutCts.Token),
+            CancellationToken.None);
+
+        try
+        {
+            var (hives, failureReason) = await hiveTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            return discoveryResult with
+            {
+                AggregateFailureReason = failureReason,
+                Hives = hives,
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            var reason = string.Format(
+                CultureInfo.CurrentCulture,
+                InfoOptionStrings.InstallationDiscoveryTimedOutReasonFormat,
+                timeout.TotalSeconds);
+            logger.LogWarning("Aspire CLI hive discovery timed out after {TimeoutSeconds} seconds.", timeout.TotalSeconds);
+            return discoveryResult with { AggregateFailureReason = reason };
+        }
     }
 
-    private static async Task<InstallationDiscoveryResult> DiscoverAllCoreToResultAsync(
+    private static async Task<InstallationDiscoveryResult> DiscoverInstallationsCoreToResultAsync(
         IInstallationDiscovery discovery,
-        IHiveEnumerator? hiveEnumerator,
         WingetFirstRunProbe wingetFirstRunProbe,
         ILogger logger,
         CancellationToken cancellationToken)
@@ -265,12 +301,7 @@ internal static class InstallationInfoOutput
             logger.LogDebug("Discovering Aspire CLI installations for info output.");
             var installations = await discovery.DiscoverAllAsync(cancellationToken).ConfigureAwait(false);
             logger.LogDebug("Discovered {InstallationCount} Aspire CLI installation(s) for info output.", installations.Count);
-            var hives = hiveEnumerator?.EnumerateHives(cancellationToken).ToList() ?? [];
-            logger.LogDebug("Discovered {HiveCount} Aspire CLI hive(s) for info output.", hives.Count);
-            return new InstallationDiscoveryResult(installations, AggregateFailureReason: null)
-            {
-                Hives = hives,
-            };
+            return new InstallationDiscoveryResult(installations, AggregateFailureReason: null);
         }
         catch (OperationCanceledException)
         {
@@ -280,6 +311,28 @@ internal static class InstallationInfoOutput
         {
             logger.LogWarning(ex, "Could not discover Aspire CLI installations for info output.");
             return new InstallationDiscoveryResult([], AggregateFailureReason: InfoOptionStrings.InstallationDiscoveryFailedReason);
+        }
+    }
+
+    private static (IReadOnlyList<HiveInfo> Hives, string? FailureReason) EnumerateHivesToResult(
+        IHiveEnumerator hiveEnumerator,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var hives = hiveEnumerator.EnumerateHives(cancellationToken).ToList();
+            logger.LogDebug("Discovered {HiveCount} Aspire CLI hive(s) for info output.", hives.Count);
+            return (hives, FailureReason: null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not discover Aspire CLI hives for info output.");
+            return ([], InfoOptionStrings.InstallationDiscoveryFailedReason);
         }
     }
 
@@ -340,9 +393,9 @@ internal static class InstallationInfoOutput
         InstallationDiscoveryResult discoveryResult,
         IEnumerable<HiveInfo> hives)
     {
-        if (discoveryResult.AggregateFailureReason is { } aggregateFailureReason)
+        if (discoveryResult is { Installations.Count: 0, AggregateFailureReason: { } failureReason })
         {
-            return [CreateInfoDiscoveryFailedRow(aggregateFailureReason)];
+            return [CreateInfoDiscoveryFailedRow(failureReason)];
         }
 
         var hiveList = hives.ToList();
@@ -393,6 +446,11 @@ internal static class InstallationInfoOutput
             }
         }
 
+        if (discoveryResult.AggregateFailureReason is { } aggregateFailureReason)
+        {
+            rows.Add(CreateInfoDiscoveryFailedRow(aggregateFailureReason));
+        }
+
         return [.. rows];
     }
 
@@ -421,6 +479,34 @@ internal static class InstallationInfoOutput
         {
             logger.LogWarning(ex, "Could not describe the running Aspire CLI installation for info self-probe output.");
             return CreateInfoDiscoveryFailedRow(InfoOptionStrings.InstallationDiscoveryFailedReason);
+        }
+    }
+
+    internal static IReadOnlyList<InstallationInfo> DescribeSelfForLegacyDoctor(
+        IInstallationDiscovery discovery,
+        ILogger logger)
+    {
+        try
+        {
+            return [discovery.DescribeSelf()];
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not describe the running Aspire CLI installation for the legacy doctor self-probe.");
+            return
+            [
+                new InstallationInfo
+                {
+                    Path = string.Empty,
+                    PathStatus = InstallationPathStatus.NotOnPath,
+                    Status = InstallationInfoStatus.Failed,
+                    StatusReason = InfoOptionStrings.InstallationDiscoveryFailedReason,
+                },
+            ];
         }
     }
 

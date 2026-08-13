@@ -61,7 +61,7 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
 
     /// <inheritdoc />
     public InstallationInfo DescribeSelf()
-        => DescribeSelf(Environment.ProcessPath, pathHits: null);
+        => DescribeSelf(Environment.ProcessPath, pathHits: []);
 
     /// <summary>
     /// Test seam for <see cref="DescribeSelf()"/>: lets tests substitute the
@@ -70,7 +70,11 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
     /// without manipulating <see cref="Environment.ProcessPath"/>.
     /// </summary>
     internal InstallationInfo DescribeSelf(string? processPath)
-        => DescribeSelf(processPath, pathHits: null);
+        // The hidden self-description contract is invoked as a bounded peer
+        // probe. Avoid walking PATH here because a dead network mount can block
+        // indefinitely; full discovery computes and overwrites PathStatus in
+        // the parent process.
+        => DescribeSelf(processPath, pathHits: []);
 
     private InstallationInfo DescribeSelf(string? processPath, IReadOnlyList<InstallationPathHit>? pathHits)
     {
@@ -100,11 +104,10 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
             Path = canonicalPath ?? processPath ?? string.Empty,
             CanonicalPath = canonicalPath,
             // physical-binary-version-by-design (see docs/specs/cli-identity-sidecar.md):
-            // the `aspire --info --self` contract reports the REAL build installed on
-            // disk, so this must read the assembly's stamped version even when
-            // ASPIRE_CLI_VERSION / the sidecar override the CLI's runtime identity.
-            // Routing this through CliExecutionContext.IdentityVersion would make
-            // the self-describe row lie about what is physically installed.
+            // `aspire --info --self` reports the REAL build installed on disk, so this must read
+            // the assembly's stamped version even when ASPIRE_CLI_VERSION / the sidecar override
+            // the CLI's runtime identity. Routing this through CliExecutionContext.IdentityVersion
+            // would make --info lie about what is physically installed.
             Version = VersionHelper.GetDefaultTemplateVersion(),
             Channel = TryReadChannel(),
             Route = route,
@@ -414,8 +417,9 @@ internal sealed partial class InstallationDiscovery : IInstallationDiscovery
             return channel;
         }
 
-        // A misconfigured dev build with no AspireCliChannel assembly metadata
-        // must not break `aspire --info`.
+        // Same defensive posture as before: a misconfigured dev build
+        // with no AspireCliChannel assembly metadata must not break
+        // aspire --info.
         _logger.LogDebug("Could not read identity channel for InstallationDiscovery: {Error}", error);
         return null;
     }

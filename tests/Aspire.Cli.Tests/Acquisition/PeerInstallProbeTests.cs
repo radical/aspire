@@ -414,6 +414,23 @@ public class PeerInstallProbeTests(ITestOutputHelper outputHelper) : IDisposable
     }
 
     [Fact]
+    public async Task ProbeAsync_PeerEmitsEmptyObjectRow_FallsBackToVersion()
+    {
+        using var fakePeer = FakePeerScript.BuildDoctorOrVersion(
+            outputHelper,
+            doctorStdout: "[{}]",
+            doctorExitCode: 0,
+            versionStdout: "9.0.0\n",
+            versionExitCode: 0);
+
+        var probe = CreateProbeWithGenerousTimeout();
+        var result = await probe.ProbeAsync(fakePeer.Path, TestContext.Current.CancellationToken);
+
+        var ok = AssertProbeOk(result);
+        Assert.Equal("9.0.0", ok.Info.Version);
+    }
+
+    [Fact]
     public async Task ProbeAsync_InfoFailsLegacyValid_InvokesExactlyInfoThenDoctorAndKeepsRichMetadata()
     {
         // The peer doesn't understand --info --self (e.g. an older build):

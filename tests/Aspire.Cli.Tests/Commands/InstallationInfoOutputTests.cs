@@ -94,10 +94,20 @@ public class InstallationInfoOutputTests(ITestOutputHelper outputHelper)
             TimeSpan.FromMilliseconds(100),
             TestContext.Current.CancellationToken).DefaultTimeout();
 
-        Assert.Empty(result.Installations);
+        var installation = Assert.Single(result.Installations);
+        Assert.Same(self, installation);
         Assert.Empty(result.Hives);
         Assert.NotNull(result.AggregateFailureReason);
         Assert.Contains("timed out after", result.AggregateFailureReason, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Collection(
+            InstallationInfoOutput.BuildInfoRows(result, result.Hives),
+            row =>
+            {
+                Assert.Equal(InfoInstallationKind.Installation, row.Kind);
+                Assert.Equal(self.Path, row.Path);
+            },
+            row => Assert.Equal(InfoInstallationKind.DiscoveryFailed, row.Kind));
     }
 
     // ---------------------------------------------------------------------------

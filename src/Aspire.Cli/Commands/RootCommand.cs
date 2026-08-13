@@ -95,16 +95,9 @@ internal sealed class RootCommand : BaseRootCommand
 
     public static readonly Option<bool> InfoOption = CreateInfoOption();
 
-    public static readonly Option<bool> SelfOption = new("--self")
-    {
-        Hidden = true,
-    };
+    public static readonly Option<bool> SelfOption = CreateSelfOption();
 
-    public static readonly Option<InfoOutputFormat> FormatOption = new("--format")
-    {
-        Description = InfoOptionStrings.FormatOptionDescription,
-        DefaultValueFactory = _ => InfoOutputFormat.List,
-    };
+    public static readonly Option<InfoOutputFormat> FormatOption = CreateFormatOption();
 
     /// <summary>
     /// Global options that should be passed through to child CLI processes when spawning.
@@ -209,29 +202,6 @@ internal sealed class RootCommand : BaseRootCommand
         Options.Add(SelfOption);
         Options.Add(FormatOption);
 
-        // --self and --format are only meaningful alongside --info; without it they'd
-        // silently do nothing (or, for --self, be indistinguishable from a subcommand
-        // that also happens to declare its own --self option). GetResult(...).Implicit
-        // is false only when the user actually typed the option, so an unspecified
-        // --format (which carries a DefaultValueFactory) does not trigger this error.
-        Validators.Add(result =>
-        {
-            if (result.GetValue(InfoOption))
-            {
-                return;
-            }
-
-            if (result.GetResult(SelfOption) is { Implicit: false })
-            {
-                result.AddError(InfoOptionStrings.SelfRequiresInfo);
-            }
-
-            if (result.GetResult(FormatOption) is { Implicit: false })
-            {
-                result.AddError(InfoOptionStrings.FormatRequiresInfo);
-            }
-        });
-
         // Handle standalone 'aspire' or 'aspire --banner' (no subcommand)
         this.SetAction((Func<ParseResult, CancellationToken, Task<int>>)((context, cancellationToken) =>
         {
@@ -334,12 +304,62 @@ internal sealed class RootCommand : BaseRootCommand
 
         option.Validators.Add(result =>
         {
+            // --info is a standalone root action. Reject a truthy, explicitly supplied
+            // --info when parsing also selected a subcommand (for example, `aspire --info run`).
+            // An omitted option or explicit --info=false does not request the action.
             if (!result.Implicit
                 && result.GetValueOrDefault<bool>()
                 && result.Parent is System.CommandLine.Parsing.CommandResult commandResult
                 && commandResult.Children.OfType<System.CommandLine.Parsing.CommandResult>().Any())
             {
                 result.AddError(InfoOptionStrings.InfoCannotBeCombinedWithSubcommand);
+            }
+        });
+
+        return option;
+    }
+
+    private static Option<bool> CreateSelfOption()
+    {
+        var option = new Option<bool>("--self")
+        {
+            Hidden = true,
+        };
+
+        option.Validators.Add(result =>
+        {
+            // Option validators also run when a subcommand is selected. A root
+            // command validator would miss `--self run` and let the subcommand
+            // silently ignore this option.
+            if (!result.Implicit
+                && result.Parent is System.CommandLine.Parsing.CommandResult commandResult
+                && !commandResult.GetValue(InfoOption))
+            {
+                result.AddError(InfoOptionStrings.SelfRequiresInfo);
+            }
+        });
+
+        return option;
+    }
+
+    private static Option<InfoOutputFormat> CreateFormatOption()
+    {
+        var option = new Option<InfoOutputFormat>("--format")
+        {
+            Description = InfoOptionStrings.FormatOptionDescription,
+            DefaultValueFactory = _ => InfoOutputFormat.List,
+        };
+
+        option.Validators.Add(result =>
+        {
+            // Implicit is false only when the user supplied --format. This
+            // keeps the default value valid while rejecting a root --format
+            // that a selected subcommand would otherwise silently ignore.
+            if (!result.Implicit
+                && result.Parent is System.CommandLine.Parsing.CommandResult commandResult
+                && !commandResult.GetValue(InfoOption))
+            {
+                result.AddError(InfoOptionStrings.FormatRequiresInfo);
             }
         });
 

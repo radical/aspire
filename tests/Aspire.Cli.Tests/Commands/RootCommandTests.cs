@@ -274,6 +274,23 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         Assert.NotEmpty(result.Errors);
     }
 
+    [Theory]
+    [InlineData("--self run")]
+    [InlineData("--format json ps")]
+    public void InfoCompanionOption_WithSubcommand_IsRejected(string commandLine)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse(commandLine);
+
+        Assert.Contains(
+            result.Errors,
+            error => error.Message.Contains("--info", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void DoctorCommand_InfoOption_IsRejected()
     {
@@ -291,25 +308,16 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void DoctorCommand_SelfOption_IsRejected()
+    public void DoctorCommand_SelfOption_ParsesForLegacyPeerCompatibility()
     {
-        // The root --self option is non-recursive, so it must not leak into
-        // subcommands. DoctorCommand no longer declares its own local --self
-        // option either — installation discovery (including the --self
-        // peer-probe surface) is exclusively owned by root `aspire --info`
-        // now — so "doctor --self" must fail parser validation as an
-        // unrecognized option, with or without --format json.
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
 
         var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("doctor --self --format json");
 
-        var result = command.Parse("doctor --self");
-        Assert.NotEmpty(result.Errors);
-
-        var jsonResult = command.Parse("doctor --self --format json");
-        Assert.NotEmpty(jsonResult.Errors);
+        Assert.Empty(result.Errors);
     }
 
     [Fact]
@@ -676,12 +684,8 @@ public class RootCommandTests(ITestOutputHelper outputHelper)
         yield return new object[] { true, new[] { "--help" } };
         yield return new object[] { true, new[] { "-h" } };
         yield return new object[] { true, new[] { "-?" } };
-        yield return new object[] { true, new[] { "/h" } };
-        yield return new object[] { true, new[] { "/?" } };
         yield return new object[] { true, new[] { "doctor", "--help" } };
         yield return new object[] { true, new[] { "run", "-h" } };
-        yield return new object[] { true, new[] { "doctor", "/h" } };
-        yield return new object[] { true, new[] { "run", "/?" } };
 
         // True: explicit "=true"/"true" forms of --info behave the same as the bare flag.
         yield return new object[] { true, new[] { "--info=true" } };

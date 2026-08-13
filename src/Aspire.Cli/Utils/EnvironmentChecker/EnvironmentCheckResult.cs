@@ -4,6 +4,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Aspire.Cli.Acquisition;
 
 namespace Aspire.Cli.Utils.EnvironmentChecker;
 
@@ -168,6 +169,13 @@ internal sealed class DoctorCheckResponse
     /// </summary>
     [JsonPropertyName("summary")]
     public required DoctorCheckSummary Summary { get; set; }
+
+    /// <summary>
+    /// Gets or sets the running installation returned by the hidden legacy
+    /// <c>doctor --self --format json</c> peer compatibility contract.
+    /// </summary>
+    [JsonPropertyName("installations")]
+    public List<InstallationInfo>? Installations { get; set; }
 }
 
 /// <summary>

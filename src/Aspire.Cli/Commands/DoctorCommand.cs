@@ -3,10 +3,12 @@
 
 using System.CommandLine;
 using System.Globalization;
+using Aspire.Cli.Acquisition;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Cli.Utils.EnvironmentChecker;
+using Microsoft.Extensions.Logging;
 using Spectre.Console;
 
 namespace Aspire.Cli.Commands;
@@ -22,27 +24,51 @@ internal sealed class DoctorCommand : BaseCommand
     // already used by other --format json commands (ApiGet, ApiList, DocsSearch, DocsList).
 
     private readonly IEnvironmentChecker _environmentChecker;
+    private readonly IInstallationDiscovery _installationDiscovery;
     private readonly IAnsiConsole _ansiConsole;
+    private readonly ILogger<DoctorCommand> _logger;
     private static readonly Option<OutputFormat> s_formatOption = new("--format")
     {
         Description = DoctorCommandStrings.JsonOptionDescription
     };
+    private static readonly Option<bool> s_selfOption = new("--self")
+    {
+        Hidden = true,
+    };
 
     public DoctorCommand(
         IEnvironmentChecker environmentChecker,
+        IInstallationDiscovery installationDiscovery,
         IAnsiConsole ansiConsole,
+        ILogger<DoctorCommand> logger,
         CommonCommandServices services)
         : base("doctor", DoctorCommandStrings.Description, services)
     {
         _environmentChecker = environmentChecker;
+        _installationDiscovery = installationDiscovery;
         _ansiConsole = ansiConsole;
+        _logger = logger;
 
         Options.Add(s_formatOption);
+        Options.Add(s_selfOption);
     }
 
     protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
         var format = parseResult.GetValue(s_formatOption);
+        var selfOnly = parseResult.GetValue(s_selfOption);
+
+        if (selfOnly)
+        {
+            // Compatibility-only responder for older CLIs whose peer probe
+            // predates root --info. Keep this hidden and limited to self so
+            // doctor does not resume full installation discovery.
+            var installations = InstallationInfoOutput.DescribeSelfForLegacyDoctor(
+                _installationDiscovery,
+                _logger);
+            OutputJson([], installations);
+            return CommandResult.Success();
+        }
 
         // Run all prerequisite checks
         var results = await InteractionService.ShowStatusAsync(
@@ -51,7 +77,7 @@ internal sealed class DoctorCommand : BaseCommand
 
         if (format == OutputFormat.Json)
         {
-            OutputJson(results);
+            OutputJson(results, installations: null);
         }
         else
         {
@@ -63,7 +89,9 @@ internal sealed class DoctorCommand : BaseCommand
         return CommandResult.FromExitCode(hasFailures ? CliExitCodes.InvalidCommand : CliExitCodes.Success);
     }
 
-    private void OutputJson(IReadOnlyList<EnvironmentCheckResult> results)
+    private void OutputJson(
+        IReadOnlyList<EnvironmentCheckResult> results,
+        IReadOnlyList<InstallationInfo>? installations)
     {
         var passed = results.Count(r => r.Status == EnvironmentCheckStatus.Pass);
         var warnings = results.Count(r => r.Status == EnvironmentCheckStatus.Warning);
@@ -78,6 +106,7 @@ internal sealed class DoctorCommand : BaseCommand
                 Warnings = warnings,
                 Failed = failed
             },
+            Installations = installations?.ToList(),
         };
 
         var json = System.Text.Json.JsonSerializer.Serialize(response, JsonSourceGenerationContext.RelaxedEscaping.DoctorCheckResponse);

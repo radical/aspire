@@ -551,7 +551,7 @@ The top-level `version` and `channel` describe the runtime-resolved CLI identity
 | ----- | ----------- |
 | `installation` | A discovered CLI binary (the running CLI, or a peer found on `$PATH` or in a known install location). |
 | `orphan-hive` | A hive directory that exists on disk but has no correlated installation. |
-| `discovery-failed` | The overall discovery pass itself failed (timeout or unexpected error); a single row replaces the normal per-installation rows. |
+| `discovery-failed` | Installation or hive discovery failed (timeout or unexpected error). The row is appended after any installation data completed before the failure; it is the only row when no partial data was available. |
 
 #### Row fields
 
@@ -573,7 +573,7 @@ The top-level `version` and `channel` describe the runtime-resolved CLI identity
 
 #### Hidden peer contract: `aspire --info --self --format json`
 
-`aspire --info --self` limits output to the running CLI and stays hidden from `--help`: it exists so other Aspire CLI processes can ask a peer to self-describe, not as a primary user workflow. It does not enumerate hive directories. Its JSON form is a bare array containing exactly one row, using the same shape as an `installs[]` entry — there is no wrapping `version`/`channel` envelope, because the array itself represents a single installation:
+`aspire --info --self` limits output to the running CLI and stays hidden from `--help`: it exists so other Aspire CLI processes can ask a peer to self-describe, not as a primary user workflow. It does not enumerate hive directories or walk `$PATH`; the discovering parent computes `pathStatus` from its own candidate walk. Its JSON form is a bare array containing exactly one row, using the same shape as an `installs[]` entry — there is no wrapping `version`/`channel` envelope, because the array itself represents a single installation:
 
 ```json
 [
@@ -584,14 +584,14 @@ The top-level `version` and `channel` describe the runtime-resolved CLI identity
     "version": "13.5.0",
     "channel": "stable",
     "source": "script",
-    "pathStatus": "active",
+    "pathStatus": "notOnPath",
     "status": "ok",
     "isCurrent": true
   }
 ]
 ```
 
-When the Aspire CLI discovers a peer installation, it probes that peer's binary in order: `--info --self --format json` first, then `doctor --self --format json` as a compatibility fallback for CLI versions that predate `--info`, then `--version` as the compatibility floor for CLIs that support neither machine-readable self-description form. This lets discovery report rich version, channel, and source data for older peers without requiring every installed CLI on a machine to be upgraded. It is a compatibility detail of peer discovery, not user-facing recursion — running `aspire --info` never re-invokes itself.
+When the Aspire CLI discovers a peer installation, it probes that peer's binary in order: `--info --self --format json` first, then `doctor --self --format json` as a compatibility fallback for CLI versions that predate `--info`, then `--version` as the compatibility floor for CLIs that support neither machine-readable self-description form. New CLIs retain the hidden legacy `doctor --self --format json` responder so older installed CLIs can also obtain rich metadata from newer peers. These are compatibility details of peer discovery, not user-facing recursion — running `aspire --info` never re-invokes itself.
 
 ## MCP tooling
 

@@ -267,8 +267,6 @@ public class TelemetryConfigurationTests
     [InlineData("--help")]
     [InlineData("-h")]
     [InlineData("-?")]
-    [InlineData("/h")]
-    [InlineData("/?")]
     public void AzureMonitor_Disabled_ForAllHelpFlags(string flag)
     {
         var configuration = new ConfigurationBuilder().Build();

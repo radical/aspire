@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Reflection;
 using System.Text.Json;
 using Aspire.Cli.Acquisition;
 using Aspire.Cli.Interaction;
@@ -20,20 +19,37 @@ namespace Aspire.Cli.Tests.Commands;
 public class DoctorCommandTests(ITestOutputHelper outputHelper)
 {
     [Fact]
-    public void ConstructorDoesNotDependOnInstallationDiscovery()
+    public async Task DoctorCommand_SelfJson_PreservesLegacyPeerContract()
     {
-        // Installation discovery is exclusively owned by `aspire --info` now; doctor
-        // must not resolve or hold onto it. This assertion fails immediately if
-        // installation discovery is ever wired back into doctor, before any
-        // output-level symptom (e.g. an "installations" JSON property) could hide it.
-        var constructor = Assert.Single(
-            typeof(Aspire.Cli.Commands.DoctorCommand).GetConstructors(
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.OutputTextWriter = outputWriter;
+        });
+        services.RemoveAll<IInstallationDiscovery>();
+        services.AddSingleton<IInstallationDiscovery>(new FakeInstallationDiscovery(new InstallationInfo
+        {
+            Path = "/test/aspire",
+            Version = "13.5.0",
+            Channel = "staging",
+            Route = "script",
+            PathStatus = InstallationPathStatus.Active,
+            Status = InstallationInfoStatus.Ok,
+        }));
+        using var provider = services.BuildServiceProvider();
 
-        Assert.DoesNotContain(
-            constructor.GetParameters(),
-            parameter => parameter.ParameterType == typeof(IInstallationDiscovery) ||
-                parameter.ParameterType == typeof(WingetFirstRunProbe));
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse("doctor --self --format json");
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        using var document = JsonDocument.Parse(string.Concat(outputWriter.Logs));
+        var installation = Assert.Single(document.RootElement.GetProperty("installations").EnumerateArray());
+        Assert.Equal("/test/aspire", installation.GetProperty("path").GetString());
+        Assert.Equal("13.5.0", installation.GetProperty("version").GetString());
+        Assert.Equal("staging", installation.GetProperty("channel").GetString());
+        Assert.Equal("script", installation.GetProperty("route").GetString());
     }
 
     [Fact]

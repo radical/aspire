@@ -13,8 +13,6 @@ internal static class CommonOptionNames
     public const string Help = "--help";
     public const string HelpShort = "-h";
     public const string HelpAlt = "-?";
-    public const string HelpSlash = "/h";
-    public const string HelpAltSlash = "/?";
     public const string NoLogo = "--nologo";
     public const string Banner = "--banner";
     public const string Debug = "--debug";
@@ -30,12 +28,11 @@ internal static class CommonOptionNames
     /// <summary>
     /// Help and long-version options that are recognized as informational wherever they appear in
     /// the raw arguments (including after a subcommand, e.g. "doctor --help"). None take a value.
-    /// System.CommandLine's default <c>HelpOption</c> registers "/h" and "/?" as aliases alongside
-    /// "-h" and "-?", so both slash forms are recognized here too. The short version alias
-    /// <c>-v</c> is excluded because subcommands can use it for their own options.
+    /// The short version alias <c>-v</c> is excluded because subcommands can use it
+    /// for their own options.
     /// </summary>
     private static readonly string[] s_helpVersionOptionNames =
-        [Version, Help, HelpShort, HelpAlt, HelpSlash, HelpAltSlash];
+        [Version, Help, HelpShort, HelpAlt];
 
     // Root options declared by RootCommand (src/Aspire.Cli/Commands/RootCommand.cs) that
     // *unconditionally* consume a following token as their value. Kept in sync manually:
@@ -105,12 +102,12 @@ internal static class CommonOptionNames
     /// </summary>
     /// <remarks>
     /// Help and long-version options (<see cref="Version"/>, <see cref="Help"/>,
-    /// <see cref="HelpShort"/>, <see cref="HelpAlt"/>, <see cref="HelpSlash"/>,
-    /// <see cref="HelpAltSlash"/>) are recognized wherever they appear before the "--"
-    /// app-argument delimiter — including after a subcommand, e.g. "doctor --help" — matching
-    /// existing CLI behavior. They are bare flags that never take a value, so no value-consumption
-    /// tracking is required for them, and unlike <see cref="Info"/> they are not sensitive to the
-    /// subcommand boundary (only to "--").
+    /// <see cref="HelpShort"/>, <see cref="HelpAlt"/>) are recognized wherever
+    /// they appear before the "--" app-argument delimiter — including after a
+    /// subcommand, e.g. "doctor --help" — matching existing CLI behavior. They
+    /// are bare flags that never take a value, so no value-consumption tracking
+    /// is required for them, and unlike <see cref="Info"/> they are not sensitive
+    /// to the subcommand boundary (only to "--").
     ///
     /// <see cref="Info"/> (<c>--info</c>) and <see cref="VersionShort"/> (<c>-v</c>) are different:
     /// they are recognized only before any subcommand/positional token or the "--" app-argument

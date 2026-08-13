@@ -117,15 +117,15 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
         // bounded only by the per-level timeout. `--format json` is
         // required so the peer emits a machine-readable row (the human
         // table layout is the default when `--format` is omitted).
-        var info = await SpawnWithBudgetAsync(binaryPath, s_infoArgs, budget, cancellationToken).ConfigureAwait(false);
-        if (info.Cancelled)
+        var infoResult = await SpawnWithBudgetAsync(binaryPath, s_infoArgs, budget, cancellationToken).ConfigureAwait(false);
+        if (infoResult.Cancelled)
         {
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (info.ExitCode == 0 && TryParseRichProbeResult(binaryPath, info.Stdout, out var infoResult, out _))
+        if (infoResult.ExitCode == 0 && TryParseRichProbeResult(binaryPath, infoResult.Stdout, out var parsedInfo, out _))
         {
-            return new PeerProbeResult.Ok(infoResult);
+            return new PeerProbeResult.Ok(parsedInfo);
         }
 
         // Attempt 2: `doctor --self --format json`, the legacy self-describe
@@ -134,15 +134,15 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
         // stdout, unparseable/wrong-shape JSON) as well as the peer simply
         // predating `--info --self` (System.CommandLine rejects the unknown
         // option and the peer exits non-zero).
-        var doctor = await SpawnWithBudgetAsync(binaryPath, s_doctorArgs, budget, cancellationToken).ConfigureAwait(false);
-        if (doctor.Cancelled)
+        var doctorResult = await SpawnWithBudgetAsync(binaryPath, s_doctorArgs, budget, cancellationToken).ConfigureAwait(false);
+        if (doctorResult.Cancelled)
         {
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (doctor.ExitCode == 0 && TryParseRichProbeResult(binaryPath, doctor.Stdout, out var doctorResult, out _))
+        if (doctorResult.ExitCode == 0 && TryParseRichProbeResult(binaryPath, doctorResult.Stdout, out var parsedDoctorInfo, out _))
         {
-            return new PeerProbeResult.Ok(doctorResult);
+            return new PeerProbeResult.Ok(parsedDoctorInfo);
         }
 
         // Attempt 3: `--version`, the compatibility floor. Peers this old
@@ -182,7 +182,7 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
         // reason lets a caller distinguish "peer doesn't support --info yet"
         // from "peer is broken across every contract we tried" without
         // discarding either signal.
-        return new PeerProbeResult.Failed(DescribeFailure(binaryPath, info, doctor, version));
+        return new PeerProbeResult.Failed(DescribeFailure(binaryPath, infoResult, doctorResult, version));
     }
 
     /// <summary>
@@ -265,9 +265,15 @@ internal sealed class PeerInstallProbe : IPeerInstallProbe
             // whole discovery walk for the caller.
             if (row is { ValueKind: JsonValueKind.Object } element)
             {
-                info = InstallationInfoParser.Parse(element);
-                failureReason = string.Empty;
-                return true;
+                var parsed = InstallationInfoParser.Parse(element);
+                if (!string.IsNullOrWhiteSpace(parsed.Path)
+                    || !string.IsNullOrWhiteSpace(parsed.Version)
+                    || (parsed.Status == InstallationInfoStatus.Failed && !string.IsNullOrWhiteSpace(parsed.StatusReason)))
+                {
+                    info = parsed;
+                    failureReason = string.Empty;
+                    return true;
+                }
             }
 
             _logger.LogDebug("Peer probe at {BinaryPath} returned JSON without an installation row; trying the --version fallback.", binaryPath);
