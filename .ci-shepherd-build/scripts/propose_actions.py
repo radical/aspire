@@ -20,6 +20,7 @@ def main() -> int:
     )
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--prepared", type=Path, required=True)
+    parser.add_argument("--agent-input", type=Path, required=True)
     parser.add_argument("--judgments", type=Path, required=True)
     parser.add_argument("--shepherd-author", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -34,6 +35,7 @@ def main() -> int:
             _load(args.prepared),
             _load(args.judgments),
             args.shepherd_author,
+            agent_input=_load(args.agent_input),
         )
         args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         args.output.write_text(stable_json(proposals), encoding="utf-8")

@@ -224,6 +224,124 @@ def _render_close_body(
     )
 
 
+def _render_duplicate_close_body(
+    issue_number: int,
+    recommendation: dict[str, Any],
+    action_cluster: dict[str, Any],
+    snapshot: dict[str, object],
+) -> str:
+    evidence_ids = recommendation.get("evidenceIds")
+    if not isinstance(evidence_ids, list) or not all(
+        isinstance(evidence_id, str) for evidence_id in evidence_ids
+    ):
+        raise TypeError("Duplicate review-close evidenceIds must contain strings.")
+    missing = recommendation.get("missingEvidence")
+    if not isinstance(missing, list):
+        raise TypeError("Duplicate review-close missingEvidence must be a list.")
+    if missing:
+        raise ValueError(
+            f"Issue {issue_number} duplicate review-close cannot have missing evidence."
+        )
+
+    canonical_issue_number = action_cluster.get("canonicalIssueNumber")
+    members = action_cluster.get("memberIssueNumbers")
+    relationship = action_cluster.get("relationship")
+    if (
+        action_cluster.get("role") != "superseded"
+        or not isinstance(canonical_issue_number, int)
+        or isinstance(canonical_issue_number, bool)
+        or canonical_issue_number <= 0
+        or canonical_issue_number == issue_number
+        or not isinstance(members, list)
+        or issue_number not in members
+        or canonical_issue_number not in members
+        or relationship
+        not in {"same-error-code", "same-test", "same-workflow-failure"}
+    ):
+        raise ValueError(
+            f"Issue {issue_number} duplicate review-close cluster is invalid."
+        )
+
+    repository = snapshot.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise TypeError("Validated snapshot repository must be a string.")
+    canonical_url = (
+        f"https://github.com/{repository}/issues/{canonical_issue_number}"
+    )
+    relationship_description = {
+        "same-error-code": "the same normalized error code",
+        "same-test": "the same test failure",
+        "same-workflow-failure": "the same workflow failure",
+    }[relationship]
+    return "\n".join(
+        [
+            "[automated] The CI shepherd found that this is a duplicate issue record.",
+            "",
+            f"**Current assessment:** {recommendation['summary']}",
+            "",
+            "**Why this can be closed:**",
+            (
+                f"- This issue and the canonical issue track "
+                f"{relationship_description}."
+            ),
+            (
+                f"- The shared failure remains tracked by canonical issue "
+                f"[#{canonical_issue_number}]({canonical_url})."
+            ),
+            (
+                "- Closing this duplicate does not claim that the shared failure "
+                "has recovered."
+            ),
+            "",
+            "**Evidence reviewed:**",
+            *_evidence_lines(snapshot, evidence_ids),
+            "",
+            (
+                "**Resolution:** The duplicate relationship supports closing this "
+                "issue as a duplicate."
+            ),
+            "",
+            _status_markers(issue_number, "review-close"),
+        ]
+    )
+
+
+def _action_clusters(
+    agent_input: object | None,
+    *,
+    snapshot_id: object,
+) -> dict[int, dict[str, Any]]:
+    if agent_input is None:
+        return {}
+    if not isinstance(agent_input, dict):
+        raise TypeError("Compact agent input must be an object.")
+    if agent_input.get("schemaVersion") != 1:
+        raise ValueError("Compact agent input schemaVersion must be 1.")
+    if agent_input.get("snapshotId") != snapshot_id:
+        raise ValueError("Compact agent input snapshotId does not match prepared input.")
+    issues = agent_input.get("issues")
+    if not isinstance(issues, list):
+        raise TypeError("Compact agent input issues must be a list.")
+
+    clusters: dict[int, dict[str, Any]] = {}
+    for issue in issues:
+        if not isinstance(issue, dict):
+            raise TypeError("Compact agent input issue must be an object.")
+        issue_number = issue.get("issueNumber")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+        ):
+            raise ValueError("Compact agent input issueNumber must be positive.")
+        cluster = issue.get("actionCluster")
+        if cluster is not None:
+            if not isinstance(cluster, dict):
+                raise TypeError("Compact agent input actionCluster must be an object.")
+            clusters[issue_number] = cluster
+    return clusters
+
+
 def _owned_status_comments(
     snapshot: dict[str, object],
     issue_number: int,
@@ -317,6 +435,7 @@ def build_watch_proposals(
             "body": body,
             "evidenceIds": list(recommendation["evidenceIds"]),
             "expectedIssueState": "open",
+            "requiresSeparateApproval": True,
         }
         if existing:
             proposal["commentId"] = existing[0]["id"]
@@ -339,6 +458,8 @@ def build_action_proposals(
     prepared: object,
     judgments: object,
     shepherd_author: str,
+    *,
+    agent_input: object | None = None,
 ) -> dict[str, object]:
     result = build_watch_proposals(
         snapshot,
@@ -350,6 +471,10 @@ def build_action_proposals(
         raise TypeError("Snapshot must be an object.")
     if not isinstance(prepared, dict) or not isinstance(judgments, dict):
         raise TypeError("Prepared input and judgments must be objects.")
+    action_clusters = _action_clusters(
+        agent_input,
+        snapshot_id=prepared.get("snapshotId"),
+    )
 
     prepared_issues = {
         issue["issueNumber"]: issue
@@ -375,11 +500,17 @@ def build_action_proposals(
             continue
 
         prepared_issue = prepared_issues[issue_number]
-        if (
-            prepared_issue.get("candidateState") != "resolved"
-            or prepared_issue.get("candidateAction") != "recommend-close"
-            or not prepared_issue.get("resolutionEvidence")
-        ):
+        action_cluster = action_clusters.get(issue_number)
+        is_duplicate = (
+            isinstance(action_cluster, dict)
+            and action_cluster.get("role") == "superseded"
+        )
+        has_recovery = (
+            prepared_issue.get("candidateState") == "resolved"
+            and prepared_issue.get("candidateAction") == "recommend-close"
+            and bool(prepared_issue.get("resolutionEvidence"))
+        )
+        if not is_duplicate and not has_recovery:
             raise ValueError(
                 f"Issue {issue_number} review-close requires deterministic "
                 "resolution evidence."
@@ -387,12 +518,22 @@ def build_action_proposals(
 
         recommendation = close_recommendations[0]
         key = f"issue:{issue_number}:review-close"
-        body = _render_close_body(
-            issue_number,
-            recommendation,
-            prepared_issue,
-            snapshot,
+        body = (
+            _render_duplicate_close_body(
+                issue_number,
+                recommendation,
+                action_cluster,
+                snapshot,
+            )
+            if is_duplicate
+            else _render_close_body(
+                issue_number,
+                recommendation,
+                prepared_issue,
+                snapshot,
+            )
         )
+        close_reason = "duplicate" if is_duplicate else "completed"
         existing = _owned_status_comments(snapshot, issue_number, key)
         if len(existing) > 1:
             raise ValueError(
@@ -431,9 +572,9 @@ def build_action_proposals(
             "issueNumber": issue_number,
             "issueUrl": prepared_issue["issueUrl"],
             "operation": "close-issue",
-            "closeReason": "completed",
+            "closeReason": close_reason,
             "requiresSeparateApproval": True,
-            "idempotencyKey": f"issue:{issue_number}:close:completed",
+            "idempotencyKey": f"issue:{issue_number}:close:{close_reason}",
             "evidenceIds": list(recommendation["evidenceIds"]),
             "expectedIssueState": "open",
         }

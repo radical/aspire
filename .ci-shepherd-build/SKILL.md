@@ -53,14 +53,19 @@ proposal rendering converts those judgments into exact effects:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/propose_actions.py" \
-  --input "$SCRATCH/input.json" \
+  --snapshot "$SCRATCH/input.round-1.json" \
+  --prepared "$SCRATCH/assessment-input.round-1.json" \
+  --agent-input "$SCRATCH/agent-input.round-1.json" \
   --judgments "$SCRATCH/judgments.json" \
+  --shepherd-author "$SHEPHERD_AUTHOR" \
   --output "$SCRATCH/action-proposals.json"
 ```
 
 `action-proposals.json` is the only external-effect authority. The actor never
 reinterprets `judgments.json`, issue prose, or evidence, and never regenerates
-comment text or close reasons.
+comment text or close reasons. The compact agent input supplies deterministic
+action-cluster context only; it cannot create a proposal without a matching
+validated judgment.
 
 The actor is dry-run by default. This command validates and prints every exact
 proposed effect:

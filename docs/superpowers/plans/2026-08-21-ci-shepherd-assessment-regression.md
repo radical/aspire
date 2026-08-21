@@ -398,6 +398,7 @@ PYTHONPATH=.ci-shepherd-build/scripts \
 python3 .ci-shepherd-build/scripts/propose_actions.py \
   --snapshot "$REPLAY/input.json" \
   --prepared "$REPLAY/assessment-input.json" \
+  --agent-input "$REPLAY/agent-input.json" \
   --judgments "$REPLAY/judgments.json" \
   --shepherd-author ankj \
   --output "$REPLAY/action-proposals.json"

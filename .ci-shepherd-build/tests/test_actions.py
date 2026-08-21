@@ -155,6 +155,43 @@ def _close_judgments() -> dict[str, object]:
     return judgments
 
 
+def _duplicate_agent_input() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "snapshotId": "snapshot:owner/repo:2026-08-21T16:00:00Z",
+        "repository": "owner/repo",
+        "issues": [
+            {
+                "issueNumber": 21,
+                "actionCluster": {
+                    "canonicalIssueNumber": 20,
+                    "memberIssueNumbers": [20, 21],
+                    "relationship": "same-error-code",
+                    "role": "superseded",
+                },
+            }
+        ],
+    }
+
+
+def _duplicate_judgments() -> dict[str, object]:
+    judgments = _close_judgments()
+    issue = judgments["issues"][0]
+    assert isinstance(issue, dict)
+    recommendations = issue["recommendations"]
+    assert isinstance(recommendations, list)
+    recommendation = recommendations[0]
+    assert isinstance(recommendation, dict)
+    recommendation.update(
+        {
+            "summary": "Review closure as a superseded duplicate of canonical issue #20.",
+            "evidenceIds": ["issue:21"],
+            "reassessWhen": "If canonical issue #20 no longer tracks the shared failure.",
+        }
+    )
+    return judgments
+
+
 def _with_owned_comment(
     snapshot: dict[str, object],
     body: str,
@@ -251,6 +288,32 @@ class WatchActionTests(unittest.TestCase):
                 "ankj",
             )
 
+    def test_build_action_proposals_renders_superseded_duplicate_close(self) -> None:
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _duplicate_judgments(),
+            "ankj",
+            agent_input=_duplicate_agent_input(),
+        )
+
+        self.assertEqual(
+            ["create-comment", "close-issue"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
+        comment, close = result["proposals"]
+        self.assertIn(
+            "canonical issue [#20](https://github.com/owner/repo/issues/20)",
+            comment["body"],
+        )
+        self.assertIn(
+            "**Resolution:** The duplicate relationship supports closing this issue "
+            "as a duplicate.",
+            comment["body"],
+        )
+        self.assertEqual("duplicate", close["closeReason"])
+        self.assertEqual(comment["actionId"], close["dependsOn"])
+
     def test_build_watch_proposals_renders_new_status_comment(self) -> None:
         result = build_watch_proposals(
             _snapshot(),
@@ -263,6 +326,7 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual(1, len(result["proposals"]))
         proposal = result["proposals"][0]
         self.assertEqual("create-comment", proposal["operation"])
+        self.assertIs(True, proposal["requiresSeparateApproval"])
         self.assertEqual("issue:21:watch", proposal["idempotencyKey"])
         self.assertTrue(proposal["body"].startswith("[automated] "))
         self.assertIn(

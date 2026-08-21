@@ -947,6 +947,7 @@ Run:
 python3 "$PWD/.ci-shepherd-build/scripts/propose_actions.py" \
   --snapshot "$SCRATCH/input.round-1.json" \
   --prepared "$SCRATCH/assessment-input.round-1.json" \
+  --agent-input "$SCRATCH/agent-input.round-1.json" \
   --judgments "$SCRATCH/judgments.json" \
   --shepherd-author "$SHEPHERD_AUTHOR" \
   --output "$SCRATCH/action-proposals.json"

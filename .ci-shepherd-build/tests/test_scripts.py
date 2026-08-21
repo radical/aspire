@@ -702,6 +702,7 @@ class PrototypeScriptTests(unittest.TestCase):
         scratch.mkdir(parents=True)
         snapshot_path = scratch / "input.json"
         prepared_path = scratch / "prepared.json"
+        agent_input_path = scratch / "agent-input.json"
         judgments_path = scratch / "judgments.json"
         output_path = scratch / "action-proposals.json"
         snapshot = {
@@ -730,6 +731,19 @@ class PrototypeScriptTests(unittest.TestCase):
         }
         snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
         prepared_path.write_text("{}", encoding="utf-8")
+        agent_input_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "snapshotId": (
+                        "snapshot:owner/repo:2026-08-21T16:00:00Z"
+                    ),
+                    "repository": "owner/repo",
+                    "issues": [],
+                }
+            ),
+            encoding="utf-8",
+        )
         judgments_path.write_text("{}", encoding="utf-8")
         proposals = {
             "schemaVersion": 1,
@@ -755,6 +769,8 @@ class PrototypeScriptTests(unittest.TestCase):
                         str(snapshot_path),
                         "--prepared",
                         str(prepared_path),
+                        "--agent-input",
+                        str(agent_input_path),
                         "--judgments",
                         str(judgments_path),
                         "--shepherd-author",
