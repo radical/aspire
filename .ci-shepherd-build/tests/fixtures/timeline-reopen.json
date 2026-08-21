@@ -1,0 +1,50 @@
+[
+  {
+    "id": 5001,
+    "event": "closed",
+    "created_at": "2026-07-01T00:00:00Z",
+    "actor": {
+      "login": "timeline-bot"
+    }
+  },
+  {
+    "id": 5002,
+    "event": "closed",
+    "created_at": "2026-07-02T00:00:00Z",
+    "actor": {
+      "login": "timeline-bot"
+    }
+  },
+  {
+    "id": 5003,
+    "event": "reopened",
+    "created_at": "2026-07-03T00:00:00Z",
+    "actor": {
+      "login": "timeline-bot"
+    }
+  },
+  {
+    "id": 5004,
+    "event": "reopened",
+    "created_at": "2026-07-04T00:00:00Z",
+    "actor": {
+      "login": "timeline-bot"
+    }
+  },
+  {
+    "id": 5005,
+    "event": "closed",
+    "created_at": "2026-07-05T00:00:00Z",
+    "actor": {
+      "login": "timeline-bot"
+    }
+  },
+  {
+    "id": 5006,
+    "event": "reopened",
+    "created_at": "2026-07-06T00:00:00Z",
+    "actor": {
+      "login": "timeline-bot"
+    }
+  }
+]

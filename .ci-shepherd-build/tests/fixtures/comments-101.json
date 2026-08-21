@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1002,
+    "html_url": "https://github.com/owner/repo/issues/101#issuecomment-1002",
+    "created_at": "2026-06-12T00:00:00Z",
+    "updated_at": "2026-06-12T00:00:00Z",
+    "body": "Exception type: TimeoutException\nError code: E_TIMEOUT",
+    "user": {
+      "login": "commenter"
+    }
+  },
+  {
+    "id": 1001,
+    "html_url": "https://github.com/owner/repo/issues/101#issuecomment-1001",
+    "created_at": "2026-06-11T00:00:00Z",
+    "updated_at": "2026-06-11T00:00:00Z",
+    "body": "Test name: Tests.Checkout.Timeout\nWorkflow: CI\nJob: Linux Tests",
+    "user": {
+      "login": "commenter"
+    }
+  }
+]

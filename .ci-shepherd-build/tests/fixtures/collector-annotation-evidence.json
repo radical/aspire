@@ -1,0 +1,140 @@
+{
+  "collectedAt": "2026-08-17T22:00:00Z",
+  "evidence": {
+    "run:7001": {
+      "availability": "available",
+      "collectedAt": "2026-08-17T22:00:00Z",
+      "kind": "workflow-run",
+      "payload": {
+        "artifacts": [],
+        "attempt": 1,
+        "attempts": [
+          1
+        ],
+        "branch": "feature",
+        "conclusion": "failure",
+        "createdAt": "2026-08-17T20:00:00Z",
+        "event": "pull_request",
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "historyCoversSourceRun": false,
+        "jobs": [
+          {
+            "annotationEvidenceIds": [
+              "run:7001:check:8001:annotation:9001"
+            ],
+            "attempt": 1,
+            "checkRunId": 8001,
+            "completedAt": "2026-08-17T20:20:00Z",
+            "conclusion": "failure",
+            "jobId": 2001,
+            "logEvidenceId": "run:7001:attempt:1:job:2001:log",
+            "name": "job-2001",
+            "referencedBy": [
+              {
+                "extractionMethod": "actions-run-url",
+                "sourceEvidenceId": "issue:11",
+                "sourceIssueNumber": 11,
+                "sourceUrl": "https://github.com/owner/repo/issues/11"
+              }
+            ],
+            "runId": 7001,
+            "startedAt": "2026-08-17T20:01:00Z",
+            "status": "completed",
+            "steps": [],
+            "targetRepository": "owner/repo",
+            "url": "https://github.com/owner/repo/actions/runs/7001/job/2001"
+          }
+        ],
+        "jobsTruncated": false,
+        "recentHistory": [],
+        "recentHistoryCollected": false,
+        "recentHistoryGap": "workflow-or-branch-unavailable",
+        "recentHistoryTotalCount": null,
+        "recentHistoryTruncated": false,
+        "referencedBy": [
+          {
+            "extractionMethod": "actions-run-url",
+            "sourceEvidenceId": "issue:11",
+            "sourceIssueNumber": 11,
+            "sourceUrl": "https://github.com/owner/repo/issues/11"
+          }
+        ],
+        "rerunIdentity": {
+          "branch": "feature",
+          "event": "pull_request",
+          "workflowId": 0
+        },
+        "runId": 7001,
+        "runStartedAt": "2026-08-17T20:01:00Z",
+        "status": "completed",
+        "targetRepository": "owner/repo",
+        "totalFailedJobs": 1,
+        "updatedAt": "2026-08-17T20:30:00Z",
+        "workflow": "CI",
+        "workflowId": 0
+      },
+      "url": "https://github.com/owner/repo/actions/runs/7001"
+    },
+    "run:7001:attempt:1:job:2001": {
+      "availability": "available",
+      "collectedAt": "2026-08-17T22:00:00Z",
+      "kind": "workflow-job",
+      "payload": {
+        "annotationEvidenceIds": [
+          "run:7001:check:8001:annotation:9001"
+        ],
+        "attempt": 1,
+        "checkRunId": 8001,
+        "completedAt": "2026-08-17T20:20:00Z",
+        "conclusion": "failure",
+        "jobId": 2001,
+        "logEvidenceId": "run:7001:attempt:1:job:2001:log",
+        "name": "job-2001",
+        "referencedBy": [
+          {
+            "extractionMethod": "actions-run-url",
+            "sourceEvidenceId": "issue:11",
+            "sourceIssueNumber": 11,
+            "sourceUrl": "https://github.com/owner/repo/issues/11"
+          }
+        ],
+        "runId": 7001,
+        "startedAt": "2026-08-17T20:01:00Z",
+        "status": "completed",
+        "steps": [],
+        "targetRepository": "owner/repo",
+        "url": "https://github.com/owner/repo/actions/runs/7001/job/2001"
+      },
+      "url": "https://github.com/owner/repo/actions/runs/7001/job/2001"
+    },
+    "run:7001:check:8001:annotation:9001": {
+      "availability": "available",
+      "collectedAt": "2026-08-17T22:00:00Z",
+      "kind": "workflow-job",
+      "payload": {
+        "annotationId": 9001,
+        "attempt": 1,
+        "checkRunId": 8001,
+        "endLine": 42,
+        "jobId": 2001,
+        "level": "failure",
+        "message": "Assert.Equal() Failure: Values differ",
+        "path": "tests/Alpha.Tests/SampleTests.cs",
+        "referencedBy": [
+          {
+            "extractionMethod": "actions-run-url",
+            "sourceEvidenceId": "issue:11",
+            "sourceIssueNumber": 11,
+            "sourceUrl": "https://github.com/owner/repo/issues/11"
+          }
+        ],
+        "runId": 7001,
+        "startLine": 42,
+        "targetRepository": "owner/repo",
+        "title": "Alpha.Tests.SampleTests.FailingTest"
+      },
+      "url": "https://github.com/owner/repo/actions/runs/7001/job/2001"
+    }
+  },
+  "repository": "owner/repo"
+}

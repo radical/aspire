@@ -1,0 +1,84 @@
+{
+  "open": [
+    {
+      "number": 101,
+      "state": "open",
+      "title": "Checkout timeout keeps reopening #150",
+      "body": "Incident persists.\n<!-- ci-shepherd:test=test_checkout -->\nCI Shepherd Marker: workflow=ci\nSee historical issue #150 and https://github.com/owner/repo/actions/runs/5555",
+      "html_url": "https://github.com/owner/repo/issues/101",
+      "created_at": "2026-06-01T00:00:00Z",
+      "updated_at": "2026-08-15T00:00:00Z",
+      "closed_at": null,
+      "labels": [
+        {
+          "name": "ci-failure-cause"
+        },
+        {
+          "name": "automation-broken"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      }
+    },
+    {
+      "number": 102,
+      "state": "open",
+      "title": "Automation rerun sticks on cancel",
+      "body": "Linked PR https://github.com/owner/repo/pull/77\nRun: https://github.com/owner/repo/actions/runs/6666\nCommit: abcdef1234567\nNoise deadbeef should stay ignored\nCI Shepherd Marker: job=rerun-worker\nStep: Requeue Job\nWorkflow: CI",
+      "html_url": "https://github.com/owner/repo/issues/102",
+      "created_at": "2026-08-10T00:00:00Z",
+      "updated_at": "2026-08-15T00:00:00Z",
+      "closed_at": null,
+      "labels": [
+        {
+          "name": "automation-broken"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      }
+    },
+    {
+      "number": 104,
+      "state": "open",
+      "title": "Another PR object should be filtered",
+      "body": "",
+      "html_url": "https://github.com/owner/repo/issues/104",
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-02T00:00:00Z",
+      "closed_at": null,
+      "labels": [
+        {
+          "name": "automation-broken"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      },
+      "pull_request": {
+        "url": "https://api.github.com/repos/owner/repo/pulls/104"
+      }
+    }
+  ],
+  "closed": [
+    {
+      "number": 205,
+      "state": "closed",
+      "title": "Automation rerun recovered",
+      "body": "CI Shepherd Marker: job=rerun-worker\nStep: Requeue Job\nWorkflow: CI",
+      "html_url": "https://github.com/owner/repo/issues/205",
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-10T00:00:00Z",
+      "closed_at": "2026-08-10T00:00:00Z",
+      "labels": [
+        {
+          "name": "automation-broken"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      }
+    }
+  ]
+}

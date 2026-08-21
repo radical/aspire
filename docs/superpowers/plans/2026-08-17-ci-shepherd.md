@@ -1,5 +1,8 @@
 # CI Failure Shepherd Implementation Plan
 
+The bounded producer-aware lifecycle follow-up is tracked in
+[CI Shepherd Lifecycle Hardening Implementation Plan](2026-08-19-ci-shepherd-lifecycle-hardening.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a manually invoked, read-only user-level Copilot skill that collects authoritative Aspire CI issue evidence and produces validated local JSON and Markdown action reports.
@@ -12,35 +15,35 @@
 
 ## File map
 
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/SKILL.md`: invocation contract, reasoning protocol, evidence rules, and concise chat output.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/models.py`: schema enums, normalization helpers, and input/report validation.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/github.py`: read-only `gh api` subprocess client, pagination, retry, and error classification.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/collector.py`: issue union, timeline/reference/run/PR/commit enrichment, log excerpts, and ownership evidence.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/storage.py`: run layout, manifests, atomic JSON writes, and latest-run pointer.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/reporter.py`: decision validation, previous-run comparison, Markdown rendering, and report finalization.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/collect.py`: collector CLI.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/finalize.py`: report validation/finalization CLI.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/verify.py`: independent inventory, corpus, report, and GET-only audit.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/install.py`: staged personal-skill installation, backup, and rollback guidance.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_models.py`: schema and high-risk safety tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_github.py`: subprocess, pagination, retry, and fatal/partial failure tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_collector.py`: inventory, reference, timeline, log, and ownership fixture tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_storage.py`: atomic run and latest pointer tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_reporter.py`: report completeness, comparison, ordering, and Markdown tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_corpus.py`: executable named-case constraints.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_install.py`: collision, backup, discovery, and removal guidance tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/`: compact GitHub API responses for deterministic tests.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/api-map.json`: endpoint-to-fixture map for deterministic CLI runs.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/corpus/input.json`: normalized evidence for the named audited cases.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/corpus/expected-report.json`: valid decisions and relationships for the named corpus.
-- `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/corpus/expected-decisions.json`: mandatory decision constraints for the audited Aspire cases.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/SKILL.md`: invocation contract, reasoning protocol, evidence rules, and concise chat output.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/models.py`: schema enums, normalization helpers, and input/report validation.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/github.py`: read-only `gh api` subprocess client, pagination, retry, and error classification.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/collector.py`: issue union, timeline/reference/run/PR/commit enrichment, log excerpts, and ownership evidence.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/storage.py`: run layout, manifests, atomic JSON writes, and latest-run pointer.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/reporter.py`: decision validation, previous-run comparison, Markdown rendering, and report finalization.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/collect.py`: collector CLI.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/finalize.py`: report validation/finalization CLI.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/verify.py`: independent inventory, corpus, report, and GET-only audit.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/install.py`: staged personal-skill installation, backup, and rollback guidance.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_models.py`: schema and high-risk safety tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_github.py`: subprocess, pagination, retry, and fatal/partial failure tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_collector.py`: inventory, reference, timeline, log, and ownership fixture tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_storage.py`: atomic run and latest pointer tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_reporter.py`: report completeness, comparison, ordering, and Markdown tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_corpus.py`: executable named-case constraints.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_install.py`: collision, backup, discovery, and removal guidance tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/`: compact GitHub API responses for deterministic tests.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/api-map.json`: endpoint-to-fixture map for deterministic CLI runs.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/corpus/input.json`: normalized evidence for the named audited cases.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/corpus/expected-report.json`: valid decisions and relationships for the named corpus.
+- `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/corpus/expected-decisions.json`: mandatory decision constraints for the audited Aspire cases.
 
 ### Task 1: Define stable schemas and validation
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/__init__.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/models.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_models.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/__init__.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/models.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_models.py`
 
 - [ ] **Step 1: Write failing schema tests**
 
@@ -103,8 +106,8 @@ class ModelTests(unittest.TestCase):
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_models.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_models.py' -v
 ```
 
 Expected: FAIL because `ci_shepherd.models` does not exist.
@@ -157,6 +160,7 @@ Evidence IDs are composite and globally unique:
 
 ```text
 issue:{number}
+issue:{owner}/{repo}:{number}
 issue:{number}:comment:{comment_id}
 issue:{number}:event:{event_id}
 run:{run_id}
@@ -164,16 +168,24 @@ run:{run_id}:attempt:{attempt}:job:{job_id}
 run:{run_id}:attempt:{attempt}:job:{job_id}:log
 run:{run_id}:check:{check_run_id}:annotation:{annotation_id}
 pr:{number}
+pr:{owner}/{repo}:{number}
 commit:{full_sha}
+commit:{owner}/{repo}:{full_sha}
 source:{percent_encoded_path}
 codeowners:{percent_encoded_path}:{line_number}
 ```
 
+The compact issue, pull request, and commit forms identify evidence from the
+snapshot repository. Cross-repository references use the repository-qualified
+forms so same-number issues and pull requests cannot overwrite one another.
+
 Every evidence record carries `kind`, `url`, `collectedAt`, `availability`,
 and its normalized factual payload. Action-specific validation requires:
 
-- `close`: a current merged-fix or recovery record, a current post-fix green
-  workflow run, and no newer contradictory failing run.
+- `close`: compatibility syntax with the same requirements as
+  `close-resolved`: a current merged-fix or recovery record, a current post-fix
+  green workflow run, a current `no-newer-matching-failure` record, and no
+  newer contradictory failing run.
 - `merge-duplicate`: a current canonical issue record plus an
   `exact-duplicate` relationship supported by a shared deterministic marker or
   matching normalized failure facts.
@@ -189,8 +201,8 @@ Expected: all model tests PASS.
 ### Task 2: Build the read-only GitHub API client
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/github.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_github.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/github.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_github.py`
 
 - [ ] **Step 1: Write failing client tests**
 
@@ -258,8 +270,8 @@ def test_all_requests_are_pinned_gets():
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_github.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_github.py' -v
 ```
 
 Expected: FAIL because `ci_shepherd.github` does not exist.
@@ -328,12 +340,12 @@ Expected: all client tests PASS.
 ### Task 3: Collect and normalize the issue inventory
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/collector.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_collector.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/issues-ci-failure-cause.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/issues-automation-broken.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/timeline-reopen.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/api-map.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/collector.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_collector.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/issues-ci-failure-cause.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/issues-automation-broken.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/timeline-reopen.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/api-map.json`
 
 - [ ] **Step 1: Write failing inventory and timeline tests**
 
@@ -394,8 +406,8 @@ def test_closed_since_response_is_filtered_by_closed_at():
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_collector.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_collector.py' -v
 ```
 
 Expected: FAIL because `ci_shepherd.collector` does not exist.
@@ -452,12 +464,12 @@ Expected: inventory and timeline tests PASS.
 ### Task 4: Enrich runs, pull requests, commits, logs, and ownership
 
 **Files:**
-- Modify: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/collector.py`
-- Modify: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_collector.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/run-failed.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/jobs-failed.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/pr-merged.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/fixtures/codeowners.txt`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/collector.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_collector.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/run-failed.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/jobs-failed.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/pr-merged.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/fixtures/codeowners.txt`
 
 - [ ] **Step 1: Add failing enrichment tests**
 
@@ -577,9 +589,9 @@ Expected: all collector tests PASS.
 ### Task 5: Add atomic run storage and collector CLI
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/storage.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/collect.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_storage.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/storage.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/collect.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_storage.py`
 
 - [ ] **Step 1: Write failing storage tests**
 
@@ -646,8 +658,8 @@ def test_pruning_deletes_only_reported_runs_older_than_retention():
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_storage.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_storage.py' -v
 ```
 
 Expected: FAIL because `ci_shepherd.storage` does not exist.
@@ -714,9 +726,9 @@ Expected: all model, GitHub, collector, and storage tests PASS.
 ### Task 6: Validate decisions and render reports
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/ci_shepherd/reporter.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/finalize.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_reporter.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/reporter.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/finalize.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_reporter.py`
 
 - [ ] **Step 1: Write failing reporter tests**
 
@@ -775,8 +787,8 @@ def test_latest_updates_only_after_valid_report_files_exist():
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_reporter.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_reporter.py' -v
 ```
 
 Expected: FAIL because `ci_shepherd.reporter` does not exist.
@@ -820,20 +832,242 @@ includes issue, state, action, confidence, next condition, and evidence links.
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -v
 ```
 
 Expected: all tests PASS.
 
+### Task 11: Add bounded adaptive evidence expansion
+
+**Files:**
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/expand.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/adaptive.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_adaptive.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/SKILL.md`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/models.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_models.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_scripts.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/docs/superpowers/specs/2026-08-17-ci-shepherd-design.md`
+
+- [ ] **Step 1: Write failing request-schema and expansion tests**
+
+Add fixtures and tests for this request document:
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "microsoft/aspire",
+  "round": 1,
+  "requests": [
+    {
+      "type": "issue-reference",
+      "sourceIssueNumber": 19149,
+      "evidenceId": "issue:19148",
+      "decisionGate": "merged-fix",
+      "reason": "Verify the referenced fix."
+    },
+    {
+      "type": "workflow-run",
+      "sourceIssueNumber": 19149,
+      "evidenceId": "run:31203621605",
+      "decisionGate": "post-fix-green",
+      "reason": "Collect the source run and covered branch history."
+    },
+    {
+      "type": "canonical-search",
+      "sourceIssueNumber": 18592,
+      "evidenceId": "issue:18592",
+      "factField": "testName",
+      "decisionGate": "canonical-search-complete",
+      "reason": "Find an existing canonical flaky-test issue."
+    }
+  ]
+}
+```
+
+Tests must prove:
+
+- only `issue-reference`, `workflow-run`, `canonical-search`, and
+  `source-check` are accepted;
+- `round` is one or two;
+- each document has at most 25 unique requests, at most 10 canonical searches,
+  and at most five requests for one source issue;
+- `sourceIssueNumber` is open in the snapshot;
+- `evidenceId` resolves to evidence scoped to that source issue;
+- issue/run requests target partial, `not-enriched`, or budget/depth-excluded
+  evidence rather than refetching available detail;
+- canonical searches use an exact factual `field`, `value`, and `normalized`
+  tuple already present in the cited issue evidence; the agent cannot supply
+  arbitrary query text;
+- source checks use an existing scoped `source-path`, pull-request, commit, job,
+  annotation, or log record containing the requested path;
+- repository mismatches, duplicate requests, invented facts, arbitrary
+  endpoints, and write-shaped fields are rejected;
+- expansion output does not mutate the baseline snapshot object;
+- partial failures are recorded per request while independent requests
+  continue.
+
+- [ ] **Step 2: Run focused tests and verify they fail**
+
+Run:
+
+```bash
+TMPDIR="$PWD/.ci-shepherd-build/tests/.tmp" \
+  PYTHONPATH=.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s .ci-shepherd-build/tests \
+  -p 'test_adaptive.py' -v
+```
+
+Expected: FAIL because `ci_shepherd.adaptive` and `expand.py` do not exist.
+
+- [ ] **Step 3: Implement allowlisted adaptive requests**
+
+In `models.py`, add:
+
+```python
+EVIDENCE_REQUEST_TYPES = frozenset({
+    "issue-reference",
+    "workflow-run",
+    "canonical-search",
+    "source-check",
+})
+EVIDENCE_REQUEST_DECISION_GATES = frozenset({
+    "merged-fix",
+    "recovery",
+    "post-fix-green",
+    "no-newer-matching-failure",
+    "no-recent-matching-failure",
+    "canonical-issue",
+    "canonical-search-complete",
+    "obsolete-surface",
+    "current-failing-run",
+    "prior-resolved-episode",
+})
+```
+
+Implement `validate_evidence_requests(snapshot, request_document)` with the
+limits and grounding rules from Step 1. It returns normalized requests sorted
+by source issue, request type, and evidence ID/fact field. Validation never
+accepts a URL, endpoint, HTTP method, repository override, or arbitrary search
+string from the agent.
+
+Implement `AdaptiveEnricher` in `adaptive.py`:
+
+- Deep-copy and validate the baseline snapshot.
+- Execute normalized requests using the existing GET-only `GitHubClient`.
+- Reuse collector normalization and association helpers rather than creating
+  incompatible evidence shapes.
+- For `issue-reference`, GET the referenced issue and, when it is a pull
+  request, its pull-request detail and changed files. Preserve the source
+  association and replace the partial/not-enriched record with available
+  evidence.
+- For `workflow-run`, use the existing bounded run enrichment with current
+  attempt, at most 10 failed jobs, three logs, and one first-page history
+  request with at most 10 results.
+- For `canonical-search`, construct the search query from the cited exact fact:
+  `repo:{repository} is:issue "<value>"`. Fetch one page with `per_page=20`.
+  Record total count, returned count, truncation, exact query fact, and
+  `complete: true` only when the total count is at most 20 and the response is
+  well formed. Normalize results as issue evidence associated with the source
+  issue. When a result collides with baseline evidence, preserve every baseline
+  `referencedBy` association and merge the request-derived association without
+  replacing or duplicating an existing source association. Do not treat search
+  execution alone as a canonical match.
+- For `source-check`, inspect the evidence-backed path beneath the supplied
+  checkout without accepting an arbitrary path from the request. Record
+  existence, current checkout commit, and whether repository history shows a
+  removal or replacement. Missing checkout or ambiguous history is partial,
+  not proof of obsolescence. Before every success, partial, or error write,
+  merge the request-derived associations with all `referencedBy` associations
+  from any colliding baseline source record.
+- Merge new records deterministically, preserve all baseline evidence and
+  collection errors, and append an `expansion` manifest containing round,
+  normalized requests, completion status, and errors.
+
+- [ ] **Step 4: Add the expansion CLI and immutable artifacts**
+
+`expand.py` accepts:
+
+```text
+--input PATH
+--requests PATH
+--output PATH
+--errors PATH
+--checkout PATH
+--audit PATH
+```
+
+It creates private files, refuses an output path equal to the input path,
+validates the request document before GitHub access, runs only GET requests,
+validates the expanded snapshot, and prints the absolute output path.
+
+Add tests proving the exact CLI:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/expand.py" \
+  --input "$SCRATCH/input.json" \
+  --requests "$SCRATCH/evidence-requests.round-1.json" \
+  --output "$SCRATCH/input.round-1.json" \
+  --errors "$SCRATCH/expansion-errors.round-1.json" \
+  --checkout "$CHECKOUT" \
+  --audit "$SCRATCH/api-calls.jsonl"
+```
+
+uses private permissions, preserves the baseline input byte-for-byte, and
+rejects a third round.
+
+- [ ] **Step 5: Update the skill to use at most two adaptive rounds**
+
+After the first draft assessment, require the shepherd to:
+
+1. Identify missing evidence that could change a decision.
+2. Write only grounded allowlisted requests.
+3. Prefer explicit referenced fixes/runs before canonical searches.
+4. Request canonical search only for a recurring/known signature.
+5. Run `expand.py`, read the new immutable snapshot, and reassess every issue.
+6. Stop when remaining gaps cannot change an action or after round two.
+7. Validate the final report against the newest snapshot.
+
+The prompt must explicitly prohibit direct agent-authored `gh api`, arbitrary
+web/GitHub searches, user-supplied endpoints, unbounded traversal, and using an
+attempted or truncated expansion as completed evidence.
+
+- [ ] **Step 6: Verify #19149 and canonical-search fixtures end to end**
+
+Add an integration fixture where the first pass leaves #19149's linked fix and
+run partial. Round one requests those records; the expanded snapshot supplies
+merged-fix, post-fix-green, and covered history facts so a validated
+`close-resolved` decision becomes possible.
+
+Add a flaky incident fixture where round one performs an exact test-name search:
+
+- zero complete results permits `canonical-search-complete`;
+- one matching canonical issue permits `close-as-tracked`;
+- more than 20 results or an API error leaves the search incomplete;
+- a truncated search cannot support `open-dedicated-issue`.
+
+- [ ] **Step 7: Run all prototype tests**
+
+Run:
+
+```bash
+TMPDIR="$PWD/.ci-shepherd-build/tests/.tmp" \
+  PYTHONPATH=.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s .ci-shepherd-build/tests -v
+```
+
+Expected: all tests PASS, including GET-only auditing and immutable baseline
+artifacts.
+
 ### Task 7: Author the `ci-shepherd` reasoning skill
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/SKILL.md`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_corpus.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/corpus/input.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/corpus/expected-report.json`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/corpus/expected-decisions.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/SKILL.md`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_corpus.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/corpus/input.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/corpus/expected-report.json`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/corpus/expected-decisions.json`
 
 - [ ] **Step 1: Add the expected-decision corpus**
 
@@ -893,8 +1127,8 @@ def test_named_corpus_rejects_lost_duplicate_relationship():
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_corpus.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_corpus.py' -v
 ```
 
 Expected: FAIL until `validate_corpus` and the fixture are implemented.
@@ -921,14 +1155,17 @@ description: "Read-only shepherd for microsoft/aspire issues labeled ci-failure-
 
 The skill must instruct the agent to:
 
-1. Run `scripts/collect.py` and capture its single run-directory output.
+1. Save the target checkout as `CHECKOUT="$PWD"`, set
+   `CI_SHEPHERD_ROOT` to the directory containing `SKILL.md`, and run
+   `"$CI_SHEPHERD_ROOT/scripts/collect.py"` without resolving scripts relative
+   to the target repository.
 2. Read `input.json`, `collection-errors.json`, the previous `report.json`, and
    the corpus constraints.
 3. Produce `decisions.draft.json` with exactly one decision per open issue.
 4. Use only evidence IDs present in the current snapshot for factual claims.
 5. Apply the approved lifecycle/action/confidence rules and never equate a
    merged PR with verified resolution.
-6. Run `scripts/finalize.py`.
+6. Run `"$CI_SHEPHERD_ROOT/scripts/finalize.py"`.
 7. If validation fails, correct only the invalid decisions and rerun.
 8. Return a concise summary of changed/high-priority items and absolute report
    paths.
@@ -942,8 +1179,8 @@ prohibition on all GitHub write commands.
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -v
 ```
 
 Expected: all tests PASS, including named-case violations that identify their
@@ -952,8 +1189,8 @@ issue numbers.
 ### Task 8: Install and discover the personal skill safely
 
 **Files:**
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/install.py`
-- Create: `/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests/test_install.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/install.py`
+- Create: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_install.py`
 
 - [ ] **Step 1: Write failing installation tests**
 
@@ -980,8 +1217,8 @@ def test_removal_guidance_uses_verified_cli_command():
 Run:
 
 ```bash
-PYTHONPATH=/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts \
-  python3 -m unittest discover -s /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/tests -p 'test_install.py' -v
+PYTHONPATH=/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests -p 'test_install.py' -v
 ```
 
 Expected: FAIL until `install.py` exists.
@@ -1005,7 +1242,7 @@ copilot skill remove ci-shepherd
 The implementation is authored first under:
 
 ```text
-/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/
+/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/
 ```
 
 Then install it with `install.py`; do not overwrite a pre-existing personal
@@ -1016,8 +1253,8 @@ skill without a timestamped backup.
 Run:
 
 ```bash
-python3 /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build/scripts/install.py \
-  --source /Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-build
+python3 /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/install.py \
+  --source /Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build
 python3 - <<'PY'
 from pathlib import Path
 text = Path("/Users/ankj/.copilot/skills/ci-shepherd/SKILL.md").read_text()
@@ -1140,3 +1377,372 @@ copilot skill remove ci-shepherd
 
 as the supported uninstall command and explain how to restore the newest
 `.ci-shepherd.backup-*` directory if installation replaced an earlier version.
+
+### Task 10: Model `ci/main` incident dispositions explicitly
+
+**Files:**
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/SKILL.md`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/collect.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/__init__.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/collector.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/models.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/scripts/ci_shepherd/ownership.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_collector.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_enrichment.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_models.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_ownership.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/.ci-shepherd-build/tests/test_scripts.py`
+- Modify: `/Users/ankj/worktrees/aspire/copilot-worktrees/aspire/radical-fuzzy-engine/docs/superpowers/specs/2026-08-17-ci-shepherd-design.md`
+
+- [ ] **Step 1: Write failing disposition and evidence-role tests**
+
+Keep the explicit Task 10 disposition tests and add these model tests for the
+collector/report boundary:
+
+- `test_valid_high_risk_decision_uses_roles_from_report_references` builds a
+  collector-shaped merged pull request and workflow-run records with no
+  `payload.role`, assigns `merged-fix`, `post-fix-green`, and
+  `no-newer-matching-failure` on report references, and expects validation to
+  pass.
+- `test_report_role_must_not_conflict_with_deterministic_snapshot_role` assigns
+  `newer-failure` in the snapshot and
+  `no-newer-matching-failure` on the report reference, then expects a role
+  conflict.
+- `test_required_positive_role_associated_only_with_another_issue_is_rejected`
+  assigns `post-fix-green` on a report reference to factual evidence scoped only
+  to issue 2 and verifies it cannot close issue 1.
+- `test_high_risk_decision_must_cite_scoped_roleless_snapshot_record` adds a
+  factual issue-scoped comment without a role and expects omission to fail.
+- `test_snapshot_rejects_unsupported_evidence_availability` uses `availble` and
+  expects snapshot validation to fail.
+- `test_optional_evidence_roles_must_be_supported` covers null, empty,
+  non-string, and unknown roles in snapshots and report references.
+- Plural-role tests require a nonempty, unique `roles` list drawn from
+  `EVIDENCE_ROLES`, reject references that specify both `role` and `roles`, and
+  reject any plural assignment other than `[payload.role]` when the snapshot
+  has a deterministic singular role.
+- A collector-shaped `close-resolved` end-to-end test assigns
+  `roles: ["post-fix-green", "no-newer-matching-failure"]` to one run.
+  Negative tests remove factual success or rigorous history coverage so each
+  independent role gate demonstrably fails.
+- Effective-cause tests assign optional `normalizedCause` on report references,
+  prefer a deterministic snapshot cause, reject conflicting snapshot/reference
+  values, and require all three `open-regression` role references to have the
+  same nonempty effective cause.
+
+Retain the full high-risk role/action matrix for `close`, `close-resolved`,
+`close-stale`, `close-as-tracked`, `open-dedicated-issue`, `merge-duplicate`,
+and `open-regression`. Add an end-to-end script test that passes exact
+collector-shaped factual records without `payload.role` through
+`build_snapshot`, assigns roles and matching normalized causes on report
+references, and validates `open-regression` without a snapshot
+`normalizedCause`.
+
+Add collection-boundary tests proving:
+
+- `scripts/collect.py` opts into supporting issues with explicit budgets of 20
+  total supporting closed issues, five references per issue, three marker
+  candidates, and three fact candidates while leaving timelines disabled.
+- Every open issue records completed-zero-match and incomplete/truncated
+  `supportingSearch` shapes.
+- Every selected explicit or inferred supporting issue records deterministic
+  `referencedBy` associations for each selecting open issue. Cover direct and
+  transitive explicit references, marker/fact matches that use the stable open
+  issue evidence ID, and one support issue selected by multiple open issues.
+- A depth-chain fixture `#21 -> #401 -> #402 -> #403` proves only `#401` and
+  `#402` are selected, `#403` is never fetched, and its unavailable stub retains
+  root association and deterministic `depth-limit` selection metadata.
+- A fanout fixture proves shared global-budget selection does not make extra
+  issue-detail GETs, while each excluded stub retains every associated root.
+- Minimal run evidence retains the current attempt, 10-failed-job, and
+  three-log limits while an explicit option makes one bounded history request
+  for each of at most 10 selected referenced runs.
+- History proof covers missing lists, malformed responses, endpoint errors,
+  truncated windows that omit the source, truncated windows containing the
+  source, complete short windows, and missing source identity/timestamps.
+  Collection failures leave `recentHistoryCollected: false`; only a bounded
+  window that proves coverage sets `historyCoversSourceRun: true`.
+- Issue comments, timeline events, local source paths, and CODEOWNERS evidence
+  are associated with the source issue and included by high-risk completeness.
+- Incomplete factual searches cannot satisfy search-complete report roles.
+
+Add prompt-contract tests for
+`{id, kind, role?, roles?, normalizedCause?}`, complete issue-scoped citation,
+deterministic role/cause immutability, per-role factual proof, strong history
+proof, supporting-issue associations and exclusions, endpoint-family/result
+budgets, and the `CI_SHEPHERD_ROOT` / `CHECKOUT` invocation.
+
+- [ ] **Step 2: Run focused tests and verify they fail**
+
+Run:
+
+```bash
+TMPDIR="$PWD/.ci-shepherd-build/tests/.tmp" \
+  PYTHONPATH=.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s .ci-shepherd-build/tests -p 'test_models.py' -v
+TMPDIR="$PWD/.ci-shepherd-build/tests/.tmp" \
+  PYTHONPATH=.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s .ci-shepherd-build/tests -p 'test_scripts.py' -v
+(
+  cd .ci-shepherd-build/tests
+  TMPDIR="$PWD/.tmp" PYTHONPATH=../scripts python3 -m unittest -v \
+    test_collector \
+    test_enrichment \
+    test_ownership
+)
+```
+
+Expected: the new tests FAIL because report roles are ignored, role conflicts
+and availability typos are accepted, roleless scoped evidence can be omitted,
+the prompt resolves scripts relative to the target checkout, and bounded
+supporting/history facts, normalized causes, and associations are absent.
+
+- [ ] **Step 3: Implement bounded facts and semantic report roles without changing dispositions**
+
+Set explicit runnable-profile budgets in `scripts/collect.py`:
+
+```text
+max supporting closed issues: 20
+max references followed per issue: 5
+max exact-marker candidates per issue: 3
+max normalized-fact candidates per issue: 3
+```
+
+Enable supporting collection and explicit issue-reference enrichment while
+keeping issue timelines off. Preserve deterministic truncation warnings and
+prioritize explicit issue references within the global supporting budget.
+Apply that global budget before out-of-lookback issue-detail probes and retain
+budget-excluded references as explicit `not-enriched` evidence.
+Record `supportingSearch: {complete, candidateIssueNumbers, truncated}` on
+every open issue and its evidence record. A relevant collection error or
+budget or depth truncation makes `complete` false. Candidate lists contain only
+selected issues.
+
+When traversal discovers an issue beyond the depth limit or global budget, add
+`supportingSelection: {state: "excluded", reasons, rootIssueNumbers}` to the
+inventory reference. Preserve the reference for provenance, but make generic
+enrichment honor the exclusion rather than GETing the issue later. Emit a
+`not-enriched` evidence stub with the issue identity and sorted `referencedBy`
+associations for every affected root.
+
+For every selected supporting issue, merge a sorted, deduplicated
+`referencedBy` association into its issue evidence for each open issue whose
+reference or match selected it. Preserve the direct source evidence association
+for explicit references. For aggregate inferred marker/fact selection without
+one source evidence item, use the stable open issue evidence ID together with
+`sourceIssueNumber` and extraction method `marker-match` or `fact-match`.
+
+Keep the runnable profile's minimal run expansion: at most 10 selected
+referenced runs, only the current attempt, at most 10 failed jobs, and at most
+three failed-job logs. Add an explicit history option that makes one
+first-page `per_page=10` workflow/branch history GET per selected run and never
+paginate it. Record `recentHistory`, `recentHistoryCollected`,
+`recentHistoryTruncated`, `recentHistoryTotalCount`,
+`historyCoversSourceRun`, and `recentHistoryGap`.
+
+Set coverage true only when the bounded window proves every run newer than the
+source is included: the source run appears in the returned window, or the whole
+history fits because a reported total at most 10 agrees with the returned count
+or fewer than 10 results are returned without a total. Exactly 10 results
+without a total remains potentially truncated. Missing source run identity or
+timestamps, malformed responses, endpoint errors, and a source older than a
+truncated window leave coverage false; collection errors also leave
+`recentHistoryCollected` false.
+Default enrichment behavior remains unchanged for callers that do not supply
+the new option.
+
+Put `sourceIssueNumber` directly on issue comments and timeline events. Build
+sorted, deduplicated path associations from local pull-request and commit
+`referencedBy` data and copy them to source-path and CODEOWNERS payloads.
+Never associate an external-repository path with local ownership evidence.
+
+Preserve the approved states, actions, state/action pairs, action gates,
+identity checks, incident-only restrictions, case-insensitive repository
+matching, and relationship validation. Add finite schema constants:
+
+```python
+EVIDENCE_ROLES = frozenset({
+    "canonical-issue",
+    "canonical-search-complete",
+    "current-failing-run",
+    "deterministic-marker",
+    "known-flaky-signature",
+    "merged-fix",
+    "newer-failure",
+    "no-newer-matching-failure",
+    "no-recent-matching-failure",
+    "normalized-cause",
+    "normalized-facts",
+    "obsolete-surface",
+    "post-fix-green",
+    "prior-resolved-episode",
+    "recurrence",
+    "recovery",
+})
+EVIDENCE_AVAILABILITIES = frozenset({
+    "available",
+    "expired-or-unavailable",
+    "not-enriched",
+    "partial",
+})
+```
+
+Evidence references have `{id, kind, role?, roles?, normalizedCause?}`.
+Validate optional snapshot and reference roles against `EVIDENCE_ROLES`, and
+require every supplied normalized cause to be a nonempty string. Reject using
+`role` and `roles` together. Require `roles` to be nonempty and unique. Resolve
+the effective roles as:
+
+```python
+report_roles = [reference_role] if reference_role is not None else roles
+if payload_role is not None and report_roles not in ([], [payload_role]):
+    raise ValidationError("report role conflicts with snapshot role")
+effective_roles = [payload_role] if payload_role is not None else report_roles
+```
+
+Resolve the effective normalized cause similarly:
+
+```python
+if payload_cause is not None and reference_cause is not None and payload_cause != reference_cause:
+    raise ValidationError("report normalizedCause conflicts with snapshot normalizedCause")
+effective_cause = payload_cause if payload_cause is not None else reference_cause
+```
+
+This keeps deterministic fixture compatibility while leaving the collector
+factual. Evaluate identity, current-source status, availability, issue scope,
+and factual proof independently for every effective role. Only current,
+`available` records in supporting `evidence` satisfy positive roles;
+contradictory, missing, and previous-report references do not.
+In addition, `canonical-search-complete` requires an available issue payload
+with completed, non-truncated `supportingSearch`, while
+`no-newer-matching-failure` and `no-recent-matching-failure` require available
+workflow-run evidence with `recentHistoryCollected: true`, a list-valued
+`recentHistory`, a boolean `recentHistoryTruncated`, and
+`historyCoversSourceRun: true`. Empty candidate or history lists do not satisfy
+these roles by themselves.
+
+Require factual success for `post-fix-green`: a workflow-run record must either
+be successful itself or include a successful run in rigorously covered
+`recentHistory`; a workflow-job record must itself be successful. Chronology
+relative to merged-fix or recovery evidence remains an agent judgment. A
+multi-role reference has one effective `normalizedCause`, but only roles that
+require cause equality consume it.
+
+Required positive evidence must be associated with the decision issue through
+`payload.sourceIssueNumber`, `payload.referencedBy[*].sourceIssueNumber`, or
+the decision issue's own compact or repository-qualified issue evidence
+record. Canonical-target and prior-episode evidence from another issue needs
+that association even when a relationship points to the same target.
+
+For every high-risk action, scan only current records deterministically scoped
+to the decision issue. Require every scoped record to appear exactly once
+across `evidence`, `contradictoryEvidence`, and `missingEvidence`, regardless
+of availability and regardless of whether it has a role. Exclude
+previous-report and unrelated records. Preserve bucket exclusivity.
+
+Snapshot roles are authoritative, so a report cannot relabel a deterministic
+blocker. The unchanged disposition gates remain:
+
+- `close`: `merged-fix` or `recovery`, `post-fix-green`,
+  `no-newer-matching-failure`, and no `newer-failure`.
+- `close-resolved`: `merged-fix` or `recovery`, `post-fix-green`, and
+  `no-newer-matching-failure`.
+- `close-stale`: `obsolete-surface` and `no-recent-matching-failure`; issue age
+  alone is never sufficient.
+- `close-as-tracked`: `canonical-issue` plus a `canonical-tracker` or
+  `exact-duplicate` relationship.
+- `open-dedicated-issue`: `current-failing-run`, `recurrence` or
+  `known-flaky-signature`, and `canonical-search-complete`.
+- `merge-duplicate`: retain its existing identity, matching-fact, and
+  relationship gates.
+- `open-regression`: require `current-failing-run`,
+  `prior-resolved-episode`, and `normalized-cause` supporting references to
+  have equal nonempty effective normalized causes, in addition to its existing
+  prior-identity and `regression-of` relationship gates.
+
+Keep the generic `close` action valid only for compatibility with existing
+prototype reports, with the same gates as `close-resolved`. The four explicit
+Task 10 actions remain:
+
+```python
+{
+    "close-resolved",
+    "close-stale",
+    "close-as-tracked",
+    "open-dedicated-issue",
+}
+```
+
+- [ ] **Step 4: Update the shepherd reasoning contract**
+
+Document that `ci/main` issues are incident records. A recurring flaky test or
+infrastructure defect belongs in a separate canonical problem issue. Require
+the following order:
+
+1. Determine whether the incident is active, resolved, flaky, duplicate, or
+   obsolete.
+2. For probable flakes, search for a canonical issue before recommending a new
+   one.
+3. If no canonical issue exists, recommend `open-dedicated-issue` and keep the
+   incident open until that issue exists.
+4. Once a canonical issue exists, recommend `close-as-tracked`.
+5. Recommend `close-resolved` only after a verified fix/recovery, a later green
+   run, and a completed search finding no newer matching failure.
+6. Recommend `close-stale` only when the affected test/workflow/code path is
+   removed or superseded and a bounded recent-history search finds no matching
+   failure.
+
+Show singular `role`, plural `roles`, and optional normalized causes in the
+decision JSON example and state that these can be agent judgments over factual
+collector records. Require complete citation of all current issue-scoped
+records for high-risk recommendations, per-role factual proof, and no
+overriding or supplementing deterministic snapshot roles or causes.
+
+Provide a runnable invocation that preserves the target checkout and resolves
+scripts from the skill directory:
+
+```bash
+CI_SHEPHERD_ROOT="/path/to/directory-containing-SKILL.md"
+CHECKOUT="$PWD"
+SCRATCH="$HOME/.copilot/ci-shepherd/manual-run"
+umask 077
+mkdir -p "$SCRATCH"
+python3 "$CI_SHEPHERD_ROOT/scripts/collect.py" \
+  --repository microsoft/aspire \
+  --checkout "$CHECKOUT" \
+  --output-dir "$SCRATCH"
+```
+
+Document deterministic endpoint-family/result budgets: at most 20 supporting
+issue candidates receive enrichment, and at most 10 selected referenced runs
+receive one first-page history request each. Do not translate these limits into
+a total HTTP-request upper bound. Issue detail and comment endpoints can
+paginate; the GitHub client stops after a page with fewer than 100 items but
+has no fixed page-count cap, and it permits at most three attempts for each
+page, detail, or log request. Cite
+`.ci-shepherd-build/scripts/ci_shepherd/github.py` for these client behaviors.
+
+Update the design document's input/output, lifecycle/action, resolution,
+association, completeness, availability, and high-risk sections to match this
+contract.
+
+- [ ] **Step 5: Run the focused and complete prototype tests**
+
+Run:
+
+```bash
+(
+  cd .ci-shepherd-build/tests
+  TMPDIR="$PWD/.tmp" PYTHONPATH=../scripts python3 -m unittest -v \
+    test_collector \
+    test_enrichment \
+    test_ownership \
+    test_models \
+    test_scripts
+)
+TMPDIR="$PWD/.ci-shepherd-build/tests/.tmp" \
+  PYTHONPATH=.ci-shepherd-build/scripts \
+  python3 -m unittest discover -s .ci-shepherd-build/tests -v
+```
+
+Expected: all tests PASS.

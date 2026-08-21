@@ -1,0 +1,62 @@
+{
+  "/repos/owner/repo/issues/101/comments": {
+    "file": "comments-101.json"
+  },
+  "/repos/owner/repo/issues/101/timeline": {
+    "file": "timeline-reopen.json"
+  },
+  "/repos/owner/repo/issues/102/comments": {
+    "file": "comments-102.json"
+  },
+  "/repos/owner/repo/issues/102/timeline": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/140": {
+    "file": "issue-explicit-old.json",
+    "key": "140"
+  },
+  "/repos/owner/repo/issues/140/comments": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/140/timeline": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/150": {
+    "file": "issue-explicit-old.json",
+    "key": "150"
+  },
+  "/repos/owner/repo/issues/150/comments": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/150/timeline": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/201/comments": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/201/timeline": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/205/comments": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues/205/timeline": {
+    "file": "empty.json"
+  },
+  "/repos/owner/repo/issues?state=closed&labels=automation-broken&since=2026-05-19T22:00:00Z&per_page=100": {
+    "file": "issues-automation-broken.json",
+    "key": "closed"
+  },
+  "/repos/owner/repo/issues?state=closed&labels=ci-failure-cause&since=2026-05-19T22:00:00Z&per_page=100": {
+    "file": "issues-ci-failure-cause.json",
+    "key": "closed"
+  },
+  "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": {
+    "file": "issues-automation-broken.json",
+    "key": "open"
+  },
+  "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": {
+    "file": "issues-ci-failure-cause.json",
+    "key": "open"
+  }
+}

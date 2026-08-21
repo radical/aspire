@@ -1,0 +1,57 @@
+{
+  "total_count": 2,
+  "jobs": [
+    {
+      "id": 2001,
+      "run_id": 7001,
+      "run_attempt": 2,
+      "name": "test-linux",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-08-16T12:02:00Z",
+      "completed_at": "2026-08-16T12:20:00Z",
+      "html_url": "https://github.com/owner/repo/actions/runs/7001/job/2001",
+      "check_run_url": "https://api.github.com/repos/owner/repo/check-runs/8001",
+      "steps": [
+        {
+          "number": 1,
+          "name": "Setup",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-08-16T12:02:00Z",
+          "completed_at": "2026-08-16T12:03:00Z"
+        },
+        {
+          "number": 2,
+          "name": "Run tests",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-08-16T12:03:00Z",
+          "completed_at": "2026-08-16T12:20:00Z"
+        }
+      ]
+    },
+    {
+      "id": 2002,
+      "run_id": 7001,
+      "run_attempt": 2,
+      "name": "build-windows",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-08-16T12:02:00Z",
+      "completed_at": "2026-08-16T12:10:00Z",
+      "html_url": "https://github.com/owner/repo/actions/runs/7001/job/2002",
+      "check_run_url": "https://api.github.com/repos/owner/repo/check-runs/8002",
+      "steps": [
+        {
+          "number": 1,
+          "name": "Build",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-08-16T12:02:00Z",
+          "completed_at": "2026-08-16T12:10:00Z"
+        }
+      ]
+    }
+  ]
+}

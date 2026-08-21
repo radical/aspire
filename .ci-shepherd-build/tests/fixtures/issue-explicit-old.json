@@ -1,0 +1,38 @@
+{
+  "150": {
+    "number": 150,
+    "state": "closed",
+    "title": "Historic checkout timeout",
+    "body": "Original fix tracked in https://github.com/owner/repo/issues/140",
+    "html_url": "https://github.com/owner/repo/issues/150",
+    "created_at": "2024-11-01T00:00:00Z",
+    "updated_at": "2024-12-01T00:00:00Z",
+    "closed_at": "2024-12-01T00:00:00Z",
+    "labels": [
+      {
+        "name": "ci-failure-cause"
+      }
+    ],
+    "user": {
+      "login": "octocat"
+    }
+  },
+  "140": {
+    "number": 140,
+    "state": "closed",
+    "title": "Older checkout root cause",
+    "body": "See #130 for the original incident.",
+    "html_url": "https://github.com/owner/repo/issues/140",
+    "created_at": "2024-10-01T00:00:00Z",
+    "updated_at": "2024-10-05T00:00:00Z",
+    "closed_at": "2024-10-05T00:00:00Z",
+    "labels": [
+      {
+        "name": "ci-failure-cause"
+      }
+    ],
+    "user": {
+      "login": "octocat"
+    }
+  }
+}

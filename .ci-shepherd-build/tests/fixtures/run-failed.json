@@ -1,0 +1,15 @@
+{
+  "id": 7001,
+  "name": "CI",
+  "workflow_id": 9001,
+  "event": "push",
+  "head_branch": "main",
+  "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "run_attempt": 2,
+  "status": "completed",
+  "conclusion": "failure",
+  "created_at": "2026-08-16T12:00:00Z",
+  "updated_at": "2026-08-16T12:30:00Z",
+  "run_started_at": "2026-08-16T12:01:00Z",
+  "html_url": "https://github.com/owner/repo/actions/runs/7001"
+}

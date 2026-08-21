@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1003,
+    "html_url": "https://github.com/owner/repo/issues/102#issuecomment-1003",
+    "created_at": "2026-08-11T00:00:00Z",
+    "updated_at": "2026-08-11T00:00:00Z",
+    "body": "Exception type: TaskCanceledException",
+    "user": {
+      "login": "commenter"
+    }
+  }
+]

@@ -1,0 +1,105 @@
+{
+  "open": [
+    {
+      "number": 101,
+      "state": "open",
+      "title": "Checkout timeout keeps reopening #150",
+      "body": "Incident persists.\n<!-- ci-shepherd:test=test_checkout -->\nCI Shepherd Marker: workflow=ci\nSee historical issue #150 and https://github.com/owner/repo/actions/runs/5555",
+      "html_url": "https://github.com/owner/repo/issues/101",
+      "created_at": "2026-06-01T00:00:00Z",
+      "updated_at": "2026-08-15T00:00:00Z",
+      "closed_at": null,
+      "labels": [
+        {
+          "name": "ci-failure-cause"
+        },
+        {
+          "name": "automation-broken"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      }
+    },
+    {
+      "number": 103,
+      "state": "open",
+      "title": "PR object should be filtered",
+      "body": "",
+      "html_url": "https://github.com/owner/repo/issues/103",
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-02T00:00:00Z",
+      "closed_at": null,
+      "labels": [
+        {
+          "name": "ci-failure-cause"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      },
+      "pull_request": {
+        "url": "https://api.github.com/repos/owner/repo/pulls/103"
+      }
+    }
+  ],
+  "closed": [
+    {
+      "number": 201,
+      "state": "closed",
+      "title": "Checkout timeout fixed",
+      "body": "<!-- ci-shepherd:test=test_checkout -->\nTest name: Tests.Checkout.Timeout\nException type: TimeoutException\nWorkflow: CI\nJob: Linux Tests",
+      "html_url": "https://github.com/owner/repo/issues/201",
+      "created_at": "2026-06-10T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z",
+      "closed_at": "2026-08-01T00:00:00Z",
+      "labels": [
+        {
+          "name": "ci-failure-cause"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      }
+    },
+    {
+      "number": 202,
+      "state": "closed",
+      "title": "Old issue updated recently",
+      "body": "Test name: Tests.Checkout.Timeout",
+      "html_url": "https://github.com/owner/repo/issues/202",
+      "created_at": "2026-03-01T00:00:00Z",
+      "updated_at": "2026-08-05T00:00:00Z",
+      "closed_at": "2026-04-01T00:00:00Z",
+      "labels": [
+        {
+          "name": "ci-failure-cause"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      }
+    },
+    {
+      "number": 204,
+      "state": "closed",
+      "title": "Closed PR object should be filtered",
+      "body": "",
+      "html_url": "https://github.com/owner/repo/issues/204",
+      "created_at": "2026-06-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z",
+      "closed_at": "2026-08-01T00:00:00Z",
+      "labels": [
+        {
+          "name": "ci-failure-cause"
+        }
+      ],
+      "user": {
+        "login": "octocat"
+      },
+      "pull_request": {
+        "url": "https://api.github.com/repos/owner/repo/pulls/204"
+      }
+    }
+  ]
+}

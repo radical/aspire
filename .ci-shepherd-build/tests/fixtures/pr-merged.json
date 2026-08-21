@@ -1,0 +1,18 @@
+{
+  "number": 77,
+  "state": "closed",
+  "merged_at": "2026-08-10T09:30:00Z",
+  "merge_commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+  "html_url": "https://github.com/owner/repo/pull/77",
+  "base": {
+    "ref": "main",
+    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "head": {
+    "ref": "feature/fix-flake",
+    "sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "repo": {
+      "full_name": "owner/repo"
+    }
+  }
+}

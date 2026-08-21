@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": "manual-v1",
+  "quarantineReviewMinDistinctRuns": 2,
+  "quarantineReviewMinDistinctCommits": 2,
+  "recoveryMinIndependentSuccesses": 2,
+  "dormantHumanReviewAfterDays": 7,
+  "systemicTransientWindowDays": 14,
+  "systemicTransientMinOccurrences": 3,
+  "systemicTransientMinFailureRate": 0.05,
+  "proposalTtlHours": 24,
+  "maxProposalsPerIssue": 3,
+  "retrySafePatternIds": []
+}
