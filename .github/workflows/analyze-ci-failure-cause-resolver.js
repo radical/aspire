@@ -7,9 +7,18 @@ const safeCauseIdPattern = /^[a-z0-9][a-z0-9-]*$/;
 function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} }) {
     validateInputs(analysis, causes, priorCauses);
 
+    priorCauses = priorCauses.filter(
+        cause => cause && typeof cause.id === 'string' && cause.id.length > 0);
+    const proposalNormalization = normalizeProposedCauseIds(analysis, causes);
+    analysis = proposalNormalization.analysis;
+    causes = proposalNormalization.causes;
+
     const priorById = new Map(priorCauses.map(cause => [cause.id, cause]));
+    // Historical memory predates the slug contract. Match sanitized proposals back to those
+    // records so fixing an ID does not split one cause into old and new identities.
+    const priorByNormalizedId = buildPriorByNormalizedId(priorCauses);
     const failedJobsById = new Map(analysis.failed_jobs.map(job => [job.id, job]));
-    const canonicalizations = [];
+    const canonicalizations = [...proposalNormalization.canonicalizations];
     const normalizedById = new Map();
     const proposedToCanonical = new Map();
 
@@ -18,7 +27,7 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
         const jobNames = jobIds.map(jobId => failedJobsById.get(jobId).name);
         const evidence = buildEvidence(cause, analysis, jobIds);
 
-        const proposedAlias = findPriorCauseByProposedId(cause, priorById);
+        const proposedAlias = findPriorCauseByProposedId(cause, priorById, priorByNormalizedId);
         let testNameMatch;
         let retryPatternMatch;
         let explicitMatcherMatch;
@@ -43,7 +52,7 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
             testNameMatch ??
             retryPatternMatch ??
             explicitMatcherMatch ??
-            findPriorCauseByExistingId(cause, priorById);
+            findPriorCauseByExistingId(cause, priorById, priorByNormalizedId);
 
         const canonicalId = canonicalPriorCause?.id ?? cause.id;
         const normalizedCause = normalizeCause(cause, canonicalPriorCause, jobIds, jobNames);
@@ -71,7 +80,7 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
 
     const normalizedAnalysis = {
         ...analysis,
-        causes: unique(referencedCauseIds),
+        causes: unique([...referencedCauseIds, ...normalizedCauses.map(cause => cause.id)]),
         failed_jobs: analysis.failed_jobs.map(job => ({
             ...job,
             cause_ids: normalizedCauses
@@ -105,11 +114,86 @@ function validateInputs(analysis, causes, priorCauses) {
         throw new Error('Causes and priorCauses must be arrays.');
     }
 
-    for (const cause of [...causes, ...priorCauses]) {
-        if (!cause || typeof cause.id !== 'string' || !safeCauseIdPattern.test(cause.id)) {
+    for (const causeId of analysis.causes) {
+        if (typeof causeId !== 'string' || causeId.length === 0) {
+            throw new Error(`Invalid cause ID '${causeId ?? ''}'.`);
+        }
+    }
+
+    for (const cause of causes) {
+        if (!cause || typeof cause.id !== 'string' || cause.id.length === 0) {
             throw new Error(`Invalid cause ID '${cause?.id ?? ''}'.`);
         }
     }
+}
+
+function normalizeProposedCauseIds(analysis, causes) {
+    const normalizedByProposed = new Map();
+    const proposedByNormalized = new Map();
+    const canonicalizations = [];
+
+    for (const cause of causes) {
+        const normalizedId = sanitizeProposedCauseId(cause.id);
+        const existingProposedId = proposedByNormalized.get(normalizedId);
+        if (existingProposedId && existingProposedId !== cause.id) {
+            throw new Error(
+                `Cause IDs '${existingProposedId}' and '${cause.id}' normalize to the same cause ID '${normalizedId}'.`);
+        }
+
+        normalizedByProposed.set(cause.id, normalizedId);
+        proposedByNormalized.set(normalizedId, cause.id);
+        if (cause.id !== normalizedId) {
+            canonicalizations.push({ proposed_id: cause.id, canonical_id: normalizedId });
+        }
+    }
+
+    return {
+        analysis: {
+            ...analysis,
+            causes: analysis.causes.map(causeId => normalizedByProposed.get(causeId) ?? causeId),
+        },
+        causes: causes.map(cause => ({
+            ...cause,
+            id: normalizedByProposed.get(cause.id),
+        })),
+        canonicalizations,
+    };
+}
+
+function buildPriorByNormalizedId(priorCauses) {
+    const priorByNormalizedId = new Map();
+
+    for (const cause of priorCauses) {
+        const normalizedId = normalizeCauseId(cause.id);
+        if (!safeCauseIdPattern.test(normalizedId)) {
+            continue;
+        }
+
+        if (!priorByNormalizedId.has(normalizedId)) {
+            priorByNormalizedId.set(normalizedId, cause);
+        } else if (priorByNormalizedId.get(normalizedId)?.id !== cause.id) {
+            priorByNormalizedId.set(normalizedId, null);
+        }
+    }
+
+    return priorByNormalizedId;
+}
+
+function sanitizeProposedCauseId(causeId) {
+    const normalizedId = normalizeCauseId(causeId);
+    if (!safeCauseIdPattern.test(normalizedId)) {
+        throw new Error(`Invalid cause ID '${causeId}'.`);
+    }
+
+    return normalizedId;
+}
+
+function normalizeCauseId(causeId) {
+    return String(causeId ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
 }
 
 function resolveCauseJobIds(cause, analysis, failedJobsById) {
@@ -161,14 +245,18 @@ function buildEvidence(cause, analysis, jobIds) {
     ].filter(value => typeof value === 'string' && value.length > 0).join('\n');
 }
 
-function findPriorCauseByProposedId(cause, priorById) {
-    const priorCause = priorById.get(cause.id);
+function findPriorCauseByProposedId(cause, priorById, priorByNormalizedId) {
+    const priorCause = findPriorCauseById(cause.id, priorById, priorByNormalizedId);
     return priorCause?.canonical_id ? resolveAlias(priorCause, priorById) : undefined;
 }
 
-function findPriorCauseByExistingId(cause, priorById) {
-    const priorCause = priorById.get(cause.id);
+function findPriorCauseByExistingId(cause, priorById, priorByNormalizedId) {
+    const priorCause = findPriorCauseById(cause.id, priorById, priorByNormalizedId);
     return priorCause ? resolveAlias(priorCause, priorById) : undefined;
+}
+
+function findPriorCauseById(causeId, priorById, priorByNormalizedId) {
+    return priorById.get(causeId) ?? priorByNormalizedId.get(causeId);
 }
 
 function findPriorCauseByTestName(cause, priorCauses, priorById) {
@@ -266,6 +354,7 @@ function normalizeCause(cause, priorCause, jobIds, jobNames) {
         test_names: testNames.length > 0 ? testNames : undefined,
         error_pattern: priorCause?.error_pattern ?? cause.error_pattern,
         matchers: priorCause?.matchers,
+        issue_url: priorCause?.issue_url,
         job_ids: jobIds,
         job_names: jobNames,
     });
@@ -292,9 +381,11 @@ function validateTrackedJobsHaveCauses(analysis) {
 }
 
 function normalizeTestName(testName) {
-    return String(testName ?? '')
-        .trim()
-        .replace(/\([^()]*\)$/, '')
+    const displayName = String(testName ?? '').trim();
+    const argumentStart = displayName.indexOf('(');
+    const canonicalName = argumentStart > 0 ? displayName.slice(0, argumentStart) : displayName;
+
+    return canonicalName
         .replace(/\s+/g, ' ')
         .toLowerCase();
 }

@@ -181,7 +181,7 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
     {
         const string canonicalCauseId = "servicebus-namespace-connection-string";
         const string canonicalTestName = "Aspire.Azure.Messaging.ServiceBus.Tests.AspireServiceBusExtensionsTests.NamespaceWorksInConnectionStrings";
-        string currentTestName = $"{canonicalTestName}(useKeyed: True)";
+        string currentTestName = $"{canonicalTestName}(connectionString: \"Endpoint=(primary)\")";
 
         JsonElement result = await ResolveAsync(CreateSingleTestPayload(
             currentTestName,
@@ -191,12 +191,158 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
                 id = canonicalCauseId,
                 type = "flaky-test",
                 title = "Service Bus connection string test",
-                test_name = $"{canonicalTestName}(useKeyed: False)",
+                test_name = $"{canonicalTestName}(connectionString: \"Endpoint=(secondary)\")",
                 error_pattern = "Collection was modified",
                 occurrences = new[] { new { observed_at = "2026-07-17T18:57:00Z" } }
             }));
 
         Assert.Equal(canonicalCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task SanitizesProposedCauseIds()
+    {
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { "NuGet_Feed Timeout" },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "The NuGet feed timed out."
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = "NuGet_Feed Timeout",
+                    type = "infra-failure",
+                    title = "NuGet feed timeout",
+                    error_pattern = "The NuGet feed timed out.",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal(["nuget-feed-timeout"], ReadStrings(result.GetProperty("analysis"), "causes"));
+        Assert.Equal("nuget-feed-timeout", FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task RejectsCollidingSanitizedCauseIds()
+    {
+        object payload = new
+        {
+            analysis = new
+            {
+                causes = new[] { "NuGet_Feed Timeout", "nuget-feed-timeout" },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "The NuGet feed timed out."
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = "NuGet_Feed Timeout",
+                    type = "infra-failure",
+                    title = "First NuGet feed timeout",
+                    error_pattern = "The NuGet feed timed out.",
+                    job_ids = new[] { 1 }
+                },
+                new
+                {
+                    id = "nuget-feed-timeout",
+                    type = "infra-failure",
+                    title = "Second NuGet feed timeout",
+                    error_pattern = "The NuGet feed timed out.",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        };
+
+        CommandResult result = await ExecuteHarnessAsync(payload);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("normalize to the same cause ID", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task IncludesAllJobBackedCausesInRunSummary()
+    {
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { "listed-cause" },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Listed / Listed (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Listed failure"
+                    },
+                    new
+                    {
+                        id = 2,
+                        name = "Tests / Unlisted / Unlisted (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Unlisted failure"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = "listed-cause",
+                    type = "infra-failure",
+                    title = "Listed cause",
+                    error_pattern = "Listed failure",
+                    job_ids = new[] { 1 }
+                },
+                new
+                {
+                    id = "unlisted-cause",
+                    type = "infra-failure",
+                    title = "Unlisted cause",
+                    error_pattern = "Unlisted failure",
+                    job_ids = new[] { 2 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal(
+            ["listed-cause", "unlisted-cause"],
+            ReadStrings(result.GetProperty("analysis"), "causes").Order().ToArray());
     }
 
     [Fact]
@@ -473,6 +619,201 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
         });
 
         Assert.Equal(canonicalCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task ToleratesLegacyPriorCauseIds()
+    {
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { "current-infra-cause" },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Current infrastructure failure"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = "current-infra-cause",
+                    type = "infra-failure",
+                    title = "Current infrastructure cause",
+                    error_pattern = "Current infrastructure failure",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = new[]
+            {
+                new
+                {
+                    id = "processguest-signalerThrows-treekill-timeout",
+                    type = "flaky-test",
+                    title = "Legacy cause",
+                    error_pattern = "Legacy failure"
+                }
+            },
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal("current-infra-cause", FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task MatchesSanitizedProposalToLegacyPriorCauseId()
+    {
+        const string legacyCauseId = "processguest-signalerThrows-treekill-timeout";
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { legacyCauseId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Legacy infrastructure failure"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = legacyCauseId,
+                    type = "infra-failure",
+                    title = "Legacy infrastructure cause",
+                    error_pattern = "Legacy infrastructure failure",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = new[]
+            {
+                new
+                {
+                    id = legacyCauseId,
+                    type = "infra-failure",
+                    title = "Stored legacy cause",
+                    error_pattern = "Legacy infrastructure failure"
+                }
+            },
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal(legacyCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task DoesNotMatchAmbiguousNormalizedPriorCauseIds()
+    {
+        const string currentCauseId = "legacy-cause";
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { currentCauseId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Current infrastructure failure"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = currentCauseId,
+                    type = "infra-failure",
+                    title = "Current infrastructure cause",
+                    error_pattern = "Current infrastructure failure",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = new[]
+            {
+                CreateLegacyCause("Legacy.Cause"),
+                CreateLegacyCause("legacy_Cause"),
+                CreateLegacyCause("Legacy Cause")
+            },
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal(currentCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task PreservesWorkflowOwnedIssueUrl()
+    {
+        const string canonicalCauseId = "canonical-infra-cause";
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { canonicalCauseId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Current infrastructure failure"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = canonicalCauseId,
+                    type = "infra-failure",
+                    title = "Current infrastructure cause",
+                    error_pattern = "Current infrastructure failure",
+                    issue_url = "https://github.com/microsoft/aspire/issues/4242",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = new[]
+            {
+                new
+                {
+                    id = canonicalCauseId,
+                    type = "infra-failure",
+                    title = "Canonical infrastructure cause",
+                    error_pattern = "Stored infrastructure failure",
+                    issue_url = "https://github.com/microsoft/aspire/issues/1111"
+                }
+            },
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal(
+            "https://github.com/microsoft/aspire/issues/1111",
+            FindOnlyCause(result).GetProperty("issue_url").GetString());
     }
 
     [Fact]
@@ -1005,6 +1346,15 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
                 }
             },
             occurrences = new[] { new { observed_at = "2026-07-01T00:00:00Z" } }
+        };
+
+    private static object CreateLegacyCause(string causeId)
+        => new
+        {
+            id = causeId,
+            type = "infra-failure",
+            title = causeId,
+            error_pattern = "Legacy infrastructure failure"
         };
 
     private static object CreateRetryPatternPayload(string causeId, object retryPattern)
