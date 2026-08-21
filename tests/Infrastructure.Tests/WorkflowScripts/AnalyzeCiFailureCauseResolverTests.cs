@@ -201,6 +201,74 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task ValidatesTestAttributionWithinTheCauseDeclaredJobs()
+    {
+        const string testName = "Aspire.Sample.Tests.SampleTests.FlakyTest";
+        const string trackedJobName = "Tests / Sample / Sample (ubuntu-latest)";
+        const string codeIssueJobName = "Tests / Sample / Sample (windows-latest)";
+
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { "sample-flaky-test" },
+                failed_jobs = new object[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = trackedJobName,
+                        classification = "flaky-test",
+                        reason = "The sample test failed intermittently."
+                    },
+                    new
+                    {
+                        id = 2,
+                        name = codeIssueJobName,
+                        classification = "code-issue",
+                        reason = "The sample test failed because of the PR."
+                    }
+                },
+                failed_tests = new[]
+                {
+                    new
+                    {
+                        name = $"{testName}(value: 1)",
+                        job = trackedJobName,
+                        error = "Transient sample failure",
+                        stack_trace = string.Empty
+                    },
+                    new
+                    {
+                        name = $"{testName}(value: 2)",
+                        job = codeIssueJobName,
+                        error = "Deterministic sample failure",
+                        stack_trace = string.Empty
+                    }
+                }
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = "sample-flaky-test",
+                    type = "flaky-test",
+                    title = "Sample flaky test",
+                    test_name = $"{testName}(value: 1)",
+                    error_pattern = "Transient sample failure",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        JsonElement cause = FindOnlyCause(result);
+        Assert.Equal([1], ReadInt32s(cause, "job_ids"));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task UsesExplicitMatcherForCrossTestRootCause()
     {
         const string canonicalCauseId = "hosting-parentprocess-dcp-timestamp-badrequest";
@@ -340,6 +408,66 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
                     title = "Alias",
                     error_pattern = "DCP rejected a fractional timestamp."
                 }
+            },
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        Assert.Equal(canonicalCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task ExplicitAliasRemainsAuthoritativeWhenMatchersAreAmbiguous()
+    {
+        const string canonicalCauseId = "canonical-infra-cause";
+        const string aliasCauseId = "canonical-infra-alias";
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { aliasCauseId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Shared deterministic failure token"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = aliasCauseId,
+                    type = "infra-failure",
+                    title = "Current infrastructure cause",
+                    error_pattern = "Shared deterministic failure token",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = new object[]
+            {
+                new
+                {
+                    id = canonicalCauseId,
+                    type = "infra-failure",
+                    title = "Canonical infrastructure cause",
+                    error_pattern = "Shared deterministic failure token"
+                },
+                new
+                {
+                    id = aliasCauseId,
+                    canonical_id = canonicalCauseId,
+                    type = "infra-failure",
+                    title = "Canonical alias",
+                    error_pattern = "Shared deterministic failure token"
+                },
+                CreatePriorMatcherCause("first-matcher-cause"),
+                CreatePriorMatcherCause("second-matcher-cause")
             },
             retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
         });
@@ -597,6 +725,88 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task RejectsConflictingCanonicalizationMechanisms()
+    {
+        const string testName = "Aspire.Sample.Tests.SampleTests.FlakyTest";
+        object payload = CreateSingleTestPayload(
+            testName,
+            "new-sample-cause",
+            new
+            {
+                id = "canonical-test-cause",
+                type = "flaky-test",
+                title = "Canonical test cause",
+                test_name = testName,
+                error_pattern = "Prior sample failure",
+                occurrences = new[] { new { observed_at = "2026-07-01T00:00:00Z" } }
+            },
+            error: "Distinctive shared infrastructure token");
+
+        using JsonDocument payloadDocument = JsonDocument.Parse(JsonSerializer.Serialize(payload, s_jsonOptions));
+        JsonElement root = payloadDocument.RootElement;
+        object expandedPayload = new
+        {
+            analysis = root.GetProperty("analysis"),
+            causes = root.GetProperty("causes"),
+            priorCauses = new object[]
+            {
+                root.GetProperty("priorCauses")[0],
+                new
+                {
+                    id = "canonical-infra-cause",
+                    type = "infra-failure",
+                    title = "Canonical infrastructure cause",
+                    error_pattern = "Distinctive shared infrastructure token",
+                    matchers = new[]
+                    {
+                        new { kind = "error-literal", value = "Distinctive shared infrastructure token" }
+                    }
+                }
+            },
+            retryPatterns = root.GetProperty("retryPatterns")
+        };
+
+        CommandResult result = await ExecuteHarnessAsync(expandedPayload);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("matched conflicting canonical prior causes", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task IgnoresDisabledRetryPatterns()
+    {
+        const string currentCauseId = "current-infra-cause";
+        JsonElement result = await ResolveAsync(CreateRetryPatternPayload(
+            currentCauseId,
+            new
+            {
+                output = "Shared retry token",
+                causeId = "disabled-canonical-cause",
+                enabled = false
+            }));
+
+        Assert.Equal(currentCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task IgnoresInvalidRetryPatternRegex()
+    {
+        const string currentCauseId = "current-infra-cause";
+        JsonElement result = await ResolveAsync(CreateRetryPatternPayload(
+            currentCauseId,
+            new
+            {
+                output = new { regex = "[invalid" },
+                causeId = "invalid-regex-canonical-cause"
+            }));
+
+        Assert.Equal(currentCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task CommandLineRewritesCauseFilesAndRunReferences()
     {
         const string proposedCauseId = "windows-process-init-0xc0000142";
@@ -688,6 +898,12 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
         Assert.Contains("queue: max", workflow, StringComparison.Ordinal);
         Assert.Contains("$ex * ($new | del(.occurrences))", workflow, StringComparison.Ordinal);
         Assert.True(memoryPushIndex < issueCreationIndex, "Canonical cause identities must be pushed before issue side effects.");
+        Assert.Contains("node .github/workflows/analyze-ci-failure-cause-resolver.js \\", workflow, StringComparison.Ordinal);
+        Assert.Contains("|| RESOLVER_STATUS=$?", workflow, StringComparison.Ordinal);
+        Assert.Contains("if [ \"$RESOLVER_STATUS\" -eq 0 ]; then", workflow, StringComparison.Ordinal);
+        Assert.True(
+            workflow.LastIndexOf("exit \"$RESOLVER_STATUS\"", StringComparison.Ordinal) > workflow.IndexOf("# ── 5. Post PR comment", StringComparison.Ordinal),
+            "Resolver failures must be reported only after the independent PR analysis comment is posted.");
         Assert.False(
             workflow.Contains("FIRST_JOB=$(jq -r '.failed_jobs[0].name", StringComparison.Ordinal),
             "Occurrence attribution must come from each cause's job references.");
@@ -791,6 +1007,39 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
             occurrences = new[] { new { observed_at = "2026-07-01T00:00:00Z" } }
         };
 
+    private static object CreateRetryPatternPayload(string causeId, object retryPattern)
+        => new
+        {
+            analysis = new
+            {
+                causes = new[] { causeId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Shared retry token"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = causeId,
+                    type = "infra-failure",
+                    title = "Current infrastructure cause",
+                    error_pattern = "Shared retry token",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = new[] { retryPattern } }
+        };
+
     private static JsonElement FindOnlyCause(JsonElement result)
         => Assert.Single(result.GetProperty("causes").EnumerateArray());
 
@@ -803,6 +1052,12 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
         => element.GetProperty(propertyName)
             .EnumerateArray()
             .Select(static value => value.GetString()!)
+            .ToArray();
+
+    private static int[] ReadInt32s(JsonElement element, string propertyName)
+        => element.GetProperty(propertyName)
+            .EnumerateArray()
+            .Select(static value => value.GetInt32())
             .ToArray();
 
     private sealed class HarnessRequest

@@ -530,6 +530,7 @@ safe-outputs:
             # a single pr.number; if the collect-data job passed multiple PRs
             # in the future, extend the agent schema accordingly.
             PR_NUMBERS=$(jq -r '.pr.number // "" | tostring' "$ANALYSIS_FILE")
+            RESOLVER_STATUS=0
 
             # ── 1. Set up memory branch and merge cause data ──
             # Skip persisting data for code-issue verdicts — these are not
@@ -555,11 +556,12 @@ safe-outputs:
                 "$ANALYSIS_FILE" \
                 "$CAUSES_DIR" \
                 "memory-repo/causes" \
-                "eng/test-retry-patterns.json"
+                "eng/test-retry-patterns.json" || RESOLVER_STATUS=$?
 
-              # Store run summary under runs/ directory
-              mkdir -p "memory-repo/runs"
-              cp "$ANALYSIS_FILE" "memory-repo/runs/${RUN_ID}.json"
+              if [ "$RESOLVER_STATUS" -eq 0 ]; then
+                # Store run summary under runs/ directory
+                mkdir -p "memory-repo/runs"
+                cp "$ANALYSIS_FILE" "memory-repo/runs/${RUN_ID}.json"
 
               # Store individual cause files under causes/ (shared across runs).
               # Each cause file accumulates occurrences over time. The agent
@@ -793,14 +795,17 @@ safe-outputs:
               rm -f "${OPEN_ISSUES_CACHE:-}" "${CLOSED_ISSUES_CACHE:-}"
             fi
 
-              # ── 4. Persist issue links to the memory branch ──
-              git -C memory-repo add -A
-              if git -C memory-repo diff --cached --quiet; then
-                echo "No changes to memory branch"
+                # ── 4. Persist issue links to the memory branch ──
+                git -C memory-repo add -A
+                if git -C memory-repo diff --cached --quiet; then
+                  echo "No changes to memory branch"
+                else
+                  git -C memory-repo commit -m "Link CI failure issues for run ${RUN_ID}"
+                  git -C memory-repo push origin "HEAD:$MEMORY_BRANCH"
+                  echo "Memory branch updated with issue links for run ${RUN_ID}"
+                fi
               else
-                git -C memory-repo commit -m "Link CI failure issues for run ${RUN_ID}"
-                git -C memory-repo push origin "HEAD:$MEMORY_BRANCH"
-                echo "Memory branch updated with issue links for run ${RUN_ID}"
+                echo "::error::Cause resolver failed; skipping memory persistence and issue updates."
               fi
             fi
 
@@ -808,6 +813,9 @@ safe-outputs:
             FIRST_PR=$(echo "$PR_NUMBERS" | cut -d',' -f1)
             if [ -z "$FIRST_PR" ] || [ "$FIRST_PR" = "null" ]; then
               echo "No PR number found in analysis. Skipping comment."
+              if [ "$RESOLVER_STATUS" -ne 0 ]; then
+                exit "$RESOLVER_STATUS"
+              fi
               exit 0
             fi
 
@@ -815,6 +823,9 @@ safe-outputs:
             PR_LOCKED=$(gh api "repos/${REPO}/pulls/${FIRST_PR}" --jq '.locked' 2>/dev/null || echo "false")
             if [ "$PR_LOCKED" = "true" ]; then
               echo "PR #${FIRST_PR} is locked. Skipping comment."
+              if [ "$RESOLVER_STATUS" -ne 0 ]; then
+                exit "$RESOLVER_STATUS"
+              fi
               exit 0
             fi
 
@@ -860,6 +871,10 @@ safe-outputs:
               echo "Posted new analysis comment on PR #${FIRST_PR}"
             fi
             rm -f "$COMMENT_FILE"
+
+            if [ "$RESOLVER_STATUS" -ne 0 ]; then
+              exit "$RESOLVER_STATUS"
+            fi
     rerun-failed-jobs:
       name: "Rerun failed CI jobs"
       description: |

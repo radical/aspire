@@ -110,7 +110,8 @@ For job-level log matching (e.g., a Windows-specific process init failure):
     {
       "jobName": { "regex": ".*windows.*" },
       "output": "0xC0000142",
-      "reason": "Windows process initialization failure"
+      "reason": "Windows process initialization failure",
+      "causeId": "windows-process-init-failure-0xc0000142"
     }
   ]
 }
@@ -140,6 +141,7 @@ For job-level log matching (e.g., a Windows-specific process init failure):
 |-------|------|-----------------|
 | `jobName` | string or `{"regex": "..."}` | GitHub Actions job name (e.g., `Tests / Run ubuntu-latest Aspire.Hosting.Redis.Tests`) |
 | `output` | string or `{"regex": "..."}` | Full job log text (capped at 256KB) |
+| `causeId` | lowercase slug | Optional canonical ID used by CI failure analysis to associate this stable signal with an existing recurring-cause record. The auto-rerun workflow validates but otherwise ignores this field |
 
 ### Matching semantics
 

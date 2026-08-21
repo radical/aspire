@@ -18,11 +18,31 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
         const jobNames = jobIds.map(jobId => failedJobsById.get(jobId).name);
         const evidence = buildEvidence(cause, analysis, jobIds);
 
+        const proposedAlias = findPriorCauseByProposedId(cause, priorById);
+        let testNameMatch;
+        let retryPatternMatch;
+        let explicitMatcherMatch;
+
+        if (!proposedAlias) {
+            testNameMatch = findPriorCauseByTestName(cause, priorCauses, priorById);
+            retryPatternMatch = findPriorCauseByRetryPattern(evidence, jobNames, retryPatterns, priorById);
+            explicitMatcherMatch = findPriorCauseByExplicitMatcher(evidence, priorCauses, priorById);
+            const crossMechanismMatches = uniqueById(
+                [testNameMatch, retryPatternMatch, explicitMatcherMatch].filter(Boolean));
+
+            if (crossMechanismMatches.length > 1) {
+                throw new Error(
+                    `Failure matched conflicting canonical prior causes: ${crossMechanismMatches.map(match => match.id).join(', ')}.`);
+            }
+        }
+
+        // An explicit alias is authoritative. Otherwise normalized test identity is the primary
+        // key for flaky tests, while retry patterns and matchers cover cross-test root causes.
         const canonicalPriorCause =
-            findPriorCauseByProposedId(cause, priorById) ??
-            findPriorCauseByTestName(cause, priorCauses, priorById) ??
-            findPriorCauseByRetryPattern(evidence, jobNames, retryPatterns, priorById) ??
-            findPriorCauseByExplicitMatcher(evidence, priorCauses, priorById) ??
+            proposedAlias ??
+            testNameMatch ??
+            retryPatternMatch ??
+            explicitMatcherMatch ??
             findPriorCauseByExistingId(cause, priorById);
 
         const canonicalId = canonicalPriorCause?.id ?? cause.id;
@@ -113,22 +133,14 @@ function resolveCauseJobIds(cause, analysis, failedJobsById) {
 
     if (cause.test_name) {
         const normalizedTestName = normalizeTestName(cause.test_name);
-        const matchingJobNames = unique(analysis.failed_tests
-            .filter(test => normalizeTestName(test.name) === normalizedTestName)
-            .map(test => test.job));
-
-        if (matchingJobNames.length === 0) {
-            throw new Error(`Cause '${cause.id}' names test '${cause.test_name}', but that test is not in failed_tests.`);
-        }
-
-        const matchingJobIds = analysis.failed_jobs
-            .filter(job => matchingJobNames.includes(job.name))
-            .map(job => job.id);
-
-        const missingJobIds = matchingJobIds.filter(jobId => !jobIds.includes(jobId));
+        const missingJobIds = jobIds.filter(jobId => {
+            const jobName = failedJobsById.get(jobId).name;
+            return !analysis.failed_tests.some(test =>
+                test.job === jobName && normalizeTestName(test.name) === normalizedTestName);
+        });
         if (missingJobIds.length > 0) {
             throw new Error(
-                `Cause '${cause.id}' does not reference the failed job for test '${cause.test_name}'.`);
+                `Cause '${cause.id}' names test '${cause.test_name}', but that test is not in its referenced failed jobs.`);
         }
     }
 
@@ -173,6 +185,7 @@ function findPriorCauseByTestName(cause, priorCauses, priorById) {
 
 function findPriorCauseByRetryPattern(evidence, jobNames, retryPatterns, priorById) {
     const matchingCauseIds = unique((retryPatterns.jobFailurePatterns ?? [])
+        .filter(pattern => pattern.enabled !== false)
         .filter(pattern => pattern.causeId)
         .filter(pattern => matchesConfiguredPattern(pattern.output, evidence))
         .filter(pattern => !pattern.jobName || jobNames.some(jobName => matchesConfiguredPattern(pattern.jobName, jobName)))
@@ -299,7 +312,11 @@ function matchesConfiguredPattern(pattern, value) {
     }
 
     if (pattern?.regex) {
-        return new RegExp(pattern.regex, 'i').test(value);
+        try {
+            return new RegExp(pattern.regex, 'i').test(value);
+        } catch {
+            return false;
+        }
     }
 
     return false;
