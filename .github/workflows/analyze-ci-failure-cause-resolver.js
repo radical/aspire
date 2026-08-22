@@ -379,6 +379,8 @@ function normalizeCause(cause, priorCause, canonicalId, jobIds, jobNames) {
     return removeUndefined({
         ...cause,
         id: canonicalId,
+        // Alias metadata is owned by the memory branch; proposals cannot redirect canonical identity.
+        canonical_id: undefined,
         type: priorCause?.type ?? cause.type,
         title: priorCause?.title ?? cause.title,
         test_name: priorCause?.test_name ?? cause.test_name,

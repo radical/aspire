@@ -796,6 +796,49 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task DoesNotTrustAgentAuthoredCanonicalId()
+    {
+        const string proposedCauseId = "proposed-infra-cause";
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { proposedCauseId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "transient-infra",
+                        reason = "Current infrastructure failure"
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = proposedCauseId,
+                    canonical_id = "agent-selected-canonical-cause",
+                    type = "infra-failure",
+                    title = "Current infrastructure cause",
+                    error_pattern = "Current infrastructure failure",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        JsonElement cause = FindOnlyCause(result);
+        Assert.Equal(proposedCauseId, cause.GetProperty("id").GetString());
+        Assert.False(cause.TryGetProperty("canonical_id", out _));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task PreservesWorkflowOwnedIssueUrl()
     {
         const string canonicalCauseId = "canonical-infra-cause";
