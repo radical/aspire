@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const trackedClassifications = new Set(['flaky-test', 'transient-infra']);
+const supportedCauseTypes = new Set(['flaky-test', 'infra-failure']);
 const safeCauseIdPattern = /^[a-z0-9][a-z0-9-]*$/;
 
 function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} }) {
@@ -21,6 +22,7 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
     const canonicalizations = [...proposalNormalization.canonicalizations];
     const normalizedById = new Map();
     const proposedToCanonical = new Map();
+    const priorCauseMigrations = new Map();
 
     for (const cause of causes) {
         const jobIds = resolveCauseJobIds(cause, analysis, failedJobsById);
@@ -54,9 +56,15 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
             explicitMatcherMatch ??
             findPriorCauseByExistingId(cause, priorById, priorByNormalizedId);
 
-        const canonicalId = canonicalPriorCause?.id ?? cause.id;
-        const normalizedCause = normalizeCause(cause, canonicalPriorCause, jobIds, jobNames);
+        const priorCauseId = canonicalPriorCause?.id;
+        const canonicalId = getCanonicalCauseId(cause.id, priorCauseId);
+        const normalizedCause = normalizeCause(cause, canonicalPriorCause, canonicalId, jobIds, jobNames);
+        validateCauseType(normalizedCause);
         proposedToCanonical.set(cause.id, canonicalId);
+
+        if (priorCauseId && priorCauseId !== canonicalId) {
+            priorCauseMigrations.set(priorCauseId, canonicalId);
+        }
 
         if (cause.id !== canonicalId) {
             canonicalizations.push({ proposed_id: cause.id, canonical_id: canonicalId });
@@ -102,6 +110,10 @@ function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} 
         analysis: normalizedAnalysis,
         causes: normalizedCauses,
         canonicalizations,
+        priorCauseMigrations: [...priorCauseMigrations].map(([legacyId, canonicalId]) => ({
+            legacy_id: legacyId,
+            canonical_id: canonicalId,
+        })),
     };
 }
 
@@ -124,6 +136,13 @@ function validateInputs(analysis, causes, priorCauses) {
         if (!cause || typeof cause.id !== 'string' || cause.id.length === 0) {
             throw new Error(`Invalid cause ID '${cause?.id ?? ''}'.`);
         }
+        validateCauseType(cause);
+    }
+}
+
+function validateCauseType(cause) {
+    if (!supportedCauseTypes.has(cause.type)) {
+        throw new Error(`Cause '${cause.id}' has unsupported type '${cause.type ?? ''}'.`);
     }
 }
 
@@ -194,6 +213,18 @@ function normalizeCauseId(causeId) {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '');
+}
+
+function getCanonicalCauseId(proposedCauseId, priorCauseId) {
+    if (!priorCauseId) {
+        return proposedCauseId;
+    }
+    if (safeCauseIdPattern.test(priorCauseId)) {
+        return priorCauseId;
+    }
+
+    const normalizedPriorCauseId = normalizeCauseId(priorCauseId);
+    return safeCauseIdPattern.test(normalizedPriorCauseId) ? normalizedPriorCauseId : proposedCauseId;
 }
 
 function resolveCauseJobIds(cause, analysis, failedJobsById) {
@@ -339,7 +370,7 @@ function resolveAlias(cause, priorById) {
     return current;
 }
 
-function normalizeCause(cause, priorCause, jobIds, jobNames) {
+function normalizeCause(cause, priorCause, canonicalId, jobIds, jobNames) {
     const testNames = unique([
         ...allTestNames(priorCause ?? {}),
         ...allTestNames(cause),
@@ -347,7 +378,7 @@ function normalizeCause(cause, priorCause, jobIds, jobNames) {
 
     return removeUndefined({
         ...cause,
-        id: priorCause?.id ?? cause.id,
+        id: canonicalId,
         type: priorCause?.type ?? cause.type,
         title: priorCause?.title ?? cause.title,
         test_name: priorCause?.test_name ?? cause.test_name,
@@ -463,6 +494,52 @@ function readJsonFiles(directory) {
         });
 }
 
+function migratePriorCauseFiles(directory, migrations) {
+    if (!fs.existsSync(directory) || migrations.length === 0) {
+        return;
+    }
+
+    const canonicalByLegacyId = new Map(
+        migrations.map(migration => [migration.legacy_id, migration.canonical_id]));
+
+    for (const migration of migrations) {
+        const legacyPath = path.join(directory, `${migration.legacy_id}.json`);
+        const canonicalPath = path.join(directory, `${migration.canonical_id}.json`);
+        if (!fs.existsSync(legacyPath)) {
+            throw new Error(`Legacy cause file '${migration.legacy_id}.json' does not exist.`);
+        }
+        const canonicalPathExists = fs.existsSync(canonicalPath);
+        const legacyFile = fs.statSync(legacyPath);
+        const canonicalFile = canonicalPathExists ? fs.statSync(canonicalPath) : undefined;
+        const pathsReferToSameFile = canonicalFile &&
+            legacyFile.dev === canonicalFile.dev &&
+            legacyFile.ino === canonicalFile.ino;
+        if (canonicalPathExists && !pathsReferToSameFile) {
+            throw new Error(
+                `Cannot migrate legacy cause '${migration.legacy_id}' because '${migration.canonical_id}' already exists.`);
+        }
+
+        const cause = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+        cause.id = migration.canonical_id;
+        // A temporary path is required for case-only renames on case-insensitive file systems.
+        const temporaryPath = `${canonicalPath}.migrating`;
+        fs.writeFileSync(temporaryPath, `${JSON.stringify(cause, null, 2)}\n`);
+        fs.rmSync(legacyPath);
+        fs.renameSync(temporaryPath, canonicalPath);
+    }
+
+    // Aliases are separate records, so their targets must move with the canonical cause.
+    for (const fileName of fs.readdirSync(directory).filter(fileName => fileName.endsWith('.json'))) {
+        const causePath = path.join(directory, fileName);
+        const cause = JSON.parse(fs.readFileSync(causePath, 'utf8'));
+        const canonicalId = canonicalByLegacyId.get(cause.canonical_id);
+        if (canonicalId) {
+            cause.canonical_id = canonicalId;
+            fs.writeFileSync(causePath, `${JSON.stringify(cause, null, 2)}\n`);
+        }
+    }
+}
+
 function runCli(args) {
     if (args.length !== 4) {
         throw new Error(
@@ -477,6 +554,7 @@ function runCli(args) {
         retryPatterns: JSON.parse(fs.readFileSync(retryPatternsFile, 'utf8')),
     });
 
+    migratePriorCauseFiles(priorCausesDirectory, result.priorCauseMigrations);
     fs.writeFileSync(analysisFile, `${JSON.stringify(result.analysis, null, 2)}\n`);
     fs.mkdirSync(causesDirectory, { recursive: true });
     for (const fileName of fs.readdirSync(causesDirectory)) {
@@ -492,6 +570,9 @@ function runCli(args) {
 
     for (const canonicalization of result.canonicalizations) {
         console.log(`Canonicalized ${canonicalization.proposed_id} -> ${canonicalization.canonical_id}`);
+    }
+    for (const migration of result.priorCauseMigrations) {
+        console.log(`Migrated legacy cause ${migration.legacy_id} -> ${migration.canonical_id}`);
     }
 }
 

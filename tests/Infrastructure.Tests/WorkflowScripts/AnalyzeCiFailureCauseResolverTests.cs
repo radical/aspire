@@ -674,6 +674,7 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
     public async Task MatchesSanitizedProposalToLegacyPriorCauseId()
     {
         const string legacyCauseId = "processguest-signalerThrows-treekill-timeout";
+        const string canonicalCauseId = "processguest-signalerthrows-treekill-timeout";
         JsonElement result = await ResolveAsync(new
         {
             analysis = new
@@ -715,7 +716,37 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
             retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
         });
 
-        Assert.Equal(legacyCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+        Assert.Equal(canonicalCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+        JsonElement migration = Assert.Single(result.GetProperty("priorCauseMigrations").EnumerateArray());
+        Assert.Equal(legacyCauseId, migration.GetProperty("legacy_id").GetString());
+        Assert.Equal(canonicalCauseId, migration.GetProperty("canonical_id").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task DerivesMigratedIdFromLegacyCauseInsteadOfCurrentProposal()
+    {
+        const string testName = "Aspire.Sample.Tests.SampleTests.FlakyTest";
+        const string legacyCauseId = "Legacy.Cause";
+        const string canonicalCauseId = "legacy-cause";
+
+        JsonElement result = await ResolveAsync(CreateSingleTestPayload(
+            testName,
+            "unrelated-current-proposal",
+            new
+            {
+                id = legacyCauseId,
+                type = "flaky-test",
+                title = "Stored legacy cause",
+                test_name = testName,
+                error_pattern = "The sample test failed."
+            },
+            error: "The sample test failed."));
+
+        Assert.Equal(canonicalCauseId, FindOnlyCause(result).GetProperty("id").GetString());
+        JsonElement migration = Assert.Single(result.GetProperty("priorCauseMigrations").EnumerateArray());
+        Assert.Equal(legacyCauseId, migration.GetProperty("legacy_id").GetString());
+        Assert.Equal(canonicalCauseId, migration.GetProperty("canonical_id").GetString());
     }
 
     [Fact]
@@ -1020,6 +1051,71 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task RejectsUnsupportedCauseTypes()
+    {
+        object payload = new
+        {
+            analysis = new
+            {
+                causes = new[] { "sample-code-issue" },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = "Tests / Sample / Sample (ubuntu-latest)",
+                        classification = "flaky-test",
+                        reason = "The sample test failed."
+                    }
+                },
+                failed_tests = Array.Empty<object>()
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = "sample-code-issue",
+                    type = "code-issue",
+                    title = "Sample code issue",
+                    error_pattern = "The sample test failed.",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = Array.Empty<object>(),
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        };
+
+        CommandResult result = await ExecuteHarnessAsync(payload);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("unsupported type 'code-issue'", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task RejectsUnsupportedCanonicalPriorCauseTypes()
+    {
+        object payload = CreateSingleTestPayload(
+            "Aspire.Sample.Tests.SampleTests.FlakyTest",
+            "current-flaky-test",
+            new
+            {
+                id = "stored-code-issue",
+                type = "code-issue",
+                title = "Stored code issue",
+                test_name = "Aspire.Sample.Tests.SampleTests.FlakyTest",
+                error_pattern = "The sample test failed."
+            },
+            error: "The sample test failed.");
+
+        CommandResult result = await ExecuteHarnessAsync(payload);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("unsupported type 'code-issue'", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task RejectsAmbiguousExplicitMatchers()
     {
         object payload = new
@@ -1220,6 +1316,101 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
         Assert.Equal(
             [canonicalCauseId],
             ReadStrings(analysis.RootElement, "causes"));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CommandLineMigratesLegacyCauseFiles()
+    {
+        const string legacyCauseId = "processguest-signalerThrows-treekill-timeout";
+        const string canonicalCauseId = "processguest-signalerthrows-treekill-timeout";
+
+        string analysisPath = Path.Combine(_workspace.Path, "legacy-analysis-result.json");
+        string causesDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "legacy-causes")).FullName;
+        string priorCausesDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "legacy-prior-causes")).FullName;
+        string retryPatternsPath = Path.Combine(_workspace.Path, "legacy-retry-patterns.json");
+
+        await WriteJsonAsync(analysisPath, new
+        {
+            causes = new[] { canonicalCauseId },
+            failed_jobs = new[]
+            {
+                new
+                {
+                    id = 1,
+                    name = "Tests / Sample / Sample (ubuntu-latest)",
+                    classification = "transient-infra",
+                    reason = "Legacy infrastructure failure"
+                }
+            },
+            failed_tests = Array.Empty<object>()
+        });
+        await WriteJsonAsync(Path.Combine(causesDirectory, $"{canonicalCauseId}.json"), new
+        {
+            id = canonicalCauseId,
+            type = "infra-failure",
+            title = "Current infrastructure cause",
+            error_pattern = "Legacy infrastructure failure",
+            job_ids = new[] { 1 }
+        });
+        await WriteJsonAsync(Path.Combine(priorCausesDirectory, $"{legacyCauseId}.json"), new
+        {
+            id = legacyCauseId,
+            type = "infra-failure",
+            title = "Stored legacy cause",
+            error_pattern = "Legacy infrastructure failure",
+            issue_url = "https://github.com/microsoft/aspire/issues/1111",
+            occurrences = new[] { new { observed_at = "2026-07-01T00:00:00Z" } }
+        });
+        await WriteJsonAsync(Path.Combine(priorCausesDirectory, "legacy-cause-alias.json"), new
+        {
+            id = "legacy-cause-alias",
+            canonical_id = legacyCauseId,
+            type = "infra-failure",
+            title = "Legacy cause alias",
+            error_pattern = "Legacy infrastructure failure"
+        });
+        await WriteJsonAsync(
+            retryPatternsPath,
+            new { jobFailurePatterns = Array.Empty<object>() });
+
+        using NodeCommand command = new(_output, label: "migrateLegacyCause");
+        command.WithWorkingDirectory(_repoRoot).WithTimeout(TimeSpan.FromMinutes(1));
+
+        CommandResult result = await command.ExecuteScriptAsync(
+            _resolverPath,
+            analysisPath,
+            causesDirectory,
+            priorCausesDirectory,
+            retryPatternsPath);
+        result.EnsureSuccessful();
+
+        string canonicalPath = Path.Combine(priorCausesDirectory, $"{canonicalCauseId}.json");
+        Assert.True(File.Exists(canonicalPath));
+        Assert.Equal(
+            ["legacy-cause-alias.json", $"{canonicalCauseId}.json"],
+            Directory.GetFiles(priorCausesDirectory, "*.json").Select(path => Path.GetFileName(path)!).Order().ToArray());
+
+        using JsonDocument migratedDocument = JsonDocument.Parse(await File.ReadAllTextAsync(canonicalPath));
+        JsonElement migratedCause = migratedDocument.RootElement;
+        Assert.Equal(canonicalCauseId, migratedCause.GetProperty("id").GetString());
+        Assert.Equal(
+            "https://github.com/microsoft/aspire/issues/1111",
+            migratedCause.GetProperty("issue_url").GetString());
+        Assert.Single(migratedCause.GetProperty("occurrences").EnumerateArray());
+
+        using JsonDocument aliasDocument = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(priorCausesDirectory, "legacy-cause-alias.json")));
+        Assert.Equal(canonicalCauseId, aliasDocument.RootElement.GetProperty("canonical_id").GetString());
+
+        using JsonDocument analysisDocument = JsonDocument.Parse(await File.ReadAllTextAsync(analysisPath));
+        Assert.Equal([canonicalCauseId], ReadStrings(analysisDocument.RootElement, "causes"));
+
+        string[] causeFiles = Directory.GetFiles(causesDirectory, "*.json")
+            .Select(Path.GetFileName)
+            .Order()
+            .ToArray()!;
+        Assert.Equal([$"{canonicalCauseId}.json"], causeFiles);
     }
 
     [Fact]
