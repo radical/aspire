@@ -265,7 +265,7 @@ function resolveCauseJobIds(cause, analysis, failedJobsById) {
 function buildEvidence(cause, analysis, jobIds) {
     const jobIdSet = new Set(jobIds);
     const jobNames = new Set(analysis.failed_jobs.filter(job => jobIdSet.has(job.id)).map(job => job.name));
-    const causeTestNames = new Set(allTestNames(cause).map(normalizeTestName));
+    const causeTestNames = new Set(cause.test_name ? [normalizeTestName(cause.test_name)] : []);
     const failedTests = analysis.failed_tests.filter(test =>
         jobNames.has(test.job) && causeTestNames.has(normalizeTestName(test.name)));
 
@@ -373,8 +373,8 @@ function resolveAlias(cause, priorById) {
 function normalizeCause(cause, priorCause, canonicalId, jobIds, jobNames) {
     const testNames = unique([
         ...allTestNames(priorCause ?? {}),
-        ...allTestNames(cause),
-    ]);
+        cause.test_name,
+    ].filter(Boolean));
 
     return removeUndefined({
         ...cause,

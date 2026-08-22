@@ -839,6 +839,86 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task IgnoresAgentAuthoredTestNames()
+    {
+        const string proposedCauseId = "proposed-flaky-cause";
+        const string failedTestName = "Current.Tests.ActualFailure";
+        const string unrelatedTestName = "Current.Tests.UnrelatedFailure";
+        const string jobName = "Tests / Sample / Sample (ubuntu-latest)";
+        JsonElement result = await ResolveAsync(new
+        {
+            analysis = new
+            {
+                causes = new[] { proposedCauseId },
+                failed_jobs = new[]
+                {
+                    new
+                    {
+                        id = 1,
+                        name = jobName,
+                        classification = "flaky-test",
+                        reason = "Two tests failed independently."
+                    }
+                },
+                failed_tests = new[]
+                {
+                    new
+                    {
+                        name = failedTestName,
+                        job = jobName,
+                        error = "Actual deterministic failure token",
+                        stack_trace = string.Empty
+                    },
+                    new
+                    {
+                        name = unrelatedTestName,
+                        job = jobName,
+                        error = "Unrelated deterministic failure token",
+                        stack_trace = string.Empty
+                    }
+                }
+            },
+            causes = new[]
+            {
+                new
+                {
+                    id = proposedCauseId,
+                    type = "flaky-test",
+                    title = "Actual flaky test",
+                    test_name = failedTestName,
+                    test_names = new[] { unrelatedTestName },
+                    error_pattern = "Actual deterministic failure token",
+                    job_ids = new[] { 1 }
+                }
+            },
+            priorCauses = new[]
+            {
+                new
+                {
+                    id = "unrelated-canonical-cause",
+                    type = "infra-failure",
+                    title = "Unrelated canonical cause",
+                    error_pattern = "Unrelated deterministic failure token",
+                    matchers = new[]
+                    {
+                        new
+                        {
+                            kind = "error-literal",
+                            value = "Unrelated deterministic failure token"
+                        }
+                    }
+                }
+            },
+            retryPatterns = new { jobFailurePatterns = Array.Empty<object>() }
+        });
+
+        JsonElement cause = FindOnlyCause(result);
+        Assert.Equal(proposedCauseId, cause.GetProperty("id").GetString());
+        Assert.Equal([failedTestName], ReadStrings(cause, "test_names"));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task PreservesWorkflowOwnedIssueUrl()
     {
         const string canonicalCauseId = "canonical-infra-cause";
