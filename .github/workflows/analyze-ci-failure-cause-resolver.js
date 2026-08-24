@@ -7,6 +7,7 @@ const safeCauseIdPattern = /^[a-z0-9][a-z0-9-]*$/;
 
 function resolveCauses({ analysis, causes, priorCauses = [], retryPatterns = {} }) {
     validateInputs(analysis, causes, priorCauses);
+    validateRetryPatternCauseIds(retryPatterns);
 
     priorCauses = priorCauses.filter(
         cause => cause && typeof cause.id === 'string' && cause.id.length > 0);
@@ -137,6 +138,16 @@ function validateInputs(analysis, causes, priorCauses) {
             throw new Error(`Invalid cause ID '${cause?.id ?? ''}'.`);
         }
         validateCauseType(cause);
+    }
+}
+
+function validateRetryPatternCauseIds(retryPatterns) {
+    for (const [index, pattern] of (retryPatterns.jobFailurePatterns ?? []).entries()) {
+        if (pattern?.causeId !== undefined &&
+            (typeof pattern.causeId !== 'string' || !safeCauseIdPattern.test(pattern.causeId))) {
+            throw new Error(
+                `jobFailurePatterns[${index}].causeId '${String(pattern.causeId)}' must be a safe cause ID.`);
+        }
     }
 }
 
@@ -327,7 +338,12 @@ function findPriorCauseByExplicitMatcher(evidence, priorCauses, priorById) {
     const candidates = [];
 
     for (const priorCause of priorCauses) {
-        if ((priorCause.matchers ?? []).some(matcher => matchesExplicitMatcher(matcher, evidence))) {
+        let matched = false;
+        for (const [index, matcher] of (priorCause.matchers ?? []).entries()) {
+            matched = matchesExplicitMatcher(matcher, evidence, priorCause.id, index) || matched;
+        }
+
+        if (matched) {
             candidates.push(resolveAlias(priorCause, priorById));
         }
     }
@@ -446,13 +462,20 @@ function matchesConfiguredPattern(pattern, value) {
     return false;
 }
 
-function matchesExplicitMatcher(matcher, evidence) {
+function matchesExplicitMatcher(matcher, evidence, priorCauseId, matcherIndex) {
     if (matcher.kind === 'error-literal' && typeof matcher.value === 'string') {
         return evidence.toLowerCase().includes(matcher.value.toLowerCase());
     }
 
     if (matcher.kind === 'error-regex' && typeof matcher.pattern === 'string') {
-        return new RegExp(matcher.pattern, matcher.flags ?? 'i').test(evidence);
+        const flags = matcher.flags ?? 'i';
+        try {
+            return new RegExp(matcher.pattern, flags).test(evidence);
+        } catch (error) {
+            throw new Error(
+                `Prior cause '${priorCauseId}' matcher ${matcherIndex} has invalid regular expression ` +
+                `'${matcher.pattern}' with flags '${flags}': ${error.message}`);
+        }
     }
 
     throw new Error(`Unsupported cause matcher kind '${matcher.kind ?? ''}'.`);
@@ -505,6 +528,12 @@ function migratePriorCauseFiles(directory, migrations) {
         migrations.map(migration => [migration.legacy_id, migration.canonical_id]));
 
     for (const migration of migrations) {
+        if (typeof migration.legacy_id !== 'string' || /[\\/]/.test(migration.legacy_id) ||
+            !safeCauseIdPattern.test(migration.canonical_id)) {
+            throw new Error(
+                `Cannot migrate unsafe cause IDs '${migration.legacy_id ?? ''}' -> '${migration.canonical_id ?? ''}'.`);
+        }
+
         const legacyPath = path.join(directory, `${migration.legacy_id}.json`);
         const canonicalPath = path.join(directory, `${migration.canonical_id}.json`);
         if (!fs.existsSync(legacyPath)) {

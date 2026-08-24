@@ -454,6 +454,44 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task RejectsMalformedStoredMatcherWithCauseContext()
+    {
+        object payload = CreateSingleTestPayload(
+            "Aspire.Sample.Tests.SampleTests.CurrentTest",
+            "current-sample-cause",
+            new
+            {
+                id = "stored-malformed-matcher",
+                type = "flaky-test",
+                title = "Stored cause with malformed matcher",
+                test_name = "Aspire.Sample.Tests.SampleTests.PriorTest",
+                error_pattern = "Shared failure token",
+                matchers = new object[]
+                {
+                    new
+                    {
+                        kind = "error-literal",
+                        value = "Shared failure token"
+                    },
+                    new
+                    {
+                        kind = "error-regex",
+                        pattern = "[invalid",
+                        flags = "i"
+                    }
+                }
+            },
+            error: "Shared failure token");
+
+        CommandResult result = await ExecuteHarnessAsync(payload);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Prior cause 'stored-malformed-matcher' matcher 1", result.Output, StringComparison.Ordinal);
+        Assert.Contains("invalid regular expression '[invalid' with flags 'i'", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task DoesNotMergeSimilarFailuresWithoutDeterministicMatcher()
     {
         JsonElement result = await ResolveAsync(new
@@ -1367,6 +1405,26 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task RejectsUnsafeCauseIdInDisabledRetryPattern()
+    {
+        CommandResult result = await ExecuteHarnessAsync(CreateRetryPatternPayload(
+            "current-infra-cause",
+            new
+            {
+                output = "Shared retry token",
+                causeId = "../outside/victim",
+                enabled = false
+            }));
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            "jobFailurePatterns[0].causeId '../outside/victim' must be a safe cause ID",
+            result.Output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task CommandLineRewritesCauseFilesAndRunReferences()
     {
         const string proposedCauseId = "windows-process-init-0xc0000142";
@@ -1439,6 +1497,73 @@ public sealed class AnalyzeCiFailureCauseResolverTests : IDisposable
         Assert.Equal(
             [canonicalCauseId],
             ReadStrings(analysis.RootElement, "causes"));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CommandLineRejectsUnsafeRetryPatternCauseIdWithoutMigratingFiles()
+    {
+        const string proposedCauseId = "current-infra-cause";
+        const string unsafeCauseId = "../outside/victim";
+
+        string analysisPath = Path.Combine(_workspace.Path, "unsafe-analysis-result.json");
+        string causesDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "unsafe-causes")).FullName;
+        string priorCausesDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "unsafe-prior-causes")).FullName;
+        string retryPatternsPath = Path.Combine(_workspace.Path, "unsafe-retry-patterns.json");
+        string outsideDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "outside")).FullName;
+        string outsideCausePath = Path.Combine(outsideDirectory, "victim.json");
+        const string outsideCauseContents = """{"sentinel":"must remain unchanged"}""";
+
+        await WriteJsonAsync(analysisPath, new
+        {
+            causes = new[] { proposedCauseId },
+            failed_jobs = new[]
+            {
+                new
+                {
+                    id = 1,
+                    name = "Tests / Sample / Sample (ubuntu-latest)",
+                    classification = "transient-infra",
+                    reason = "Shared retry token"
+                }
+            },
+            failed_tests = Array.Empty<object>()
+        });
+        await WriteJsonAsync(Path.Combine(causesDirectory, $"{proposedCauseId}.json"), new
+        {
+            id = proposedCauseId,
+            type = "infra-failure",
+            title = "Current infrastructure cause",
+            error_pattern = "Shared retry token",
+            job_ids = new[] { 1 }
+        });
+        await WriteJsonAsync(retryPatternsPath, new
+        {
+            jobFailurePatterns = new[]
+            {
+                new
+                {
+                    output = "Shared retry token",
+                    causeId = unsafeCauseId
+                }
+            }
+        });
+        await File.WriteAllTextAsync(outsideCausePath, outsideCauseContents);
+
+        using NodeCommand command = new(_output, label: "rejectUnsafeCauseId");
+        command.WithWorkingDirectory(_repoRoot).WithTimeout(TimeSpan.FromMinutes(1));
+
+        CommandResult result = await command.ExecuteScriptAsync(
+            _resolverPath,
+            analysisPath,
+            causesDirectory,
+            priorCausesDirectory,
+            retryPatternsPath);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("must be a safe cause ID", result.Output, StringComparison.Ordinal);
+        Assert.Equal(outsideCauseContents, await File.ReadAllTextAsync(outsideCausePath));
+        Assert.True(File.Exists(Path.Combine(causesDirectory, $"{proposedCauseId}.json")));
     }
 
     [Fact]
