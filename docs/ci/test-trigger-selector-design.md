@@ -9,17 +9,16 @@ Companion documents:
 - [`test-trigger-map.md`](./test-trigger-map.md) — the descriptive path → target map.
 - [`eng/github-ci/test-trigger-map.yml`](../../eng/github-ci/test-trigger-map.yml) — its machine-readable form.
 
-**Status: audit.** `tests.yml`'s `setup_for_tests` runs the `select-tests` action
-*before* `enumerate-tests`. When its `enforce: 'true'` and the selection is
+**Status: enforcing.** `tests.yml`'s `setup_for_tests` runs the `select-tests`
+action *before* `enumerate-tests` with `enforce: 'true'`. When the selection is
 not ALL, the selector writes an `OverrideProjectToBuild` props file so
-`enumerate-tests` builds and enumerates only the selected projects; in audit mode
-(`enforce: 'false'`) it writes no props and `enumerate-tests` produces
-the full matrix unchanged while the summary still reports what enforcing would
-have skipped.
+`enumerate-tests` builds and enumerates only the selected projects. The
+`run-full-ci` label remains a kill switch that forces the full matrix and all
+jobs.
 
-Audit mode does not soften Layer 1 failures. If the affected-projects graph
-cannot be computed, `SelectTests` fails the step because under-selecting would
-silently skip real tests.
+Neither enforcing nor audit mode softens Layer 1 failures. If the
+affected-projects graph cannot be computed, `SelectTests` fails the step because
+under-selecting would silently skip real tests.
 
 ## Goal
 
@@ -453,10 +452,12 @@ The clean wins remain large and safe:
 - Component ↔ component isolation holds: an `Aspire.Npgsql` change does not pull
   unrelated Redis / RabbitMQ / MongoDB / Milvus component tests.
 
-## Audit mode
+## Enforcement and audit mode
 
-Audit mode computes the subset and writes a `$GITHUB_STEP_SUMMARY`, but CI still
-runs the full matrix and all jobs. The summary shows:
+Enforcing mode restricts the .NET matrix and gates non-.NET jobs to the computed
+selection. Audit mode remains available by passing `enforce: 'false'`; it computes
+the subset and writes a `$GITHUB_STEP_SUMMARY`, but CI still runs the full matrix
+and all jobs. The summary shows:
 
 - the invocation mode and change source;
 - selected test projects and triggered jobs, each annotated with **why** it was
@@ -488,9 +489,8 @@ audit mode the comment is advisory — the
 full matrix and all jobs still run — so it is labelled "(audit mode)" and states
 that the lists are what selective CI **would** run under enforcement.
 
-Any audit run where a would-be-skipped test would have failed is a map bug,
-fixed before enforcing. Once audit data shows the skip set is consistently safe,
-flip to enforcing and keep the `run-full-ci` kill switch.
+Any audit run where a would-be-skipped test would have failed is a map bug. Fix
+the map before returning to enforcing mode.
 
 ## Verifier test
 
@@ -596,9 +596,10 @@ run-all fallback exists to prevent.
 
 ## Rollout
 
-1. Run `SelectTests` in audit mode.
-2. Watch the audit summaries and fix unsafe skips in the curated layer.
-3. Flip to enforcing. Keep the kill switch and hard-fail Layer 1 policy.
+1. `SelectTests` ran in audit mode while its summaries were reviewed.
+2. Unsafe skips in the curated layer were fixed.
+3. `tests.yml` now runs in enforcing mode while retaining the `run-full-ci` kill
+   switch and hard-fail Layer 1 policy.
 
 ## Future refinement
 
