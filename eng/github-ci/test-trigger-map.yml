@@ -17,7 +17,8 @@
 #   job:polyglot               tests.yml -> polyglot-validation.yml (py/go/java/rust/ts)
 #   job:typescript-sdk         tests.yml -> typescript-sdk-tests.yml
 #   job:typescript-api-compat  tests.yml -> typescript-api-compat.yml
-#   job:extension-unit         tests.yml extension_tests_win + extension_bootstrap_linux
+#   job:extension-unit         tests.yml extension_tests_win + extension_bootstrap_linux,
+#                              with unit/package steps in extension-unit-tests.yml
 #   job:extension-e2e          tests.yml -> extension-e2e-tests.yml
 #   job:winget-installer       tests.yml prepare_winget_installer_artifacts
 #   job:homebrew-installer     tests.yml prepare_homebrew_installer_artifacts
@@ -195,7 +196,9 @@ path_rules:
       - src/Aspire.Hosting*/api/*.ats.txt
     targets: [job:typescript-api-compat, job:polyglot]
     reason: an integration's *.ats.txt baseline tracks its exported ATS surface; the polyglot playground regenerates+compiles that surface per language, so a baseline change must run polyglot too
-  - paths: [extension/**]
+  - paths:
+      - extension/**
+      - .github/workflows/extension-unit-tests.yml
     targets: [job:extension-unit]
     reason: extension_tests_win + extension_bootstrap_linux run yarn build/test in extension/
   - paths:
@@ -208,6 +211,7 @@ path_rules:
       - tests/Aspire.Hosting.Tests/Cli/**
       - eng/scripts/get-aspire-cli*
       - .github/workflows/tests.yml
+      - .github/workflows/extension-unit-tests.yml
       - .github/workflows/extension-e2e-tests.yml
       - .github/workflows/build-packages.yml
       - .github/workflows/build-cli-native-archives.yml
