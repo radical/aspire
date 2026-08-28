@@ -1,5 +1,14 @@
 # CI Shepherd Full-Cycle POC Design
 
+## Implementation checkpoint
+
+The implemented state and validation evidence as of 2026-08-28 are recorded in
+[CI Shepherd Implementation Status](../status/2026-08-28-ci-shepherd-implementation.md).
+The agreed operational rollout is tracked in
+[CI Shepherd Continuation Plan](../plans/2026-08-28-ci-shepherd-continuation.md).
+Those documents supersede unchecked historical implementation steps but do not
+relax this design's per-action approval boundary.
+
 ## Purpose
 
 The CI shepherd now implements collection, incremental factual reuse, selective

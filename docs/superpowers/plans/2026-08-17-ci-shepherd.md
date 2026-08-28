@@ -1,5 +1,13 @@
 # CI Failure Shepherd Implementation Plan
 
+> **Status:** The original read-only foundation and subsequent lifecycle,
+> assessment, pull-request, and actor work are implemented through commit
+> `443e989126`. Current validation and remaining constraints are recorded in
+> [CI Shepherd Implementation Status](../status/2026-08-28-ci-shepherd-implementation.md).
+> Continue from
+> [CI Shepherd Continuation Plan](2026-08-28-ci-shepherd-continuation.md)
+> instead of replaying this historical task list.
+
 The bounded producer-aware lifecycle follow-up is tracked in
 [CI Shepherd Lifecycle Hardening Implementation Plan](2026-08-19-ci-shepherd-lifecycle-hardening.md).
 

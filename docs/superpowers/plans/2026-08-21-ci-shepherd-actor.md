@@ -1,5 +1,12 @@
 # CI Shepherd Actor Implementation Plan
 
+> **Status:** The exact-action actor and its lifecycle preflight are implemented
+> through commit `443e989126`. Current validation and residual constraints are
+> recorded in
+> [CI Shepherd Implementation Status](../status/2026-08-28-ci-shepherd-implementation.md).
+> Live action trials remain intentionally pending in
+> [CI Shepherd Continuation Plan](2026-08-28-ci-shepherd-continuation.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a dry-run-by-default actor that prints validated CI shepherd proposals and executes exactly one explicit action only with `--execute --action-id`.

@@ -1,5 +1,12 @@
 # CI Shepherd Lifecycle Hardening Implementation Plan
 
+> **Status:** This historical plan is implemented through commit
+> `443e989126`. Current validation and residual constraints are recorded in
+> [CI Shepherd Implementation Status](../status/2026-08-28-ci-shepherd-implementation.md).
+> Continue from
+> [CI Shepherd Continuation Plan](2026-08-28-ci-shepherd-continuation.md);
+> do not infer current progress from the unchecked historical steps below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Produce bounded, producer-aware, read-only CI lifecycle recommendations that distinguish investigation, waiting, human review, and closure-review candidates without permitting GitHub writes.
