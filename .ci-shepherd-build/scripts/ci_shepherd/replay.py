@@ -122,6 +122,8 @@ def replay_lifecycle_scenario(
             prepared_path,
             "--judgments",
             judgments_path,
+            "--snapshot",
+            replay_input,
             "--output",
             report_path,
         )

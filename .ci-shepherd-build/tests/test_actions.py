@@ -174,6 +174,20 @@ def _duplicate_agent_input() -> dict[str, object]:
     }
 
 
+def _recovered_run_agent_input() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "snapshotId": "snapshot:owner/repo:2026-08-21T16:00:00Z",
+        "repository": "owner/repo",
+        "issues": [
+            {
+                "issueNumber": 21,
+                "recoveredRunEvidenceId": "run:777",
+            }
+        ],
+    }
+
+
 def _duplicate_judgments() -> dict[str, object]:
     judgments = _close_judgments()
     issue = judgments["issues"][0]
@@ -192,11 +206,43 @@ def _duplicate_judgments() -> dict[str, object]:
     return judgments
 
 
+def _ping_human_judgments() -> dict[str, object]:
+    judgments = _judgments()
+    issue = judgments["issues"][0]
+    assert isinstance(issue, dict)
+    recommendations = issue["recommendations"]
+    assert isinstance(recommendations, list)
+    recommendation = recommendations[0]
+    assert isinstance(recommendation, dict)
+    recommendation.update(
+        {
+            "disposition": "ping-human",
+            "target": {"kind": "issue", "value": 21},
+            "summary": "A workflow owner must choose the recovery policy.",
+            "evidenceIds": ["issue:21", "run:777"],
+            "missingEvidence": [],
+            "reassessWhen": "After the owner records the policy decision.",
+            "humanEscalation": {
+                "context": "The release lane still lacks a recovery policy.",
+                "whyHuman": "The repository does not encode the intended policy.",
+                "question": "Should the failed lane retry or remain blocked?",
+                "suggestedNextSteps": [
+                    "Choose the intended retry policy.",
+                    "Record it in the workflow configuration.",
+                ],
+                "routingHint": "release-infrastructure",
+            },
+        }
+    )
+    return judgments
+
+
 def _with_owned_comment(
     snapshot: dict[str, object],
     body: str,
     *,
     comment_id: int = 900,
+    idempotency_key: str = "issue:21:status",
 ) -> dict[str, object]:
     result = copy.deepcopy(snapshot)
     evidence = result["evidence"]
@@ -218,7 +264,7 @@ def _with_owned_comment(
             "references": [],
             "shepherdStatus": {
                 "role": "status",
-                "idempotencyKey": "issue:21:watch",
+                "idempotencyKey": idempotency_key,
                 "owned": True,
             },
         },
@@ -227,6 +273,92 @@ def _with_owned_comment(
 
 
 class WatchActionTests(unittest.TestCase):
+    def test_legacy_watch_comment_is_migrated_in_place(self) -> None:
+        result = build_watch_proposals(
+            _with_owned_comment(
+                _snapshot(),
+                "[automated] Old watch status",
+                idempotency_key="issue:21:watch",
+            ),
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(1, len(result["proposals"]))
+        proposal = result["proposals"][0]
+        self.assertEqual("edit-comment", proposal["operation"])
+        self.assertEqual(900, proposal["commentId"])
+        self.assertEqual("issue:21:status", proposal["idempotencyKey"])
+
+    def test_newest_legacy_status_comment_is_migrated_when_multiple_exist(self) -> None:
+        snapshot = _with_owned_comment(
+            _snapshot(),
+            "[automated] Old watch status",
+            comment_id=900,
+            idempotency_key="issue:21:watch",
+        )
+        snapshot = _with_owned_comment(
+            snapshot,
+            "[automated] Old close status",
+            comment_id=901,
+            idempotency_key="issue:21:review-close",
+        )
+
+        result = build_action_proposals(
+            snapshot,
+            _resolved_prepared(),
+            _close_judgments(),
+            "ankj",
+        )
+
+        comment, close = result["proposals"]
+        self.assertEqual("edit-comment", comment["operation"])
+        self.assertEqual(901, comment["commentId"])
+        self.assertEqual("issue:21:status", comment["idempotencyKey"])
+        self.assertEqual(comment["actionId"], close["dependsOn"])
+
+    def test_review_close_wins_over_watch_for_the_canonical_status_comment(self) -> None:
+        judgments = _close_judgments()
+        issue = judgments["issues"][0]
+        assert isinstance(issue, dict)
+        recommendations = issue["recommendations"]
+        assert isinstance(recommendations, list)
+        recommendations.append(copy.deepcopy(_judgments()["issues"][0]["recommendations"][0]))
+
+        result = build_action_proposals(
+            _snapshot(),
+            _resolved_prepared(),
+            judgments,
+            "ankj",
+        )
+
+        self.assertEqual(
+            ["create-comment", "close-issue"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
+        self.assertIn("supports closing this issue", result["proposals"][0]["body"])
+
+    def test_ping_human_edits_the_canonical_status_comment(self) -> None:
+        result = build_action_proposals(
+            _with_owned_comment(_snapshot(), "[automated] Old watch status"),
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(1, len(result["proposals"]))
+        proposal = result["proposals"][0]
+        self.assertEqual("edit-comment", proposal["operation"])
+        self.assertEqual(900, proposal["commentId"])
+        self.assertEqual("issue:21:status", proposal["idempotencyKey"])
+        self.assertIn(
+            "**Decision needed:** Should the failed lane retry or remain blocked?",
+            proposal["body"],
+        )
+        self.assertIn("`release-infrastructure`", proposal["body"])
+        self.assertIn("<!-- ci-shepherd:role=status -->", proposal["body"])
+
     def test_build_action_proposals_renders_resolved_review_close(self) -> None:
         result = build_action_proposals(
             _snapshot(),
@@ -275,6 +407,46 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual("completed", close["closeReason"])
         self.assertTrue(close["requiresSeparateApproval"])
         self.assertEqual(comment["actionId"], close["dependsOn"])
+
+    def test_build_action_proposals_renders_direct_run_recovery_close(self) -> None:
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _close_judgments(),
+            "ankj",
+            agent_input=_recovered_run_agent_input(),
+        )
+
+        self.assertEqual(
+            ["create-comment", "close-issue"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
+        self.assertIn(
+            "completed successfully on `main` after the last recorded failure",
+            result["proposals"][0]["body"],
+        )
+
+    def test_direct_run_recovery_satisfies_missing_verified_fix(self) -> None:
+        judgments = _close_judgments()
+        recommendation = judgments["issues"][0]["recommendations"][0]
+        assert isinstance(recommendation, dict)
+        recommendation["missingEvidence"] = [
+            "occurrence-run-timestamp-for-fix-day",
+            "verified-fix",
+        ]
+
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            judgments,
+            "ankj",
+            agent_input=_recovered_run_agent_input(),
+        )
+
+        self.assertEqual(
+            ["create-comment", "close-issue"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
 
     def test_build_action_proposals_rejects_unresolved_review_close(self) -> None:
         with self.assertRaisesRegex(
@@ -327,7 +499,7 @@ class WatchActionTests(unittest.TestCase):
         proposal = result["proposals"][0]
         self.assertEqual("create-comment", proposal["operation"])
         self.assertIs(True, proposal["requiresSeparateApproval"])
-        self.assertEqual("issue:21:watch", proposal["idempotencyKey"])
+        self.assertEqual("issue:21:status", proposal["idempotencyKey"])
         self.assertTrue(proposal["body"].startswith("[automated] "))
         self.assertIn(
             "One matching failure has been observed.",
@@ -347,7 +519,7 @@ class WatchActionTests(unittest.TestCase):
             proposal["body"],
         )
         self.assertIn(
-            "<!-- ci-shepherd:idempotency-key=issue:21:watch -->",
+            "<!-- ci-shepherd:idempotency-key=issue:21:status -->",
             proposal["body"],
         )
 
@@ -399,7 +571,7 @@ class WatchActionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "multiple owned watch status comments",
+            "multiple owned canonical status comments",
         ):
             build_watch_proposals(snapshot, _prepared(), _judgments(), "ankj")
 

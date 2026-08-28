@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import re
 from typing import Callable, Protocol
 
+from .collector import COPILOT_ASSIGNEES
+
 
 KNOWN_OPERATIONS = frozenset({"create-comment", "edit-comment", "close-issue"})
 KNOWN_CLOSE_REASONS = frozenset({"completed", "not_planned", "duplicate"})
@@ -20,6 +22,10 @@ COMMON_PROPOSAL_FIELDS = frozenset(
         "issueUrl",
         "operation",
         "requiresSeparateApproval",
+        "targetKind",
+        "targetNumber",
+        "targetUrl",
+        "expectedTargetState",
     }
 )
 OPERATION_FIELDS = {
@@ -101,10 +107,6 @@ def _validate_proposal(
         raise TypeError("Each proposal must be an object.")
 
     action_id = _required_string(proposal.get("actionId"), field="actionId")
-    issue_number = _required_int(
-        proposal.get("issueNumber"),
-        field=f"{action_id}.issueNumber",
-    )
     operation = _required_string(
         proposal.get("operation"),
         field=f"{action_id}.operation",
@@ -119,28 +121,20 @@ def _validate_proposal(
             f"{action_id} has unsupported fields: {sorted(unsupported_fields)}"
         )
 
-    issue_url = _required_string(
-        proposal.get("issueUrl"),
-        field=f"{action_id}.issueUrl",
+    target_kind, target_number, target_url, expected_state = _proposal_target(
+        proposal,
+        repository=repository,
+        action_id=action_id,
     )
-    expected_issue_url = (
-        f"https://github.com/{repository}/issues/{issue_number}"
-    )
-    if issue_url != expected_issue_url:
-        raise ValueError(
-            f"{action_id}.issueUrl does not match repository and issueNumber."
-        )
+    if operation == "close-issue" and target_kind != "issue":
+        raise ValueError(f"{action_id} cannot close a pull request.")
 
     idempotency_key = _required_string(
         proposal.get("idempotencyKey"),
         field=f"{action_id}.idempotencyKey",
     )
-    expected_state = _required_string(
-        proposal.get("expectedIssueState"),
-        field=f"{action_id}.expectedIssueState",
-    )
     if expected_state not in KNOWN_ISSUE_STATES:
-        raise ValueError(f"{action_id}.expectedIssueState is unsupported.")
+        raise ValueError(f"{action_id} expected target state is unsupported.")
 
     evidence_ids = proposal.get("evidenceIds")
     if (
@@ -182,6 +176,62 @@ def _validate_proposal(
     return proposal
 
 
+def _proposal_target(
+    proposal: dict[str, object],
+    *,
+    repository: str,
+    action_id: str,
+) -> tuple[str, int, str, str]:
+    if "targetKind" in proposal:
+        target_kind = _required_string(
+            proposal.get("targetKind"),
+            field=f"{action_id}.targetKind",
+        )
+        if target_kind not in {"issue", "pull-request"}:
+            raise ValueError(f"{action_id}.targetKind is unsupported.")
+        target_number = _required_int(
+            proposal.get("targetNumber"),
+            field=f"{action_id}.targetNumber",
+        )
+        target_url = _required_string(
+            proposal.get("targetUrl"),
+            field=f"{action_id}.targetUrl",
+        )
+        expected_state = _required_string(
+            proposal.get("expectedTargetState"),
+            field=f"{action_id}.expectedTargetState",
+        )
+        expected_url = (
+            f"https://github.com/{repository}/pull/{target_number}"
+            if target_kind == "pull-request"
+            else f"https://github.com/{repository}/issues/{target_number}"
+        )
+        if target_url != expected_url:
+            raise ValueError(
+                f"{action_id}.targetUrl does not match repository and target."
+            )
+        return target_kind, target_number, target_url, expected_state
+
+    issue_number = _required_int(
+        proposal.get("issueNumber"),
+        field=f"{action_id}.issueNumber",
+    )
+    issue_url = _required_string(
+        proposal.get("issueUrl"),
+        field=f"{action_id}.issueUrl",
+    )
+    expected_issue_url = f"https://github.com/{repository}/issues/{issue_number}"
+    if issue_url != expected_issue_url:
+        raise ValueError(
+            f"{action_id}.issueUrl does not match repository and issueNumber."
+        )
+    expected_state = _required_string(
+        proposal.get("expectedIssueState"),
+        field=f"{action_id}.expectedIssueState",
+    )
+    return "issue", issue_number, issue_url, expected_state
+
+
 def validate_action_proposals(document: object) -> dict[str, object]:
     if not isinstance(document, dict):
         raise TypeError("Action proposals must be an object.")
@@ -201,12 +251,17 @@ def validate_action_proposals(document: object) -> dict[str, object]:
     if not isinstance(proposals, list):
         raise TypeError("proposals must be a list.")
     action_ids: set[str] = set()
+    idempotency_keys: set[str] = set()
     for raw_proposal in proposals:
         proposal = _validate_proposal(raw_proposal, repository=repository)
         action_id = str(proposal["actionId"])
         if action_id in action_ids:
             raise ValueError(f"Duplicate actionId: {action_id}")
         action_ids.add(action_id)
+        idempotency_key = str(proposal["idempotencyKey"])
+        if idempotency_key in idempotency_keys:
+            raise ValueError(f"Duplicate idempotencyKey: {idempotency_key}")
+        idempotency_keys.add(idempotency_key)
 
     for raw_proposal in proposals:
         assert isinstance(raw_proposal, dict)
@@ -228,17 +283,28 @@ def select_action(
     raise ValueError(f"Unknown actionId: {action_id}")
 
 
-def _dry_run_action(proposal: dict[str, object]) -> dict[str, object]:
+def _dry_run_action(
+    proposal: dict[str, object],
+    *,
+    repository: str,
+) -> dict[str, object]:
+    action_id = str(proposal["actionId"])
+    target_kind, target_number, target_url, expected_state = _proposal_target(
+        proposal,
+        repository=repository,
+        action_id=action_id,
+    )
     return {
-        "actionId": proposal["actionId"],
-        "issueNumber": proposal["issueNumber"],
-        "issueUrl": proposal["issueUrl"],
+        "actionId": action_id,
+        "targetKind": target_kind,
+        "targetNumber": target_number,
+        "targetUrl": target_url,
         "operation": proposal["operation"],
         "body": proposal.get("body"),
         "closeReason": proposal.get("closeReason"),
         "evidenceIds": list(proposal["evidenceIds"]),
         "dependsOn": proposal.get("dependsOn"),
-        "expectedIssueState": proposal["expectedIssueState"],
+        "expectedTargetState": expected_state,
         "wouldExecute": True,
     }
 
@@ -261,7 +327,7 @@ def build_dry_run(
         "repository": validated["repository"],
         "mode": "dry-run",
         "actions": [
-            _dry_run_action(proposal)
+            _dry_run_action(proposal, repository=str(validated["repository"]))
             for proposal in selected
             if isinstance(proposal, dict)
         ],
@@ -319,6 +385,36 @@ def _comment_user(comment: dict[str, object]) -> str | None:
     return str(user.get("login")) if isinstance(user, dict) and user.get("login") else None
 
 
+def _accepted_comment_keys(
+    target_kind: str,
+    target_number: int,
+    key: str,
+) -> set[str]:
+    accepted = {key}
+    if target_kind == "issue" and key == f"issue:{target_number}:status":
+        accepted.update(
+            {
+                f"issue:{target_number}:watch",
+                f"issue:{target_number}:review-close",
+                f"issue:{target_number}:investigate",
+                f"issue:{target_number}:ping-human",
+            }
+        )
+    return accepted
+
+
+def _assigned_to_copilot(target: dict[str, object]) -> bool:
+    assignees = target.get("assignees")
+    if not isinstance(assignees, list):
+        return False
+    return any(
+        isinstance(assignee, dict)
+        and isinstance(assignee.get("login"), str)
+        and assignee["login"].casefold() in COPILOT_ASSIGNEES
+        for assignee in assignees
+    )
+
+
 def execute_action(
     document: object,
     *,
@@ -354,15 +450,52 @@ def execute_action(
             reason="dependency-not-executed",
         )
 
-    issue_number = int(proposal["issueNumber"])
+    target_kind, target_number, target_url, expected_state = _proposal_target(
+        proposal,
+        repository=repository,
+        action_id=action_id,
+    )
     try:
-        issue = client.get_issue(repository, issue_number)
+        issue = client.get_issue(repository, target_number)
         issue_state = issue.get("state")
         preflight = {
-            "issueState": issue_state,
-            "issueUpdatedAt": issue.get("updated_at"),
+            (
+                "pullRequestState"
+                if target_kind == "pull-request"
+                else "issueState"
+            ): issue_state,
+            (
+                "pullRequestUpdatedAt"
+                if target_kind == "pull-request"
+                else "issueUpdatedAt"
+            ): issue.get("updated_at"),
         }
-        if issue_state != proposal["expectedIssueState"]:
+        is_pull_request = isinstance(issue.get("pull_request"), dict)
+        if is_pull_request != (target_kind == "pull-request"):
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="stale",
+                reason="target-kind-changed",
+                preflight=preflight,
+            )
+        if issue.get("html_url") not in {None, target_url}:
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="stale",
+                reason="target-url-changed",
+                preflight=preflight,
+            )
+        if target_kind == "pull-request" and _assigned_to_copilot(issue):
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="stale",
+                reason="target-assigned-to-copilot",
+                preflight=preflight,
+            )
+        if issue_state != expected_state:
             return _terminal_result(
                 action_id=action_id,
                 attempted_at=attempted_at,
@@ -374,11 +507,19 @@ def execute_action(
         operation = proposal["operation"]
         if operation == "create-comment":
             key = str(proposal["idempotencyKey"])
-            marker = f"ci-shepherd:idempotency-key={key}"
-            comments = client.list_comments(repository, issue_number)
+            accepted_keys = _accepted_comment_keys(
+                target_kind,
+                target_number,
+                key,
+            )
+            comments = client.list_comments(repository, target_number)
             login = client.get_authenticated_login()
             if any(
-                marker in str(comment.get("body") or "")
+                any(
+                    f"ci-shepherd:idempotency-key={accepted_key}"
+                    in str(comment.get("body") or "")
+                    for accepted_key in accepted_keys
+                )
                 and _comment_user(comment) == login
                 for comment in comments
             ):
@@ -391,7 +532,7 @@ def execute_action(
                 )
             created = client.create_comment(
                 repository,
-                issue_number,
+                target_number,
                 str(proposal["body"]),
             )
             comment_id = _required_int(
@@ -419,12 +560,19 @@ def execute_action(
             comment_id = int(proposal["commentId"])
             live = client.get_comment(repository, comment_id)
             login = client.get_authenticated_login()
-            marker = (
-                f"ci-shepherd:idempotency-key={proposal['idempotencyKey']}"
+            key = str(proposal["idempotencyKey"])
+            accepted_keys = _accepted_comment_keys(
+                target_kind,
+                target_number,
+                key,
             )
+            body = str(live.get("body") or "")
             if (
                 _comment_user(live) != login
-                or marker not in str(live.get("body") or "")
+                or not any(
+                    f"ci-shepherd:idempotency-key={accepted_key}" in body
+                    for accepted_key in accepted_keys
+                )
             ):
                 return _terminal_result(
                     action_id=action_id,
@@ -456,8 +604,8 @@ def execute_action(
             )
 
         close_reason = str(proposal["closeReason"])
-        client.close_issue(repository, issue_number, close_reason)
-        reconciled_issue = client.get_issue(repository, issue_number)
+        client.close_issue(repository, target_number, close_reason)
+        reconciled_issue = client.get_issue(repository, target_number)
         if (
             reconciled_issue.get("state") != "closed"
             or reconciled_issue.get("state_reason") != close_reason

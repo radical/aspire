@@ -17,7 +17,13 @@ def _parser() -> argparse.ArgumentParser:
         description="Preview or execute one validated CI shepherd action."
     )
     parser.add_argument("--proposals", required=True, type=Path)
-    parser.add_argument("--results", required=True, type=Path)
+    result_location = parser.add_mutually_exclusive_group()
+    result_location.add_argument("--results", type=Path)
+    result_location.add_argument(
+        "--state-dir",
+        type=Path,
+        help="Persist execution history as STATE_DIR/action-results.json.",
+    )
     parser.add_argument("--action-id")
     parser.add_argument("--execute", action="store_true")
     return parser
@@ -75,16 +81,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.execute and args.action_id is None:
         parser.error("--execute requires --action-id")
+    if args.execute and args.results is None and args.state_dir is None:
+        parser.error("--execute requires --results or --state-dir")
 
     proposals_path = args.proposals.resolve()
-    results_path = args.results.resolve()
-    if proposals_path == results_path:
+    if args.state_dir is not None:
+        state_dir = args.state_dir.expanduser().absolute()
+        if state_dir.exists() and state_dir.is_symlink():
+            parser.error("--state-dir must not be a symlink")
+        results_path = state_dir / "action-results.json"
+    else:
+        results_path = args.results.resolve() if args.results is not None else None
+    if results_path is not None and proposals_path == results_path:
         parser.error("--proposals and --results must be different paths")
 
     proposals = _load_json(proposals_path)
     if not args.execute:
         _print_json(build_dry_run(proposals, action_id=args.action_id))
         return 0
+    assert results_path is not None
 
     repository = proposals.get("repository")
     if not isinstance(repository, str) or not repository:

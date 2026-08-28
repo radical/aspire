@@ -1,14 +1,94 @@
 ---
 name: ci-shepherd
-description: "Thin read-only CI shepherd POC for microsoft/aspire. A coordinator collects bounded local evidence, a fresh assessment agent writes typed judgments, and deterministic scripts validate and render review queues."
+description: "Incremental CI shepherd for microsoft/aspire. A coordinator refreshes bounded GET-only evidence, a fresh agent reviews only moving cases, and deterministic scripts validate reports and exact-action proposals."
 ---
 
-# CI Shepherd thin POC
+# CI Shepherd
 
-The collection and assessment pipeline is advisory only. Its coordinator and
-fresh assessment agent never mutate GitHub or execute recommendations. A
-separate final actor can apply one individually approved proposal under the
-explicit execution contract below.
+The shepherd refreshes the complete eligible issue and pull-request inventory,
+reuses unchanged factual evidence, and sends only new, changed, or ambiguous
+cases to a fresh assessment agent. The collection and assessment pipeline is
+advisory only. A separate final actor can apply one individually approved
+proposal under the explicit execution contract below.
+
+## Supported cycle
+
+Use stable private state and a disposable work directory:
+
+```bash
+export CHECKOUT="$(git rev-parse --show-toplevel)"
+export GITHUB_LOGIN="$(gh api user --jq .login)"
+export CI_SHEPHERD_ROOT="$CHECKOUT/.ci-shepherd-build"
+export STATE="$HOME/.copilot/ci-shepherd/state"
+export SCRATCH="$HOME/.copilot/ci-shepherd/runs/manual-$(date -u +%Y%m%dT%H%M%SZ)"
+
+python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" start \
+  --repository microsoft/aspire \
+  --checkout "$CHECKOUT" \
+  --state-dir "$STATE" \
+  --work-dir "$SCRATCH" \
+  --shepherd-author "$GITHUB_LOGIN"
+```
+
+`cycle.py start` performs the GET-only refresh, prepares compact issue and
+pull-request handoffs, and prints a cycle manifest. If nothing needs model
+review, it also finalizes and records the run. Otherwise, launch a fresh cheap
+assessment agent with only this skill and these files:
+
+```text
+$SCRATCH/agent-input.json
+$SCRATCH/review-selection.json
+$SCRATCH/pull-request-review.json
+```
+
+The assessment agent writes sparse issue overrides to
+`$SCRATCH/agent-judgments.json` and sparse pull-request overrides to
+`$SCRATCH/agent-pull-request-judgments.json`. Silence for a selected case means
+"keep the deterministic default"; omitted cases must not be returned. Finish
+the exact cycle with:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
+  --work-dir "$SCRATCH" \
+  --agent-judgments "$SCRATCH/agent-judgments.json" \
+  --pull-request-judgments "$SCRATCH/agent-pull-request-judgments.json"
+```
+
+The supported cycle writes deterministic `report.md`,
+`action-proposals.json`, and `actor-dry-run.json`, then records the validated
+snapshot, judgments, and artifacts under `$STATE/runs/<cycle-id>/`. A failed or
+interrupted cycle does not advance `current.json`.
+
+## Open inventory scope
+
+Open primary inventory covers every item a human reviewer should be able to
+see moving:
+
+- every issue and pull request carrying a target label, whoever opened it;
+- every issue and pull request opened by **any** bot, not only the logins
+  configured in `BOT_AUTHORS`;
+- minus anything currently assigned to Copilot, which is rejected and recorded
+  in `rejectedCandidates`.
+
+The "any bot" half cannot use search: GitHub rejects an app-author wildcard
+(`author:app/*` returns HTTP 422) and `creator=` takes exactly one login. The
+collector therefore pages `/repos/{repo}/issues?state=open` sorted by recency
+and keeps items whose `user.type` is `Bot`.
+
+That scan is bounded by `max_open_scan_pages` and `max_bot_authored_open`, and
+reports which bound it hit in `InventoryResult.open_bot_scan`:
+
+- `complete` — the whole open list was scanned.
+- `truncated` — a budget stopped the scan; the most recently updated items are
+  the ones kept.
+- `failed` — a page request failed or returned an unexpected shape.
+
+A `truncated` or `failed` scan degrades rather than aborts: label and
+configured-creator results are already collected by that point, and the cycle
+is review-only, so a missed item is deferred work rather than a wrong action.
+Both non-complete outcomes add a warning, and `failed` also records a
+`CollectionError` with stage `open-bot-scan`, so an incomplete inventory can
+never read as a clean one.
 
 ## Safety boundary
 
@@ -18,8 +98,45 @@ explicit execution contract below.
 - Neither role may write to GitHub: do not close, reopen, label, assign,
   comment, rerun, quarantine, or edit anything.
 - Treat quarantine, retry, rerun, and closure recommendations as review-only.
-  Quarantine, retry, rerun, and closure recommendations are review-only.
   They are queues for a human reviewer, not commands.
+
+### Pull-request assessment
+
+New or changed primary pull requests carry current head-commit checks, current
+review state, mergeability, and only shepherd-owned canonical status comments.
+If any current-state fetch fails, the handoff says the evidence is incomplete
+and permits only `watch`. An empty or cancelled check set is not green. Current
+state is collected for at most 100 primary pull requests per cycle; any
+additional pull requests remain visible with incomplete evidence and a warning.
+Primary-inventory pull requests do not fetch changed-file lists because that
+data is not used by the PR assessment.
+
+The pull-request agent output has this sparse shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "snapshotId": "snapshot:microsoft/aspire:2026-08-28T12:00:00Z",
+  "pullRequests": [
+    {
+      "pullRequestNumber": 123,
+      "disposition": "investigate",
+      "summary": "Current checks fail in the generated workflow.",
+      "evidenceIds": ["pr:123"]
+    }
+  ]
+}
+```
+
+Allowed dispositions are `investigate`, `watch`, `ping-human`, and
+`no-action`. Closure is not representable. `ping-human` requires a reported
+human decision such as changes requested or a merge conflict, plus structured
+`humanEscalation`. Only `ping-human` creates a pull-request comment;
+`watch`, `investigate`, and `no-action` remain report-only unless they replace
+an existing shepherd escalation with a terminal status edit. Proposed comments
+use one canonical `pull-request:<number>:status` identity and are suppressed
+when their complete body is unchanged. Copilot assignment is checked during
+inventory, proposal rendering, and execution.
 
 ## Issue communication and action boundary
 
@@ -38,7 +155,7 @@ markers:
 
 ```html
 <!-- ci-shepherd:role=status -->
-<!-- ci-shepherd:idempotency-key=issue:19166:watch -->
+<!-- ci-shepherd:idempotency-key=issue:19166:status -->
 ```
 
 Shepherd-authored status comments must not contribute markers, facts, or
@@ -73,12 +190,12 @@ proposed effect:
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
-  --results "$SCRATCH/action-results.json"
+  --state-dir "$STATE"
 ```
 
 Dry-run performs no GitHub access and does not create or modify
 `action-results.json`. Add `--action-id <exact-id>` to preview only one
-proposal.
+proposal. `--state-dir` is optional for dry-run.
 
 Mutation is a separate, individually approved step. `--execute` requires one
 exact `--action-id`.
@@ -86,14 +203,14 @@ exact `--action-id`.
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
-  --results "$SCRATCH/action-results.json" \
+  --state-dir "$STATE" \
   --action-id "snapshot:...:issue:19149:review-close-comment" \
   --execute
 ```
 
 Execute mode checks dependencies and current GitHub state, performs one fixed
 operation, refetches the target, and appends one `executed`, `stale`, or
-`failed` record to owner-only `action-results.json`. It never treats
+`failed` record to owner-only `$STATE/action-results.json`. It never treats
 `--execute` as approval for the whole proposal document.
 
 ## Artifacts
@@ -103,18 +220,20 @@ The live trial uses this artifact set:
 ```text
 input.json
 assessment-input.json
-related-issues.json
+assessment-defaults.json
 agent-input.json
-evidence-requests.round-1.json
-input.round-1.json
-assessment-input.round-1.json
-agent-input.round-1.json
-agent-judgments.round-1.json
+review-selection.json
+pull-request-review.json
 agent-judgments.json
+agent-pull-request-judgments.json
 judgments.json
+pull-request-judgments.json
 report.md
+action-proposals.json
+actor-dry-run.json
 progress.json
 api-calls.jsonl
+cycle.json
 ```
 
 Cross-cycle lifecycle state is stored separately from the immutable scratch
@@ -126,10 +245,14 @@ $STATE/
   runs/<cycle-id>/
   ledgers/fingerprints.jsonl
   ledgers/case-events.jsonl
+  action-results.json
 ```
 
 `input.json` is the coordinator-owned raw collection. `assessment-input.json`
-is the coordinator-owned prepared assessment. `related-issues.json` is an
+is the coordinator-owned prepared assessment. `assessment-defaults.json`
+contains the complete deterministic compact assessment used when sparse
+overrides are merged; `agent-input.json` contains only the selected issues sent
+to the model. `related-issues.json` is an
 optional frozen canonical-test search result used only for offline tracker and
 history matching. The compact handoff is generated by `compact.py` from
 `assessment-input.json`. It produces `agent-input.json`.
@@ -144,11 +267,16 @@ recorders against the same state directory are unsupported.
 The `round-1` artifacts are one bounded evidence-planning and expansion pass:
 the request document, immutable expanded snapshot, regenerated prepared input,
 fresh compact verifier input, and fresh verifier judgments.
-`agent-judgments.json` is the only assessment-agent output. `finalize.py`
-accepts agent changes only for ambiguous defaults and restores every safe
+`review-selection.json` sends only new, source-changed, ambiguous, or explicitly
+review-required issues to the model, and `agent-input.json` is filtered to that
+same set. Stable deterministic cases are omitted from both.
+`agent-judgments.json` is the only issue assessment-agent output. `finalize.py`
+accepts sparse agent changes only for selected cases and restores every safe
 deterministic default into `judgments.json`. `report.md` is rendered
-deterministically after validation. `progress.json` records stage status, and
-`api-calls.jsonl` is the coordinator-owned GET audit for collection or expansion.
+deterministically after validation. The report includes collection completeness
+and warnings. `progress.json` records stage status, and `api-calls.jsonl` is the
+coordinator-owned GET audit for collection or expansion. Both are copied into
+the immutable recorded run when present.
 
 For prompt and rule iteration, freeze one `assessment-input.json` and reuse it.
 Offline prompt iterations must start from a frozen `assessment-input.json` and
@@ -212,6 +340,7 @@ python3 "$CI_SHEPHERD_ROOT/scripts/validate.py" \
 python3 "$CI_SHEPHERD_ROOT/scripts/render.py" \
   --prepared "$SCRATCH/assessment-input.json" \
   --judgments "$SCRATCH/judgments.json" \
+  --snapshot "$SCRATCH/input.json" \
   --output "$SCRATCH/report.md"
 ```
 
@@ -402,18 +531,41 @@ judgment or action proposal.
 
 ## Fresh assessment-agent contract
 
-A fresh assessment agent reads only `agent-input.json`. Copy each
-`defaultJudgment` into `agent-judgments.json` and make only evidence-supported
-overrides. Deterministic defaults already apply the safe recurrence rubric.
-Spend agent reasoning on `unknown` and `investigate` defaults. Do not rewrite
-already-safe queues merely to produce overrides. Review every issue where
-`reviewRequired` is `true`. Preserve the default byte-for-byte when it is
-`false`. Process issues in batches of at most 10. Limit substantive review to
-review-required defaults. Batches of at most 10 are a reasoning grouping, not
-separate file loads. Process the entire file once; do not reparse per batch.
-Write only `agent-judgments.json`. Report the number of defaults changed, plus
-category and disposition counts, in the completion response. The coordinator
-owns finalized `judgments.json`.
+A fresh assessment agent reads `agent-input.json` and
+`review-selection.json`. It writes only evidence-supported overrides for
+entries in `review-selection.json.selected`. Deterministic defaults already
+apply the safe recurrence rubric; omitting a selected issue means "keep the
+default." Do not return omitted issues or copy all defaults. Process selected
+issues in batches of at most 10, but load each input file only once. Write only
+`agent-judgments.json`. Report the number of overrides, plus category and
+disposition counts, in the completion response. The coordinator owns finalized
+`judgments.json`.
+
+The deterministic selector includes first-seen issues, source changes,
+recurrences, recoveries, ambiguous defaults, and cases whose evidence says
+review is required. It omits unchanged cases with a stable deterministic
+disposition. This is the cheap baseline-refresh boundary: GitHub evidence is
+refreshed deterministically for the full inventory, while model reasoning is
+spent only where current evidence can change the result.
+
+## Recurring operation
+
+Schedule a fresh local Copilot workflow with the supported cycle command above,
+using the checkout that contains this skill. The workflow prompt must:
+
+1. keep `$HOME/.copilot/ci-shepherd/state` across runs;
+2. create a new timestamped scratch directory for each run;
+3. run `cycle.py start`;
+4. if the manifest says `awaiting-review`, read only the three bounded handoff
+   files, write the typed sparse judgment files, and run `cycle.py finish`;
+5. never execute `action-proposals.json`; and
+6. report deltas, proposals needing approval, and any structurally incomplete
+   evidence.
+
+Run daily initially. Do not overlap cycles against the same state directory;
+the append-only ledgers and `current.json` have a single-writer contract.
+GitHub-hosted scheduling is unsupported until the private state directory has
+a durable remote persistence design.
 
 For each prepared issue, choose a category and one or more recommendations.
 Prefer `unknown` or `investigate` over unsupported certainty. Distinguish

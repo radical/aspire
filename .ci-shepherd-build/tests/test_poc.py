@@ -10,6 +10,7 @@ from ci_shepherd.poc import (
     build_compact_poc_input,
     merge_ambiguous_poc_judgments,
     validate_poc_judgments,
+    validate_poc_projectability,
 )
 from ci_shepherd.poc_history import compute_fingerprint
 
@@ -577,6 +578,7 @@ class PocValidationTests(unittest.TestCase):
                 "blockers",
                 "missingPrerequisites",
                 "resolutionEvidence",
+                "recoveredRunEvidenceId",
                 "allowedEvidence",
                 "defaultJudgment",
             },
@@ -844,7 +846,7 @@ class PocValidationTests(unittest.TestCase):
         # "investigate", not "ping-human" -- ping-human is reserved for
         # cases that actually carry a reported decision requirement.
         self.assertEqual(("blocking-build", "investigate"), _category_and_disposition(defaults[307]))
-        self.assertEqual(("blocking-build", "review-close"), _category_and_disposition(defaults[308]))
+        self.assertEqual(("blocking-build", "investigate"), _category_and_disposition(defaults[308]))
         self.assertEqual(("automation-tracker", "review-close"), _category_and_disposition(defaults[310]))
         self.assertEqual(("automation-tracker", "investigate"), _category_and_disposition(defaults[311]))
         self.assertIn("#310", defaults[311]["recommendations"][0]["summary"])
@@ -2152,3 +2154,175 @@ class PocValidationTests(unittest.TestCase):
         # field added to every compact issue (same shape as occurrenceSummary).
         self.assertLessEqual(len(serialized), 140_000)
         self.assertEqual(60, len(compact["issues"]))
+
+
+def _override_judgments(
+    compact: dict[str, object],
+    issue_number: int,
+    recommendation: dict[str, object],
+    *,
+    category: str = "flaky-test",
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "snapshotId": compact["snapshotId"],
+        "issues": [
+            {
+                "issueNumber": issue_number,
+                "category": category,
+                "recommendations": [recommendation],
+            }
+        ],
+    }
+
+
+def _close_recommendation(issue_number: int) -> dict[str, object]:
+    return {
+        "disposition": "review-close",
+        "target": {"kind": "issue", "value": issue_number},
+        "confidence": "medium",
+        "summary": "Close this issue.",
+        "evidenceIds": [f"issue:{issue_number}"],
+        "missingEvidence": [],
+        "reassessWhen": "If the failure returns.",
+    }
+
+
+def _human_decision_compact_issue(issue_number: int = 309) -> dict[str, object]:
+    return _compact_issue(
+        issue_number,
+        title='CI lane "Deployment Environment Cleanup" red',
+        producer="ci-health-dashboard",
+        tier2_test_name=None,
+        candidate_state="actionable",
+        candidate_action="investigate",
+        labels=["area-deployment", "automation-broken"],
+        issue_body=(
+            "Workflow lane **Deployment Environment Cleanup** is red at tip.\n\n"
+            "- Failing since 10h \u00b7 streak 10\n"
+            "- Last run: https://github.com/owner/repo/actions/runs/9001\n"
+            "- Assessment: Azure Login fails with AADSTS5000229 because "
+            "tenant 'Aspire Testing' is expired.\n"
+            "- Suggested: Renew or replace the expired Azure tenant or "
+            "switch to a valid service principal, then rerun cleanup."
+        ),
+    )
+
+
+class PocProjectabilityTests(unittest.TestCase):
+    def test_rejects_review_close_without_recovery_or_duplicate_prerequisites(self) -> None:
+        compact = build_compact_poc_input(
+            _compact_prepared(
+                [
+                    _compact_issue(
+                        101,
+                        candidate_state="active",
+                        candidate_action="investigate",
+                        resolution_evidence={},
+                    )
+                ]
+            )
+        )
+        judgments = _override_judgments(compact, 101, _close_recommendation(101))
+
+        with self.assertRaisesRegex(ValidationError, "review-close"):
+            validate_poc_projectability(compact, judgments)
+
+    def test_accepts_review_close_backed_by_deterministic_resolution_evidence(self) -> None:
+        compact = build_compact_poc_input(
+            _compact_prepared(
+                [
+                    _compact_issue(
+                        101,
+                        candidate_state="resolved",
+                        candidate_action="recommend-close",
+                        resolution_evidence={
+                            "pullRequestEvidenceId": "pr:101",
+                            "runEvidenceId": "run:101",
+                            "mergeCommitSha": "a" * 40,
+                        },
+                    )
+                ]
+            )
+        )
+        judgments = _override_judgments(compact, 101, _close_recommendation(101))
+
+        validate_poc_projectability(compact, judgments)
+
+    def test_rejects_ping_human_without_a_reported_human_decision(self) -> None:
+        compact = build_compact_poc_input(
+            _compact_prepared([_compact_issue(101, candidate_action="investigate")])
+        )
+        judgments = _override_judgments(
+            compact,
+            101,
+            {
+                "disposition": "ping-human",
+                "target": {"kind": "issue", "value": 101},
+                "confidence": "low",
+                "summary": "Ask somebody about this.",
+                "evidenceIds": ["issue:101"],
+                "missingEvidence": [],
+                "reassessWhen": "After human review.",
+                "humanEscalation": {
+                    "context": "The test keeps failing.",
+                    "whyHuman": "Somebody should look.",
+                    "question": "Who owns this?",
+                    "suggestedNextSteps": ["Find an owner."],
+                    "routingHint": "area-unknown",
+                },
+            },
+        )
+
+        with self.assertRaisesRegex(ValidationError, "ping-human"):
+            validate_poc_projectability(compact, judgments)
+
+    def test_rejects_ping_human_without_structured_human_escalation(self) -> None:
+        compact = build_compact_poc_input(
+            _compact_prepared([_human_decision_compact_issue(309)])
+        )
+        judgments = _override_judgments(
+            compact,
+            309,
+            {
+                "disposition": "ping-human",
+                "target": {"kind": "issue", "value": 309},
+                "confidence": "low",
+                "summary": "Route this to a human.",
+                "evidenceIds": ["issue:309"],
+                "missingEvidence": [],
+                "reassessWhen": "After human review.",
+            },
+            category="automation-tracker",
+        )
+
+        with self.assertRaisesRegex(ValidationError, "humanEscalation"):
+            validate_poc_projectability(compact, judgments)
+
+    def test_accepts_ping_human_grounded_in_a_reported_decision(self) -> None:
+        compact = build_compact_poc_input(
+            _compact_prepared([_human_decision_compact_issue(309)])
+        )
+        default = compact["issues"][0]["defaultJudgment"]
+        judgments = {
+            "schemaVersion": 1,
+            "snapshotId": compact["snapshotId"],
+            "issues": [default],
+        }
+
+        validate_poc_projectability(compact, judgments)
+
+    def test_rejects_a_judgment_for_an_unprepared_issue(self) -> None:
+        compact = build_compact_poc_input(_compact_prepared([_compact_issue(101)]))
+        judgments = _override_judgments(compact, 999, _close_recommendation(999))
+
+        with self.assertRaisesRegex(ValidationError, "non-prepared issue 999"):
+            validate_poc_projectability(compact, judgments)
+
+    def test_rejects_a_judgment_from_another_snapshot(self) -> None:
+        compact = build_compact_poc_input(_compact_prepared([_compact_issue(101)]))
+        judgments = _override_judgments(compact, 101, _close_recommendation(101))
+        judgments["snapshotId"] = "snapshot:owner/repo:2020-01-01T00:00:00Z"
+
+        with self.assertRaisesRegex(ValidationError, "snapshotId"):
+            validate_poc_projectability(compact, judgments)

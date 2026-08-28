@@ -95,6 +95,7 @@ def render_poc_markdown(
     judgments: object,
     *,
     prepared_path: Path,
+    snapshot: object,
 ) -> str:
     validate_poc_judgments(prepared, judgments)
     if not isinstance(prepared, dict) or not isinstance(judgments, dict):
@@ -152,6 +153,48 @@ def render_poc_markdown(
     _append_count_table(lines, "Category counts", "Category", category_counts)
     _append_count_table(lines, "Disposition counts", "Disposition", disposition_counts)
     _append_count_table(lines, "Confidence counts", "Confidence", confidence_counts)
+
+    if not isinstance(snapshot, dict):
+        raise TypeError("Snapshot must be an object.")
+    scan = snapshot.get("openBotScan")
+    scan_status = (
+        str(scan.get("status"))
+        if isinstance(scan, dict) and isinstance(scan.get("status"), str)
+        else "not-recorded"
+    )
+    collection_errors = snapshot.get("collectionErrors")
+    warnings = snapshot.get("warnings")
+    error_count = len(collection_errors) if isinstance(collection_errors, list) else 0
+    warning_rows = warnings if isinstance(warnings, list) else []
+    lines.extend(
+        [
+            "",
+            "## Collection completeness",
+            "",
+            f"**Open bot scan:** `{_markdown_text(scan_status)}`  ",
+            f"**Collection errors:** {error_count}  ",
+            f"**Collection warnings:** {len(warning_rows)}",
+        ]
+    )
+    if warning_rows:
+        lines.extend(
+            [
+                "",
+                *[
+                    f"- {_markdown_text(str(warning))}"
+                    for warning in warning_rows
+                ],
+            ]
+        )
+    if isinstance(collection_errors, list) and collection_errors:
+        lines.extend(["", "**Collection error details:**"])
+        for error in collection_errors:
+            if not isinstance(error, dict):
+                continue
+            stage = _markdown_text(str(error.get("stage") or "unknown"))
+            message = _markdown_text(str(error.get("message") or "unknown error"))
+            endpoint = _markdown_text(str(error.get("endpoint") or "unknown endpoint"))
+            lines.append(f"- `{stage}`: {message} (`{endpoint}`)")
 
     for heading, disposition in _POC_QUEUES:
         queue = [
@@ -400,12 +443,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Render a validated CI shepherd report as Markdown.")
     parser.add_argument("--prepared", type=Path, required=True)
     parser.add_argument("--judgments", type=Path, required=True)
+    parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
     judgments = json.loads(args.judgments.read_text(encoding="utf-8"))
-    markdown = render_poc_markdown(prepared, judgments, prepared_path=args.prepared.resolve())
+    snapshot = json.loads(args.snapshot.read_text(encoding="utf-8"))
+    markdown = render_poc_markdown(
+        prepared,
+        judgments,
+        prepared_path=args.prepared.resolve(),
+        snapshot=snapshot,
+    )
 
     print(_write_markdown(args.output, markdown))
     return 0

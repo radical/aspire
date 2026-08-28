@@ -90,6 +90,10 @@ class ScriptedClient:
 
     def get(self, endpoint: str) -> object:
         self.calls.append(("get", endpoint))
+        if endpoint not in self._singles and "state=open&sort=updated" in endpoint:
+            # The open bot-author scan pages an endpoint most fixtures do not
+            # care about; an empty page means "no bot-authored items here".
+            return []
         response = self._singles[endpoint]
         if isinstance(response, Exception):
             raise response
@@ -189,6 +193,103 @@ def mixed_root_report(high_risk_issue_number: int) -> dict[str, object]:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_enriches_primary_pull_request_inventory_as_evidence(self) -> None:
+        issue_payload = make_issue(23, is_pull_request=True)
+        issue_payload["html_url"] = f"https://github.com/{REPOSITORY}/pull/23"
+        client = ScriptedClient(
+            pages={
+                f"/repos/{REPOSITORY}/pulls/23/files?per_page=100": [
+                    {"filename": "eng/example.yml", "status": "modified"}
+                ]
+            },
+            singles={
+                f"/repos/{REPOSITORY}/issues/23": issue_payload,
+                f"/repos/{REPOSITORY}/pulls/23": {
+                    "number": 23,
+                    "state": "open",
+                    "html_url": f"https://github.com/{REPOSITORY}/pull/23",
+                    "merged_at": None,
+                    "merge_commit_sha": None,
+                    "base": {"ref": "main", "sha": "base"},
+                    "head": {
+                        "ref": "automation/fix",
+                        "sha": "head",
+                        "repo": {"full_name": REPOSITORY},
+                    },
+                },
+            },
+        )
+        inventory = InventoryResult(
+            open_issues=[],
+            supporting_issues=[],
+            evidence={},
+            collection_errors=[],
+            warnings=[],
+            references={},
+            open_pull_requests=[
+                {
+                    "number": 23,
+                    "url": f"https://github.com/{REPOSITORY}/pull/23",
+                }
+            ],
+        )
+
+        result = Collector(client, REPOSITORY, NOW).enrich_github_evidence(
+            inventory
+        )
+
+        self.assertEqual("pull-request", result.evidence["pr:23"]["kind"])
+        self.assertEqual("head", result.evidence["pr:23"]["payload"]["head"]["sha"])
+        self.assertEqual([], result.evidence["pr:23"]["payload"]["files"])
+        self.assertNotIn(
+            ("get_pages", f"/repos/{REPOSITORY}/pulls/23/files?per_page=100"),
+            client.calls,
+        )
+
+    def test_collect_includes_bot_pull_requests_and_excludes_copilot_assigned_work(
+        self,
+    ) -> None:
+        bot_pull = make_issue(23, labels=["dependencies"])
+        bot_pull["user"] = {"login": "github-actions[bot]"}
+        bot_pull["pull_request"] = {
+            "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/23"
+        }
+        bot_pull["html_url"] = f"https://github.com/{REPOSITORY}/pull/23"
+        copilot_issue = make_issue(24, labels=["ci-failure-cause"])
+        copilot_issue["assignees"] = [{"login": "copilot-swe-agent[bot]"}]
+        pages = {
+            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [
+                copilot_issue
+            ],
+            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+            f"/repos/{REPOSITORY}/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [
+                bot_pull
+            ],
+        }
+
+        result = Collector(
+            ScriptedClient(pages=pages),
+            REPOSITORY,
+            NOW,
+            bot_authors=("github-actions[bot]",),
+        ).collect(
+            include_supporting=False,
+            include_timeline=False,
+        )
+
+        self.assertEqual([], result.open_issues)
+        self.assertEqual([23], [pull["number"] for pull in result.open_pull_requests])
+        self.assertEqual(
+            [
+                {
+                    "number": 24,
+                    "targetKind": "issue",
+                    "reason": "assigned-to-copilot",
+                }
+            ],
+            result.rejected_candidates,
+        )
+
     def test_collect_includes_open_github_actions_issues_without_target_labels(self) -> None:
         bot_issue = make_issue(22, labels=["agentic-workflows"])
         bot_issue["user"] = {"login": "github-actions[bot]"}
@@ -624,6 +725,10 @@ Deployment tests are failing.
         open_automation = (
             f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100"
         )
+        open_bot_scan_page_1 = (
+            f"/repos/{REPOSITORY}/issues?state=open&sort=updated&direction=desc"
+            f"&per_page=100&page=1"
+        )
         comments = f"/repos/{REPOSITORY}/issues/1/comments"
         closed_cause = (
             f"/repos/{REPOSITORY}/issues?state=closed&labels=ci-failure-cause"
@@ -769,6 +874,7 @@ Deployment tests are failing.
             [
                 ("get_pages", open_cause),
                 ("get_pages", open_automation),
+                ("get", open_bot_scan_page_1),
                 ("get", history_endpoint),
             ],
             second_client.calls,

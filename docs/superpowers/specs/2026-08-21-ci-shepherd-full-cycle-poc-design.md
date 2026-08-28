@@ -2,44 +2,43 @@
 
 ## Purpose
 
-The current CI shepherd POC proves collection, bounded evidence expansion,
-fresh assessment, deterministic validation, and report rendering. It does not
-yet prove that a recommendation can safely cause useful work or that the result
-can be observed in the next run.
+The CI shepherd now implements collection, incremental factual reuse, selective
+fresh assessment, deterministic validation and reporting, exact-action
+proposals, guarded execution, and next-run lifecycle replay.
 
-The next POC should exercise the complete loop with live data:
+The supported loop is:
 
 ```text
 collect -> assess -> propose -> approve -> act -> reconcile -> recollect
 ```
 
-The objective is to learn how the cycle behaves in practice: whether the
+The remaining objective is to learn how the cycle behaves in practice: whether the
 recommendations are useful, whether the action handoffs contain enough context,
 how actions appear in Copilot sessions and on GitHub issues and pull requests,
 and where stale evidence, duplication, or poor UX causes friction.
 
-This is a staged proof, not a production automation design. Robust scheduling,
-parallel execution, generalized retries, and autonomous mutation are deferred
-until the live slices reveal what is actually needed.
+This remains a staged proof rather than autonomous mutation. A daily local
+Copilot workflow may start a fresh assessment agent, but effects stay behind
+one exact user-approved action ID. Parallel writers, generalized retries, bulk
+approval, and GitHub-hosted state are deliberately unsupported.
 
-## Current Boundary
+## Implemented Boundary
 
-The existing flow ends at a validated `report.md`:
+The flow records a validated immutable run:
 
 1. Collect live issue and workflow evidence.
 2. Prepare bounded issue records.
 3. Append exact failure occurrences to fingerprint history.
-4. Ask a planner for one bounded GET-only evidence round.
-5. Regenerate compact input without preliminary judgments.
-6. Ask a fresh assessor for typed judgments.
-7. Finalize, validate, and render review queues.
+4. Select only new, source-changed, ambiguous, or review-required cases.
+5. Ask a fresh assessor for sparse typed judgments.
+6. Restore deterministic defaults for omitted or silent cases.
+7. Finalize, validate, render, and produce exact dry-run actions.
+8. Record the immutable run and append factual lifecycle ledgers.
 
-All GitHub access in this flow is read-only. Quarantine, retry, rerun, closure,
-and investigation recommendations are advisory.
-
-The missing layer is an action coordinator that converts selected judgments
-into reviewable proposals, executes only approved effects, records what
-happened, and verifies the result against current state.
+Assessment access is GET-only. The actor is a separate boundary: it accepts one
+exact approved action ID, repeats target and assignment preflight checks,
+performs only the rendered operation, and appends `executed`, `stale`, or
+`failed` to private persistent action history.
 
 ## What the POC Must Prove
 
@@ -148,7 +147,7 @@ contains identity only:
 
 ```html
 <!-- ci-shepherd:role=status -->
-<!-- ci-shepherd:idempotency-key=issue:19166:investigate -->
+<!-- ci-shepherd:idempotency-key=issue:19166:status -->
 ```
 
 It never stores disposition, confidence, evidence, or a previous judgment.
@@ -203,6 +202,13 @@ bounded evidence from the immutable assessment artifacts, including normalized
 log excerpts and exact evidence IDs. It must not contain the entire report or
 unrelated issue data.
 
+Pull-request communication is narrower: `watch`, `investigate`, and
+`no-action` remain report-only. Only `ping-human`, backed by a concrete human
+decision such as changes requested or an unmergeable branch, can produce a
+new pull-request comment proposal. When that decision is no longer needed, the
+next non-escalated state edits the existing shepherd comment to retire the stale
+request instead of leaving it visible indefinitely.
+
 ## Cycle Architecture
 
 ```mermaid
@@ -225,25 +231,19 @@ flowchart LR
 The existing assessor never executes actions. A deterministic coordinator owns
 proposal validation, preflight checks, action execution, and reconciliation.
 
-## POC Execution Style
+## Execution Style
 
-The first live cycle is manually orchestrated from the validated artifacts. Do
-not build a scheduler, queue service, generalized GitHub mutation layer, or
-parallel action runner before the trial.
+`scripts/cycle.py start` owns live or frozen collection through selective
+handoff generation. `scripts/cycle.py finish` consumes the sparse fresh-agent
+output, regenerates the complete validated judgment set, renders the report and
+dry-run actions, and records the immutable cycle. Stable cases with unchanged
+source evidence do not require a model call.
 
-Before the live run, update `.ci-shepherd-build/SKILL.md` with:
-
-- the canonical issue-status communication contract;
-- the richer investigation handoff fields;
-- the rule that assessors still emit recommendations and never execute them;
-- the per-effect user approval requirement;
-- the immediate preflight requirement; and
-- the action outcome vocabulary used during reconciliation.
-
-The coordinator may write a small deterministic proposal renderer or validator
-when needed to avoid copying fields by hand. It should execute the approved
-GitHub and Copilot effects through the existing trusted tools. Generalize only
-after the trial identifies repeated mechanics worth preserving.
+A local daily Copilot workflow can run the same entry point with persistent
+state under `$HOME/.copilot/ci-shepherd/state`. The scheduled agent may assess
+and finish a cycle but must never execute proposals. GitHub-hosted scheduling
+is deferred because local factual history and action records do not yet have a
+durable remote-state design.
 
 ## Action Artifacts
 

@@ -35,10 +35,17 @@ def build_snapshot(repository: str, collected_at: datetime, inventory: Inventory
         "collectedAt": collected_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "openIssues": [int(issue["number"]) for issue in inventory.open_issues],
         "issues": inventory.open_issues,
+        "openPullRequests": [
+            int(pull_request["number"])
+            for pull_request in inventory.open_pull_requests
+        ],
+        "pullRequests": inventory.open_pull_requests,
+        "rejectedCandidates": inventory.rejected_candidates,
         "supportingIssues": inventory.supporting_issues,
         "evidence": inventory.evidence,
         "collectionErrors": [asdict(error) for error in inventory.collection_errors],
         "warnings": inventory.warnings,
+        "openBotScan": inventory.open_bot_scan,
         "references": {
             str(number): refs
             for number, refs in inventory.references.items()

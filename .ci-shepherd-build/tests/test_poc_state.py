@@ -5,11 +5,15 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ci_shepherd.poc_state import record_poc_ledgers
+from ci_shepherd.poc_state import (
+    case_key,
+    load_latest_case_state,
+    record_poc_ledgers,
+)
 from ci_shepherd.replay import replay_lifecycle_scenario
 
 
-def prepared(observed_at: str) -> dict[str, object]:
+def prepared(observed_at: str, *, run_id: int = 1001) -> dict[str, object]:
     return {
         "repository": "owner/repo",
         "sourceCollectedAt": observed_at,
@@ -27,7 +31,7 @@ def prepared(observed_at: str) -> dict[str, object]:
                     "rows": [
                         {
                             "date": "2026-08-20",
-                            "sourceRun": 1001,
+                            "sourceRun": run_id,
                             "job": "Tests / Linux",
                         }
                     ]
@@ -60,7 +64,39 @@ def judgments(snapshot_id: str, disposition: str) -> dict[str, object]:
 
 
 class PocStateTests(unittest.TestCase):
-    def test_records_bootstrap_then_only_material_case_transition(self) -> None:
+    def test_loads_latest_case_state_for_repository(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_poc_ledgers(
+                state,
+                "owner/repo",
+                prepared("2026-08-20T06:00:00Z"),
+                judgments(
+                    "snapshot:owner/repo:2026-08-20T06:00:00Z",
+                    "watch",
+                ),
+            )
+            record_poc_ledgers(
+                state,
+                "owner/repo",
+                prepared("2026-08-21T06:00:00Z", run_id=1002),
+                judgments(
+                    "snapshot:owner/repo:2026-08-21T06:00:00Z",
+                    "review-quarantine",
+                ),
+            )
+
+            latest = load_latest_case_state(state, "owner/repo")
+
+            key = case_key(
+                "owner/repo",
+                1,
+                {"kind": "test", "value": "Namespace.Type.Test"},
+            )
+            self.assertEqual("review-quarantine", latest[key]["disposition"])
+            self.assertEqual("transition", latest[key]["eventKind"])
+
+    def test_distinguishes_convergence_from_source_evidence_transition(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             first_prepared = prepared("2026-08-20T06:00:00Z")
@@ -74,31 +110,34 @@ class PocStateTests(unittest.TestCase):
                 ),
             )
 
-            _, unchanged_events = record_poc_ledgers(
+            _, convergence_events = record_poc_ledgers(
                 state,
                 "owner/repo",
                 prepared("2026-08-21T06:00:00Z"),
                 judgments(
                     "snapshot:owner/repo:2026-08-21T06:00:00Z",
-                    "watch",
+                    "review-quarantine",
                 ),
             )
             _, transition_events = record_poc_ledgers(
                 state,
                 "owner/repo",
-                prepared("2026-08-22T06:00:00Z"),
+                prepared("2026-08-22T06:00:00Z", run_id=1002),
                 judgments(
                     "snapshot:owner/repo:2026-08-22T06:00:00Z",
-                    "review-quarantine",
+                    "watch",
                 ),
             )
 
             self.assertEqual("bootstrap", first_events[0]["eventKind"])
-            self.assertEqual([], unchanged_events)
+            self.assertEqual("convergence", convergence_events[0]["eventKind"])
             self.assertEqual("transition", transition_events[0]["eventKind"])
-            self.assertEqual("watch", transition_events[0]["previousDisposition"])
             self.assertEqual(
-                ["bootstrap", "transition"],
+                "review-quarantine",
+                transition_events[0]["previousDisposition"],
+            )
+            self.assertEqual(
+                ["bootstrap", "convergence", "transition"],
                 [
                     json.loads(line)["eventKind"]
                     for line in (
@@ -109,7 +148,7 @@ class PocStateTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(
-                1,
+                2,
                 len(
                     (state / "ledgers" / "fingerprints.jsonl")
                     .read_text(encoding="utf-8")
@@ -142,13 +181,13 @@ class PocStateTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual("transition", events[0]["eventKind"])
+            self.assertEqual("convergence", events[0]["eventKind"])
             persisted = [
                 json.loads(line)
                 for line in case_ledger.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(
-                ["bootstrap", "transition"],
+                ["bootstrap", "convergence"],
                 [event["eventKind"] for event in persisted],
             )
 
@@ -251,7 +290,11 @@ def _write_cycle(
                 "payload": {
                     "number": 1,
                     "state": "open",
-                    "title": "[Failing test] Namespace.Type.Test",
+                    "title": (
+                        "[Failing test] Namespace.Type.Test"
+                        if disposition == "watch"
+                        else "[Failing test] Namespace.Type.Test (new occurrence)"
+                    ),
                 },
             }
         },

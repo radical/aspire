@@ -11,6 +11,7 @@ from urllib.parse import quote
 from pathlib import Path
 
 from . import ownership
+from .pull_requests import build_pull_request_current_state
 from .signals import Occurrence, extract_issue_signals, select_references
 
 if TYPE_CHECKING:
@@ -19,6 +20,14 @@ if TYPE_CHECKING:
 
 TARGET_LABELS = ("ci-failure-cause", "automation-broken")
 BOT_AUTHORS = ("github-actions[bot]",)
+COPILOT_ASSIGNEES = frozenset(
+    {
+        "copilot",
+        "copilot-swe-agent",
+        "copilot-swe-agent[bot]",
+        "github-copilot[bot]",
+    }
+)
 _CORRELATION_MARKER_KEYS = frozenset(
     {"automation-broken", "ci-failure", "ci-failure-cause", "gh-aw-failure-issue"}
 )
@@ -31,7 +40,17 @@ _DEFAULT_BUDGETS = {
     "max_commit_refs_per_issue": 3,
     "marker_candidates": 20,
     "fact_candidates": 20,
+    # The open bot scan pages the repository's entire open issue+PR list, so
+    # both the paging and the number of newly adopted items are capped. On
+    # microsoft/aspire the full list is ~2,200 records (22 pages) of which ~150
+    # are bot-authored, so these defaults leave roughly an order of magnitude of
+    # headroom before truncation kicks in.
+    "max_open_scan_pages": 40,
+    "max_bot_authored_open": 250,
+    "max_primary_pull_requests": 100,
 }
+
+OPEN_SCAN_PAGE_SIZE = 100
 
 _LEGACY_HTML_MARKER_RE = re.compile(
     r"<!--\s*ci-shepherd:(?P<key>[a-zA-Z][\w-]*)=(?P<value>.+?)\s*-->",
@@ -74,6 +93,9 @@ class InventoryResult:
     warnings: list[str]
     references: dict[int, list[dict[str, Any]]]
     refresh_plan: RefreshPlan | None = None
+    open_pull_requests: list[dict[str, Any]] = field(default_factory=list)
+    rejected_candidates: list[dict[str, Any]] = field(default_factory=list)
+    open_bot_scan: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -171,6 +193,9 @@ class Collector:
         self._supporting_budget_excluded_issue_numbers: set[int] = set()
         self._supporting_probe_failed_issue_numbers: set[int] = set()
         self._supporting_comment_failed_issue_numbers: set[int] = set()
+        self._open_pull_requests: dict[int, dict[str, Any]] = {}
+        self._rejected_candidates: dict[tuple[str, int], dict[str, Any]] = {}
+        self._open_bot_scan: dict[str, Any] | None = None
 
     def collect(
         self,
@@ -249,6 +274,12 @@ class Collector:
                 collection_errors=list(self._collection_errors),
                 warnings=sorted(set(self._warnings)),
                 references=references,
+                open_pull_requests=[
+                    copy.deepcopy(pull)
+                    for _, pull in sorted(self._open_pull_requests.items())
+                ],
+                rejected_candidates=list(self._rejected_candidates.values()),
+                open_bot_scan=copy.deepcopy(self._open_bot_scan),
             )
 
         recent_closed_candidates = self._load_candidate_issues(recent_closed_seed)
@@ -313,6 +344,12 @@ class Collector:
             collection_errors=list(self._collection_errors),
             warnings=sorted(set(self._warnings)),
             references=references,
+            open_pull_requests=[
+                copy.deepcopy(pull)
+                for _, pull in sorted(self._open_pull_requests.items())
+            ],
+            rejected_candidates=list(self._rejected_candidates.values()),
+            open_bot_scan=copy.deepcopy(self._open_bot_scan),
         )
 
     def collect_incremental(
@@ -348,11 +385,19 @@ class Collector:
                 tuple(sorted(live_by_number for live_by_number in open_seed)),
             )
         ):
-            return reconstruct_inventory(
-                self._repository,
-                open_inventory,
-                previous_snapshot,
-                plan,
+            return replace(
+                reconstruct_inventory(
+                    self._repository,
+                    open_inventory,
+                    previous_snapshot,
+                    plan,
+                ),
+                open_pull_requests=[
+                    copy.deepcopy(pull)
+                    for _, pull in sorted(self._open_pull_requests.items())
+                ],
+                rejected_candidates=list(self._rejected_candidates.values()),
+                open_bot_scan=copy.deepcopy(self._open_bot_scan),
             )
 
         inventory = self.collect(
@@ -384,6 +429,7 @@ class Collector:
         supporting_issues = copy.deepcopy(inventory.supporting_issues)
         refresh_plan = inventory.refresh_plan
         budget_deferred_refreshes: set[str] = set()
+        refreshed_primary_pull_requests: set[str] = set()
         reusable_evidence_ids = (
             set(refresh_plan.reuse)
             if refresh_plan is not None
@@ -426,6 +472,23 @@ class Collector:
         pull_targets: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
         run_targets: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
         commit_targets: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+
+        for pull_request in inventory.open_pull_requests:
+            number = pull_request.get("number")
+            if not isinstance(number, int) or isinstance(number, bool):
+                continue
+            pull_targets[(self._repository, number)].append(
+                {
+                    "sourceIssueNumber": number,
+                    "sourceEvidenceId": f"pr:{number}",
+                    "sourceUrl": pull_request.get("url"),
+                    "targetType": "pull-request",
+                    "targetRepository": self._repository,
+                    "targetNumber": number,
+                    "targetUrl": pull_request.get("url"),
+                    "extractionMethod": "primary-inventory",
+                }
+            )
 
         for issue_refs in references.values():
             for ref in issue_refs:
@@ -512,13 +575,64 @@ class Collector:
                 ),
             )
 
-        for (target_repository, target_number), refs in sorted(pull_targets.items()):
+        primary_pull_updated_at = {
+            (self._repository, int(pull_request["number"])): str(
+                pull_request.get("updatedAt") or ""
+            )
+            for pull_request in inventory.open_pull_requests
+            if isinstance(pull_request, dict)
+            and isinstance(pull_request.get("number"), int)
+            and not isinstance(pull_request["number"], bool)
+        }
+        primary_pull_targets = [
+            key
+            for key, refs in sorted(
+                pull_targets.items(),
+                key=lambda item: (
+                    primary_pull_updated_at.get(item[0], ""),
+                    item[0][1],
+                    item[0][0],
+                ),
+                reverse=True,
+            )
+            if _has_primary_inventory_reference(refs)
+        ]
+        max_primary_pull_requests = max(
+            0, int(self._budgets["max_primary_pull_requests"])
+        )
+        selected_primary_pull_targets = set(
+            primary_pull_targets[:max_primary_pull_requests]
+        )
+        if len(primary_pull_targets) > max_primary_pull_requests:
+            warnings.append(
+                "primary pull request current-state budget retained "
+                f"{max_primary_pull_requests} of {len(primary_pull_targets)} "
+                "selected pull requests; deferred pull requests remain in the "
+                "inventory with incomplete current-state evidence."
+            )
+
+        for target_key, refs in sorted(pull_targets.items()):
+            target_repository, target_number = target_key
             evidence_id = _repository_scoped_evidence_id(
                 "pr", target_repository, self._repository, target_number
             )
             if evidence_id in reusable_evidence_ids:
-                continue
-            self._enrich_pull_request_reference(evidence, collection_errors, target_repository, target_number, refs)
+                if (
+                    not _has_primary_inventory_reference(refs)
+                    or target_key not in selected_primary_pull_targets
+                ):
+                    continue
+                refreshed_primary_pull_requests.add(evidence_id)
+            self._enrich_pull_request_reference(
+                evidence,
+                collection_errors,
+                target_repository,
+                target_number,
+                refs,
+                include_primary_current_state=(
+                    target_key in selected_primary_pull_targets
+                ),
+            )
 
         selected_run_targets = sorted(
             run_targets.items(),
@@ -625,6 +739,20 @@ class Collector:
                 retry=tuple(set(refresh_plan.retry) | budget_deferred_refreshes),
             )
 
+        if refresh_plan is not None and refreshed_primary_pull_requests:
+            refresh_plan = replace(
+                refresh_plan,
+                reuse=tuple(
+                    evidence_id
+                    for evidence_id in refresh_plan.reuse
+                    if evidence_id not in refreshed_primary_pull_requests
+                ),
+                refresh=(
+                    *refresh_plan.refresh,
+                    *sorted(refreshed_primary_pull_requests),
+                ),
+            )
+
         return InventoryResult(
             open_issues=copy.deepcopy(inventory.open_issues),
             supporting_issues=supporting_issues,
@@ -633,6 +761,9 @@ class Collector:
             warnings=warnings,
             references=references,
             refresh_plan=refresh_plan,
+            open_pull_requests=copy.deepcopy(inventory.open_pull_requests),
+            rejected_candidates=copy.deepcopy(inventory.rejected_candidates),
+            open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
         )
 
     def _recollect_supporting_comments(
@@ -884,6 +1015,13 @@ class Collector:
                     warnings=list(inventory.warnings),
                     references=copy.deepcopy(inventory.references),
                     refresh_plan=refresh_plan,
+                    open_pull_requests=copy.deepcopy(
+                        inventory.open_pull_requests
+                    ),
+                    rejected_candidates=copy.deepcopy(
+                        inventory.rejected_candidates
+                    ),
+                    open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
                 )
 
         codeowners_document: ownership.CodeownersDocument | None = None
@@ -907,6 +1045,13 @@ class Collector:
                     warnings=list(inventory.warnings),
                     references=copy.deepcopy(inventory.references),
                     refresh_plan=refresh_plan,
+                    open_pull_requests=copy.deepcopy(
+                        inventory.open_pull_requests
+                    ),
+                    rejected_candidates=copy.deepcopy(
+                        inventory.rejected_candidates
+                    ),
+                    open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
                 )
 
             try:
@@ -975,9 +1120,15 @@ class Collector:
             warnings=list(inventory.warnings),
             references=copy.deepcopy(inventory.references),
             refresh_plan=refresh_plan,
+            open_pull_requests=copy.deepcopy(inventory.open_pull_requests),
+            rejected_candidates=copy.deepcopy(inventory.rejected_candidates),
+            open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
         )
 
     def _fetch_open_inventory(self) -> dict[int, dict[str, Any]]:
+        self._open_pull_requests.clear()
+        self._rejected_candidates.clear()
+        self._open_bot_scan = None
         open_seed: dict[int, dict[str, Any]] = {}
         for label in TARGET_LABELS:
             endpoint = self._issue_query_endpoint("open", label)
@@ -995,7 +1146,106 @@ class Collector:
                     f"Failed open issue query for author {author}: {endpoint}: {exc}"
                 ) from exc
             self._merge_issue_inventory(open_seed, items, None)
+        self._merge_bot_authored_open_inventory(open_seed)
         return open_seed
+
+    def _merge_bot_authored_open_inventory(
+        self, open_seed: dict[int, dict[str, Any]]
+    ) -> None:
+        """Adopt every open bot-authored issue and pull request.
+
+        The label and `creator=` queries above only find the bot logins that
+        were configured up front, so any other app that opens issues stays
+        invisible. GitHub's search API cannot close that gap: an author
+        wildcard such as `author:app/*` is rejected with HTTP 422
+        ("The listed users cannot be searched"), and `creator=` accepts exactly
+        one login per request. Paging the full open list and filtering on
+        `user.type == "Bot"` is therefore the only complete option.
+
+        The scan is deliberately bounded twice -- by pages and by adopted items
+        -- and reports which bound it hit, because an inventory that quietly
+        drops bot-authored work would make the whole cycle look clean when it
+        merely stopped looking.
+        """
+        max_pages = max(0, int(self._budgets["max_open_scan_pages"]))
+        max_items = max(0, int(self._budgets["max_bot_authored_open"]))
+        bot_items: list[dict[str, Any]] = []
+        scanned_pages = 0
+        reached_end = False
+        status = "complete"
+        detail: str | None = None
+
+        for page in range(1, max_pages + 1):
+            endpoint = self._open_scan_endpoint(page)
+            try:
+                payload = self._client.get(endpoint)
+            except Exception as exc:
+                status = "failed"
+                detail = str(exc)
+                self._collection_errors.append(
+                    CollectionError("open-bot-scan", endpoint, str(exc))
+                )
+                break
+            if not isinstance(payload, list):
+                status = "failed"
+                detail = "Unexpected open issue list payload shape"
+                self._collection_errors.append(
+                    CollectionError("open-bot-scan", endpoint, detail)
+                )
+                break
+            scanned_pages += 1
+            bot_items.extend(
+                raw_issue
+                for raw_issue in payload
+                if isinstance(raw_issue, dict) and _is_bot_authored(raw_issue)
+            )
+            if len(payload) < OPEN_SCAN_PAGE_SIZE:
+                reached_end = True
+                break
+
+        if status == "complete" and not reached_end:
+            # Either the page budget ran out mid-list, or it was zero. Both mean
+            # unscanned open items remain.
+            status = "truncated"
+            detail = f"open scan stopped after the {max_pages} page budget"
+
+        found = len(bot_items)
+        if found > max_items:
+            bot_items = bot_items[:max_items]
+            if status == "complete":
+                status = "truncated"
+                detail = (
+                    f"kept the {max_items} most recently updated of {found} "
+                    "bot-authored open items"
+                )
+
+        self._merge_issue_inventory(
+            open_seed, bot_items, None, selection_reason="bot-author"
+        )
+        self._open_bot_scan = {
+            "status": status,
+            "complete": status == "complete",
+            "scannedPages": scanned_pages,
+            "pageBudget": max_pages,
+            "itemBudget": max_items,
+            "botAuthoredFound": found,
+            "botAuthoredAdopted": len(bot_items),
+            "detail": detail,
+        }
+        if status != "complete":
+            self._warnings.append(
+                "open bot-authored inventory is incomplete "
+                f"({status}): {detail}"
+            )
+
+    def _open_scan_endpoint(self, page: int) -> str:
+        # Sorted by recency so that hitting the item budget deterministically
+        # keeps the freshest work rather than an arbitrary slice.
+        return (
+            f"/repos/{self._repository}/issues?state=open"
+            f"&sort=updated&direction=desc"
+            f"&per_page={OPEN_SCAN_PAGE_SIZE}&page={page}"
+        )
 
     def _issue_query_endpoint(self, state: str, label: str) -> str:
         encoded_label = quote(label, safe="")
@@ -1025,6 +1275,7 @@ class Collector:
         label: str | None,
         *,
         require_recently_closed: bool = False,
+        selection_reason: str | None = None,
     ) -> None:
         if not isinstance(items, list):
             return
@@ -1032,10 +1283,26 @@ class Collector:
         for raw_issue in items:
             if not isinstance(raw_issue, dict):
                 continue
-            if raw_issue.get("pull_request"):
-                continue
             number = raw_issue.get("number")
             if not isinstance(number, int):
+                continue
+            is_pull_request = bool(raw_issue.get("pull_request"))
+            if self._is_assigned_to_copilot(raw_issue):
+                target_kind = "pull-request" if is_pull_request else "issue"
+                self._rejected_candidates[(target_kind, number)] = {
+                    "number": number,
+                    "targetKind": target_kind,
+                    "reason": "assigned-to-copilot",
+                }
+                continue
+            if is_pull_request:
+                if (
+                    not require_recently_closed
+                    and raw_issue.get("state") == "open"
+                ):
+                    self._merge_pull_request_inventory(
+                        raw_issue, label, selection_reason=selection_reason
+                    )
                 continue
             if require_recently_closed and not self._is_recently_closed(raw_issue):
                 continue
@@ -1050,6 +1317,60 @@ class Collector:
                 "issue": dict(raw_issue),
                 "labels": merged_labels,
             }
+
+    @staticmethod
+    def _is_assigned_to_copilot(raw_issue: dict[str, Any]) -> bool:
+        assignees = raw_issue.get("assignees")
+        if not isinstance(assignees, list):
+            return False
+        return any(
+            isinstance(assignee, dict)
+            and isinstance(assignee.get("login"), str)
+            and assignee["login"].casefold() in COPILOT_ASSIGNEES
+            for assignee in assignees
+        )
+
+    def _merge_pull_request_inventory(
+        self,
+        raw_pull_request: dict[str, Any],
+        label: str | None,
+        *,
+        selection_reason: str | None = None,
+    ) -> None:
+        number = int(raw_pull_request["number"])
+        existing = self._open_pull_requests.get(number)
+        labels = set(_extract_labels(raw_pull_request))
+        if label is not None:
+            labels.add(label)
+        if existing is not None:
+            labels.update(existing.get("labels", []))
+        selection_reasons = set(
+            existing.get("selectionReasons", []) if existing is not None else []
+        )
+        if label is not None:
+            selection_reasons.add(f"label:{label}")
+        else:
+            selection_reasons.add(selection_reason or "automation-author")
+        self._open_pull_requests[number] = {
+            "number": number,
+            "state": raw_pull_request.get("state"),
+            "title": raw_pull_request.get("title"),
+            "body": raw_pull_request.get("body"),
+            "url": raw_pull_request.get("html_url"),
+            "createdAt": raw_pull_request.get("created_at"),
+            "updatedAt": raw_pull_request.get("updated_at"),
+            "labels": sorted(labels),
+            "author": _nested_text(raw_pull_request, ("user", "login")),
+            "assignees": sorted(
+                {
+                    str(assignee["login"])
+                    for assignee in raw_pull_request.get("assignees", [])
+                    if isinstance(assignee, dict)
+                    and isinstance(assignee.get("login"), str)
+                }
+            ),
+            "selectionReasons": sorted(selection_reasons),
+        }
 
     def _is_recently_closed(self, raw_issue: dict[str, Any]) -> bool:
         closed_at = raw_issue.get("closed_at")
@@ -2463,6 +2784,8 @@ class Collector:
         target_repository: str,
         target_number: int,
         refs: list[dict[str, Any]],
+        *,
+        include_primary_current_state: bool = True,
     ) -> None:
         issue_endpoint = f"/repos/{target_repository}/issues/{target_number}"
         issue_url = _reference_target_url(refs, f"https://github.com/{target_repository}/pull/{target_number}")
@@ -2539,11 +2862,20 @@ class Collector:
             )
             return
 
-        raw_files = self._load_paged_list(
-            collection_errors,
-            stage="pull-request-files",
-            endpoint=files_endpoint,
-            key="files",
+        primary_only = all(
+            isinstance(ref, dict)
+            and ref.get("extractionMethod") == "primary-inventory"
+            for ref in refs
+        )
+        raw_files = (
+            []
+            if primary_only
+            else self._load_paged_list(
+                collection_errors,
+                stage="pull-request-files",
+                endpoint=files_endpoint,
+                key="files",
+            )
         )
         linked_issues = [
             {
@@ -2560,6 +2892,22 @@ class Collector:
             )
             if ref["targetType"] == "issue"
         ]
+
+        # Only pull requests the inventory selected are triaged, so only they
+        # pay for the extra current-state GETs. A pull request that merely got
+        # mentioned in an issue body keeps the cheaper reference shape.
+        primary_state: dict[str, Any] = {}
+        if (
+            include_primary_current_state
+            and _has_primary_inventory_reference(refs)
+        ):
+            primary_state = self._collect_pull_request_current_state(
+                collection_errors,
+                target_repository,
+                target_number,
+                raw_pull,
+                raw_issue,
+            )
 
         evidence[evidence_id] = self._make_evidence_record(
             "pull-request",
@@ -2589,8 +2937,176 @@ class Collector:
                 ],
                 "linkedIssues": linked_issues,
                 "referencedBy": referenced_by,
+                **primary_state,
             },
         )
+
+    def _collect_pull_request_current_state(
+        self,
+        collection_errors: list[CollectionError],
+        target_repository: str,
+        target_number: int,
+        raw_pull: dict[str, Any],
+        raw_issue: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Fetch the bounded, GET-only current CI and review state.
+
+        Every endpoint is derived from the already-fetched pull request record
+        (its number and its current head SHA), never from free text, so no
+        caller can steer collection at an arbitrary path. A failed fetch stays
+        ``None`` rather than becoming an empty result, because "nothing failed"
+        and "we could not look" must not summarize to the same conclusion.
+        """
+        head_sha = _nested_text(raw_pull, ("head", "sha"))
+        check_runs: list[dict[str, Any]] | None = None
+        combined_status: dict[str, Any] | None = None
+        if head_sha:
+            checks_endpoint = (
+                f"/repos/{target_repository}/commits/{head_sha}/check-runs?per_page=100"
+            )
+            check_runs = self._load_optional_paged_list(
+                collection_errors,
+                stage="pull-request-checks",
+                endpoint=checks_endpoint,
+                key="check_runs",
+            )
+            # The combined-status API is the legacy commit-status surface. It
+            # is only consulted when no check run reported, because a
+            # repository can use either mechanism (or both).
+            if check_runs == []:
+                status_endpoint = f"/repos/{target_repository}/commits/{head_sha}/status"
+                combined_status = self._load_optional_object(
+                    collection_errors,
+                    stage="pull-request-status",
+                    endpoint=status_endpoint,
+                )
+
+        reviews_endpoint = (
+            f"/repos/{target_repository}/pulls/{target_number}/reviews?per_page=100"
+        )
+        reviews = self._load_optional_paged_list(
+            collection_errors,
+            stage="pull-request-reviews",
+            endpoint=reviews_endpoint,
+            key="reviews",
+        )
+
+        current_state = build_pull_request_current_state(
+            raw_pull,
+            check_runs=check_runs,
+            combined_status=combined_status,
+            reviews=reviews,
+        )
+        payload: dict[str, Any] = {
+            "currentState": current_state,
+            "assignees": sorted(
+                {
+                    str(assignee["login"])
+                    for assignee in raw_issue.get("assignees", [])
+                    if isinstance(assignee, dict)
+                    and isinstance(assignee.get("login"), str)
+                }
+            ),
+        }
+        status_comments = self._collect_pull_request_status_comments(
+            collection_errors,
+            target_repository,
+            target_number,
+        )
+        if status_comments is not None:
+            payload["shepherdStatusComments"] = status_comments
+        return payload
+
+    def _collect_pull_request_status_comments(
+        self,
+        collection_errors: list[CollectionError],
+        target_repository: str,
+        target_number: int,
+    ) -> list[dict[str, Any]] | None:
+        """Retain only the shepherd's own canonical status comments.
+
+        Everything else on the pull request is deliberately dropped: the
+        shepherd needs its own comment identity to stay idempotent, and
+        ingesting third-party comment text would let arbitrary prose reach the
+        assessment handoff.
+        """
+        if self._shepherd_author is None:
+            return None
+        endpoint = f"/repos/{target_repository}/issues/{target_number}/comments?per_page=100"
+        raw_comments = self._load_optional_paged_list(
+            collection_errors,
+            stage="pull-request-comments",
+            endpoint=endpoint,
+            key="comments",
+        )
+        if raw_comments is None:
+            return None
+
+        owned: list[dict[str, Any]] = []
+        for raw_comment in raw_comments:
+            comment_id = raw_comment.get("id")
+            body = _text(raw_comment, "body")
+            author = _nested_text(raw_comment, ("user", "login"))
+            if (
+                not isinstance(comment_id, int)
+                or isinstance(comment_id, bool)
+                or not body.startswith("[automated] ")
+                or str(author or "").casefold() != self._shepherd_author
+            ):
+                continue
+            markers = {
+                str(marker.get("key")): str(marker.get("normalized"))
+                for marker in self._extract_markers(
+                    body, f"pr:{target_number}:comment:{comment_id}"
+                )
+            }
+            idempotency_key = markers.get("idempotency-key")
+            if markers.get("role") != "status" or not idempotency_key:
+                continue
+            owned.append(
+                {
+                    "id": comment_id,
+                    "url": _text(raw_comment, "html_url"),
+                    "body": body,
+                    "idempotencyKey": idempotency_key,
+                }
+            )
+        owned.sort(key=lambda comment: int(comment["id"]))
+        return owned
+
+    def _load_optional_paged_list(
+        self,
+        collection_errors: list[CollectionError],
+        *,
+        stage: str,
+        endpoint: str,
+        key: str,
+    ) -> list[dict[str, Any]] | None:
+        try:
+            payload = self._client.get_pages(endpoint, key=key)
+        except Exception as exc:
+            collection_errors.append(CollectionError(stage, endpoint, str(exc)))
+            return None
+        return _paged_dict_items(payload, key)
+
+    def _load_optional_object(
+        self,
+        collection_errors: list[CollectionError],
+        *,
+        stage: str,
+        endpoint: str,
+    ) -> dict[str, Any] | None:
+        try:
+            payload = self._client.get(endpoint)
+        except Exception as exc:
+            collection_errors.append(CollectionError(stage, endpoint, str(exc)))
+            return None
+        if not isinstance(payload, dict):
+            collection_errors.append(
+                CollectionError(stage, endpoint, f"Unexpected {stage} payload shape")
+            )
+            return None
+        return payload
 
     def _enrich_commit_reference(
         self,
@@ -3362,6 +3878,27 @@ class Collector:
         record["payload"]["errorCategory"] = _error_category(exc)
         record["payload"]["errorMessage"] = str(exc)
         return record
+
+
+def _has_primary_inventory_reference(refs: list[dict[str, Any]]) -> bool:
+    return any(
+        isinstance(ref, dict) and ref.get("extractionMethod") == "primary-inventory"
+        for ref in refs
+    )
+
+
+def _is_bot_authored(raw_issue: dict[str, Any]) -> bool:
+    """Report whether GitHub attributes this item to an app rather than a person.
+
+    `user.type` is `"Bot"` for every GitHub App author (`github-actions[bot]`,
+    `dependabot[bot]`, `Copilot`, and any repository-specific app), `"User"`
+    for people, and `"Organization"`/`"Mannequin"` for the remaining cases.
+    """
+    user = raw_issue.get("user")
+    if not isinstance(user, dict):
+        return False
+    user_type = user.get("type")
+    return isinstance(user_type, str) and user_type.casefold() == "bot"
 
 
 def _repository_scoped_evidence_id(

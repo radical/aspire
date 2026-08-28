@@ -48,6 +48,10 @@ class EnrichmentClient:
 
     def get(self, endpoint: str) -> object:
         self.calls.append(("get", endpoint))
+        if endpoint not in self._singles and "state=open&sort=updated" in endpoint:
+            # The open bot-author scan pages an endpoint most fixtures do not
+            # care about; an empty page means "no bot-authored items here".
+            return []
         response = self._singles[endpoint]
         if isinstance(response, Exception):
             raise response

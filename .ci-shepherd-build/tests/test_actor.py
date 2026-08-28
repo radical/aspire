@@ -62,6 +62,34 @@ def _results(*records: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _pull_proposals() -> dict[str, object]:
+    key = "pull-request:23:status"
+    return {
+        "schemaVersion": 1,
+        "repository": "owner/repo",
+        "snapshotId": "snapshot:owner/repo:1",
+        "shepherdAuthor": "ankj",
+        "proposals": [
+            {
+                "actionId": "snapshot:owner/repo:1:pull-request:23:status",
+                "targetKind": "pull-request",
+                "targetNumber": 23,
+                "targetUrl": "https://github.com/owner/repo/pull/23",
+                "operation": "create-comment",
+                "idempotencyKey": key,
+                "body": (
+                    "[automated] Human review is needed.\n\n"
+                    f"<!-- ci-shepherd:idempotency-key={key} -->"
+                ),
+                "evidenceIds": ["pr:23"],
+                "expectedTargetState": "open",
+                "requiresSeparateApproval": True,
+            }
+        ],
+        "unchangedIssueNumbers": [],
+    }
+
+
 class ScriptedActorClient:
     def __init__(
         self,
@@ -124,6 +152,31 @@ class ScriptedActorClient:
 
 
 class ActorTests(unittest.TestCase):
+    def test_pull_request_comment_aborts_when_assigned_to_copilot(self) -> None:
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 23,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/pull/23",
+                    "pull_request": {},
+                    "assignees": [{"login": "copilot-swe-agent[bot]"}],
+                }
+            ]
+        )
+
+        result = execute_action(
+            _pull_proposals(),
+            action_id="snapshot:owner/repo:1:pull-request:23:status",
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("target-assigned-to-copilot", result["reason"])
+        self.assertEqual([("get_issue", 23)], client.calls)
+
     def test_dry_run_renders_all_actions_without_client_calls(self) -> None:
         rendered = build_dry_run(_proposals(), action_id=None)
 
@@ -133,6 +186,31 @@ class ActorTests(unittest.TestCase):
             [action["operation"] for action in rendered["actions"]],
         )
         self.assertTrue(all(action["wouldExecute"] for action in rendered["actions"]))
+
+    def test_dry_run_renders_target_shaped_pull_request_action(self) -> None:
+        rendered = build_dry_run(_pull_proposals(), action_id=None)
+
+        self.assertEqual(
+            [
+                {
+                    "actionId": "snapshot:owner/repo:1:pull-request:23:status",
+                    "targetKind": "pull-request",
+                    "targetNumber": 23,
+                    "targetUrl": "https://github.com/owner/repo/pull/23",
+                    "operation": "create-comment",
+                    "body": (
+                        "[automated] Human review is needed.\n\n"
+                        "<!-- ci-shepherd:idempotency-key=pull-request:23:status -->"
+                    ),
+                    "closeReason": None,
+                    "evidenceIds": ["pr:23"],
+                    "dependsOn": None,
+                    "expectedTargetState": "open",
+                    "wouldExecute": True,
+                }
+            ],
+            rendered["actions"],
+        )
 
     def test_dry_run_can_select_one_action(self) -> None:
         rendered = build_dry_run(_proposals(), action_id=COMMENT_ACTION_ID)
@@ -150,6 +228,17 @@ class ActorTests(unittest.TestCase):
         actions.append(duplicate)
 
         with self.assertRaisesRegex(ValueError, "Duplicate actionId"):
+            build_dry_run(proposals, action_id=None)
+
+    def test_dry_run_rejects_duplicate_idempotency_keys(self) -> None:
+        proposals = _proposals()
+        actions = proposals["proposals"]
+        assert isinstance(actions, list)
+        duplicate_key = copy.deepcopy(actions[0])
+        duplicate_key["actionId"] = "snapshot:owner/repo:1:issue:21:other-comment"
+        actions.append(duplicate_key)
+
+        with self.assertRaisesRegex(ValueError, "Duplicate idempotencyKey"):
             build_dry_run(proposals, action_id=None)
 
     def test_dry_run_rejects_unknown_operation(self) -> None:
@@ -247,6 +336,46 @@ class ActorTests(unittest.TestCase):
             client.calls,
         )
 
+    def test_create_comment_aborts_when_legacy_status_marker_exists(self) -> None:
+        proposals = _proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        action["idempotencyKey"] = "issue:21:status"
+        action["body"] = (
+            "[automated] Current status.\n\n"
+            "<!-- ci-shepherd:idempotency-key=issue:21:status -->"
+        )
+        client = ScriptedActorClient(
+            issues=[{"number": 21, "state": "open"}],
+            comments=[
+                [
+                    {
+                        "id": 900,
+                        "body": (
+                            "[automated] Old watch status.\n\n"
+                            "<!-- ci-shepherd:idempotency-key=issue:21:watch -->"
+                        ),
+                        "user": {"login": "ankj"},
+                    }
+                ]
+            ],
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("idempotency-marker-exists", result["reason"])
+        self.assertNotIn(
+            ("create_comment", 21, action["body"]),
+            client.calls,
+        )
+
     def test_create_comment_ignores_unowned_marker(self) -> None:
         client = ScriptedActorClient(
             issues=[{"number": 21, "state": "open"}],
@@ -338,6 +467,51 @@ class ActorTests(unittest.TestCase):
                 ("edit_comment", 900, COMMENT_BODY),
                 ("get_comment", 900),
             ],
+            client.calls,
+        )
+
+    def test_edit_comment_migrates_legacy_issue_status_marker(self) -> None:
+        proposals = _proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        action["operation"] = "edit-comment"
+        action["commentId"] = 900
+        action["idempotencyKey"] = "issue:21:status"
+        action["body"] = (
+            "[automated] Current status.\n\n"
+            "<!-- ci-shepherd:idempotency-key=issue:21:status -->"
+        )
+        existing = {
+            "id": 900,
+            "body": (
+                "[automated] Old watch status.\n\n"
+                "<!-- ci-shepherd:idempotency-key=issue:21:watch -->"
+            ),
+            "user": {"login": "ankj"},
+        }
+        client = ScriptedActorClient(
+            issues=[{"number": 21, "state": "open"}],
+            single_comments=[
+                existing,
+                {
+                    "id": 900,
+                    "body": action["body"],
+                    "user": {"login": "ankj"},
+                },
+            ],
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"])
+        self.assertIn(
+            ("edit_comment", 900, action["body"]),
             client.calls,
         )
 

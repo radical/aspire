@@ -5,10 +5,10 @@ from typing import Any
 from ci_shepherd.poc import validate_poc_judgments
 
 
-def _status_markers(issue_number: int, disposition: str) -> str:
+def _status_markers(issue_number: int) -> str:
     return (
         "<!-- ci-shepherd:role=status -->\n"
-        f"<!-- ci-shepherd:idempotency-key=issue:{issue_number}:{disposition} -->"
+        f"<!-- ci-shepherd:idempotency-key=issue:{issue_number}:status -->"
     )
 
 
@@ -74,7 +74,50 @@ def _render_watch_body(
             "",
             "No quarantine, retry, closure, or investigation has been started.",
             "",
-            _status_markers(issue_number, "watch"),
+            _status_markers(issue_number),
+        ]
+    )
+
+
+def _render_ping_human_body(
+    issue_number: int,
+    recommendation: dict[str, Any],
+    snapshot: dict[str, object],
+) -> str:
+    escalation = recommendation.get("humanEscalation")
+    if not isinstance(escalation, dict):
+        raise TypeError(
+            "Validated ping-human recommendation must include humanEscalation."
+        )
+    steps = escalation.get("suggestedNextSteps")
+    if not isinstance(steps, list) or not all(
+        isinstance(step, str) and step.strip() for step in steps
+    ):
+        raise TypeError("Validated suggestedNextSteps must contain strings.")
+    evidence_ids = recommendation.get("evidenceIds")
+    if not isinstance(evidence_ids, list) or not all(
+        isinstance(evidence_id, str) for evidence_id in evidence_ids
+    ):
+        raise TypeError("Ping-human evidenceIds must contain strings.")
+    return "\n".join(
+        [
+            f"[automated] {escalation['context']}",
+            "",
+            f"**Current assessment:** {recommendation['summary']}",
+            "",
+            "**Evidence reviewed:**",
+            *_evidence_lines(snapshot, evidence_ids),
+            "",
+            f"**Why human input is needed:** {escalation['whyHuman']}",
+            "",
+            f"**Decision needed:** {escalation['question']}",
+            "",
+            "**Suggested next steps:**",
+            *(f"- {step}" for step in steps),
+            "",
+            f"**Routing hint:** `{escalation['routingHint']}`",
+            "",
+            _status_markers(issue_number),
         ]
     )
 
@@ -219,7 +262,90 @@ def _render_close_body(
                 "issue as completed."
             ),
             "",
-            _status_markers(issue_number, "review-close"),
+            _status_markers(issue_number),
+        ]
+    )
+
+
+def _render_recovered_run_close_body(
+    issue_number: int,
+    recommendation: dict[str, Any],
+    recovered_run_evidence_id: str,
+    snapshot: dict[str, object],
+) -> str:
+    evidence_ids = recommendation.get("evidenceIds")
+    if (
+        not isinstance(evidence_ids, list)
+        or recovered_run_evidence_id not in evidence_ids
+    ):
+        raise ValueError(
+            f"Issue {issue_number} review-close must cite its recovered run."
+        )
+    missing = recommendation.get("missingEvidence")
+    run_recovery_satisfied = {
+        "occurrence-run-timestamp-for-fix-day",
+        "verified-fix",
+        "verified-fix-or-current-recurrence-check",
+    }
+    if (
+        not isinstance(missing, list)
+        or any(
+            not isinstance(item, str) or item not in run_recovery_satisfied
+            for item in missing
+        )
+    ):
+        raise ValueError(
+            f"Issue {issue_number} review-close has unsupported missing evidence."
+        )
+    evidence = snapshot.get("evidence")
+    if not isinstance(evidence, dict):
+        raise TypeError("Validated snapshot evidence must be an object.")
+    run_record = evidence.get(recovered_run_evidence_id)
+    run_payload = run_record.get("payload") if isinstance(run_record, dict) else None
+    if (
+        not isinstance(run_record, dict)
+        or run_record.get("availability") != "available"
+        or not isinstance(run_payload, dict)
+        or run_payload.get("status") != "completed"
+        or run_payload.get("conclusion") != "success"
+        or run_payload.get("branch") != "main"
+    ):
+        raise ValueError(
+            f"Issue {issue_number} recovered run evidence is inconsistent."
+        )
+    run_id = run_payload.get("runId")
+    run_url = run_record.get("url")
+    if (
+        not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or not isinstance(run_url, str)
+        or not run_url
+    ):
+        raise ValueError(
+            f"Issue {issue_number} recovered run details are incomplete."
+        )
+    return "\n".join(
+        [
+            "[automated] The CI shepherd found recovery evidence for this failure.",
+            "",
+            f"**Current assessment:** {recommendation['summary']}",
+            "",
+            "**Evidence reviewed:**",
+            *_evidence_lines(snapshot, evidence_ids),
+            "",
+            "**Recovery proof:**",
+            (
+                f"- CI run [{run_id}]({run_url}) completed successfully on `main` "
+                "after the last recorded failure."
+            ),
+            (
+                "- This directly issue-scoped later run satisfies the recovery "
+                "gate without attributing the fix to a specific pull request."
+            ),
+            "",
+            "**Resolution:** The recovery evidence supports closing this issue as completed.",
+            "",
+            _status_markers(issue_number),
         ]
     )
 
@@ -301,7 +427,7 @@ def _render_duplicate_close_body(
                 "issue as a duplicate."
             ),
             "",
-            _status_markers(issue_number, "review-close"),
+            _status_markers(issue_number),
         ]
     )
 
@@ -342,6 +468,37 @@ def _action_clusters(
     return clusters
 
 
+def _compact_issues(
+    agent_input: object | None,
+    *,
+    snapshot_id: object,
+) -> dict[int, dict[str, Any]]:
+    if agent_input is None:
+        return {}
+    if not isinstance(agent_input, dict):
+        raise TypeError("Compact agent input must be an object.")
+    if agent_input.get("schemaVersion") != 1:
+        raise ValueError("Compact agent input schemaVersion must be 1.")
+    if agent_input.get("snapshotId") != snapshot_id:
+        raise ValueError("Compact agent input snapshotId does not match prepared input.")
+    issues = agent_input.get("issues")
+    if not isinstance(issues, list):
+        raise TypeError("Compact agent input issues must be a list.")
+    result: dict[int, dict[str, Any]] = {}
+    for issue in issues:
+        if not isinstance(issue, dict):
+            raise TypeError("Compact agent input issue must be an object.")
+        issue_number = issue.get("issueNumber")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+        ):
+            raise ValueError("Compact agent input issueNumber must be positive.")
+        result[issue_number] = issue
+    return result
+
+
 def _owned_status_comments(
     snapshot: dict[str, object],
     issue_number: int,
@@ -351,7 +508,14 @@ def _owned_status_comments(
     if not isinstance(evidence, dict):
         raise TypeError("Validated snapshot evidence must be an object.")
 
-    matches: list[dict[str, object]] = []
+    canonical_matches: list[dict[str, object]] = []
+    legacy_matches: list[dict[str, object]] = []
+    legacy_keys = {
+        f"issue:{issue_number}:watch",
+        f"issue:{issue_number}:review-close",
+        f"issue:{issue_number}:investigate",
+        f"issue:{issue_number}:ping-human",
+    }
     for record in evidence.values():
         if not isinstance(record, dict) or record.get("kind") != "issue-comment":
             continue
@@ -362,13 +526,61 @@ def _owned_status_comments(
         ):
             continue
         status = payload.get("shepherdStatus")
-        if (
-            isinstance(status, dict)
-            and status.get("owned") is True
-            and status.get("idempotencyKey") == idempotency_key
-        ):
-            matches.append(payload)
-    return matches
+        if not isinstance(status, dict) or status.get("owned") is not True:
+            continue
+        status_key = status.get("idempotencyKey")
+        if status_key == idempotency_key:
+            canonical_matches.append(payload)
+        elif status_key in legacy_keys:
+            legacy_matches.append(payload)
+
+    if len(canonical_matches) > 1:
+        raise ValueError(
+            f"Issue {issue_number} has multiple owned canonical status comments."
+        )
+    if canonical_matches:
+        return canonical_matches
+    if not legacy_matches:
+        return []
+
+    # The old scheme could legitimately leave one comment per disposition.
+    # Migrate the newest one so the cycle can converge on a single status slot.
+    return [
+        max(
+            legacy_matches,
+            key=lambda comment: (
+                int(comment["id"])
+                if isinstance(comment.get("id"), int)
+                and not isinstance(comment["id"], bool)
+                else 0
+            ),
+        )
+    ]
+
+
+def _selected_status_recommendation(
+    issue: dict[str, object],
+) -> dict[str, object] | None:
+    recommendations = issue.get("recommendations")
+    if not isinstance(recommendations, list):
+        raise TypeError("Validated recommendations must be a list.")
+    by_disposition: dict[str, list[dict[str, object]]] = {}
+    for recommendation in recommendations:
+        if not isinstance(recommendation, dict):
+            raise TypeError("Validated recommendation must be an object.")
+        disposition = recommendation.get("disposition")
+        if disposition in {"watch", "ping-human", "review-close"}:
+            by_disposition.setdefault(str(disposition), []).append(recommendation)
+    for disposition, matches in by_disposition.items():
+        if len(matches) > 1:
+            raise ValueError(
+                f"Issue {issue['issueNumber']} has multiple {disposition} recommendations."
+            )
+    for disposition in ("review-close", "ping-human", "watch"):
+        matches = by_disposition.get(disposition)
+        if matches:
+            return matches[0]
+    return None
 
 
 def build_watch_proposals(
@@ -394,20 +606,11 @@ def build_watch_proposals(
     unchanged: list[int] = []
     for issue in judgments["issues"]:
         issue_number = issue["issueNumber"]
-        watch_recommendations = [
-            recommendation
-            for recommendation in issue["recommendations"]
-            if recommendation["disposition"] == "watch"
-        ]
-        if len(watch_recommendations) > 1:
-            raise ValueError(
-                f"Issue {issue_number} has multiple watch recommendations."
-            )
-        if not watch_recommendations:
+        recommendation = _selected_status_recommendation(issue)
+        if recommendation is None or recommendation["disposition"] != "watch":
             continue
 
-        recommendation = watch_recommendations[0]
-        key = f"issue:{issue_number}:watch"
+        key = f"issue:{issue_number}:status"
         body = _render_watch_body(issue_number, recommendation, snapshot)
         existing = _owned_status_comments(snapshot, issue_number, key)
         if len(existing) > 1:
@@ -475,6 +678,10 @@ def build_action_proposals(
         agent_input,
         snapshot_id=prepared.get("snapshotId"),
     )
+    compact_issues = _compact_issues(
+        agent_input,
+        snapshot_id=prepared.get("snapshotId"),
+    )
 
     prepared_issues = {
         issue["issueNumber"]: issue
@@ -487,19 +694,61 @@ def build_action_proposals(
 
     for issue in judgments["issues"]:
         issue_number = issue["issueNumber"]
-        close_recommendations = [
-            recommendation
-            for recommendation in issue["recommendations"]
-            if recommendation["disposition"] == "review-close"
-        ]
-        if len(close_recommendations) > 1:
-            raise ValueError(
-                f"Issue {issue_number} has multiple review-close recommendations."
+        status_recommendation = _selected_status_recommendation(issue)
+        if (
+            status_recommendation is not None
+            and status_recommendation["disposition"] == "ping-human"
+        ):
+            recommendation = status_recommendation
+            key = f"issue:{issue_number}:status"
+            body = _render_ping_human_body(
+                issue_number,
+                recommendation,
+                snapshot,
             )
-        if not close_recommendations:
+            existing = _owned_status_comments(snapshot, issue_number, key)
+            if len(existing) > 1:
+                raise ValueError(
+                    f"Issue {issue_number} has multiple owned status comments."
+                )
+            existing_body = (
+                str(existing[0].get("body") or "").strip()
+                if existing
+                else ""
+            )
+            if existing and existing_body == body.strip():
+                unchanged = result["unchangedIssueNumbers"]
+                if isinstance(unchanged, list) and issue_number not in unchanged:
+                    unchanged.append(issue_number)
+            else:
+                proposal: dict[str, object] = {
+                    "actionId": (
+                        f"{prepared['snapshotId']}:issue:{issue_number}:"
+                        "ping-human-comment"
+                    ),
+                    "issueNumber": issue_number,
+                    "issueUrl": prepared_issues[issue_number]["issueUrl"],
+                    "operation": (
+                        "edit-comment" if existing else "create-comment"
+                    ),
+                    "idempotencyKey": key,
+                    "body": body,
+                    "evidenceIds": list(recommendation["evidenceIds"]),
+                    "expectedIssueState": "open",
+                    "requiresSeparateApproval": True,
+                }
+                if existing:
+                    proposal["commentId"] = existing[0]["id"]
+                proposals.append(proposal)
+
+        if (
+            status_recommendation is None
+            or status_recommendation["disposition"] != "review-close"
+        ):
             continue
 
         prepared_issue = prepared_issues[issue_number]
+        compact_issue = compact_issues.get(issue_number, {})
         action_cluster = action_clusters.get(issue_number)
         is_duplicate = (
             isinstance(action_cluster, dict)
@@ -510,14 +759,19 @@ def build_action_proposals(
             and prepared_issue.get("candidateAction") == "recommend-close"
             and bool(prepared_issue.get("resolutionEvidence"))
         )
-        if not is_duplicate and not has_recovery:
+        recovered_run_evidence_id = compact_issue.get("recoveredRunEvidenceId")
+        has_run_recovery = (
+            isinstance(recovered_run_evidence_id, str)
+            and bool(recovered_run_evidence_id)
+        )
+        if not is_duplicate and not has_recovery and not has_run_recovery:
             raise ValueError(
                 f"Issue {issue_number} review-close requires deterministic "
                 "resolution evidence."
             )
 
-        recommendation = close_recommendations[0]
-        key = f"issue:{issue_number}:review-close"
+        recommendation = status_recommendation
+        key = f"issue:{issue_number}:status"
         body = (
             _render_duplicate_close_body(
                 issue_number,
@@ -526,6 +780,13 @@ def build_action_proposals(
                 snapshot,
             )
             if is_duplicate
+            else _render_recovered_run_close_body(
+                issue_number,
+                recommendation,
+                recovered_run_evidence_id,
+                snapshot,
+            )
+            if has_run_recovery and not has_recovery
             else _render_close_body(
                 issue_number,
                 recommendation,

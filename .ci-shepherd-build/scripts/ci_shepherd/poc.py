@@ -38,8 +38,12 @@ TARGET_KINDS = frozenset({"issue", "test", "failure-fingerprint", "workflow-run"
 CONFIDENCE = frozenset({"high", "medium", "low"})
 __all__ = [
     "build_compact_poc_input",
+    "close_is_projectable",
+    "compact_issue_requires_human_decision",
+    "is_ambiguous_default",
     "merge_ambiguous_poc_judgments",
     "validate_poc_judgments",
+    "validate_poc_projectability",
     "validate_poc",
 ]
 
@@ -113,6 +117,75 @@ def validate_poc_judgments(prepared: object, judgments: object) -> None:
         )
 
 
+def validate_poc_projectability(compact_input: object, judgments: object) -> None:
+    """Reject judgments whose disposition cannot become a concrete action.
+
+    ``propose_actions`` refuses a ``review-close`` that lacks deterministic
+    recovery or duplicate evidence, and it has no rendering path at all for a
+    ``ping-human`` without a structured escalation. Discovering that only at
+    proposal time forces a full replay of the whole cycle, so the same gates
+    run here against the compact input the agent actually saw.
+    """
+    compact_mapping = _require_mapping(compact_input, "compact input")
+    judgment_mapping = _require_mapping(judgments, "POC judgment")
+    _require_exact_int(compact_mapping, "schemaVersion", ASSESSMENT_SCHEMA_VERSION)
+    _require_exact_int(judgment_mapping, "schemaVersion", ASSESSMENT_SCHEMA_VERSION)
+    snapshot_id = _require_nonempty_string(compact_mapping, "snapshotId")
+    if _require_nonempty_string(judgment_mapping, "snapshotId") != snapshot_id:
+        raise ValidationError("POC snapshotId must match the compact input snapshotId.")
+
+    compact_issues = {
+        _require_positive_int(issue, "issueNumber"): issue
+        for issue in (
+            _require_mapping(raw_issue, "compact issue")
+            for raw_issue in _require_list(compact_mapping, "issues")
+        )
+    }
+
+    for raw_issue in _require_list(judgment_mapping, "issues"):
+        issue = _require_mapping(raw_issue, "issue judgment")
+        issue_number = _require_positive_int(issue, "issueNumber")
+        compact_issue = compact_issues.get(issue_number)
+        if compact_issue is None:
+            raise ValidationError(
+                f"Unexpected issue judgment for non-prepared issue {issue_number}."
+            )
+
+        for raw_recommendation in _require_list(issue, "recommendations"):
+            recommendation = _require_mapping(raw_recommendation, "recommendation")
+            disposition = recommendation.get("disposition")
+            if disposition == "review-close" and not close_is_projectable(compact_issue):
+                raise ValidationError(
+                    f"Issue {issue_number} review-close requires deterministic "
+                    "duplicate or resolution evidence."
+                )
+            if disposition == "ping-human":
+                if not compact_issue_requires_human_decision(compact_issue):
+                    raise ValidationError(
+                        f"Issue {issue_number} ping-human requires a reported human decision."
+                    )
+                _validate_human_escalation(recommendation.get("humanEscalation"))
+
+
+def close_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
+    action_cluster = compact_issue.get("actionCluster")
+    if (
+        isinstance(action_cluster, Mapping)
+        and action_cluster.get("role") == "superseded"
+    ):
+        return True
+    if (
+        compact_issue.get("candidateState") == "resolved"
+        and compact_issue.get("candidateAction") == "recommend-close"
+        and bool(compact_issue.get("resolutionEvidence"))
+    ):
+        return True
+    recovered_run_evidence_id = compact_issue.get("recoveredRunEvidenceId")
+    return isinstance(recovered_run_evidence_id, str) and bool(
+        recovered_run_evidence_id.strip()
+    )
+
+
 def validate_poc(prepared: object, judgment: object) -> None:
     validate_poc_judgments(prepared, judgment)
 
@@ -162,12 +235,12 @@ def merge_ambiguous_poc_judgments(
         # that escalation.
         unauthorized_human_escalation = _agent_recommends_ping_human(
             agent_issue
-        ) and not _compact_issue_requires_human_decision(issue)
+        ) and not compact_issue_requires_human_decision(issue)
         selected = (
             agent_issue
             if not superseded
             and not unauthorized_human_escalation
-            and (review_required or _is_ambiguous_default(default_judgment))
+            and (review_required or is_ambiguous_default(default_judgment))
             else default_judgment
         )
         merged_issues.append(copy.deepcopy(dict(selected)))
@@ -185,7 +258,7 @@ def merge_ambiguous_poc_judgments(
     }
 
 
-def _is_ambiguous_default(default_judgment: Mapping[str, Any]) -> bool:
+def is_ambiguous_default(default_judgment: Mapping[str, Any]) -> bool:
     if default_judgment.get("category") == "unknown":
         return True
     recommendations = _require_list(default_judgment, "recommendations")
@@ -206,7 +279,7 @@ def _agent_recommends_ping_human(agent_issue: Mapping[str, Any]) -> bool:
     )
 
 
-def _compact_issue_requires_human_decision(issue: Mapping[str, Any]) -> bool:
+def compact_issue_requires_human_decision(issue: Mapping[str, Any]) -> bool:
     human_context = issue.get("humanContext")
     return isinstance(human_context, Mapping) and human_context.get("decisionRequired") is True
 
@@ -596,11 +669,18 @@ def _build_compact_issue(
         evidence_bundle,
         last_seen_date=effective_occurrence_summary.get("lastSeenDate"),
     )
+    recovered_run_evidence_id = _recovered_run_evidence_id(verification_context)
+    if (
+        recovered_run_evidence_id is not None
+        and recovered_run_evidence_id not in allowed_evidence_ids
+    ):
+        recovered_run_evidence_id = None
     default_judgment = _build_default_judgment(
         issue_number=issue_number,
         title=title,
         producer=producer,
         autoclose=autoclose,
+        candidate_state=candidate_state,
         candidate_action=candidate_action,
         identity=identity,
         occurrence_summary=effective_occurrence_summary,
@@ -642,6 +722,7 @@ def _build_compact_issue(
         "blockers": blockers,
         "missingPrerequisites": missing_prerequisites,
         "resolutionEvidence": dict(resolution_evidence),
+        "recoveredRunEvidenceId": recovered_run_evidence_id,
         "allowedEvidence": allowed_evidence,
         "defaultJudgment": default_judgment,
     }
@@ -1754,6 +1835,7 @@ def _build_default_judgment(
     title: str,
     producer: str,
     autoclose: bool | None,
+    candidate_state: str,
     candidate_action: str,
     identity: Mapping[str, Any],
     occurrence_summary: Mapping[str, Any],
@@ -1778,7 +1860,9 @@ def _build_default_judgment(
     disposition = _default_disposition(
         producer=producer,
         autoclose=autoclose,
+        candidate_state=candidate_state,
         candidate_action=candidate_action,
+        has_resolution_evidence=bool(resolution_evidence),
         category=category,
         occurrence_summary=occurrence_summary,
         human_context=human_context,
@@ -1981,13 +2065,19 @@ def _default_disposition(
     *,
     producer: str,
     autoclose: bool | None,
+    candidate_state: str,
     candidate_action: str,
+    has_resolution_evidence: bool,
     category: str,
     occurrence_summary: Mapping[str, Any],
     human_context: Mapping[str, Any] | None,
     recovered_run_evidence_id: str | None = None,
 ) -> str:
-    if candidate_action == "recommend-close":
+    if (
+        candidate_state == "resolved"
+        and candidate_action == "recommend-close"
+        and has_resolution_evidence
+    ):
         return "review-close"
 
     independent_runs = _require_nonnegative_int(occurrence_summary, "independentRunCount")

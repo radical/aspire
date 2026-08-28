@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 
 from ci_shepherd.poc import merge_ambiguous_poc_judgments
+from ci_shepherd.review_selection import merge_selected_poc_judgments
 
 
 def finalize(
@@ -15,12 +16,25 @@ def finalize(
     agent_input_path: Path,
     agent_judgments_path: Path,
     output_path: Path,
+    selection_path: Path | None = None,
 ) -> Path:
     compact_input = json.loads(agent_input_path.resolve(strict=True).read_text(encoding="utf-8"))
     agent_judgments = json.loads(
         agent_judgments_path.resolve(strict=True).read_text(encoding="utf-8")
     )
-    finalized = merge_ambiguous_poc_judgments(compact_input, agent_judgments)
+    if selection_path is None:
+        # Without a selection the agent is expected to return every issue, so
+        # the full merge still applies. This keeps existing recipes working.
+        finalized = merge_ambiguous_poc_judgments(compact_input, agent_judgments)
+    else:
+        selection = json.loads(
+            selection_path.resolve(strict=True).read_text(encoding="utf-8")
+        )
+        finalized = merge_selected_poc_judgments(
+            compact_input,
+            selection,
+            agent_judgments,
+        )
 
     resolved_output = output_path.resolve()
     resolved_output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -49,6 +63,7 @@ def main() -> int:
     )
     parser.add_argument("--agent-input", type=Path, required=True)
     parser.add_argument("--agent-judgments", type=Path, required=True)
+    parser.add_argument("--selection", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -56,6 +71,7 @@ def main() -> int:
         agent_input_path=args.agent_input,
         agent_judgments_path=args.agent_judgments,
         output_path=args.output,
+        selection_path=args.selection,
     )
     print(output)
     return 0

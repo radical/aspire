@@ -13,6 +13,64 @@ from .poc_history import (
     read_ledger_rows,
 )
 
+CaseKey = tuple[str, int, str, str]
+
+
+def case_key(
+    repository: str,
+    issue_number: int,
+    target: Mapping[str, Any],
+) -> CaseKey:
+    if not isinstance(repository, str) or not repository.strip():
+        raise ValueError("Case repository must be a nonempty string.")
+    if (
+        not isinstance(issue_number, int)
+        or isinstance(issue_number, bool)
+        or issue_number < 1
+    ):
+        raise ValueError("Case issue number must be a positive integer.")
+    target_kind = target.get("kind")
+    if not isinstance(target_kind, str) or not target_kind:
+        raise ValueError("Case target kind must be a nonempty string.")
+    return (
+        repository.casefold(),
+        issue_number,
+        target_kind,
+        json.dumps(target.get("value"), sort_keys=True),
+    )
+
+
+def load_latest_case_state(
+    state_directory: Path,
+    repository: str,
+) -> dict[CaseKey, dict[str, Any]]:
+    if not isinstance(repository, str) or not repository.strip():
+        raise ValueError("Case repository must be a nonempty string.")
+    latest: dict[CaseKey, dict[str, Any]] = {}
+    for row in read_ledger_rows(
+        state_directory / "ledgers" / "case-events.jsonl"
+    ):
+        if str(row.get("repository", "")).casefold() != repository.casefold():
+            continue
+        issue_number = row.get("issueNumber")
+        target_kind = row.get("targetKind")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number < 1
+            or not isinstance(target_kind, str)
+            or not target_kind
+        ):
+            continue
+        latest[
+            case_key(
+                repository,
+                issue_number,
+                {"kind": target_kind, "value": row.get("targetValue")},
+            )
+        ] = dict(row)
+    return latest
+
 
 def record_poc_ledgers(
     state_directory: Path,
@@ -55,6 +113,7 @@ def _collect_case_events(
         if not isinstance(issue_number, int):
             continue
         prepared_issue = prepared_issues.get(issue_number, {})
+        source_evidence_fingerprint = _source_evidence_fingerprint(prepared_issue)
         identity = prepared_issue.get("identity")
         fingerprint = (
             compute_fingerprint(identity)
@@ -77,6 +136,7 @@ def _collect_case_events(
                     "category": issue_judgment.get("category"),
                     "disposition": recommendation.get("disposition"),
                     "confidence": recommendation.get("confidence"),
+                    "sourceEvidenceFingerprint": source_evidence_fingerprint,
                     "snapshotId": snapshot_id,
                     "observedAt": observed_at,
                 }
@@ -92,11 +152,13 @@ def _collect_case_events(
 
 
 def _case_identity(row: Mapping[str, Any]) -> tuple[Any, ...]:
-    return (
-        str(row.get("repository", "")).casefold(),
+    return case_key(
+        str(row.get("repository", "")),
         row.get("issueNumber"),
-        row.get("targetKind"),
-        json.dumps(row.get("targetValue"), sort_keys=True),
+        {
+            "kind": row.get("targetKind"),
+            "value": row.get("targetValue"),
+        },
     )
 
 
@@ -106,6 +168,20 @@ def _case_state(row: Mapping[str, Any]) -> tuple[Any, ...]:
         row.get("category"),
         row.get("disposition"),
     )
+
+
+def _source_evidence_fingerprint(prepared_issue: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        prepared_issue,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    value = 0xCBF29CE484222325
+    for byte in encoded:
+        value ^= byte
+        value = (value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"fnv1a64:{value:016x}"
 
 
 def _append_case_events(
@@ -129,6 +205,12 @@ def _append_case_events(
             event["eventKind"] = "bootstrap"
         elif previous is None:
             event["eventKind"] = "created"
+        elif (
+            previous.get("sourceEvidenceFingerprint")
+            == row.get("sourceEvidenceFingerprint")
+        ):
+            event["eventKind"] = "convergence"
+            event["previousDisposition"] = previous.get("disposition")
         else:
             event["eventKind"] = "transition"
             event["previousDisposition"] = previous.get("disposition")
