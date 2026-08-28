@@ -55,7 +55,14 @@ def validate_poc_judgments(prepared: object, judgments: object) -> None:
     source_collected_at = _require_nonempty_string(prepared_mapping, "sourceCollectedAt")
     expected_snapshot_id = f"snapshot:{repository}:{source_collected_at}"
     prepared_snapshot_id = _require_nonempty_string(prepared_mapping, "snapshotId")
-    if prepared_snapshot_id != expected_snapshot_id:
+    if (
+        prepared_snapshot_id != expected_snapshot_id
+        and re.fullmatch(
+            rf"{re.escape(expected_snapshot_id)}:r[1-9][0-9]*",
+            prepared_snapshot_id,
+        )
+        is None
+    ):
         raise ValidationError("Prepared snapshotId must match repository and sourceCollectedAt.")
 
     judgment_snapshot_id = _require_nonempty_string(judgment_mapping, "snapshotId")

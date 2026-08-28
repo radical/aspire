@@ -117,6 +117,35 @@ def snapshot(
 
 
 class LifecycleAssessmentTests(unittest.TestCase):
+    def test_expanded_snapshot_has_round_qualified_identity(self) -> None:
+        payload = issue_payload(
+            1,
+            producer="ci-failure-cause",
+            autoclose=None,
+            ledger=complete_ledger(1001),
+        )
+        baseline = snapshot(payload)
+        expanded = {
+            **baseline,
+            "expansions": [
+                {
+                    "round": 1,
+                    "requests": [],
+                    "status": "complete",
+                    "errors": [],
+                }
+            ],
+        }
+
+        self.assertEqual(
+            f"snapshot:{REPOSITORY}:{COLLECTED_AT}",
+            prepare_assessment(baseline)["snapshotId"],
+        )
+        self.assertEqual(
+            f"snapshot:{REPOSITORY}:{COLLECTED_AT}:r1",
+            prepare_assessment(expanded)["snapshotId"],
+        )
+
     def test_prepared_issue_evidence_preserves_bot_author(self) -> None:
         payload = issue_payload(
             1,

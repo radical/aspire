@@ -34,7 +34,7 @@ def compact(
         )
     history_occurrences = None
     if fingerprints_path is not None:
-        resolved_fingerprints = fingerprints_path.resolve(strict=True)
+        resolved_fingerprints = fingerprints_path.resolve()
         if resolved_fingerprints == resolved_output:
             raise ValueError("Compact agent input must not overwrite the fingerprint ledger.")
         history_occurrences = group_rows_by_fingerprint(read_ledger_rows(resolved_fingerprints))

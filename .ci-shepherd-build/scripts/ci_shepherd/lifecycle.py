@@ -224,11 +224,12 @@ def prepare_assessment(
         )
         for issue_number in sorted(issue_numbers)
     ]
+    snapshot_id = snapshot_id_for(snapshot)
     return {
         "schemaVersion": ASSESSMENT_SCHEMA_VERSION,
         "repository": snapshot.get("repository"),
         "sourceCollectedAt": snapshot.get("collectedAt"),
-        "snapshotId": f"snapshot:{snapshot.get('repository')}:{snapshot.get('collectedAt')}",
+        "snapshotId": snapshot_id,
         "maxBundleRecords": max_bundle_records,
         "issues": candidates,
         "summary": {
@@ -241,6 +242,22 @@ def prepare_assessment(
             ),
         },
     }
+
+
+def snapshot_id_for(snapshot: Mapping[str, Any]) -> str:
+    snapshot_id = f"snapshot:{snapshot.get('repository')}:{snapshot.get('collectedAt')}"
+    expansions = snapshot.get("expansions")
+    if isinstance(expansions, list):
+        rounds = [
+            expansion["round"]
+            for expansion in expansions
+            if isinstance(expansion, Mapping)
+            and isinstance(expansion.get("round"), int)
+            and expansion["round"] > 0
+        ]
+        if rounds:
+            snapshot_id += f":r{max(rounds)}"
+    return snapshot_id
 
 
 def candidate_for(

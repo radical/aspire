@@ -183,6 +183,8 @@ def append_new_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> list[dict[
                 # Write the encoded row and its newline as a single string so
                 # one row is always one append, never split across writes.
                 stream.write(json.dumps(row, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         os.chmod(path, 0o600)
 
     return new_rows

@@ -15,6 +15,7 @@ from ci_shepherd.history import (
     HistoryError,
     load_current,
     record_history,
+    record_poc_history,
 )
 
 
@@ -86,6 +87,56 @@ def report(*, repository: str = "owner/repo") -> dict[str, object]:
     }
 
 
+def prepared_assessment() -> dict[str, object]:
+    snapshot_id = f"snapshot:owner/repo:{OBSERVED_AT}"
+    return {
+        "schemaVersion": 1,
+        "repository": "owner/repo",
+        "sourceCollectedAt": OBSERVED_AT,
+        "snapshotId": snapshot_id,
+        "issues": [
+            {
+                "issueNumber": 1,
+                "evidenceBundle": [
+                    {
+                        "id": "issue:1",
+                        "kind": "issue-event",
+                        "availability": "available",
+                        "payload": {"number": 1},
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def poc_judgments() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "snapshotId": f"snapshot:owner/repo:{OBSERVED_AT}",
+        "issues": [
+            {
+                "issueNumber": 1,
+                "category": "flaky-test",
+                "recommendations": [
+                    {
+                        "disposition": "watch",
+                        "target": {
+                            "kind": "test",
+                            "value": "Namespace.Type.Test",
+                        },
+                        "confidence": "low",
+                        "summary": "One independent occurrence is not enough to quarantine.",
+                        "evidenceIds": ["issue:1"],
+                        "missingEvidence": [],
+                        "reassessWhen": "The test fails in another independent run.",
+                    }
+                ],
+            }
+        ],
+    }
+
+
 class HistoryTests(unittest.TestCase):
     def setUp(self) -> None:
         TEST_TEMP_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -125,6 +176,70 @@ class HistoryTests(unittest.TestCase):
             record_history(self.root, "owner/repo", "run-001", snapshot(), report())
 
         self.assertEqual(load_current(self.root, "owner/repo"), first)
+
+    def test_record_poc_creates_immutable_run_and_rejects_duplicate_cycle(self) -> None:
+        current = record_poc_history(
+            self.root,
+            "owner/repo",
+            "cycle-001",
+            snapshot(),
+            prepared_assessment(),
+            poc_judgments(),
+            "# CI Shepherd POC Assessment\n",
+        )
+
+        run = self.root / "runs" / "cycle-001"
+        self.assertEqual("cycle-001", current.run_id)
+        self.assertEqual(snapshot(), json.loads((run / "snapshot.json").read_text()))
+        self.assertEqual(
+            prepared_assessment(),
+            json.loads((run / "assessment-input.json").read_text()),
+        )
+        self.assertEqual(
+            poc_judgments(),
+            json.loads((run / "judgments.json").read_text()),
+        )
+        self.assertEqual(
+            "# CI Shepherd POC Assessment\n",
+            (run / "report.md").read_text(),
+        )
+
+        with self.assertRaisesRegex(HistoryError, "already exists"):
+            record_poc_history(
+                self.root,
+                "owner/repo",
+                "cycle-001",
+                snapshot(),
+                prepared_assessment(),
+                poc_judgments(),
+                "# CI Shepherd POC Assessment\n",
+            )
+
+        self.assertEqual(current, load_current(self.root, "owner/repo"))
+
+    def test_record_poc_rejects_prepared_identity_from_another_evidence_round(self) -> None:
+        expanded_snapshot = snapshot()
+        expanded_snapshot["expansions"] = [
+            {
+                "round": 1,
+                "requests": [],
+                "status": "complete",
+                "errors": [],
+            }
+        ]
+
+        with self.assertRaisesRegex(HistoryError, "snapshot identity"):
+            record_poc_history(
+                self.root,
+                "owner/repo",
+                "cycle-001",
+                expanded_snapshot,
+                prepared_assessment(),
+                poc_judgments(),
+                "# CI Shepherd POC Assessment\n",
+            )
+
+        self.assertFalse(self.root.exists())
 
     def test_missing_or_malformed_current_is_rebuilt_from_runs(self) -> None:
         expected = record_history(self.root, "owner/repo", "run-001", snapshot(), report())

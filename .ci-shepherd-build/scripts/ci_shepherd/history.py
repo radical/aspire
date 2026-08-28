@@ -31,6 +31,15 @@ _REPOSITORY_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$"
 )
 _RESERVED_RUN_FILES = frozenset({"manifest.json", "snapshot.json", "report.json"})
+_POC_RESERVED_RUN_FILES = frozenset(
+    {
+        "manifest.json",
+        "snapshot.json",
+        "assessment-input.json",
+        "judgments.json",
+        "report.md",
+    }
+)
 _IMMUTABLE_EVIDENCE_KINDS = frozenset({"commit", "workflow-log"})
 _SOURCE_VERSIONED_EVIDENCE_KINDS = frozenset(
     {"source-path", "codeowners", "issue-comment"}
@@ -90,6 +99,54 @@ def record_history(
     artifacts: Mapping[str, bytes] | Iterable[tuple[str, bytes]] = (),
 ) -> CurrentHistory:
     prepared = _validate_inputs(repository, run_id, snapshot, report, artifacts)
+    return _record_prepared_history(
+        state_directory,
+        repository,
+        run_id,
+        snapshot,
+        prepared,
+        record_kind="legacy",
+    )
+
+
+def record_poc_history(
+    state_directory: str | os.PathLike[str],
+    repository: str,
+    run_id: str,
+    snapshot: object,
+    prepared_assessment: object,
+    judgments: object,
+    report_markdown: str,
+    artifacts: Mapping[str, bytes] | Iterable[tuple[str, bytes]] = (),
+) -> CurrentHistory:
+    prepared = _validate_poc_inputs(
+        repository,
+        run_id,
+        snapshot,
+        prepared_assessment,
+        judgments,
+        report_markdown,
+        artifacts,
+    )
+    return _record_prepared_history(
+        state_directory,
+        repository,
+        run_id,
+        snapshot,
+        prepared,
+        record_kind="poc",
+    )
+
+
+def _record_prepared_history(
+    state_directory: str | os.PathLike[str],
+    repository: str,
+    run_id: str,
+    snapshot: object,
+    prepared: list[tuple[str, bytes]],
+    *,
+    record_kind: str,
+) -> CurrentHistory:
     state = _validate_state_path(state_directory)
     promoted = False
     staging: Path | None = None
@@ -122,6 +179,8 @@ def record_history(
                 "freshnessClasses": list(FRESHNESS_CLASSES),
                 "files": sorted(file_entries, key=lambda item: str(item["path"])),
             }
+            if record_kind != "legacy":
+                manifest["recordKind"] = record_kind
             _write_new_private_file(
                 staging / "manifest.json",
                 _strict_json(manifest).encode("utf-8"),
@@ -212,6 +271,27 @@ def load_current(
         return _make_current(state, expected)
 
 
+def load_recorded_run(
+    state_directory: str | os.PathLike[str],
+    repository: str,
+    run_id: str,
+) -> dict[str, Any]:
+    _validate_repository(repository)
+    _validate_run_id(run_id)
+    state = _validate_state_path(state_directory)
+    _reject_symlink(state, "state directory")
+    if not state.is_dir() or stat.S_IMODE(state.stat().st_mode) != 0o700:
+        raise HistoryError("State directory is missing or has unsafe permissions.")
+
+    runs = state / "runs"
+    _reject_symlink(runs, "runs directory")
+    if not runs.is_dir() or stat.S_IMODE(runs.stat().st_mode) != 0o700:
+        raise HistoryError("Runs directory is missing or has unsafe permissions.")
+
+    with _history_lock(state):
+        return _load_valid_run(runs / run_id, repository)
+
+
 def _validate_inputs(
     repository: object,
     run_id: object,
@@ -254,6 +334,66 @@ def _validate_inputs(
     return prepared
 
 
+def _validate_poc_inputs(
+    repository: object,
+    run_id: object,
+    snapshot: object,
+    prepared_assessment: object,
+    judgments: object,
+    report_markdown: object,
+    artifacts: object,
+) -> list[tuple[str, bytes]]:
+    from .lifecycle import snapshot_id_for
+    from .poc import validate_poc_judgments
+
+    _validate_repository(repository)
+    _validate_run_id(run_id)
+    try:
+        validate_snapshot(snapshot)
+        validate_poc_judgments(prepared_assessment, judgments)
+    except ValidationError as error:
+        raise HistoryError(f"Invalid POC cycle: {error}") from error
+
+    snapshot_mapping = _mapping(snapshot, "snapshot")
+    prepared_mapping = _mapping(prepared_assessment, "prepared assessment")
+    repository_text = str(repository)
+    if (
+        str(snapshot_mapping.get("repository", "")).casefold()
+        != repository_text.casefold()
+        or str(prepared_mapping.get("repository", "")).casefold()
+        != repository_text.casefold()
+        or prepared_mapping.get("sourceCollectedAt")
+        != snapshot_mapping.get("collectedAt")
+    ):
+        raise HistoryError(
+            "History repository and timestamp must match the snapshot and prepared assessment."
+        )
+    if prepared_mapping.get("snapshotId") != snapshot_id_for(snapshot_mapping):
+        raise HistoryError(
+            "Prepared snapshot identity must match the snapshot evidence round."
+        )
+    if not isinstance(report_markdown, str) or not report_markdown.strip():
+        raise HistoryError("POC report Markdown must be nonempty.")
+    _reject_previous_decisions_in_evidence(snapshot_mapping)
+
+    try:
+        prepared = [
+            ("snapshot.json", _strict_json(snapshot).encode("utf-8")),
+            (
+                "assessment-input.json",
+                _strict_json(prepared_assessment).encode("utf-8"),
+            ),
+            ("judgments.json", _strict_json(judgments).encode("utf-8")),
+            ("report.md", report_markdown.encode("utf-8")),
+        ]
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise HistoryError("POC cycle records must be JSON-compatible UTF-8.") from error
+    prepared.extend(
+        _validate_artifacts(artifacts, reserved_paths=_POC_RESERVED_RUN_FILES)
+    )
+    return prepared
+
+
 def _validate_repository(repository: object) -> None:
     if not isinstance(repository, str) or _REPOSITORY_RE.fullmatch(repository) is None:
         raise HistoryError("Repository must be a valid OWNER/REPO string.")
@@ -269,7 +409,11 @@ def _validate_run_id(run_id: object) -> None:
         raise HistoryError("Run ID must be a safe, non-hidden path component.")
 
 
-def _validate_artifacts(artifacts: object) -> list[tuple[str, bytes]]:
+def _validate_artifacts(
+    artifacts: object,
+    *,
+    reserved_paths: frozenset[str] = _RESERVED_RUN_FILES,
+) -> list[tuple[str, bytes]]:
     if isinstance(artifacts, Mapping):
         raw_artifacts: Iterable[object] = artifacts.items()
     elif isinstance(artifacts, Iterable) and not isinstance(
@@ -280,7 +424,7 @@ def _validate_artifacts(artifacts: object) -> list[tuple[str, bytes]]:
         raise HistoryError("Artifacts must be a mapping or iterable of name/bytes pairs.")
 
     prepared: list[tuple[str, bytes]] = []
-    aliases = {_path_alias(path) for path in _RESERVED_RUN_FILES}
+    aliases = {_path_alias(path) for path in reserved_paths}
     artifact_aliases: list[tuple[str, ...]] = []
     for raw_artifact in raw_artifacts:
         if (
@@ -533,7 +677,7 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
 
     manifest_path = path / "manifest.json"
     manifest = _read_json_file(manifest_path, "manifest")
-    if set(manifest) != {
+    manifest_fields = {
         "schemaVersion",
         "repository",
         "runId",
@@ -541,8 +685,12 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
         "complete",
         "freshnessClasses",
         "files",
-    }:
+    }
+    if "recordKind" in manifest:
+        manifest_fields.add("recordKind")
+    if set(manifest) != manifest_fields:
         raise HistoryError(f"Run {path.name!r} has a malformed manifest.")
+    record_kind = manifest.get("recordKind", "legacy")
     if (
         manifest.get("schemaVersion") != _SCHEMA_VERSION
         or manifest.get("complete") is not True
@@ -552,6 +700,7 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
         or not isinstance(manifest.get("recordedAt"), str)
         or not manifest["recordedAt"]
         or manifest.get("freshnessClasses") != list(FRESHNESS_CLASSES)
+        or record_kind not in {"legacy", "poc"}
     ):
         raise HistoryError(f"Run {path.name!r} has an invalid manifest.")
 
@@ -580,7 +729,17 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
             or raw_entry.get("crc32") != f"{zlib.crc32(content):08x}"
         ):
             raise HistoryError(f"Run {path.name!r} file {relative!r} is corrupt.")
-    if not {"snapshot.json", "report.json"}.issubset(expected_files):
+    required_files = (
+        {"snapshot.json", "report.json"}
+        if record_kind == "legacy"
+        else {
+            "snapshot.json",
+            "assessment-input.json",
+            "judgments.json",
+            "report.md",
+        }
+    )
+    if not required_files.issubset(expected_files):
         raise HistoryError(f"Run {path.name!r} is missing its validated pair.")
 
     actual_files: set[str] = set()
@@ -599,15 +758,45 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
         raise HistoryError(f"Run {path.name!r} manifest does not match its files.")
 
     snapshot = _read_json_file(path / "snapshot.json", "snapshot")
-    report = _read_json_file(path / "report.json", "report")
-    try:
-        validate_snapshot(snapshot)
-        validate_report(snapshot, report)
-    except ValidationError as error:
-        raise HistoryError(f"Run {path.name!r} contains an invalid pair: {error}") from error
+    if record_kind == "legacy":
+        report = _read_json_file(path / "report.json", "report")
+        try:
+            validate_snapshot(snapshot)
+            validate_report(snapshot, report)
+        except ValidationError as error:
+            raise HistoryError(f"Run {path.name!r} contains an invalid pair: {error}") from error
+        if report.get("repository", "").casefold() != repository.casefold():
+            raise HistoryError(f"Run {path.name!r} repository is inconsistent.")
+        run_payload: dict[str, Any] = {"report": report}
+    else:
+        prepared = _read_json_file(
+            path / "assessment-input.json",
+            "prepared assessment",
+        )
+        judgments = _read_json_file(path / "judgments.json", "judgments")
+        try:
+            from .poc import validate_poc_judgments
+
+            validate_snapshot(snapshot)
+            validate_poc_judgments(prepared, judgments)
+            report_markdown = (path / "report.md").read_text(encoding="utf-8")
+        except (ValidationError, OSError, UnicodeError) as error:
+            raise HistoryError(
+                f"Run {path.name!r} contains an invalid POC cycle: {error}"
+            ) from error
+        if (
+            not report_markdown.strip()
+            or prepared.get("repository", "").casefold() != repository.casefold()
+            or prepared.get("sourceCollectedAt") != snapshot.get("collectedAt")
+        ):
+            raise HistoryError(f"Run {path.name!r} POC cycle is inconsistent.")
+        run_payload = {
+            "preparedAssessment": prepared,
+            "judgments": judgments,
+            "reportMarkdown": report_markdown,
+        }
     if (
         snapshot.get("repository", "").casefold() != repository.casefold()
-        or report.get("repository", "").casefold() != repository.casefold()
         or snapshot.get("collectedAt") != manifest["recordedAt"]
     ):
         raise HistoryError(f"Run {path.name!r} repository or timestamp is inconsistent.")
@@ -615,10 +804,11 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
 
     return {
         "runId": path.name,
+        "recordKind": record_kind,
         "recordedAt": manifest["recordedAt"],
         "snapshot": snapshot,
-        "report": report,
-        "artifacts": sorted(expected_files - {"snapshot.json", "report.json"}),
+        **run_payload,
+        "artifacts": sorted(expected_files - required_files),
     }
 
 
@@ -636,7 +826,6 @@ def _validate_run_file(root: Path, path: Path) -> None:
 
 def _current_document(run: Mapping[str, Any]) -> dict[str, Any]:
     snapshot = _mapping(run["snapshot"], "snapshot")
-    report = _mapping(run["report"], "report")
     evidence = _mapping(snapshot.get("evidence"), "evidence")
     normalized_evidence = {
         evidence_id: _history_evidence_record(
@@ -645,19 +834,30 @@ def _current_document(run: Mapping[str, Any]) -> dict[str, Any]:
         )
         for evidence_id, record in sorted(evidence.items())
     }
-    decisions = report.get("decisions")
+    record_kind = run.get("recordKind", "legacy")
+    if record_kind == "poc":
+        judgments = _mapping(run["judgments"], "judgments")
+        decisions = judgments.get("issues")
+        source_schema_versions = {
+            "snapshot": snapshot["schemaVersion"],
+            "judgments": judgments["schemaVersion"],
+        }
+    else:
+        report = _mapping(run["report"], "report")
+        decisions = report.get("decisions")
+        source_schema_versions = {
+            "snapshot": snapshot["schemaVersion"],
+            "report": report["schemaVersion"],
+        }
     if not isinstance(decisions, list):
-        raise HistoryError("Validated report decisions are unavailable.")
+        raise HistoryError("Validated cycle decisions are unavailable.")
     return {
         "schemaVersion": _SCHEMA_VERSION,
         "repository": snapshot["repository"],
         "runId": run["runId"],
         "runPath": f"runs/{run['runId']}",
         "recordedAt": run["recordedAt"],
-        "sourceSchemaVersions": {
-            "snapshot": snapshot["schemaVersion"],
-            "report": report["schemaVersion"],
-        },
+        "sourceSchemaVersions": source_schema_versions,
         "freshnessClasses": list(FRESHNESS_CLASSES),
         "evidence": normalized_evidence,
         "previousDecisions": decisions,

@@ -570,6 +570,7 @@ class PrototypeScriptTests(unittest.TestCase):
             'python3 "$CI_SHEPHERD_ROOT/scripts/compact.py" \\\n'
             '  --prepared "$SCRATCH/assessment-input.json" \\\n'
             '  --related-issues "$FIXTURE/related-issues.json" \\\n'
+            '  --fingerprints "$STATE/ledgers/fingerprints.jsonl" \\\n'
             '  --output "$SCRATCH/agent-input.json"'
         )
         render_command = (
@@ -692,6 +693,37 @@ class PrototypeScriptTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_skill)
+
+    def test_skill_documents_poc_lifecycle_recording_and_replay(self) -> None:
+        skill = SKILL_PATH.read_text()
+        normalized_skill = " ".join(skill.split())
+
+        for phrase in (
+            "`record_poc.py` records the finalized POC cycle",
+            "`case-events.jsonl` records bootstrap and material disposition transitions",
+            "Expanded evidence rounds use a round-qualified snapshot identity",
+            "replaying unchanged evidence must append no case event",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized_skill)
+
+        self.assertIn(
+            'python3 "$CI_SHEPHERD_ROOT/scripts/record_poc.py" \\\n'
+            '  --state-dir "$STATE" \\\n'
+            '  --input "$SCRATCH/input.round-1.json" \\\n'
+            '  --prepared "$SCRATCH/assessment-input.round-1.json" \\\n'
+            '  --judgments "$SCRATCH/judgments.json" \\\n'
+            '  --report "$SCRATCH/report.md" \\\n'
+            '  --artifacts "$SCRATCH"',
+            skill,
+        )
+        self.assertIn(
+            'python3 "$CI_SHEPHERD_ROOT/scripts/replay_scenario.py" \\\n'
+            '  --scenario-dir "$SCENARIO" \\\n'
+            '  --output-dir "$REPLAY" \\\n'
+            '  --state-dir "$STATE"',
+            skill,
+        )
 
     def test_propose_actions_cli_writes_owner_only_output(self) -> None:
         if os.name == "nt":
@@ -1066,6 +1098,33 @@ class PrototypeScriptTests(unittest.TestCase):
             history_summary = compact["issues"][0]["historyOccurrenceSummary"]
             self.assertEqual(1, history_summary["independentRunCount"])
             self.assertEqual("2026-08-01", history_summary["firstSeenDate"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_compact_script_treats_missing_state_ledger_as_empty_history(self) -> None:
+        compact_script = load_script("compact")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        prepared_path = scratch / "assessment-input.json"
+        output_path = scratch / "agent-input.json"
+        fingerprints_path = scratch / "state" / "ledgers" / "fingerprints.jsonl"
+        scratch.mkdir(parents=True)
+        prepared_path.write_text(
+            json.dumps(compact_prepared()),
+            encoding="utf-8",
+        )
+
+        try:
+            compact_script.compact(
+                prepared_path=prepared_path,
+                related_issues_path=None,
+                fingerprints_path=fingerprints_path,
+                output_path=output_path,
+            )
+
+            self.assertTrue(output_path.is_file())
+            self.assertFalse(fingerprints_path.exists())
+            self.assertFalse(fingerprints_path.parent.exists())
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -1991,6 +2050,161 @@ class PrototypeScriptTests(unittest.TestCase):
                     artifact_paths=[run_dir],
                 )
             self.assertFalse(second_state.exists())
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_record_poc_script_persists_cycle_and_state_ledgers(self) -> None:
+        record_poc_script = load_script("record_poc")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        state_dir = scratch / "state"
+        run_dir = scratch / "run"
+        shutil.rmtree(scratch, ignore_errors=True)
+        run_dir.mkdir(parents=True)
+
+        snapshot = {
+            "schemaVersion": 1,
+            "repository": "owner/repo",
+            "collectedAt": "2026-08-20T06:00:00Z",
+            "openIssues": [1],
+            "evidence": {
+                "issue:1": {
+                    "kind": "issue-event",
+                    "url": "https://github.com/owner/repo/issues/1",
+                    "collectedAt": "2026-08-20T06:00:00Z",
+                    "availability": "available",
+                    "payload": {"number": 1, "state": "open"},
+                }
+            },
+            "collectionErrors": [],
+        }
+        prepared = poc_prepared([(1, "One failing test")])
+        prepared_issue = prepared["issues"][0]
+        prepared_issue["identity"] = {
+            "tier1CauseId": None,
+            "tier2TestName": "Namespace.Type.Test",
+            "tier2ExceptionType": None,
+            "tier3ErrorCode": None,
+            "tier3Job": None,
+        }
+        prepared_issue["ledger"] = {
+            "rows": [
+                {
+                    "date": "2026-08-20",
+                    "sourceRun": 1001,
+                    "job": "Tests / Linux",
+                }
+            ]
+        }
+        judgments = poc_judgments(
+            prepared,
+            [
+                (
+                    1,
+                    "flaky-test",
+                    "watch",
+                    "test",
+                    "Namespace.Type.Test",
+                    "low",
+                    [],
+                    "The test fails in another independent run.",
+                )
+            ],
+        )
+        input_path = run_dir / "input.json"
+        prepared_path = run_dir / "assessment-input.json"
+        judgments_path = run_dir / "judgments.json"
+        report_path = run_dir / "report.md"
+        input_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        prepared_path.write_text(json.dumps(prepared), encoding="utf-8")
+        judgments_path.write_text(json.dumps(judgments), encoding="utf-8")
+        report_path.write_text("# CI Shepherd POC Assessment\n", encoding="utf-8")
+
+        try:
+            with (
+                patch.object(
+                    record_poc_script,
+                    "record_poc_ledgers",
+                    side_effect=OSError("injected ledger failure"),
+                ),
+                self.assertRaisesRegex(OSError, "injected ledger failure"),
+            ):
+                record_poc_script.record_poc_cycle(
+                    state_dir=state_dir,
+                    input_path=input_path,
+                    prepared_path=prepared_path,
+                    judgments_path=judgments_path,
+                    report_path=report_path,
+                    artifact_paths=[run_dir],
+                )
+
+            recorded = record_poc_script.record_poc_cycle(
+                state_dir=state_dir,
+                input_path=input_path,
+                prepared_path=prepared_path,
+                judgments_path=judgments_path,
+                report_path=report_path,
+                artifact_paths=[run_dir],
+            )
+
+            self.assertEqual(
+                "2026-08-20T06-00-00Z-r0",
+                recorded.name,
+            )
+            self.assertEqual(
+                1,
+                len(
+                    (state_dir / "ledgers" / "fingerprints.jsonl")
+                    .read_text(encoding="utf-8")
+                    .strip()
+                    .splitlines()
+                ),
+            )
+            case_events = [
+                json.loads(line)
+                for line in (
+                    state_dir / "ledgers" / "case-events.jsonl"
+                )
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(1, len(case_events))
+            self.assertEqual("bootstrap", case_events[0]["eventKind"])
+            self.assertEqual("watch", case_events[0]["disposition"])
+
+            replayed = record_poc_script.record_poc_cycle(
+                state_dir=state_dir,
+                input_path=input_path,
+                prepared_path=prepared_path,
+                judgments_path=judgments_path,
+                report_path=report_path,
+                artifact_paths=[run_dir],
+            )
+            self.assertEqual(recorded, replayed)
+            self.assertEqual(
+                case_events,
+                [
+                    json.loads(line)
+                    for line in (
+                        state_dir / "ledgers" / "case-events.jsonl"
+                    )
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                ],
+            )
+
+            judgments["issues"][0]["recommendations"][0]["summary"] = (
+                "A different cycle reused the same collection identity."
+            )
+            judgments_path.write_text(json.dumps(judgments), encoding="utf-8")
+            with self.assertRaisesRegex(HistoryError, "different POC cycle"):
+                record_poc_script.record_poc_cycle(
+                    state_dir=state_dir,
+                    input_path=input_path,
+                    prepared_path=prepared_path,
+                    judgments_path=judgments_path,
+                    report_path=report_path,
+                    artifact_paths=[run_dir],
+                )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
