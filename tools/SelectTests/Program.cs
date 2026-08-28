@@ -431,19 +431,27 @@ internal static class Selection
         // From has already been rebound to the merge-base (see RunCore), so this is a branch-point..head
         // diff -- the PR's own changes -- not a base-tip..head diff.
         var range = options.To is null ? new[] { options.From } : new[] { options.From, options.To };
-        // -c core.quotePath=false: with the default (true), git octal-escapes and double-quotes any
-        // path with non-ASCII bytes (e.g. "src/caf\303\251.cs"). That escaped string is not the real
-        // repo-relative path, so the map globs below would silently miss it. Forcing quotePath off makes
-        // git emit the literal UTF-8 path, which is what the globs expect. (Layer 1's diff does the same.)
-        // --name-status -M (not --name-only --no-renames): a rename is reported as "R###\told\tnew",
-        // giving BOTH paths plus which one is which. We still glob-match both sides -- a file moved
-        // OUT of a mapped directory (e.g. eng/clipack/foo -> eng/elsewhere) must still hit that
-        // directory's rule via its old path (see SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests)
-        // -- but knowing which path is a rename's old side lets TestSelector stop treating a stale,
-        // no-longer-referenced old name as an unmapped "leftover" that forces the run-all fallback
-        // (see TestSelector.Select and the root cause described there). Layer 1 already parses this
-        // same "-M" format (GraphAffectedProjects.GetChangedPathsFromGit); this keeps Layer 2 consistent.
-        var args = new List<string> { "-c", "core.quotePath=false", "diff", "--name-status", "-M" };
+        // --name-status -M (not --name-only --no-renames): a rename is reported as one "R###" record
+        // carrying BOTH paths, not decomposed into a separate delete(old) + add(new). We still
+        // glob-match both sides -- a file moved OUT of a mapped directory (e.g. eng/clipack/foo ->
+        // eng/elsewhere) must still hit that directory's rule via its old path (see
+        // SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests) -- but knowing which path is a
+        // rename's old side lets TestSelector stop treating a stale, no-longer-referenced old name as an
+        // unmapped "leftover" that forces the run-all fallback (see TestSelector.Select and the root
+        // cause described there). Layer 1 already parses this same "-M" format
+        // (GraphAffectedProjects.GetChangedPathsFromGit); this keeps Layer 2 consistent.
+        // -z NUL-terminates every field instead of git's default newline-per-record, tab-per-field
+        // text format. That default format quotes/escapes any path containing a byte >= 0x80, a tab,
+        // a newline, a double-quote, or a backslash (e.g. a literal tab in a name becomes the 8
+        // characters "old\tname.txt", with a literal backslash-t, not a real tab byte) -- and
+        // `-c core.quotePath=false` only suppresses the non-ASCII-byte escaping, not the
+        // tab/newline/quote/backslash escaping. A quoted/escaped path never glob-equals the real
+        // repo-relative path, so the map rules below would silently miss it, AND the mismatch would
+        // apply consistently to both the file list and renameOldPaths -- so a rename whose path
+        // couldn't be attributed to any rule would still be wrongly exempted from the run-all
+        // fallback. NUL can never appear in a valid path, so `-z` lets git skip quoting entirely,
+        // for every path, with no exceptions.
+        var args = new List<string> { "diff", "--name-status", "-M", "-z" };
         args.AddRange(range);
 
         var stdout = RunProcess("git", args, options.RepoRoot, out var exitCode, out var stderr);
@@ -454,25 +462,41 @@ internal static class Selection
 
         var files = new List<string>();
         var renameOldPaths = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        // With -z the whole stream is just NUL-delimited fields back to back -- "status\0path\0" for a
+        // plain change, "R100\0old\0new\0" for a rename (the numeric similarity suffix varies) -- with
+        // no per-line framing to split on first. How many fields follow depends on the status, so walk
+        // the flat token stream and consume 1 or 2 fields per record accordingly. -M alone won't emit
+        // "C" copy records -- see GraphAffectedProjects.GetChangedPathsFromGit for the same format with
+        // more examples.
+        var tokens = stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        var tokenIndex = 0;
+        while (tokenIndex < tokens.Length)
         {
-            // Plain changes are "Status\tpath"; renames/copies are "R100\told\tnew" (the numeric
-            // similarity suffix varies). -M alone won't emit "C" copy records -- see
-            // GraphAffectedProjects.GetChangedPathsFromGit for the same format with more examples.
-            var fields = line.Split('\t', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (fields.Length < 2)
+            var status = tokens[tokenIndex++];
+            if (status.StartsWith('R') || status.StartsWith('C'))
             {
-                continue;
-            }
+                if (tokenIndex + 1 >= tokens.Length)
+                {
+                    break; // truncated/malformed output; nothing left to parse
+                }
 
-            for (var i = 1; i < fields.Length; i++)
-            {
-                files.Add(fields[i]);
+                var oldPath = tokens[tokenIndex++];
+                var newPath = tokens[tokenIndex++];
+                files.Add(oldPath);
+                files.Add(newPath);
+                if (status.StartsWith('R'))
+                {
+                    renameOldPaths.Add(oldPath);
+                }
             }
-
-            if (fields[0].StartsWith('R') && fields.Length >= 3)
+            else
             {
-                renameOldPaths.Add(fields[1]);
+                if (tokenIndex >= tokens.Length)
+                {
+                    break; // truncated/malformed output; nothing left to parse
+                }
+
+                files.Add(tokens[tokenIndex++]);
             }
         }
 

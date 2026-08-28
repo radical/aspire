@@ -436,7 +436,10 @@ public sealed class TestTriggerMapTests
     // This test uses a temp copy of the REAL map with just the two git-rename-detected paths'
     // entries updated to their new names (simulating "as if PR #19486's own map.yml edit, for these
     // two files, had already landed"), keeping every other rule, group, and affected-project mapping
-    // exactly as checked out on disk today.
+    // exactly as checked out on disk today. Because of that, `expectedTargets` below is coupled to the
+    // live map: an unrelated future change to test-trigger-map.yml's Aspire.Cli/Aspire.Cli.Tests
+    // routing (e.g. a new job gate or group added to their rules) can legitimately require updating
+    // this list, not just a regression in the selector.
     [Fact]
     public void SameCommitRenameWithMapEntryMovedToNewPathSelectsExactTargetsWithoutEscalating()
     {
@@ -453,37 +456,45 @@ public sealed class TestTriggerMapTests
             .Replace(oldCommonPath, newCommonPath, StringComparison.Ordinal)
             .Replace(oldUpdatePath, newUpdatePath, StringComparison.Ordinal);
 
-        var tempMapPath = Path.Combine(Directory.CreateTempSubdirectory().FullName, "test-trigger-map.yml");
-        File.WriteAllText(tempMapPath, simulatedMapText);
+        var tempDir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var tempMapPath = Path.Combine(tempDir.FullName, "test-trigger-map.yml");
+            File.WriteAllText(tempMapPath, simulatedMapText);
 
-        var renameOldPaths = new HashSet<string>(StringComparer.Ordinal) { oldCommonPath, oldUpdatePath };
-        var changedFiles = new[] { oldCommonPath, newCommonPath, oldUpdatePath, newUpdatePath };
+            var renameOldPaths = new HashSet<string>(StringComparer.Ordinal) { oldCommonPath, oldUpdatePath };
+            var changedFiles = new[] { oldCommonPath, newCommonPath, oldUpdatePath, newUpdatePath };
 
-        // Aspire.Cli (production) and Aspire.Cli.Tests (its test project) both changed, mirroring the
-        // production-code portion of PR #19486's actual diff (agent-init/telemetry commands).
-        var result = SelectWithRealMap(
-            changedFiles,
-            layer1Affected: ["Aspire.Cli", "Aspire.Cli.Tests"],
-            renameOldPaths: renameOldPaths,
-            mapPathOverride: tempMapPath);
+            // Aspire.Cli (production) and Aspire.Cli.Tests (its test project) both changed, mirroring the
+            // production-code portion of PR #19486's actual diff (agent-init/telemetry commands).
+            var result = SelectWithRealMap(
+                changedFiles,
+                layer1Affected: ["Aspire.Cli", "Aspire.Cli.Tests"],
+                renameOldPaths: renameOldPaths,
+                mapPathOverride: tempMapPath);
 
-        Assert.False(result.SelectsAll, $"unexpectedly selected ALL: {result.EscalationReason}");
-        Assert.Empty(result.UnmatchedFiles);
+            Assert.False(result.SelectsAll, $"unexpectedly selected ALL: {result.EscalationReason}");
+            Assert.Empty(result.UnmatchedFiles);
 
-        var actualTargets = result.TestProjects.Select(name => $"test:{name}")
-            .Concat(result.Jobs)
-            .Order(StringComparer.Ordinal);
-        string[] expectedTargets =
-        [
-            "job:deployment-e2e",
-            "job:extension-e2e",
-            "job:polyglot",
-            "job:typescript-api-compat",
-            "test:Aspire.Cli.EndToEnd.Tests",
-            "test:Aspire.Cli.Tests",
-            "test:Infrastructure.Tests",
-        ];
-        Assert.Equal(expectedTargets.Order(StringComparer.Ordinal), actualTargets);
+            var actualTargets = result.TestProjects.Select(name => $"test:{name}")
+                .Concat(result.Jobs)
+                .Order(StringComparer.Ordinal);
+            string[] expectedTargets =
+            [
+                "job:deployment-e2e",
+                "job:extension-e2e",
+                "job:polyglot",
+                "job:typescript-api-compat",
+                "test:Aspire.Cli.EndToEnd.Tests",
+                "test:Aspire.Cli.Tests",
+                "test:Infrastructure.Tests",
+            ];
+            Assert.Equal(expectedTargets.Order(StringComparer.Ordinal), actualTargets);
+        }
+        finally
+        {
+            Directory.Delete(tempDir.FullName, recursive: true);
+        }
     }
 
     [Fact]

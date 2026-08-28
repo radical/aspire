@@ -298,6 +298,17 @@ carry it forward. Never silently regenerate it.
   50% threshold — e.g. a move combined with a heavy rewrite in the same
   commit) is unaffected by this exemption and reported as a plain delete + add,
   which still forces the fallback if either side is otherwise unmapped.
+  - **Known residual limitation.** Rename detection is a content-similarity
+    heuristic, not a semantic guarantee, so it can occasionally pair an
+    unrelated deletion with an unrelated addition that merely look similar
+    (e.g. two near-identical or empty boilerplate files). If that mispaired
+    "old path" also lost its own rule in the same commit, its removal would be
+    exempted here even though it isn't really the deletion side of the rule's
+    file. This needs several independent, rare coincidences to line up, and
+    raising the similarity threshold to close it isn't viable — the real
+    rename above was only detected at 54% similarity, so any threshold high
+    enough to rule out coincidental pairing would also miss real renames like
+    it. Treated as an accepted, bounded tradeoff rather than a code fix.
 - **Layer 1 failure is fatal.** Audit mode returns run-all only after a
   successful selection. A graph-computation failure fails the selector in every
   mode.

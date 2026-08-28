@@ -247,6 +247,20 @@ public sealed class TestSelector
             // targets this content's rename should select (additively; it can only add targets, never
             // suppress them) -- so don't force ALL over it. See docs/ci/test-trigger-map.md for the
             // full rationale and TestTriggerMapTests for the regression coverage.
+            //
+            // Known residual limitation: renameOldPathSet comes from git's own "-M" similarity
+            // detection, a content heuristic, not a semantic guarantee -- it can occasionally pair an
+            // unrelated deletion with an unrelated addition that merely happen to be textually similar
+            // (e.g. two near-identical or empty boilerplate files). If that mispaired "old path" also
+            // lost its own map rule in the same commit, its removal would be exempted here even though
+            // it is not really the deletion side of the file this rule was written for. This requires
+            // several independent, rare coincidences (a same-commit rule move landing on a file whose
+            // deletion git also happens to mispair with something else), and raising the similarity
+            // threshold to close it is not viable: PR #19486's own real rename (the motivating case
+            // above) was only detected at R054 similarity (see
+            // RenameBelowGitSimilarityThresholdIsNotExemptedAndStillForcesRunAll), so any threshold high
+            // enough to rule out coincidental pairing would also stop detecting real renames like it.
+            // Accepted as a bounded, low-probability tradeoff rather than a code mitigation.
             if (renameOldPathSet.Contains(file))
             {
                 continue;

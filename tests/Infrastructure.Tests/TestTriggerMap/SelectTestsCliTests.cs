@@ -963,13 +963,13 @@ public sealed class SelectTestsCliTests
     }
 
     // P1-6c. A rename must attribute BOTH sides so a file moved OUT of a mapped directory still runs
-    // that directory's tests. git's default rename detection reports only the destination, hiding the
-    // old path; the selector passes --no-renames so the diff decomposes into delete(old)+add(new).
-    // other.txt (-> Aspire.Cli.Tests) is renamed to renamed.txt, which the map ignores so the new side
-    // adds nothing and does not trip the run-all fallback -- isolating the assertion to the old side:
-    // the deletion of other.txt must still select Aspire.Cli.Tests. Failure mode: dropping --no-renames
-    // makes git hide other.txt, so only the ignored renamed.txt is seen, the rule never fires, and the
-    // move silently skips its tests.
+    // that directory's tests. The selector diffs with `-M` (git rename detection on), which reports a
+    // rename as one "R###\told\tnew" record carrying both paths; the selector globs each side against
+    // every rule rather than only the new path. other.txt (-> Aspire.Cli.Tests) is renamed to
+    // renamed.txt, which the map ignores so the new side adds nothing and does not trip the run-all
+    // fallback -- isolating the assertion to the old side: the move of other.txt must still select
+    // Aspire.Cli.Tests. Failure mode: matching only the rename's new path would see just the ignored
+    // renamed.txt, the rule would never fire, and the move would silently skip its tests.
     [Fact]
     public void RenameOutOfMappedPathStillSelectsItsTests()
     {
@@ -1114,6 +1114,11 @@ public sealed class SelectTestsCliTests
     // this fix must avoid. So a content-heavy rewrite-plus-rename like this one is correctly NOT
     // exempted, and still forces ALL when the map's own rule/ignore entry for the old path moves to
     // the new name in the same commit -- this is expected, documented behavior, not a bug.
+    // Note: because old.txt never enters renameOldPathSet here, this test's assertion would hold even
+    // if the whole rename exemption were reverted -- it specifically pins that git's own threshold is
+    // respected (the exemption doesn't overreach to below-threshold changes), not that the exemption
+    // exists at all. RenameOldPathUnmatchedDoesNotForceRunAll and
+    // InPlaceRenameWithoutOwnMapEntryDoesNotForceRunAll are the tests that fail on that reversion.
     [Fact]
     public void RenameBelowGitSimilarityThresholdIsNotExemptedAndStillForcesRunAll()
     {
@@ -1178,14 +1183,15 @@ public sealed class SelectTestsCliTests
     }
 
     // Regression: a changed file whose repo-relative path contains non-ASCII bytes must still be
-    // attributed. git's default core.quotePath=true octal-escapes and double-quotes such paths
+    // attributed. git's default (text, non-"-z") output octal-escapes and double-quotes such paths
     // (e.g. "eng/\343\203\206.../trigger.cs"), which does not glob-equal the real path, so the rule
-    // never fires. The selector passes -c core.quotePath=false so git emits the literal UTF-8 path and
-    // the rule matches, putting Aspire.Hosting.Tests in the enforce props (asserted below). If the flag
-    // regressed, the mangled path would match no rule and fall to the run-all fallback, which writes NO
-    // restriction props -- so the assertion below would fail (props missing/empty) and catch it. A CJK
-    // dir name is used deliberately (no NFC/NFD decomposition) so the test is stable on case/normalizing
-    // filesystems while still exercising the non-ASCII path.
+    // never fires. The selector diffs with `-z` (NUL-terminated fields) instead, which git never quotes
+    // or escapes regardless of the path's contents, so the rule matches and Aspire.Hosting.Tests ends up
+    // in the enforce props (asserted below). If that regressed back to the default text format, the
+    // mangled path would match no rule and fall to the run-all fallback, which writes NO restriction
+    // props -- so the assertion below would fail (props missing/empty) and catch it. A CJK dir name is
+    // used deliberately (no NFC/NFD decomposition) so the test is stable on case/normalizing filesystems
+    // while still exercising the non-ASCII path.
     [Fact]
     public void NonAsciiChangedPathUnderAMappedDirStillSelectsItsTests()
     {
@@ -1206,6 +1212,48 @@ public sealed class SelectTestsCliTests
 
             WriteFile(repoRoot, "eng/テスト/trigger.cs", "// changed");
             GitCommitAll(repoRoot, "add a non-ASCII path under a mapped directory");
+            var headSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            var propsPath = Path.Combine(repoRoot, "BeforeBuildProps.props");
+            Selection.Run(Options(repoRoot, propsPath, from: baseSha, to: headSha, skipLayer1: true, enforce: true));
+
+            Assert.Contains("Aspire.Hosting.Tests", File.ReadAllText(propsPath));
+        });
+    }
+
+    // Regression: a same-commit rename whose path contains a literal tab byte must still be attributed
+    // via the rename exemption, not garbled by git's quoting. git's default (non-"-z") --name-status
+    // output C-style-escapes any path containing a tab, newline, double-quote, or backslash -- e.g. a
+    // literal tab in "old<TAB>name.txt" becomes the ASCII characters "old\tname.txt" (backslash + 't',
+    // not a real tab byte) inside surrounding double quotes. `-c core.quotePath=false` does NOT
+    // suppress this (it only stops the *non-ASCII-byte* octal-escaping, per
+    // NonAsciiChangedPathUnderAMappedDirStillSelectsItsTests above) -- only `-z` (NUL-terminated
+    // fields), which the selector now uses, makes git skip quoting entirely regardless of the path's
+    // bytes. This renames a tab-containing file whose OLD path has no map rule, moving its rule to the
+    // NEW path in the same commit -- the same shape as PR #19486 -- so a quoting regression would fail
+    // to glob-match the (mangled) new path's rule and force the run-all fallback instead of selecting
+    // Aspire.Hosting.Tests.
+    [Fact]
+    public void RenamedFileWithTabInPathIsAttributedCorrectlyNotGarbledByQuoting()
+    {
+        const string tab = "\t";
+        var map = $"""
+            version: 1
+            path_rules:
+              - paths: ["eng/new{tab}name.txt"]
+                targets: ["test:Aspire.Hosting.Tests"]
+            """;
+
+        WithGitRepo((repoRoot, output) =>
+        {
+            WriteFile(repoRoot, "Aspire.slnx", Slnx);
+            WriteFile(repoRoot, "map.yml", map);
+            WriteFile(repoRoot, $"eng/old{tab}name.txt", "v0");
+            GitCommitAll(repoRoot, "base");
+            var baseSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            RunGit(repoRoot, "mv", $"eng/old{tab}name.txt", $"eng/new{tab}name.txt");
+            GitCommitAll(repoRoot, "rename tab-containing file; map already targets the new name");
             var headSha = RunGit(repoRoot, "rev-parse", "HEAD");
 
             var propsPath = Path.Combine(repoRoot, "BeforeBuildProps.props");
