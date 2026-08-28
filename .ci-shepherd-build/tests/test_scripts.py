@@ -17,6 +17,7 @@ from ci_shepherd.history import HistoryError
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
 from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.refresh import RefreshPlan
+from ci_shepherd.review_selection import SELECTION_SCHEMA_VERSION
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1] / "scripts"
@@ -605,7 +606,8 @@ class PrototypeScriptTests(unittest.TestCase):
             "load each input file only once.",
             "Write only `agent-judgments.json`.",
             "A `watch` recommendation must name its `watchReason` and the exact evidence event that ends the watch.",
-            "cases whose evidence says review is required.",
+            "every first-seen issue, every direct or derived material change, and every seven-day scheduled reassessment.",
+            "`review-events.jsonl` records only cases actually handed to the assessment agent.",
             "Aggregate `clusterOccurrenceSummary` only when the listed relationship and failure symptoms are compatible.",
             "A generic exit code with unavailable logs is an investigation, not a watch.",
             "Two independent test failures on one day do not justify quarantine, but they do justify investigation.",
@@ -1216,7 +1218,7 @@ class PrototypeScriptTests(unittest.TestCase):
                     self.assertEqual(0, select_script.main())
 
             selection = json.loads(output_path.read_text())
-            self.assertEqual(1, selection["schemaVersion"])
+            self.assertEqual(SELECTION_SCHEMA_VERSION, selection["schemaVersion"])
             self.assertEqual(compact["snapshotId"], selection["snapshotId"])
             self.assertEqual(
                 len(compact["issues"]),

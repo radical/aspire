@@ -374,6 +374,62 @@ class HandoffTests(unittest.TestCase):
             {"kind": "pull-request", "number": 23}, changed["tasks"][0]["target"]
         )
 
+    def test_selects_an_unchanged_pull_request_when_reassessment_is_due(self) -> None:
+        previous = snapshot(current_state=green_state())
+
+        due = build_pull_request_handoff(
+            snapshot(current_state=green_state()),
+            previous_snapshot=previous,
+            due_pull_request_numbers=[23],
+            reassessment_context_by_pull_request={
+                23: {
+                    "lastReviewedAt": "2026-08-20T12:00:00Z",
+                    "reassessAt": "2026-08-27T12:00:00Z",
+                }
+            },
+        )
+
+        self.assertEqual("due", due["tasks"][0]["changeClass"])
+        self.assertEqual(
+            ["scheduled-reassessment"],
+            due["tasks"][0]["changeReasons"],
+        )
+        self.assertEqual(
+            "2026-08-20T12:00:00Z",
+            due["tasks"][0]["lastReviewedAt"],
+        )
+        self.assertEqual(
+            "2026-08-27T12:00:00Z",
+            due["tasks"][0]["reassessAt"],
+        )
+
+    def test_selects_a_legacy_pull_request_that_has_no_review_event(self) -> None:
+        previous = snapshot(current_state=green_state())
+
+        handoff = build_pull_request_handoff(
+            snapshot(current_state=green_state()),
+            previous_snapshot=previous,
+            initial_review_pull_request_numbers=[23],
+        )
+
+        self.assertEqual("first-seen", handoff["tasks"][0]["changeClass"])
+        self.assertEqual(
+            ["initial-assessment"],
+            handoff["tasks"][0]["changeReasons"],
+        )
+
+    def test_rejects_reassessment_context_for_an_unknown_pull_request(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "24"):
+            build_pull_request_handoff(
+                snapshot(current_state=green_state()),
+                reassessment_context_by_pull_request={
+                    24: {
+                        "lastReviewedAt": "2026-08-20T12:00:00Z",
+                        "reassessAt": "2026-08-27T12:00:00Z",
+                    }
+                },
+            )
+
     def test_selects_check_change_when_pull_request_timestamp_is_unchanged(self) -> None:
         pending = build_pull_request_current_state(
             {"head": {"sha": "abc"}},
@@ -394,6 +450,36 @@ class HandoffTests(unittest.TestCase):
             CHECKS_RED,
             changed["tasks"][0]["currentState"]["checks"]["state"],
         )
+        self.assertEqual(
+            [
+                "checks-changed",
+                "mergeability-changed",
+                "evidence-completeness-changed",
+            ],
+            changed["tasks"][0]["changeReasons"],
+        )
+        self.assertEqual(
+            "watch",
+            changed["tasks"][0]["previousDefaultDisposition"],
+        )
+
+    def test_does_not_invent_deltas_when_prior_current_state_was_not_collected(
+        self,
+    ) -> None:
+        previous = snapshot(current_state=green_state())
+        del previous["evidence"]["pr:23"]["payload"]["currentState"]
+
+        changed = build_pull_request_handoff(
+            snapshot(current_state=green_state()),
+            previous_snapshot=previous,
+        )
+
+        task = changed["tasks"][0]
+        self.assertEqual(
+            ["prior-current-state-unavailable"],
+            task["changeReasons"],
+        )
+        self.assertNotIn("previousDefaultDisposition", task)
 
     def test_green_checks_default_to_no_action_with_conclusive_dispositions(self) -> None:
         handoff = build_pull_request_handoff(snapshot(current_state=green_state()))
@@ -520,6 +606,24 @@ class JudgmentContractTests(unittest.TestCase):
 
         self.assertEqual(1, len(validated["pullRequests"]))
         self.assertEqual("investigate", validated["pullRequests"][0]["disposition"])
+
+    def test_rejects_malformed_transition_context_in_the_handoff(self) -> None:
+        handoff = self.handoff(current_state=green_state())
+        handoff["tasks"][0]["changeReasons"] = []
+
+        with self.assertRaisesRegex(ValidationError, "changeReasons"):
+            validate_pull_request_judgments(
+                handoff,
+                judgment_document(handoff),
+            )
+
+        handoff = self.handoff(current_state=green_state())
+        handoff["tasks"][0]["lastReviewedAt"] = "not-a-timestamp"
+        with self.assertRaisesRegex(ValidationError, "lastReviewedAt"):
+            validate_pull_request_judgments(
+                handoff,
+                judgment_document(handoff),
+            )
 
     def test_rejects_a_closure_disposition(self) -> None:
         handoff = self.handoff(current_state=green_state())

@@ -15,6 +15,7 @@ from ci_shepherd.history import load_current
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.poc import build_compact_poc_input
+from ci_shepherd.poc_state import load_review_schedule, record_review_events
 from ci_shepherd.pull_requests import build_pull_request_handoff
 from ci_shepherd.pull_requests import (
     build_pull_request_comment_proposals,
@@ -81,10 +82,15 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
 def _previous_context(
     state_dir: Path,
     repository: str,
-) -> tuple[set[int] | None, dict[str, Any] | None, dict[str, Any] | None]:
+) -> tuple[
+    set[int] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    list[dict[str, Any]] | None,
+]:
     current = load_current(state_dir, repository)
     if current is None:
-        return None, None, None
+        return None, None, None, None
     known = {
         issue["issueNumber"]
         for issue in current.previous_decisions
@@ -100,7 +106,7 @@ def _previous_context(
         if previous_prepared_path.is_file()
         else None
     )
-    return known, previous_snapshot, previous_prepared
+    return known, previous_snapshot, previous_prepared, current.previous_decisions
 
 
 def _refresh_issue_numbers(snapshot: Mapping[str, Any], field: str) -> list[int]:
@@ -162,10 +168,12 @@ def start_cycle(
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     work_dir.chmod(0o700)
 
-    known_issue_numbers, previous_snapshot, previous_prepared = _previous_context(
-        state_dir,
-        repository,
-    )
+    (
+        known_issue_numbers,
+        previous_snapshot,
+        previous_prepared,
+        previous_judgments,
+    ) = _previous_context(state_dir, repository)
     target_input = work_dir / "input.json"
     if input_path is None:
         collect(
@@ -187,24 +195,94 @@ def start_cycle(
     validate_snapshot(snapshot)
     if str(snapshot.get("repository", "")).casefold() != repository.casefold():
         raise ValueError("Snapshot repository does not match the requested repository.")
+    open_issue_numbers = [
+        number
+        for number in snapshot.get("openIssues", [])
+        if isinstance(number, int) and not isinstance(number, bool)
+    ]
+    open_pull_request_numbers = [
+        number
+        for number in snapshot.get("openPullRequests", [])
+        if isinstance(number, int) and not isinstance(number, bool)
+    ]
+    review_schedule = load_review_schedule(
+        state_dir,
+        repository,
+        str(snapshot["collectedAt"]),
+        issue_numbers=open_issue_numbers,
+        pull_request_numbers=open_pull_request_numbers,
+    )
+    issue_reassessment_context = {
+        int(number): context
+        for number, context in review_schedule["issues"].items()
+    }
+    pull_request_reassessment_context = {
+        int(number): context
+        for number, context in review_schedule["pullRequests"].items()
+    }
+    due_issue_numbers = set(review_schedule["dueIssueNumbers"])
+    due_pull_request_numbers = set(review_schedule["duePullRequestNumbers"])
+    reviewed_known_issue_numbers = (
+        None
+        if known_issue_numbers is None
+        else known_issue_numbers & set(issue_reassessment_context)
+    )
+    initial_review_pull_request_numbers: set[int] = set()
+    if previous_snapshot is not None:
+        previous_pull_request_numbers = {
+            number
+            for number in previous_snapshot.get("openPullRequests", [])
+            if isinstance(number, int) and not isinstance(number, bool)
+        }
+        initial_review_pull_request_numbers = (
+            set(open_pull_request_numbers)
+            & previous_pull_request_numbers
+            - set(pull_request_reassessment_context)
+        )
 
     prepared = prepare_assessment(snapshot)
     compact = build_compact_poc_input(prepared)
-    changed_issue_numbers = set(
+    source_changed_issue_numbers = set(
         _refresh_issue_numbers(snapshot, "changedIssueNumbers")
     )
-    changed_issue_numbers.update(
-        _changed_prepared_issues(prepared, previous_prepared)
+    derived_changed_issue_numbers = _changed_prepared_issues(
+        prepared,
+        previous_prepared,
     )
+    changed_issue_numbers = (
+        source_changed_issue_numbers | derived_changed_issue_numbers
+    )
+    change_reasons_by_issue = {
+        issue_number: [
+            *(
+                ["issue-source-updated"]
+                if issue_number in source_changed_issue_numbers
+                else []
+            ),
+            *(
+                ["derived-assessment-changed"]
+                if issue_number in derived_changed_issue_numbers
+                else []
+            ),
+        ]
+        for issue_number in changed_issue_numbers
+    }
     selection = build_review_selection(
         compact,
         new_issue_numbers=_refresh_issue_numbers(snapshot, "newIssueNumbers"),
         changed_issue_numbers=changed_issue_numbers,
-        known_issue_numbers=known_issue_numbers,
+        due_issue_numbers=due_issue_numbers,
+        known_issue_numbers=reviewed_known_issue_numbers,
+        change_reasons_by_issue=change_reasons_by_issue,
+        previous_judgments=previous_judgments,
+        reassessment_context_by_issue=issue_reassessment_context,
     )
     pull_request_handoff = build_pull_request_handoff(
         snapshot,
         previous_snapshot=previous_snapshot,
+        initial_review_pull_request_numbers=initial_review_pull_request_numbers,
+        due_pull_request_numbers=due_pull_request_numbers,
+        reassessment_context_by_pull_request=pull_request_reassessment_context,
     )
     selected_issue_numbers = {
         int(item["issueNumber"])
@@ -390,6 +468,27 @@ def finish_cycle(
                 for path in (work_dir / "api-calls.jsonl", work_dir / "progress.json")
                 if path.is_file()
             ],
+        ],
+    )
+    review_selection = _load_json(paths["selection"], "review selection")
+    record_review_events(
+        state_dir,
+        repository,
+        str(snapshot["collectedAt"]),
+        issue_numbers=[
+            int(entry["issueNumber"])
+            for entry in review_selection["selected"]
+            if isinstance(entry, Mapping)
+            and isinstance(entry.get("issueNumber"), int)
+            and not isinstance(entry.get("issueNumber"), bool)
+        ],
+        pull_request_numbers=[
+            int(task["target"]["number"])
+            for task in pull_request_handoff["tasks"]
+            if isinstance(task, Mapping)
+            and isinstance(task.get("target"), Mapping)
+            and isinstance(task["target"].get("number"), int)
+            and not isinstance(task["target"].get("number"), bool)
         ],
     )
     completed = {

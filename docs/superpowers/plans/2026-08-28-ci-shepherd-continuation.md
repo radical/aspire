@@ -16,8 +16,14 @@ Current implementation and evidence are recorded in
 - [x] Exclude Copilot-assigned items without using assignment as a selection
   signal.
 - [x] Refresh factual evidence cheaply and reuse unchanged evidence.
-- [x] Send only new, changed, ambiguous, or review-required issue cases to the
-  assessment model.
+- [x] Send every first-seen or materially changed issue case to the assessment
+  model, including changed cases whose deterministic default is unambiguous.
+- [x] Reassess unchanged issue and pull-request cases after seven days without a
+  review.
+- [x] Persist actual review events separately so evidence-only refreshes do not
+  reset the reassessment clock.
+- [x] Carry structured wake reasons, prior buckets, and review timing into the
+  bounded handoff.
 - [x] Handle pull requests conservatively and suppress low-value watch
   comments.
 - [x] Preserve a deterministic full default document and accept sparse model
@@ -47,7 +53,8 @@ Success criteria:
 - Open-bot scan is `complete`, or a non-complete state is prominent.
 - Every audited GitHub request is `GET`.
 - No action result is written.
-- Stable issues and pull requests are omitted from model input.
+- Stable reviewed issues and pull requests are omitted from model input until
+  they change or reach the seven-day reassessment deadline.
 - The report, proposals, and dry-run regenerate deterministically.
 
 ## Phase 2: Measure Read-Only Quality
@@ -58,6 +65,8 @@ Run the read-only workflow for several days before approving effects. Track:
 - collection completeness and errors;
 - API call count by endpoint family;
 - selected versus omitted issue and pull-request counts;
+- reassessments caused by direct source changes, derived evidence changes, and
+  the seven-day backstop;
 - deterministic defaults versus agent overrides;
 - proposal count and proposal-body churn;
 - cases repeatedly classified `investigate` without a concrete next question;
@@ -72,6 +81,8 @@ Exit criteria:
 - Incremental runs remain materially cheaper than the bootstrap run.
 - Stable watch cases do not produce repeated comment edits.
 - New recurring failures transition predictably.
+- Unchanged cases are reviewed at most once per seven days, and a completed
+  review resets that deadline.
 - Closure proposals cite current deterministic recovery or duplicate evidence.
 - Human escalations contain one answerable question and a routing hint.
 

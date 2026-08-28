@@ -21,6 +21,12 @@ The governing behavior and safety contract remains
 - Bounded current-state refresh for the 100 most recently updated primary pull
   requests.
 - Deterministic issue defaults plus selected-only low-cost agent input.
+- Initial cheap assessment for every first-seen nonsuperseded case.
+- Fresh assessment for every directly or indirectly changed case, even when the
+  new deterministic default is otherwise unambiguous.
+- Seven-day reassessment backstop for unchanged issues and pull requests.
+- Structured transition context containing the wake reason, prior issue bucket,
+  prior pull-request default, and prior review timing.
 - Sparse issue and pull-request overrides; silence preserves the deterministic
   default.
 - Resumable `cycle.py start` and `cycle.py finish` orchestration.
@@ -43,14 +49,16 @@ The governing behavior and safety contract remains
 The final repository validation passed:
 
 ```text
-864 tests passed
+880 tests passed
 python3 -m compileall passed
 git diff --check passed
 ```
 
-Two fresh Opus 5 reviewers independently rechecked the implementation. Their
-final passes reported no blockers after reproducing the legacy-comment,
-run-recovery, pull-request-budget, dry-run, and failed-check-fetch cases.
+Two Opus 5 reviewers independently rechecked the implementation. The latest
+pass additionally reproduced legacy-state migration, missing prior
+pull-request evidence, seven-day reassessment, and cross-version cycle finish
+behavior. The actionable migration and evidence-provenance findings were fixed;
+the synchronized first weekly cohort remains a documented rollout measurement.
 
 ### Live read-only cycle
 
@@ -115,8 +123,14 @@ state/
   runs/<cycle-id>/
   ledgers/fingerprints.jsonl
   ledgers/case-events.jsonl
+  ledgers/review-events.jsonl
   action-results.json
 ```
+
+`review-events.jsonl` advances only when a selected case finishes assessment.
+An unchanged evidence refresh does not postpone the next review. State created
+before this ledger existed receives one bootstrap assessment for each current
+nonsuperseded case, after which the normal seven-day schedule applies.
 
 Only one cycle writer may use a state directory at a time. The local state has
 no remote backup or multi-machine reconciliation.
@@ -150,16 +164,22 @@ implementation is present in the workflow checkout.
   baseline.
 - Ledger/state operation assumes one writer. Parallel scheduled or manual
   cycles against the same state directory are unsupported.
+- The seven-day reassessment interval is intentionally fixed while the read-only
+  trial establishes whether it is too frequent or too sparse.
+- A bootstrap review gives the initial inventory one shared deadline, so the
+  first weekly reassessment can be a large cohort. This preserves the exact
+  seven-day backstop; the read-only trial should measure whether model capacity
+  requires a later deterministic distribution policy.
 - Local state is not durable across machines. GitHub-hosted scheduling remains
   deferred until remote state ownership is designed.
 - The current live evidence includes one unavailable workflow log and several
   explicit reference-budget warnings. These are visible in the report rather
   than converted into success-shaped defaults.
 
-## Repository State
+## Implementation Baseline
 
-The worktree was clean after commit `443e989126`. Earlier implementation
-commits on the branch are:
+The main lifecycle implementation was committed as `443e989126`. Earlier
+implementation commits on the branch are:
 
 ```text
 66ff7e83cd feat(ci-shepherd): persist lifecycle replay state

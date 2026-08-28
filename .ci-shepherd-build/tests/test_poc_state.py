@@ -8,7 +8,9 @@ from tempfile import TemporaryDirectory
 from ci_shepherd.poc_state import (
     case_key,
     load_latest_case_state,
+    load_review_schedule,
     record_poc_ledgers,
+    record_review_events,
 )
 from ci_shepherd.replay import replay_lifecycle_scenario
 
@@ -64,6 +66,75 @@ def judgments(snapshot_id: str, disposition: str) -> dict[str, object]:
 
 
 class PocStateTests(unittest.TestCase):
+    def test_schedules_issue_and_pull_request_reassessment_after_seven_days(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            appended = record_review_events(
+                state,
+                "owner/repo",
+                "2026-08-20T12:00:00Z",
+                issue_numbers=[1],
+                pull_request_numbers=[2],
+            )
+
+            before_due = load_review_schedule(
+                state,
+                "owner/repo",
+                "2026-08-27T11:59:59Z",
+                issue_numbers=[1],
+                pull_request_numbers=[2],
+            )
+            due = load_review_schedule(
+                state,
+                "owner/repo",
+                "2026-08-27T12:00:00Z",
+                issue_numbers=[1],
+                pull_request_numbers=[2],
+            )
+
+            self.assertEqual(2, len(appended))
+            self.assertEqual([], before_due["dueIssueNumbers"])
+            self.assertEqual([], before_due["duePullRequestNumbers"])
+            self.assertEqual([1], due["dueIssueNumbers"])
+            self.assertEqual([2], due["duePullRequestNumbers"])
+            self.assertEqual(
+                "2026-08-27T12:00:00Z",
+                due["issues"]["1"]["reassessAt"],
+            )
+
+    def test_preserves_review_events_after_an_interrupted_trailing_newline(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_review_events(
+                state,
+                "owner/repo",
+                "2026-08-20T12:00:00Z",
+                issue_numbers=[1],
+                pull_request_numbers=[],
+            )
+            ledger = state / "ledgers" / "review-events.jsonl"
+            ledger.write_bytes(ledger.read_bytes().rstrip(b"\n"))
+
+            record_review_events(
+                state,
+                "owner/repo",
+                "2026-08-21T12:00:00Z",
+                issue_numbers=[1],
+                pull_request_numbers=[],
+            )
+            schedule = load_review_schedule(
+                state,
+                "owner/repo",
+                "2026-08-28T12:00:00Z",
+                issue_numbers=[1],
+                pull_request_numbers=[],
+            )
+
+            self.assertEqual(
+                "2026-08-21T12:00:00Z",
+                schedule["issues"]["1"]["lastReviewedAt"],
+            )
+
     def test_loads_latest_case_state_for_repository(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)

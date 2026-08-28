@@ -6,10 +6,10 @@ text. Sending every issue to a model each cycle therefore pays a per-issue
 cost to reproduce a default the pipeline already computed, and it widens the
 surface an agent can push an unsupported conclusion through.
 
-This module narrows the handoff to cases that are both *eligible* (the
-deterministic default is ambiguous or already flagged ``reviewRequired``) and
-*moving* (new, changed, or seen for the first time). Everything else keeps its
-deterministic default without a model call.
+This module narrows the handoff to cases that need a fresh judgment: every
+first-seen case, every materially changed case, and every case whose periodic
+reassessment is due. Stable previously reviewed cases keep their deterministic
+default without a model call.
 
 The selection is also the merge contract: each selected case carries the exact
 set of dispositions it can legitimately project into, so an override that
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any, Mapping
 
 from ci_shepherd.models import EVIDENCE_REQUEST_DECISION_GATES, ValidationError
@@ -34,7 +35,7 @@ from ci_shepherd.poc import (
 from ci_shepherd.poc_history import compute_fingerprint
 
 
-SELECTION_SCHEMA_VERSION = 1
+SELECTION_SCHEMA_VERSION = 2
 
 # Dispositions an agent may always choose for a selected case. `review-close`
 # and `ping-human` are deliberately absent: both are added per case only when
@@ -60,7 +61,13 @@ def build_review_selection(
     *,
     new_issue_numbers: Iterable[int] = (),
     changed_issue_numbers: Iterable[int] = (),
+    due_issue_numbers: Iterable[int] = (),
     known_issue_numbers: Iterable[int] | None = None,
+    change_reasons_by_issue: Mapping[int, Iterable[str]] | None = None,
+    previous_judgments: object | None = None,
+    reassessment_context_by_issue: Mapping[
+        int, Mapping[str, str]
+    ] | None = None,
 ) -> dict[str, Any]:
     """Choose the cases worth a model call and state exactly what to answer.
 
@@ -81,6 +88,22 @@ def build_review_selection(
     known = _issue_number_set(issue_numbers, known_issue_numbers, "knownIssueNumbers")
     new = _issue_number_set(issue_numbers, new_issue_numbers, "newIssueNumbers")
     changed = _issue_number_set(issue_numbers, changed_issue_numbers, "changedIssueNumbers")
+    due = _issue_number_set(issue_numbers, due_issue_numbers, "dueIssueNumbers")
+    change_reasons = _change_reasons_by_issue(
+        issue_numbers,
+        new=new,
+        changed=changed,
+        due=due,
+        supplied=change_reasons_by_issue,
+    )
+    previous_by_issue = _previous_judgments_by_issue(previous_judgments)
+    reassessment_context = reassessment_context_by_issue or {}
+    unknown_reassessment_context = set(reassessment_context) - set(issue_numbers)
+    if unknown_reassessment_context:
+        raise ValidationError(
+            "Reassessment context includes unknown issue "
+            f"{min(unknown_reassessment_context)}."
+        )
 
     selected: list[dict[str, Any]] = []
     omitted: list[dict[str, Any]] = []
@@ -89,6 +112,7 @@ def build_review_selection(
             issue_number,
             new=new,
             changed=changed,
+            due=due,
             known=known,
             known_supplied=known_issue_numbers is not None,
         )
@@ -99,16 +123,25 @@ def build_review_selection(
             )
             continue
 
-        reasons = _review_reasons(issue)
-        selected.append(
-            {
-                "issueNumber": issue_number,
-                "changeClass": change_class,
-                "reviewReasons": list(reasons),
-                "allowedDispositions": _allowed_dispositions(issue),
-                "question": _build_question(issue, issue_number),
-            }
-        )
+        reasons = _review_reasons(issue, change_class)
+        selected_case: dict[str, Any] = {
+            "issueNumber": issue_number,
+            "changeClass": change_class,
+            "changeReasons": change_reasons[issue_number],
+            "reviewReasons": list(reasons),
+            "allowedDispositions": _allowed_dispositions(issue),
+            "question": _build_question(issue, issue_number),
+        }
+        previous = previous_by_issue.get(issue_number)
+        if previous is not None:
+            selected_case.update(previous)
+        context = reassessment_context.get(issue_number)
+        if context is not None:
+            for field in ("lastReviewedAt", "reassessAt"):
+                value = context.get(field)
+                if isinstance(value, str) and value:
+                    selected_case[field] = value
+        selected.append(selected_case)
 
     return {
         "schemaVersion": SELECTION_SCHEMA_VERSION,
@@ -133,8 +166,9 @@ def selected_issue_numbers(selection: object) -> set[int]:
 
 def validate_review_selection(selection: object) -> dict[str, Any]:
     document = _require_mapping(selection, "review selection")
-    if document.get("schemaVersion") != SELECTION_SCHEMA_VERSION:
-        raise ValidationError("Review selection schemaVersion must be 1.")
+    schema_version = document.get("schemaVersion")
+    if schema_version not in {1, SELECTION_SCHEMA_VERSION}:
+        raise ValidationError("Review selection schemaVersion must be 1 or 2.")
     _require_nonempty_string(document, "snapshotId")
 
     seen: set[int] = set()
@@ -155,6 +189,46 @@ def validate_review_selection(selection: object) -> dict[str, Any]:
                     f"Selected case {issue_number} allows unsupported disposition "
                     f"{disposition}."
                 )
+        change_reasons = selected_entry.get("changeReasons")
+        if not (schema_version == 1 and change_reasons is None):
+            if (
+                not isinstance(change_reasons, list)
+                or not change_reasons
+                or not all(
+                    isinstance(reason, str) and reason.strip()
+                    for reason in change_reasons
+                )
+            ):
+                raise ValidationError(
+                    f"Selected case {issue_number} changeReasons must contain "
+                    "nonempty strings."
+                )
+        previous_disposition = selected_entry.get("previousDisposition")
+        if previous_disposition is not None and (
+            not isinstance(previous_disposition, str)
+            or not previous_disposition.strip()
+        ):
+            raise ValidationError(
+                f"Selected case {issue_number} previousDisposition must be "
+                "a nonempty string."
+            )
+        previous_category = selected_entry.get("previousCategory")
+        if previous_category is not None and (
+            not isinstance(previous_category, str)
+            or not previous_category.strip()
+        ):
+            raise ValidationError(
+                f"Selected case {issue_number} previousCategory must be "
+                "a nonempty string."
+            )
+        for field in ("lastReviewedAt", "reassessAt"):
+            value = selected_entry.get(field)
+            if value is not None:
+                _validate_selection_timestamp(
+                    value,
+                    issue_number=issue_number,
+                    field=field,
+                )
     for entry in _require_list(document, "omitted"):
         omitted_entry = _require_mapping(entry, "omitted case")
         issue_number = _require_positive_int(omitted_entry, "issueNumber")
@@ -165,6 +239,28 @@ def validate_review_selection(selection: object) -> dict[str, Any]:
         seen.add(issue_number)
         _require_nonempty_string(omitted_entry, "reason")
     return dict(document)
+
+
+def _validate_selection_timestamp(
+    value: object,
+    *,
+    issue_number: int,
+    field: str,
+) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValidationError(
+            f"Selected case {issue_number} {field} must be an ISO 8601 timestamp."
+        )
+    try:
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValidationError(
+            f"Selected case {issue_number} {field} must be an ISO 8601 timestamp."
+        ) from error
+    if instant.tzinfo is None:
+        raise ValidationError(
+            f"Selected case {issue_number} {field} must include a UTC offset."
+        )
 
 
 def merge_selected_poc_judgments(
@@ -285,6 +381,7 @@ def _change_class(
     *,
     new: set[int],
     changed: set[int],
+    due: set[int],
     known: set[int],
     known_supplied: bool,
 ) -> str:
@@ -292,9 +389,96 @@ def _change_class(
         return "new"
     if issue_number in changed:
         return "changed"
+    if issue_number in due:
+        return "due"
     if not known_supplied or issue_number not in known:
         return "first-seen"
     return "unchanged"
+
+
+def _change_reasons_by_issue(
+    issue_numbers: list[int],
+    *,
+    new: set[int],
+    changed: set[int],
+    due: set[int],
+    supplied: Mapping[int, Iterable[str]] | None,
+) -> dict[int, list[str]]:
+    issue_number_set = set(issue_numbers)
+    reasons_by_issue: dict[int, set[str]] = {
+        issue_number: set()
+        for issue_number in issue_numbers
+    }
+    if supplied is not None:
+        for issue_number, raw_reasons in supplied.items():
+            if issue_number not in issue_number_set:
+                raise ValidationError(
+                    f"Change reasons include unknown issue {issue_number}."
+                )
+            if isinstance(raw_reasons, str):
+                raise ValidationError(
+                    f"Change reasons for issue {issue_number} must be an iterable "
+                    "of strings."
+                )
+            for reason in raw_reasons:
+                if not isinstance(reason, str) or not reason.strip():
+                    raise ValidationError(
+                        f"Change reasons for issue {issue_number} must contain "
+                        "nonempty strings."
+                    )
+                reasons_by_issue[issue_number].add(reason.strip())
+    for issue_number in new:
+        reasons_by_issue[issue_number].add("new-issue")
+    for issue_number in changed:
+        if not reasons_by_issue[issue_number]:
+            reasons_by_issue[issue_number].add("material-change")
+    for issue_number in due:
+        reasons_by_issue[issue_number].add("scheduled-reassessment")
+    for issue_number in issue_numbers:
+        if not reasons_by_issue[issue_number]:
+            reasons_by_issue[issue_number].add("first-seen")
+    return {
+        issue_number: sorted(reasons)
+        for issue_number, reasons in reasons_by_issue.items()
+    }
+
+
+def _previous_judgments_by_issue(
+    previous_judgments: object | None,
+) -> dict[int, dict[str, str]]:
+    if previous_judgments is None:
+        return {}
+    if not isinstance(previous_judgments, list):
+        raise ValidationError("Previous judgments must be a list.")
+    previous_by_issue: dict[int, dict[str, str]] = {}
+    for raw_judgment in previous_judgments:
+        judgment = _require_mapping(raw_judgment, "previous judgment")
+        issue_number = _require_positive_int(judgment, "issueNumber")
+        if issue_number in previous_by_issue:
+            raise ValidationError(
+                f"Duplicate previous judgment for issue {issue_number}."
+            )
+        summary: dict[str, str] = {}
+        category = judgment.get("category")
+        if isinstance(category, str) and category.strip():
+            summary["previousCategory"] = category
+        raw_recommendations = judgment.get("recommendations")
+        if raw_recommendations is None:
+            previous_by_issue[issue_number] = summary
+            continue
+        if not isinstance(raw_recommendations, list):
+            raise ValidationError("recommendations must be an array.")
+        recommendations = raw_recommendations
+        if recommendations:
+            recommendation = _require_mapping(
+                recommendations[0],
+                "previous recommendation",
+            )
+            disposition = recommendation.get("disposition")
+            if isinstance(disposition, str) and disposition.strip():
+                summary["previousDisposition"] = disposition
+        previous_by_issue[issue_number] = summary
+    return previous_by_issue
 
 
 def _omission_reason(issue: Mapping[str, Any], change_class: str) -> str | None:
@@ -307,6 +491,8 @@ def _omission_reason(issue: Mapping[str, Any], change_class: str) -> str | None:
         # so selecting one would spend a model call on an override that can only
         # be discarded.
         return _OMISSION_SUPERSEDED
+    if change_class in {"first-seen", "new", "changed", "due"}:
+        return None
     if not _is_eligible(issue):
         return _OMISSION_NOT_ELIGIBLE
     if change_class == "unchanged":
@@ -323,9 +509,18 @@ def _is_eligible(issue: Mapping[str, Any]) -> bool:
     )
 
 
-def _review_reasons(issue: Mapping[str, Any]) -> tuple[str, ...]:
+def _review_reasons(
+    issue: Mapping[str, Any],
+    change_class: str,
+) -> tuple[str, ...]:
     default_judgment = _require_mapping(issue.get("defaultJudgment"), "default judgment")
     reasons: list[str] = []
+    if change_class in {"first-seen", "new"}:
+        reasons.append("initial-assessment")
+    if change_class == "changed":
+        reasons.append("material-change")
+    if change_class == "due":
+        reasons.append("scheduled-reassessment")
     if issue.get("reviewRequired") is True:
         reasons.append("review-required")
     if default_judgment.get("category") == "unknown":

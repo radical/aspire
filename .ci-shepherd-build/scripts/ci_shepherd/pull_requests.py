@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from .models import ValidationError, validate_snapshot
@@ -491,6 +492,11 @@ def build_pull_request_handoff(
     snapshot: object,
     *,
     previous_snapshot: object | None = None,
+    initial_review_pull_request_numbers: Sequence[int] = (),
+    due_pull_request_numbers: Sequence[int] = (),
+    reassessment_context_by_pull_request: Mapping[
+        int, Mapping[str, str]
+    ] | None = None,
 ) -> dict[str, object]:
     validate_snapshot(snapshot)
     if not isinstance(snapshot, Mapping):
@@ -518,15 +524,47 @@ def build_pull_request_handoff(
     if not isinstance(evidence, Mapping):
         raise TypeError("Snapshot evidence must be an object.")
 
+    pull_requests_by_number = _pull_requests_by_number(snapshot)
+    due = {
+        number
+        for number in due_pull_request_numbers
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0
+    }
+    initial_review = {
+        number
+        for number in initial_review_pull_request_numbers
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0
+    }
+    unknown_initial_review = initial_review - set(pull_requests_by_number)
+    if unknown_initial_review:
+        raise ValidationError(
+            "Initial review pull requests include unknown pull request "
+            f"{min(unknown_initial_review)}."
+        )
+    unknown_due = due - set(pull_requests_by_number)
+    if unknown_due:
+        raise ValidationError(
+            f"Due pull requests include unknown pull request {min(unknown_due)}."
+        )
+    reassessment_context = reassessment_context_by_pull_request or {}
+    unknown_reassessment_context = set(reassessment_context) - set(
+        pull_requests_by_number
+    )
+    if unknown_reassessment_context:
+        raise ValidationError(
+            "Reassessment context includes unknown pull request "
+            f"{min(unknown_reassessment_context)}."
+        )
+
     tasks: list[dict[str, object]] = []
     excluded: list[dict[str, object]] = []
-    for number, pull_request in sorted(_pull_requests_by_number(snapshot).items()):
+    for number, pull_request in sorted(pull_requests_by_number.items()):
         if pull_request_assigned_to_copilot(pull_request):
             # Copilot owns the change; commenting would interrupt its own loop.
             excluded.append({"number": number, "reason": "assigned-to-copilot"})
             continue
         previous = previous_by_number.get(number)
-        if (
+        unchanged = (
             previous is not None
             and _pull_request_change_key(
                 previous,
@@ -536,7 +574,8 @@ def build_pull_request_handoff(
                 pull_request,
                 evidence.get(f"pr:{number}"),
             )
-        ):
+        )
+        if unchanged and number not in due and number not in initial_review:
             excluded.append({"number": number, "reason": "unchanged-stable"})
             continue
 
@@ -546,6 +585,15 @@ def build_pull_request_handoff(
         evidence_status = (
             "complete" if current_state["complete"] else "incomplete"
         )
+        previous_record = (
+            previous_evidence.get(evidence_id)
+            if previous is not None
+            else None
+        )
+        previous_state = _task_current_state(previous_record)
+        previous_state_available = _has_pull_request_current_state(
+            previous_record
+        )
         allowed = _allowed_pull_request_dispositions(current_state)
         task: dict[str, object] = {
             "target": {"kind": "pull-request", "number": number},
@@ -554,7 +602,15 @@ def build_pull_request_handoff(
             "author": pull_request.get("author"),
             "labels": list(pull_request.get("labels", [])),
             "selectionReasons": list(pull_request.get("selectionReasons", [])),
-            "changeClass": "new" if previous is None else "changed",
+            "changeClass": (
+                "new"
+                if previous is None
+                else "first-seen"
+                if unchanged and number in initial_review
+                else "due"
+                if unchanged and number in due
+                else "changed"
+            ),
             "evidenceIds": [evidence_id],
             "evidenceStatus": evidence_status,
             "currentState": current_state,
@@ -584,6 +640,33 @@ def build_pull_request_handoff(
             ],
             "allowedDispositions": allowed,
         }
+        if previous is None:
+            task["changeReasons"] = ["new-pull-request"]
+        elif unchanged and number in initial_review:
+            task["changeReasons"] = ["initial-assessment"]
+        elif unchanged and number in due:
+            task["changeReasons"] = ["scheduled-reassessment"]
+        else:
+            task["changeReasons"] = _pull_request_change_reasons(
+                previous,
+                pull_request,
+                previous_state,
+                current_state,
+                previous_state_available=previous_state_available,
+            )
+        if previous is not None and previous_state_available:
+            task["previousDefaultDisposition"] = _default_pull_request_judgment(
+                number,
+                previous_state,
+                evidence_id,
+                _allowed_pull_request_dispositions(previous_state),
+            )["disposition"]
+        context = reassessment_context.get(number)
+        if context is not None:
+            for field in ("lastReviewedAt", "reassessAt"):
+                value = context.get(field)
+                if isinstance(value, str) and value:
+                    task[field] = value
         task["humanDecision"] = pull_request_human_decision_reason(task)
         task["defaultJudgment"] = _default_pull_request_judgment(
             number,
@@ -613,6 +696,50 @@ def _pull_request_change_key(
         "assignees": pull_request.get("assignees"),
         "currentState": _task_current_state(evidence_record),
     }
+
+
+def _pull_request_change_reasons(
+    previous_pull_request: Mapping[str, Any],
+    pull_request: Mapping[str, Any],
+    previous_state: Mapping[str, Any],
+    current_state: Mapping[str, Any],
+    *,
+    previous_state_available: bool,
+) -> list[str]:
+    reasons: list[str] = []
+    for field, reason in (
+        ("updatedAt", "pull-request-updated"),
+        ("title", "title-changed"),
+        ("labels", "labels-changed"),
+        ("assignees", "assignees-changed"),
+    ):
+        if previous_pull_request.get(field) != pull_request.get(field):
+            reasons.append(reason)
+    if not previous_state_available:
+        reasons.append("prior-current-state-unavailable")
+        return list(dict.fromkeys(reasons))
+    for field, reason in (
+        ("headSha", "head-changed"),
+        ("checks", "checks-changed"),
+        ("review", "review-changed"),
+        ("mergeable", "mergeability-changed"),
+        ("mergeableState", "mergeability-changed"),
+        ("complete", "evidence-completeness-changed"),
+        ("incompleteReasons", "evidence-completeness-changed"),
+    ):
+        if previous_state.get(field) != current_state.get(field):
+            reasons.append(reason)
+    return list(dict.fromkeys(reasons)) or ["material-change"]
+
+
+def _has_pull_request_current_state(record: object) -> bool:
+    if not isinstance(record, Mapping) or record.get("availability") != "available":
+        return False
+    payload = record.get("payload")
+    return (
+        isinstance(payload, Mapping)
+        and isinstance(payload.get("currentState"), Mapping)
+    )
 
 
 def _task_current_state(record: object) -> dict[str, Any]:
@@ -1023,6 +1150,37 @@ def _validate_handoff(handoff: object) -> dict[str, Any]:
         if number in seen:
             raise ValidationError(f"Duplicate pull request task: {number}.")
         seen.add(number)
+        change_class = task.get("changeClass")
+        if change_class not in {"new", "first-seen", "changed", "due"}:
+            raise ValidationError(
+                f"Pull request task {number} changeClass is unsupported."
+            )
+        change_reasons = task.get("changeReasons")
+        if (
+            not isinstance(change_reasons, list)
+            or not change_reasons
+            or not all(
+                isinstance(reason, str) and reason.strip()
+                for reason in change_reasons
+            )
+        ):
+            raise ValidationError(
+                f"Pull request task {number} changeReasons must contain "
+                "nonempty strings."
+            )
+        previous_disposition = task.get("previousDefaultDisposition")
+        if (
+            previous_disposition is not None
+            and previous_disposition not in PULL_REQUEST_DISPOSITIONS
+        ):
+            raise ValidationError(
+                f"Pull request task {number} previousDefaultDisposition "
+                "is unsupported."
+            )
+        for field in ("lastReviewedAt", "reassessAt"):
+            value = task.get(field)
+            if value is not None:
+                _validate_handoff_timestamp(value, number=number, field=field)
         tasks.append(task)
     excluded: list[Mapping[str, Any]] = []
     for raw_entry in raw_excluded:
@@ -1047,6 +1205,23 @@ def _validate_handoff(handoff: object) -> dict[str, Any]:
         "tasks": tasks,
         "excluded": excluded,
     }
+
+
+def _validate_handoff_timestamp(value: object, *, number: int, field: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValidationError(
+            f"Pull request task {number} {field} must be an ISO 8601 timestamp."
+        )
+    try:
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValidationError(
+            f"Pull request task {number} {field} must be an ISO 8601 timestamp."
+        ) from error
+    if instant.tzinfo is None:
+        raise ValidationError(
+            f"Pull request task {number} {field} must include a UTC offset."
+        )
 
 
 def _require_mapping(value: object, label: str) -> Mapping[str, Any]:

@@ -80,7 +80,7 @@ class ReviewSelectionTests(unittest.TestCase):
         self.assertEqual(set(), selected_issue_numbers(selection))
         self.assertEqual("unchanged-stable", _omitted(selection, 101)["reason"])
 
-    def test_omits_changed_cases_that_do_not_require_review(self) -> None:
+    def test_selects_changed_cases_even_when_the_default_is_unambiguous(self) -> None:
         compact = _compact([_stable_issue(101)])
         self.assertFalse(compact["issues"][0]["reviewRequired"])
 
@@ -90,16 +90,21 @@ class ReviewSelectionTests(unittest.TestCase):
             known_issue_numbers=[101],
         )
 
-        self.assertEqual(set(), selected_issue_numbers(selection))
-        self.assertEqual("not-review-required", _omitted(selection, 101)["reason"])
+        self.assertEqual({101}, selected_issue_numbers(selection))
+        self.assertEqual("changed", _selected(selection, 101)["changeClass"])
+        self.assertIn("material-change", _selected(selection, 101)["reviewReasons"])
 
-    def test_selects_every_eligible_case_when_no_prior_state_is_known(self) -> None:
+    def test_selects_every_case_when_no_prior_state_is_known(self) -> None:
         compact = _compact([_investigate_issue(101), _stable_issue(102)])
 
         selection = build_review_selection(compact)
 
-        self.assertEqual({101}, selected_issue_numbers(selection))
+        self.assertEqual({101, 102}, selected_issue_numbers(selection))
         self.assertEqual("first-seen", _selected(selection, 101)["changeClass"])
+        self.assertIn(
+            "initial-assessment",
+            _selected(selection, 102)["reviewReasons"],
+        )
 
     def test_selects_new_issues_and_records_the_review_reasons(self) -> None:
         compact = _compact([_investigate_issue(101)])
@@ -114,10 +119,35 @@ class ReviewSelectionTests(unittest.TestCase):
         self.assertEqual("new", entry["changeClass"])
         self.assertIn("investigate-default", entry["reviewReasons"])
 
+    def test_selects_an_unchanged_case_when_reassessment_is_due(self) -> None:
+        compact = _compact([_stable_issue(101)])
+
+        selection = build_review_selection(
+            compact,
+            known_issue_numbers=[101],
+            due_issue_numbers=[101],
+            reassessment_context_by_issue={
+                101: {
+                    "lastReviewedAt": "2026-08-20T12:00:00Z",
+                    "reassessAt": "2026-08-27T12:00:00Z",
+                }
+            },
+        )
+
+        entry = _selected(selection, 101)
+        self.assertEqual("due", entry["changeClass"])
+        self.assertEqual(["scheduled-reassessment"], entry["changeReasons"])
+        self.assertIn("scheduled-reassessment", entry["reviewReasons"])
+        self.assertEqual("2026-08-20T12:00:00Z", entry["lastReviewedAt"])
+        self.assertEqual("2026-08-27T12:00:00Z", entry["reassessAt"])
+
     def test_selected_case_carries_an_exact_question_and_stop_condition(self) -> None:
         compact = _compact([_investigate_issue(101)])
-
-        selection = build_review_selection(compact)
+        selection = build_review_selection(
+            compact,
+            changed_issue_numbers=[101],
+            known_issue_numbers=[101],
+        )
         question = _selected(selection, 101)["question"]
 
         self.assertIn("#101", question["ask"])
@@ -129,6 +159,54 @@ class ReviewSelectionTests(unittest.TestCase):
             set(question["decisionGates"]).issubset(EVIDENCE_REQUEST_DECISION_GATES)
         )
         self.assertTrue(question["decisionGates"])
+
+    def test_changed_case_carries_prior_bucket_and_change_reasons(self) -> None:
+        compact = _compact([_stable_issue(101)])
+        selection = build_review_selection(
+            compact,
+            changed_issue_numbers=[101],
+            known_issue_numbers=[101],
+            change_reasons_by_issue={
+                101: ["derived-assessment-changed", "issue-source-updated"]
+            },
+            previous_judgments=[
+                {
+                    "issueNumber": 101,
+                    "category": "flaky-test",
+                    "recommendations": [{"disposition": "investigate"}],
+                }
+            ],
+        )
+
+        selected = _selected(selection, 101)
+        self.assertEqual(
+            ["derived-assessment-changed", "issue-source-updated"],
+            selected["changeReasons"],
+        )
+        self.assertEqual("investigate", selected["previousDisposition"])
+        self.assertEqual("flaky-test", selected["previousCategory"])
+
+    def test_legacy_previous_decision_does_not_abort_selection(self) -> None:
+        compact = _compact([_stable_issue(101)])
+
+        selection = build_review_selection(
+            compact,
+            changed_issue_numbers=[101],
+            known_issue_numbers=[101],
+            previous_judgments=[
+                {
+                    "issueNumber": 101,
+                    "issueUrl": "https://github.com/owner/repo/issues/101",
+                    "issueKind": "ci-failure",
+                    "state": "observing",
+                    "proposedAction": "wait",
+                }
+            ],
+        )
+
+        selected = _selected(selection, 101)
+        self.assertNotIn("previousDisposition", selected)
+        self.assertNotIn("previousCategory", selected)
 
     def test_allowed_dispositions_exclude_unprojectable_close_and_escalation(self) -> None:
         compact = _compact([_investigate_issue(101)])
@@ -182,7 +260,10 @@ class ReviewSelectionTests(unittest.TestCase):
             ]
         )
 
-        selection = build_review_selection(compact)
+        selection = build_review_selection(
+            compact,
+            known_issue_numbers=[101],
+        )
 
         self.assertEqual(set(), selected_issue_numbers(selection))
         self.assertEqual("not-review-required", _omitted(selection, 101)["reason"])
@@ -199,6 +280,34 @@ class ReviewSelectionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValidationError, "999"):
             build_review_selection(compact, changed_issue_numbers=[999])
+
+    def test_rejects_reassessment_context_for_an_unknown_issue(self) -> None:
+        compact = _compact([_investigate_issue(101)])
+
+        with self.assertRaisesRegex(ValidationError, "999"):
+            build_review_selection(
+                compact,
+                reassessment_context_by_issue={
+                    999: {
+                        "lastReviewedAt": "2026-08-20T12:00:00Z",
+                        "reassessAt": "2026-08-27T12:00:00Z",
+                    }
+                },
+            )
+
+    def test_rejects_a_malformed_reassessment_timestamp(self) -> None:
+        selection = build_review_selection(_compact([_stable_issue(101)]))
+        selection["selected"][0]["lastReviewedAt"] = "not-a-timestamp"
+
+        with self.assertRaisesRegex(ValidationError, "lastReviewedAt"):
+            selected_issue_numbers(selection)
+
+    def test_accepts_a_version_one_selection_without_change_reasons(self) -> None:
+        selection = build_review_selection(_compact([_stable_issue(101)]))
+        selection["schemaVersion"] = 1
+        del selection["selected"][0]["changeReasons"]
+
+        self.assertEqual({101}, selected_issue_numbers(selection))
 
 
 def _agent(compact: dict[str, object], issues: list[dict[str, object]]) -> dict[str, object]:
@@ -244,7 +353,11 @@ def _agent_issue(
 class SelectedJudgmentMergeTests(unittest.TestCase):
     def test_omitted_issues_keep_their_deterministic_defaults(self) -> None:
         compact = _compact([_investigate_issue(101), _stable_issue(102)])
-        selection = build_review_selection(compact)
+        selection = build_review_selection(
+            compact,
+            new_issue_numbers=[101],
+            known_issue_numbers=[102],
+        )
         default_102 = compact["issues"][1]["defaultJudgment"]
 
         merged = merge_selected_poc_judgments(
@@ -267,7 +380,11 @@ class SelectedJudgmentMergeTests(unittest.TestCase):
 
     def test_rejects_a_judgment_for_an_unselected_issue(self) -> None:
         compact = _compact([_investigate_issue(101), _stable_issue(102)])
-        selection = build_review_selection(compact)
+        selection = build_review_selection(
+            compact,
+            new_issue_numbers=[101],
+            known_issue_numbers=[102],
+        )
 
         with self.assertRaisesRegex(ValidationError, "was not selected"):
             merge_selected_poc_judgments(

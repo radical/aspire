@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from .poc_history import (
 )
 
 CaseKey = tuple[str, int, str, str]
+DEFAULT_REASSESSMENT_INTERVAL = timedelta(days=7)
 
 
 def case_key(
@@ -70,6 +72,156 @@ def load_latest_case_state(
             )
         ] = dict(row)
     return latest
+
+
+def record_review_events(
+    state_directory: Path,
+    repository: str,
+    reviewed_at: str,
+    *,
+    issue_numbers: list[int],
+    pull_request_numbers: list[int],
+) -> list[dict[str, Any]]:
+    reviewed_instant = _parse_timestamp(reviewed_at, "reviewedAt")
+    rows = [
+        {
+            "schemaVersion": 1,
+            "repository": repository,
+            "targetKind": target_kind,
+            "targetNumber": number,
+            "reviewedAt": _format_timestamp(reviewed_instant),
+        }
+        for target_kind, numbers in (
+            ("issue", issue_numbers),
+            ("pull-request", pull_request_numbers),
+        )
+        for number in sorted(set(numbers))
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0
+    ]
+    path = state_directory / "ledgers" / "review-events.jsonl"
+    existing = read_ledger_rows(path)
+    seen = {
+        (
+            str(row.get("repository", "")).casefold(),
+            row.get("targetKind"),
+            row.get("targetNumber"),
+            row.get("reviewedAt"),
+        )
+        for row in existing
+    }
+    appended = [
+        row
+        for row in rows
+        if (
+            repository.casefold(),
+            row["targetKind"],
+            row["targetNumber"],
+            row["reviewedAt"],
+        )
+        not in seen
+    ]
+    if appended:
+        if state_directory.is_symlink():
+            raise ValueError("Review state directory must not be a symlink.")
+        state_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(state_directory, 0o700)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+        needs_separator = False
+        if path.exists() and path.stat().st_size > 0:
+            with path.open("rb") as existing_stream:
+                existing_stream.seek(-1, os.SEEK_END)
+                needs_separator = existing_stream.read(1) != b"\n"
+        with path.open("a", encoding="utf-8") as stream:
+            if needs_separator:
+                stream.write("\n")
+            for row in appended:
+                stream.write(json.dumps(row, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(path, 0o600)
+    return appended
+
+
+def load_review_schedule(
+    state_directory: Path,
+    repository: str,
+    observed_at: str,
+    *,
+    issue_numbers: list[int],
+    pull_request_numbers: list[int],
+    reassessment_interval: timedelta = DEFAULT_REASSESSMENT_INTERVAL,
+) -> dict[str, Any]:
+    if reassessment_interval <= timedelta(0):
+        raise ValueError("Reassessment interval must be positive.")
+    observed_instant = _parse_timestamp(observed_at, "observedAt")
+    current_targets = {
+        ("issue", number)
+        for number in issue_numbers
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0
+    } | {
+        ("pull-request", number)
+        for number in pull_request_numbers
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0
+    }
+    latest: dict[tuple[str, int], datetime] = {}
+    for row in read_ledger_rows(
+        state_directory / "ledgers" / "review-events.jsonl"
+    ):
+        if str(row.get("repository", "")).casefold() != repository.casefold():
+            continue
+        key = (row.get("targetKind"), row.get("targetNumber"))
+        if key not in current_targets:
+            continue
+        try:
+            reviewed = _parse_timestamp(row.get("reviewedAt"), "reviewedAt")
+        except ValueError:
+            continue
+        if reviewed > latest.get(key, datetime.min.replace(tzinfo=UTC)):
+            latest[key] = reviewed
+
+    contexts: dict[str, dict[str, dict[str, str]]] = {
+        "issues": {},
+        "pullRequests": {},
+    }
+    due_issues: list[int] = []
+    due_pull_requests: list[int] = []
+    for (target_kind, number), reviewed in sorted(latest.items()):
+        reassess_at = reviewed + reassessment_interval
+        context = {
+            "lastReviewedAt": _format_timestamp(reviewed),
+            "reassessAt": _format_timestamp(reassess_at),
+        }
+        if target_kind == "issue":
+            contexts["issues"][str(number)] = context
+            if observed_instant >= reassess_at:
+                due_issues.append(number)
+        else:
+            contexts["pullRequests"][str(number)] = context
+            if observed_instant >= reassess_at:
+                due_pull_requests.append(number)
+    return {
+        "schemaVersion": 1,
+        "dueIssueNumbers": due_issues,
+        "duePullRequestNumbers": due_pull_requests,
+        **contexts,
+    }
+
+
+def _parse_timestamp(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a nonempty timestamp.")
+    try:
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{label} must be an ISO 8601 timestamp.") from error
+    if instant.tzinfo is None:
+        raise ValueError(f"{label} must include a UTC offset.")
+    return instant.astimezone(UTC)
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def record_poc_ledgers(

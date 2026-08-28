@@ -115,6 +115,137 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_bootstraps_review_events_for_state_created_before_scheduling(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_input = root / "input-1.json"
+            first_input.write_text(
+                json.dumps(snapshot("2026-08-20T12:00:00Z")),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+            (state / "ledgers" / "review-events.jsonl").unlink()
+
+            next_input = root / "input-2.json"
+            next_input.write_text(
+                json.dumps(snapshot("2026-08-21T12:00:00Z")),
+                encoding="utf-8",
+            )
+            next_work = root / "work-2"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=next_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=next_input,
+            )
+            selection = json.loads(
+                (next_work / "review-selection.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual("awaiting-review", started["stage"])
+            self.assertEqual("first-seen", selection["selected"][0]["changeClass"])
+            self.assertEqual(
+                ["first-seen"],
+                selection["selected"][0]["changeReasons"],
+            )
+            self.assertIn(
+                "initial-assessment",
+                selection["selected"][0]["reviewReasons"],
+            )
+
+    def test_reselects_an_unchanged_case_when_its_review_becomes_due(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+
+            first_input = root / "input-1.json"
+            first_input.write_text(
+                json.dumps(snapshot("2026-08-20T12:00:00Z")),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+            self.assertEqual("awaiting-review", started["stage"])
+
+            due_input = root / "input-2.json"
+            due_input.write_text(
+                json.dumps(snapshot("2026-08-27T12:00:00Z")),
+                encoding="utf-8",
+            )
+            due_work = root / "work-2"
+            due = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=due_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=due_input,
+            )
+
+            self.assertEqual("awaiting-review", due["stage"])
+            selection = json.loads(
+                (due_work / "review-selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("due", selection["selected"][0]["changeClass"])
+            self.assertEqual(
+                "2026-08-20T12:00:00Z",
+                selection["selected"][0]["lastReviewedAt"],
+            )
+            self.assertEqual(
+                "2026-08-27T12:00:00Z",
+                selection["selected"][0]["reassessAt"],
+            )
+            cycle_script.finish_cycle(
+                work_dir=due_work,
+                agent_judgments_path=due_work / "agent-judgments.json",
+            )
+
+            after_review_input = root / "input-3.json"
+            after_review_input.write_text(
+                json.dumps(snapshot("2026-08-28T12:00:00Z")),
+                encoding="utf-8",
+            )
+            after_review = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=root / "work-3",
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=after_review_input,
+            )
+            self.assertEqual("completed", after_review["stage"])
+            self.assertEqual(0, after_review["issueReviewCount"])
+
     def test_resumes_agent_review_then_auto_finalizes_unchanged_cycle(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
@@ -205,6 +336,17 @@ class CycleTests(unittest.TestCase):
 
             self.assertEqual("awaiting-review", changed["stage"])
             self.assertEqual(1, changed["issueReviewCount"])
+            changed_selection = json.loads(
+                (changed_work / "review-selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                ["derived-assessment-changed"],
+                changed_selection["selected"][0]["changeReasons"],
+            )
+            self.assertEqual(
+                "investigate",
+                changed_selection["selected"][0]["previousDisposition"],
+            )
 
     def test_finishes_pull_request_review_into_report_and_shared_proposals(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
