@@ -282,6 +282,22 @@ carry it forward. Never silently regenerate it.
   no project in `Aspire.slnx`) forces the full matrix. A missed test is a silent
   regression; an extra run is just slower. Files that need no CI are dropped by
   the `prefilter` before this point.
+- **Renamed files and the fallback.** The old path of a git-detected rename
+  (`git diff -M`, default 50% content-similarity threshold) that matches no
+  Layer 2 rule is exempted from this fallback instead of forcing `ALL` — a
+  same-commit rename that also repoints the map's own rule at the new name (as
+  [microsoft/aspire#19486](https://github.com/microsoft/aspire/pull/19486)
+  did for `eng/scripts/aspire-skills-bundle.common.ps1` →
+  `aspire-skills-bundles.common.ps1`) would otherwise leave the stale old name
+  matching nothing and trip run-all, even though the new path already carries
+  whatever the map says about this content moving. The old path is still
+  glob-matched like any other changed path first, so a cross-directory rename
+  still hits the old directory's rule; only an old path matched by *nothing*
+  is exempted, and exemption can only skip forcing `ALL` — it never removes a
+  target that a rule matched. A rename git does not detect as such (below the
+  50% threshold — e.g. a move combined with a heavy rewrite in the same
+  commit) is unaffected by this exemption and reported as a plain delete + add,
+  which still forces the fallback if either side is otherwise unmapped.
 - **Layer 1 failure is fatal.** Audit mode returns run-all only after a
   successful selection. A graph-computation failure fails the selector in every
   mode.

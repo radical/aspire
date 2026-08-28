@@ -63,8 +63,7 @@ When `--from` / `--to` are supplied, the selector first resolves the
 
 ```text
 from := git merge-base <from> <to>      # the base..head branch point
-git diff --name-status -M <from> <to>   # Layer 1
-git diff --name-only   --no-renames <from> <to>   # Layer 2
+git diff --name-status -M <from> <to>   # Layer 1 and Layer 2
 ```
 
 This makes a PR select on its **own** commits. A file changed on the base
@@ -81,10 +80,17 @@ GitHub's own PR path filters make; see [Prior art and comparison](#prior-art-and
 
 Deletes are included. Renames include both the old path and the new path, so a
 cross-project move marks both the project that lost the file and the project
-that gained it.
+that gained it. This is git's own rename detection (`-M`, default 50%
+content-similarity threshold): a delete+add pair below that threshold is
+reported as a plain delete and add, not a rename, and is handled as such —
+see [Layer 2 — curated](#layer-2--curated) for why the old path of a
+detected rename gets special treatment there and why a below-threshold pair
+does not.
 
 `--changed-files` is a path-only input for local/debug runs. It does not carry
-rename/delete status, so each line is treated as a present changed path.
+rename/delete status, so each line is treated as a present changed path; a
+rename supplied this way has no "old path" to exempt from the Layer 2
+run-all fallback (below).
 
 ### File → project attribution
 
@@ -295,7 +301,18 @@ Flow:
    `ignore`d, and matched by no rule. The fallback is location-independent (not
    `src/**`-only): a missed test is a silent regression, so any unmapped change
    fails safe to the full matrix. Files that genuinely need no CI are dropped by
-   the prefilter in step 1, so they never reach this fallback.
+   the prefilter in step 1, so they never reach this fallback. **Exception:** the
+   old path of a git-detected rename (see [Changed paths](#changed-paths)) that
+   matches nothing is not treated as an unmapped leftover — a same-commit rename
+   that also updates the map's own rule to the new name (as
+   [microsoft/aspire#19486](https://github.com/microsoft/aspire/pull/19486) did)
+   would otherwise force `ALL` over a stale old name that no longer matches
+   anything, even though the new path already carries whatever the map says
+   about this content. The old path is still fully glob-matched like any other
+   changed path first (a cross-directory rename must still hit the old
+   directory's rule), so this only suppresses the fallback when nothing else
+   matched it either. It cannot cause under-selection: exemption never removes
+   a target that matched, it only skips forcing `ALL` when nothing did.
 7. Emit the per-job booleans (as one `selection` JSON object), and — in enforce
    mode for a non-ALL selection — the `OverrideProjectToBuild` props restricting
    the downstream build.

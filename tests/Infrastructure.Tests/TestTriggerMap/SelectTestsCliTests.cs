@@ -1001,6 +1001,182 @@ public sealed class SelectTestsCliTests
         });
     }
 
+    // Regression for the root cause behind PR #19486 (aspire-skills-bundle.common.ps1 renamed to
+    // aspire-skills-bundles.common.ps1, singular -> plural): an IN-PLACE rename where map.yml is
+    // updated, in the SAME commit, to reference only the new filename. Layer 2 reads map.yml from
+    // the checked-out worktree at HEAD, so by the time it runs, old.txt matches no path_rule at all
+    // -- not because nobody mapped it, but because the mapping moved with the file. Before the fix
+    // this was indistinguishable from a genuine unmapped leftover and forced the run-all fallback
+    // even though new.txt's own rule already selects the right tests. map.yml's own change is ignored
+    // here so the assertion isolates the rename, matching how the real map ignores changes to itself
+    // (see eng/github-ci/test-trigger-map.yml's own ignore entry for the analogous self-reference).
+    // Failure mode (before the fix): selectsAll is true and BeforeBuildProps.props is not written (a
+    // wide-open, non-narrowing enforce) despite new.txt's rule having everything needed.
+    [Fact]
+    public void InPlaceRenameWithoutOwnMapEntryDoesNotForceRunAll()
+    {
+        WithGitRepo((repoRoot, output) =>
+        {
+            WriteFile(repoRoot, "Aspire.slnx", Slnx);
+            WriteFile(repoRoot, "map.yml", """
+                version: 1
+                path_rules:
+                  - paths: [old.txt]
+                    targets: ["test:Aspire.Cli.Tests"]
+                ignore:
+                  - map.yml
+                """);
+            WriteFile(repoRoot, "old.txt", "v0");
+            GitCommitAll(repoRoot, "base");
+            var baseSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            RunGit(repoRoot, "mv", "old.txt", "new.txt");
+            // The map moves to the new name in the SAME commit as the rename -- exactly what PR
+            // #19486 did to eng/github-ci/test-trigger-map.yml alongside the script rename.
+            WriteFile(repoRoot, "map.yml", """
+                version: 1
+                path_rules:
+                  - paths: [new.txt]
+                    targets: ["test:Aspire.Cli.Tests"]
+                ignore:
+                  - map.yml
+                """);
+            GitCommitAll(repoRoot, "rename old.txt in place and move its map entry with it");
+            var headSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            var jsonPath = Path.Combine(repoRoot, "selection.json");
+            var previous = Environment.GetEnvironmentVariable("SELECT_TESTS_JSON_FILE");
+            Environment.SetEnvironmentVariable("SELECT_TESTS_JSON_FILE", jsonPath);
+            try
+            {
+                var propsPath = Path.Combine(repoRoot, "BeforeBuildProps.props");
+                Selection.Run(Options(repoRoot, propsPath, from: baseSha, to: headSha, skipLayer1: true, enforce: true));
+
+                using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                Assert.False(doc.RootElement.GetProperty("selectsAll").GetBoolean());
+                Assert.Contains("Aspire.Cli.Tests", File.ReadAllText(propsPath));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SELECT_TESTS_JSON_FILE", previous);
+            }
+        });
+    }
+
+    // Regression: the rename-old-path exemption from the run-all fallback must NOT suppress ordinary
+    // matching. If the fix made TestSelector skip a rename's old path entirely -- rather than only
+    // exempting it from forcing ALL when it would otherwise be unmatched -- a rule that still
+    // legitimately targets the old name would silently stop firing across a rename. Here BOTH old.txt
+    // and new.txt keep their own, unrelated path_rule targets across the rename (the map itself is
+    // untouched by the commit that does the rename), so both must still be selected -- proving the
+    // exemption is additive-safe, not a blanket "ignore rename old paths" shortcut.
+    [Fact]
+    public void RenameWhoseOldPathIncidentallyMatchesAnUnrelatedRuleStillAddsBothTargets()
+    {
+        const string map = """
+            version: 1
+            path_rules:
+              - paths: [old.txt]
+                targets: ["test:Aspire.Hosting.Tests"]
+              - paths: [new.txt]
+                targets: ["test:Aspire.Cli.Tests"]
+            """;
+
+        WithGitRepo((repoRoot, output) =>
+        {
+            WriteFile(repoRoot, "Aspire.slnx", Slnx);
+            WriteFile(repoRoot, "map.yml", map);
+            WriteFile(repoRoot, "old.txt", "v0");
+            GitCommitAll(repoRoot, "base");
+            var baseSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            RunGit(repoRoot, "mv", "old.txt", "new.txt");
+            GitCommitAll(repoRoot, "rename old.txt to new.txt; map keeps both rules unchanged");
+            var headSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            var propsPath = Path.Combine(repoRoot, "BeforeBuildProps.props");
+            Selection.Run(Options(repoRoot, propsPath, from: baseSha, to: headSha, skipLayer1: true, enforce: true));
+
+            var props = File.ReadAllText(propsPath);
+            Assert.Contains("Aspire.Hosting.Tests", props);
+            Assert.Contains("Aspire.Cli.Tests", props);
+        });
+    }
+
+    // Regression/boundary test for a residual gap uncovered while empirically validating this fix
+    // against the real PR #19486 diff: one of that PR's three renamed scripts
+    // (verify-aspire-skills-bundle.ps1) was rewritten heavily enough in the same commit (~30% content
+    // similarity) that git's DEFAULT -M50% rename-similarity threshold reports it as a plain
+    // delete+add, not a rename (confirmed with `git diff -M10%`, which *does* detect it at R030).
+    // Program.cs's rename detection deliberately uses git's default threshold rather than lowering it:
+    // lowering it would risk pairing unrelated delete+add files as a false rename, which would exempt
+    // a genuinely unmatched deletion from the run-all fallback -- exactly the under-selection risk
+    // this fix must avoid. So a content-heavy rewrite-plus-rename like this one is correctly NOT
+    // exempted, and still forces ALL when the map's own rule/ignore entry for the old path moves to
+    // the new name in the same commit -- this is expected, documented behavior, not a bug.
+    [Fact]
+    public void RenameBelowGitSimilarityThresholdIsNotExemptedAndStillForcesRunAll()
+    {
+        var oldContent = string.Join('\n', Enumerable.Range(0, 20)
+            .Select(i => $"old line {i} of filler content for similarity padding")) + '\n';
+        // Keep only 2 of the 20 original lines; replace the rest with unrelated text so the line-level
+        // similarity between old and new content stays well under git's default 50% threshold.
+        var newContent = string.Join('\n',
+            new[]
+            {
+                "old line 0 of filler content for similarity padding",
+                "old line 1 of filler content for similarity padding",
+            }.Concat(Enumerable.Range(0, 18).Select(i => $"brand new unrelated line {i} with totally different text"))) + '\n';
+
+        WithGitRepo((repoRoot, output) =>
+        {
+            WriteFile(repoRoot, "Aspire.slnx", Slnx);
+            WriteFile(repoRoot, "map.yml", """
+                version: 1
+                ignore:
+                  - old.txt
+                """);
+            WriteFile(repoRoot, "old.txt", oldContent);
+            GitCommitAll(repoRoot, "base");
+            var baseSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            RunGit(repoRoot, "mv", "old.txt", "new.txt");
+            WriteFile(repoRoot, "new.txt", newContent);
+            // The map's ignore entry moves to the new name in the SAME commit -- exactly what PR
+            // #19486 did for its ignore-listed scripts alongside the rename.
+            WriteFile(repoRoot, "map.yml", """
+                version: 1
+                ignore:
+                  - new.txt
+                """);
+            GitCommitAll(repoRoot, "rewrite old.txt heavily while renaming it, and move its ignore entry with it");
+            var headSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            // Confirm the setup actually reproduces "git does not detect this as a rename" at git's
+            // default similarity threshold, so the assertion below exercises the intended boundary
+            // rather than accidentally exempting a real rename.
+            var nameStatus = RunGit(repoRoot, "diff", "--name-status", "-M", baseSha, headSha);
+            Assert.Contains("D\told.txt", nameStatus);
+            Assert.Contains("A\tnew.txt", nameStatus);
+
+            var jsonPath = Path.Combine(repoRoot, "selection.json");
+            var previous = Environment.GetEnvironmentVariable("SELECT_TESTS_JSON_FILE");
+            Environment.SetEnvironmentVariable("SELECT_TESTS_JSON_FILE", jsonPath);
+            try
+            {
+                var propsPath = Path.Combine(repoRoot, "BeforeBuildProps.props");
+                Selection.Run(Options(repoRoot, propsPath, from: baseSha, to: headSha, skipLayer1: true, enforce: true));
+
+                using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                Assert.True(doc.RootElement.GetProperty("selectsAll").GetBoolean());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SELECT_TESTS_JSON_FILE", previous);
+            }
+        });
+    }
+
     // Regression: a changed file whose repo-relative path contains non-ASCII bytes must still be
     // attributed. git's default core.quotePath=true octal-escapes and double-quotes such paths
     // (e.g. "eng/\343\203\206.../trigger.cs"), which does not glob-equal the real path, so the rule

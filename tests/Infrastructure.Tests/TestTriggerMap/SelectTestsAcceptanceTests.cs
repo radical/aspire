@@ -125,8 +125,8 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
             (projectDirs ?? []).ToHashSet(StringComparer.Ordinal));
     }
 
-    private SelectionResult Select(string[] files, string[]? layer1 = null, IEnumerable<string>? projectDirs = null)
-        => Selector(projectDirs).Select(files, layer1 ?? [], new SelectorOptions());
+    private SelectionResult Select(string[] files, string[]? layer1 = null, IEnumerable<string>? projectDirs = null, string[]? renameOldPaths = null)
+        => Selector(projectDirs).Select(files, layer1 ?? [], new SelectorOptions(), renameOldPaths: renameOldPaths?.ToHashSet(StringComparer.Ordinal));
 
     public void Dispose()
     {
@@ -330,6 +330,33 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
 
         Assert.True(r.SelectsAll);
         Assert.Contains("docs/architecture/notes.md", r.UnmatchedFiles);
+    }
+
+    [Fact]
+    public void RenameOldPathUnmatchedDoesNotForceRunAll()
+    {
+        // Same shape as LeftoverUnmatchedFileForcesRunAll, but the caller marks the file as the OLD
+        // side of a git-detected rename (see Program.ResolveChangedFiles / TestSelector.Select). This
+        // is the fix for PR #19486's aspire-skills-bundle(s).common.ps1 rename: when the map is updated
+        // in the same commit to reference only the new name, the old name is stale by construction, not
+        // a genuine unmapped leftover -- so it must not trip the run-all fallback.
+        var r = Select(["docs/architecture/notes.md"], renameOldPaths: ["docs/architecture/notes.md"]);
+
+        Assert.False(r.SelectsAll);
+        Assert.DoesNotContain("docs/architecture/notes.md", r.UnmatchedFiles);
+    }
+
+    [Fact]
+    public void RenameOldPathStillMatchesOwnRuleAdditively()
+    {
+        // The rename-old-path exemption only suppresses the run-all ESCALATION for an otherwise
+        // unmatched file; it must not suppress ordinary rule matching. src/CuratedThing/** still maps
+        // to job:cjob regardless of whether this path is also flagged as a rename's old side, proving
+        // the exemption is additive-safe rather than a blanket "ignore rename old paths" shortcut.
+        var r = Select(["src/CuratedThing/Old.cs"], renameOldPaths: ["src/CuratedThing/Old.cs"]);
+
+        Assert.False(r.SelectsAll);
+        Assert.Contains("job:cjob", r.Jobs);
     }
 
     [Fact]

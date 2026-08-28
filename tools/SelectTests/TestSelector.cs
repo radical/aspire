@@ -149,15 +149,27 @@ public sealed class TestSelector
     /// cause carries the seed file + reverse-dependency chain so the summary can show the full path. Null
     /// when Layer 1 did not run or produced no paths.
     /// </param>
+    /// <param name="renameOldPaths">
+    /// The old-side paths of git-detected renames in this diff (from a <c>git diff --name-status -M</c>
+    /// "R###\told\tnew" record). Such a path is still glob-matched like any other changed file above --
+    /// a file moved OUT of a mapped directory must still hit that directory's rule via its old path
+    /// (see <c>SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests</c>) -- but if it ends up
+    /// matched by nothing, that is not a genuine unmapped leftover: the rename's new path already
+    /// carries whatever the map says about this content moving. Such a path is therefore exempted from
+    /// the run-all fallback below. Empty when the caller has no rename information (e.g.
+    /// <c>--changed-files</c> with an externally supplied plain list).
+    /// </param>
     public SelectionResult Select(
         IReadOnlyCollection<string> changedFiles,
         IReadOnlyCollection<string> layer1Affected,
         SelectorOptions options,
         IReadOnlySet<string>? layer1AttributedPaths = null,
-        IReadOnlyDictionary<string, AffectedPath>? layer1Paths = null)
+        IReadOnlyDictionary<string, AffectedPath>? layer1Paths = null,
+        IReadOnlySet<string>? renameOldPaths = null)
     {
         var map = TriggerMap.Load(_mapPath);
         var attributedPaths = layer1AttributedPaths ?? new HashSet<string>(StringComparer.Ordinal);
+        var renameOldPathSet = renameOldPaths ?? new HashSet<string>(StringComparer.Ordinal);
 
         // name -> the reasons it was selected. The key set IS the selected set; the lists carry the
         // attribution surfaced in the PR comment / step summary.
@@ -225,6 +237,18 @@ public sealed class TestSelector
             if (fileMatched || ignored || layer1Owned)
             {
                 // Accounted for by some layer; nothing more to do for this file.
+                continue;
+            }
+
+            // The old side of a same-commit, in-place rename: e.g. this PR renamed
+            // aspire-skills-bundle.common.ps1 -> aspire-skills-bundles.common.ps1 AND updated the map's
+            // own path_rule to the new name in the same commit, so the old name now matches nothing.
+            // That is not a genuine unmapped leftover -- the new path above already carries whatever
+            // targets this content's rename should select (additively; it can only add targets, never
+            // suppress them) -- so don't force ALL over it. See docs/ci/test-trigger-map.md for the
+            // full rationale and TestTriggerMapTests for the regression coverage.
+            if (renameOldPathSet.Contains(file))
+            {
                 continue;
             }
 
