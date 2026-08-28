@@ -1008,8 +1008,10 @@ public sealed class SelectTestsCliTests
     // -- not because nobody mapped it, but because the mapping moved with the file. Before the fix
     // this was indistinguishable from a genuine unmapped leftover and forced the run-all fallback
     // even though new.txt's own rule already selects the right tests. map.yml's own change is ignored
-    // here so the assertion isolates the rename, matching how the real map ignores changes to itself
-    // (see eng/github-ci/test-trigger-map.yml's own ignore entry for the analogous self-reference).
+    // here purely to isolate the rename under test from an unrelated map.yml-changed assertion -- this
+    // is a synthetic-map simplification, NOT a mirror of production: the real
+    // eng/github-ci/test-trigger-map.yml has no self-ignore entry and instead routes changes to itself
+    // to test:Infrastructure.Tests (see its own path_rules, "SelectTests acceptance/behavior tests...").
     // Failure mode (before the fix): selectsAll is true and BeforeBuildProps.props is not written (a
     // wide-open, non-narrowing enforce) despite new.txt's rule having everything needed.
     [Fact]
@@ -1055,6 +1057,55 @@ public sealed class SelectTestsCliTests
                 using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
                 Assert.False(doc.RootElement.GetProperty("selectsAll").GetBoolean());
                 Assert.Contains("Aspire.Cli.Tests", File.ReadAllText(propsPath));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SELECT_TESTS_JSON_FILE", previous);
+            }
+        });
+    }
+
+    // Regression test for PR #19790 review feedback: the rename-old-path exemption above must not fire
+    // when the rename's destination never reaches TestSelector.Select because ChangedFileFilter's
+    // prefilter dropped it before both layers run (e.g. a rename INTO a doc-only path matched by
+    // eng/github-ci/ci-skip-entirely-patterns.txt in production; skip-patterns.txt here). Nothing ever
+    // evaluates whether new.md's content needs CI, so old.txt -- itself unmapped -- must still be
+    // treated as a genuine unmapped leftover and force ALL. Failure mode (the bug this guards against):
+    // exempting old.txt anyway and silently selecting nothing for a change whose destination was never
+    // accounted for by anything.
+    [Fact]
+    public void InPlaceRenameToPrefilteredDestinationStillForcesRunAll()
+    {
+        WithGitRepo((repoRoot, output) =>
+        {
+            WriteFile(repoRoot, "Aspire.slnx", Slnx);
+            WriteFile(repoRoot, "map.yml", """
+                version: 1
+                prefilter:
+                  patterns_file: skip-patterns.txt
+                path_rules:
+                  - paths: [other.txt]
+                    targets: ["test:Aspire.Cli.Tests"]
+                """);
+            WriteFile(repoRoot, "skip-patterns.txt", "**.md\n");
+            WriteFile(repoRoot, "old.txt", "v0");
+            GitCommitAll(repoRoot, "base");
+            var baseSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            RunGit(repoRoot, "mv", "old.txt", "new.md");
+            GitCommitAll(repoRoot, "rename old.txt to a doc-only path the prefilter drops");
+            var headSha = RunGit(repoRoot, "rev-parse", "HEAD");
+
+            var jsonPath = Path.Combine(repoRoot, "selection.json");
+            var previous = Environment.GetEnvironmentVariable("SELECT_TESTS_JSON_FILE");
+            Environment.SetEnvironmentVariable("SELECT_TESTS_JSON_FILE", jsonPath);
+            try
+            {
+                var propsPath = Path.Combine(repoRoot, "BeforeBuildProps.props");
+                Selection.Run(Options(repoRoot, propsPath, from: baseSha, to: headSha, skipLayer1: true, enforce: true));
+
+                using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                Assert.True(doc.RootElement.GetProperty("selectsAll").GetBoolean());
             }
             finally
             {

@@ -216,7 +216,7 @@ internal static class Selection
         // --from/--changed-files input.
         trace.EnterStage("resolve changed files");
         var changedFileSet = options.ForceAll
-            ? new ChangedFileSet(Array.Empty<string>(), new HashSet<string>(StringComparer.Ordinal))
+            ? new ChangedFileSet(Array.Empty<string>(), new Dictionary<string, string>(StringComparer.Ordinal))
             : ResolveChangedFiles(options);
         var rawChangedFiles = changedFileSet.Files;
 
@@ -245,7 +245,7 @@ internal static class Selection
 
         trace.EnterStage("select (Layer 2 trigger map + Layer 1 union)");
         var selector = new TestSelector(options.MapPath, allTestProjects, projectDirectories);
-        var result = selector.Select(changedFiles, layer1Affected, new SelectorOptions(options.ForceAll, options.ForceAllReason), layer1.AttributedPaths, layer1.Paths, changedFileSet.RenameOldPaths);
+        var result = selector.Select(changedFiles, layer1Affected, new SelectorOptions(options.ForceAll, options.ForceAllReason), layer1.AttributedPaths, layer1.Paths, changedFileSet.Renames);
 
         trace.EnterStage("write summary and outputs");
         WriteSummary(options, result, allTestProjects, changedFiles, layer1Affected, excludedFiles);
@@ -418,7 +418,7 @@ internal static class Selection
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .ToList();
-            return new ChangedFileSet(suppliedFiles, new HashSet<string>(StringComparer.Ordinal));
+            return new ChangedFileSet(suppliedFiles, new Dictionary<string, string>(StringComparer.Ordinal));
         }
 
         if (options.From is null)
@@ -435,11 +435,12 @@ internal static class Selection
         // carrying BOTH paths, not decomposed into a separate delete(old) + add(new). We still
         // glob-match both sides -- a file moved OUT of a mapped directory (e.g. eng/clipack/foo ->
         // eng/elsewhere) must still hit that directory's rule via its old path (see
-        // SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests) -- but knowing which path is a
-        // rename's old side lets TestSelector stop treating a stale, no-longer-referenced old name as an
-        // unmapped "leftover" that forces the run-all fallback (see TestSelector.Select and the root
-        // cause described there). Layer 1 already parses this same "-M" format
-        // (GraphAffectedProjects.GetChangedPathsFromGit); this keeps Layer 2 consistent.
+        // SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests) -- but knowing the old->new
+        // pairing lets TestSelector stop treating a stale, no-longer-referenced old name as an unmapped
+        // "leftover" that forces the run-all fallback, PROVIDED the new side is actually still part of
+        // this diff's changed-file set (see TestSelector.Select and the root cause described there).
+        // Layer 1 already parses this same "-M" format (GraphAffectedProjects.GetChangedPathsFromGit);
+        // this keeps Layer 2 consistent.
         // -z NUL-terminates every field instead of git's default newline-per-record, tab-per-field
         // text format. That default format quotes/escapes any path containing a byte >= 0x80, a tab,
         // a newline, a double-quote, or a backslash (e.g. a literal tab in a name becomes the 8
@@ -447,10 +448,10 @@ internal static class Selection
         // `-c core.quotePath=false` only suppresses the non-ASCII-byte escaping, not the
         // tab/newline/quote/backslash escaping. A quoted/escaped path never glob-equals the real
         // repo-relative path, so the map rules below would silently miss it, AND the mismatch would
-        // apply consistently to both the file list and renameOldPaths -- so a rename whose path
-        // couldn't be attributed to any rule would still be wrongly exempted from the run-all
-        // fallback. NUL can never appear in a valid path, so `-z` lets git skip quoting entirely,
-        // for every path, with no exceptions.
+        // apply consistently to both the file list and renames -- so a rename whose path couldn't be
+        // attributed to any rule would still be wrongly exempted from the run-all fallback. NUL can
+        // never appear in a valid path, so `-z` lets git skip quoting entirely, for every path, with no
+        // exceptions.
         var args = new List<string> { "diff", "--name-status", "-M", "-z" };
         args.AddRange(range);
 
@@ -461,7 +462,7 @@ internal static class Selection
         }
 
         var files = new List<string>();
-        var renameOldPaths = new HashSet<string>(StringComparer.Ordinal);
+        var renames = new Dictionary<string, string>(StringComparer.Ordinal);
         // With -z the whole stream is just NUL-delimited fields back to back -- "status\0path\0" for a
         // plain change, "R100\0old\0new\0" for a rename (the numeric similarity suffix varies) -- with
         // no per-line framing to split on first. How many fields follow depends on the status, so walk
@@ -486,7 +487,7 @@ internal static class Selection
                 files.Add(newPath);
                 if (status.StartsWith('R'))
                 {
-                    renameOldPaths.Add(oldPath);
+                    renames[oldPath] = newPath;
                 }
             }
             else
@@ -500,13 +501,14 @@ internal static class Selection
             }
         }
 
-        return new ChangedFileSet(files, renameOldPaths);
+        return new ChangedFileSet(files, renames);
     }
 
     // The old path of a git-detected rename is still glob-matched like any other changed path (see
-    // ResolveChangedFiles), but TestSelector needs to know WHICH paths are a rename's old side so it
-    // can exempt an otherwise-unmatched one from forcing the run-all fallback.
-    private sealed record ChangedFileSet(IReadOnlyCollection<string> Files, IReadOnlySet<string> RenameOldPaths);
+    // ResolveChangedFiles), but TestSelector needs the old->new pairing (not just the old side) so it
+    // can verify the new path is actually part of this diff before exempting the old side from forcing
+    // the run-all fallback.
+    private sealed record ChangedFileSet(IReadOnlyCollection<string> Files, IReadOnlyDictionary<string, string> Renames);
 
     // Repo-relative, '/'-separated directories of every project in Aspire.slnx -- the universe the
     // Layer 1 graph walks. The selector treats a changed file under one of these dirs as

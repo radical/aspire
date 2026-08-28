@@ -462,7 +462,11 @@ public sealed class TestTriggerMapTests
             var tempMapPath = Path.Combine(tempDir.FullName, "test-trigger-map.yml");
             File.WriteAllText(tempMapPath, simulatedMapText);
 
-            var renameOldPaths = new HashSet<string>(StringComparer.Ordinal) { oldCommonPath, oldUpdatePath };
+            var renames = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [oldCommonPath] = newCommonPath,
+                [oldUpdatePath] = newUpdatePath,
+            };
             var changedFiles = new[] { oldCommonPath, newCommonPath, oldUpdatePath, newUpdatePath };
 
             // Aspire.Cli (production) and Aspire.Cli.Tests (its test project) both changed, mirroring the
@@ -470,7 +474,7 @@ public sealed class TestTriggerMapTests
             var result = SelectWithRealMap(
                 changedFiles,
                 layer1Affected: ["Aspire.Cli", "Aspire.Cli.Tests"],
-                renameOldPaths: renameOldPaths,
+                renames: renames,
                 mapPathOverride: tempMapPath);
 
             Assert.False(result.SelectsAll, $"unexpectedly selected ALL: {result.EscalationReason}");
@@ -745,7 +749,7 @@ public sealed class TestTriggerMapTests
     private static SelectionResult SelectWithRealMap(
         IReadOnlyCollection<string> paths,
         IReadOnlyCollection<string> layer1Affected,
-        IReadOnlySet<string>? renameOldPaths = null,
+        IReadOnlyDictionary<string, string>? renames = null,
         string? mapPathOverride = null)
     {
         var projectPaths = LoadSolutionProjectPaths();
@@ -760,7 +764,7 @@ public sealed class TestTriggerMapTests
         var mapPath = mapPathOverride ?? Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
         var selector = new TestSelector(mapPath, testProjects, projectDirectories);
 
-        return selector.Select(paths, layer1Affected, new SelectorOptions(), renameOldPaths: renameOldPaths);
+        return selector.Select(paths, layer1Affected, new SelectorOptions(), renames: renames);
     }
 
     private static string TextBetween(string text, string startMarker, string endMarker)

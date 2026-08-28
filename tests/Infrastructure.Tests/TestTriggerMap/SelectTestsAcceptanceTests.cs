@@ -125,8 +125,8 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
             (projectDirs ?? []).ToHashSet(StringComparer.Ordinal));
     }
 
-    private SelectionResult Select(string[] files, string[]? layer1 = null, IEnumerable<string>? projectDirs = null, string[]? renameOldPaths = null)
-        => Selector(projectDirs).Select(files, layer1 ?? [], new SelectorOptions(), renameOldPaths: renameOldPaths?.ToHashSet(StringComparer.Ordinal));
+    private SelectionResult Select(string[] files, string[]? layer1 = null, IEnumerable<string>? projectDirs = null, IReadOnlyDictionary<string, string>? renames = null)
+        => Selector(projectDirs).Select(files, layer1 ?? [], new SelectorOptions(), renames: renames);
 
     public void Dispose()
     {
@@ -336,14 +336,64 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
     public void RenameOldPathUnmatchedDoesNotForceRunAll()
     {
         // Same shape as LeftoverUnmatchedFileForcesRunAll, but the caller marks the file as the OLD
-        // side of a git-detected rename (see Program.ResolveChangedFiles / TestSelector.Select). This
-        // is the fix for PR #19486's aspire-skills-bundle(s).common.ps1 rename: when the map is updated
-        // in the same commit to reference only the new name, the old name is stale by construction, not
-        // a genuine unmapped leftover -- so it must not trip the run-all fallback.
-        var r = Select(["docs/architecture/notes.md"], renameOldPaths: ["docs/architecture/notes.md"]);
+        // side of a git-detected rename whose new side is present in changedFiles and itself matches a
+        // rule (see Program.ResolveChangedFiles / TestSelector.Select). This is the fix for PR #19486's
+        // aspire-skills-bundle(s).common.ps1 rename: when the map is updated in the same commit to
+        // reference only the new name, the old name is stale by construction, not a genuine unmapped
+        // leftover -- so it must not trip the run-all fallback, and the new path's own match is unioned
+        // in additively.
+        var r = Select(
+            ["docs/architecture/notes.md", "src/CuratedThing/Renamed.cs"],
+            renames: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["docs/architecture/notes.md"] = "src/CuratedThing/Renamed.cs",
+            });
 
         Assert.False(r.SelectsAll);
         Assert.DoesNotContain("docs/architecture/notes.md", r.UnmatchedFiles);
+        Assert.Contains("job:cjob", r.Jobs);
+    }
+
+    [Fact]
+    public void RenameOldPathWithDestinationDroppedByPrefilterStillForcesRunAll()
+    {
+        // Regression test for PR #19790 review feedback: the exemption above must require the rename's
+        // destination to be present in changedFiles, not just trust old-path membership in `renames`.
+        // Here the destination ("docs/architecture/prefiltered-away.md") is deliberately absent from
+        // `files` -- simulating Program.cs's prefilter dropping it (e.g. a rename INTO a path matched by
+        // eng/github-ci/ci-skip-entirely-patterns.txt) before it ever reaches Select. Nothing downstream
+        // ever evaluated whether that destination's content needs CI, so the old path must still be
+        // treated as a genuine unmapped leftover and force ALL -- exempting it here would silently
+        // under-select relative to what the new path's content actually needs.
+        var r = Select(
+            ["docs/architecture/notes.md"],
+            renames: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["docs/architecture/notes.md"] = "docs/architecture/prefiltered-away.md",
+            });
+
+        Assert.True(r.SelectsAll);
+        Assert.Contains("docs/architecture/notes.md", r.UnmatchedFiles);
+    }
+
+    [Fact]
+    public void RenameOldPathWithStillUnmatchedDestinationForcesRunAllViaDestination()
+    {
+        // The destination IS present in changedFiles (satisfying the "destination accounted for"
+        // guard) but itself matches no rule -- so it becomes its own unmatched leftover and forces ALL,
+        // exactly like any other unmapped file would. The old-path exemption only ever suppresses the
+        // OLD side, never the new side, so an unmatched destination "self-corrects" the selection
+        // without needing any extra logic beyond the changedFiles membership check.
+        var r = Select(
+            ["docs/architecture/notes.md", "docs/architecture/still-unmatched.md"],
+            renames: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["docs/architecture/notes.md"] = "docs/architecture/still-unmatched.md",
+            });
+
+        Assert.True(r.SelectsAll);
+        Assert.DoesNotContain("docs/architecture/notes.md", r.UnmatchedFiles);
+        Assert.Contains("docs/architecture/still-unmatched.md", r.UnmatchedFiles);
     }
 
     [Fact]
@@ -352,8 +402,15 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
         // The rename-old-path exemption only suppresses the run-all ESCALATION for an otherwise
         // unmatched file; it must not suppress ordinary rule matching. src/CuratedThing/** still maps
         // to job:cjob regardless of whether this path is also flagged as a rename's old side, proving
-        // the exemption is additive-safe rather than a blanket "ignore rename old paths" shortcut.
-        var r = Select(["src/CuratedThing/Old.cs"], renameOldPaths: ["src/CuratedThing/Old.cs"]);
+        // the exemption is additive-safe rather than a blanket "ignore rename old paths" shortcut. The
+        // exemption logic is never even reached here (the old path matches its own rule first), so the
+        // paired new path below is a placeholder.
+        var r = Select(
+            ["src/CuratedThing/Old.cs", "src/CuratedThing/New.cs"],
+            renames: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/CuratedThing/Old.cs"] = "src/CuratedThing/New.cs",
+            });
 
         Assert.False(r.SelectsAll);
         Assert.Contains("job:cjob", r.Jobs);

@@ -290,10 +290,19 @@ carry it forward. Never silently regenerate it.
   did for `eng/scripts/aspire-skills-bundle.common.ps1` →
   `aspire-skills-bundles.common.ps1`) would otherwise leave the stale old name
   matching nothing and trip run-all, even though the new path already carries
-  whatever the map says about this content moving. The old path is still
-  glob-matched like any other changed path first, so a cross-directory rename
-  still hits the old directory's rule; only an old path matched by *nothing*
-  is exempted, and exemption can only skip forcing `ALL` — it never removes a
+  whatever the map says about this content moving. This exemption only applies
+  when the rename's new path is itself present in the (post-`prefilter`)
+  changed-file set passed to the selector — i.e. something downstream actually
+  had a chance to account for it (matched a rule, was ignored, is
+  Layer-1-owned, or itself becomes an unmatched leftover that forces `ALL`). A
+  destination the `prefilter` already dropped entirely (e.g. renamed into a
+  doc-only path) never reaches that evaluation, so the old path is NOT
+  exempted in that case and the fallback still fires — silently trusting old-path
+  membership alone would otherwise under-select relative to what the
+  destination's content actually needs. The old path is still glob-matched
+  like any other changed path first, so a cross-directory rename still hits
+  the old directory's rule; only an old path matched by *nothing* is
+  exempted, and exemption can only skip forcing `ALL` — it never removes a
   target that a rule matched. A rename git does not detect as such (below the
   50% threshold — e.g. a move combined with a heavy rewrite in the same
   commit) is unaffected by this exemption and reported as a plain delete + add,
