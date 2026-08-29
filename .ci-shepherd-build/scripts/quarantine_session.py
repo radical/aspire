@@ -10,6 +10,7 @@ from ci_shepherd.models import stable_json
 from ci_shepherd.quarantine import (
     read_quarantine_session_events,
     record_quarantine_session_event,
+    select_quarantine_session_request,
 )
 
 
@@ -77,13 +78,21 @@ def main() -> int:
     parser.add_argument("--recorded-at", required=True)
     parser.add_argument("--session-id")
     parser.add_argument("--batch-id")
+    parser.add_argument(
+        "--test-name",
+        help="Start a bounded trial containing only this exact proposed test.",
+    )
     parser.add_argument("--pull-request-url")
     parser.add_argument("--completed-test", action="append")
     args = parser.parse_args()
+    if args.test_name is not None and args.status != "started":
+        parser.error("--test-name is valid only with --status started")
 
     old_umask = os.umask(0o077)
     try:
         request = _load_request(args.request, args.state_dir, args.batch_id)
+        if args.test_name is not None:
+            request = select_quarantine_session_request(request, args.test_name)
         session_id = args.session_id or request.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError(

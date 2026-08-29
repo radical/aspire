@@ -218,7 +218,9 @@ Before starting, show the user the batch ID, complete test list, original issue
 links, and exact worker prompt. After approval:
 
 1. Create one idle local worktree session from the repository default branch.
-2. Record `started` before sending work to that session:
+2. Record `started` before sending work to that session. For a staged
+   single-test trial, add `--test-name "Namespace.Type.Method"`; this derives a
+   separately identified one-test batch from the validated proposal:
 
    ```bash
    python3 "$CI_SHEPHERD_ROOT/scripts/quarantine_session.py" \

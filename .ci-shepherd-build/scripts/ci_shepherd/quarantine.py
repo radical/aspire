@@ -76,6 +76,25 @@ def _request_for_tests(
     }
 
 
+def select_quarantine_session_request(
+    request: Mapping[str, Any],
+    test_name: str,
+) -> dict[str, object]:
+    tests = request.get("tests")
+    if not isinstance(tests, list):
+        raise ValueError("Quarantine request tests must be a list.")
+    matches = [
+        dict(test)
+        for test in tests
+        if isinstance(test, Mapping) and test.get("testName") == test_name
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Quarantine request must contain exactly one test named {test_name}."
+        )
+    return _request_for_tests(request, matches)
+
+
 def build_quarantine_session_request(
     prepared: Mapping[str, Any],
     judgments: Mapping[str, Any],

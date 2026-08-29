@@ -12,6 +12,7 @@ from ci_shepherd.quarantine import (
     read_quarantine_session_events,
     record_quarantine_session_event,
     render_quarantine_session_section,
+    select_quarantine_session_request,
 )
 from quarantine_session import _load_request
 
@@ -136,6 +137,22 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertEqual([21, 22], request["tests"][0]["issueNumbers"])
         self.assertIn("Addresses #21", request["workerPrompt"])
         self.assertIn("Addresses #22", request["workerPrompt"])
+
+    def test_selects_one_test_for_a_bounded_trial(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+
+        selected = select_quarantine_session_request(
+            request,
+            "Tests.FirstTest",
+        )
+
+        self.assertEqual(
+            ["Tests.FirstTest"],
+            [test["testName"] for test in selected["tests"]],
+        )
+        self.assertNotEqual(request["batchId"], selected["batchId"])
+        self.assertIn("Tests.FirstTest", selected["workerPrompt"])
+        self.assertNotIn("Tests.SecondTest", selected["workerPrompt"])
 
     def test_suppresses_a_new_batch_while_another_session_is_active(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())

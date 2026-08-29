@@ -123,6 +123,13 @@ slice:
 5. Recollect into a new cycle.
 6. Confirm the result is observed and the same action is not proposed again.
 
+Keep a separate local Markdown trial log for these slices. The structured
+proposal and result files remain authoritative; the log is the operator view of
+the issue or test currently being processed, its intended action, evidence,
+action IDs, current phase, preflight result, terminal result, and post-action
+reconciliation. Update the same entry as the slice progresses instead of
+creating disconnected progress notes.
+
 Recommended order:
 
 - [ ] Edit or create one canonical shepherd status comment where the message
@@ -165,6 +172,15 @@ improved where deterministic producer changes can prevent noise.
 - [ ] Ensure producer-created issues expose enough run, job, test, and branch
   identity to distinguish recurrence, regression, and unrelated failures.
 - [ ] Add producer-side tests for close, reopen, reuse, and duplicate behavior.
+- [ ] Correlate incident episodes by workflow and stable failure fingerprint
+  across issues and time. A recovered transient episode may still close, but a
+  recurring cluster should raise a pattern signal on the newest relevant issue
+  with links to similar episodes, occurrence counts across distinct runs and
+  days, and a recommendation to investigate a durable fix.
+- [ ] Surface the pattern on the current issue rather than creating a separate
+  meta-issue initially. The comment must distinguish the latest episode from
+  the recurring failure family and must remain idempotent as more occurrences
+  arrive.
 
 These changes should follow observed shepherd reports rather than speculative
 rewrites of all issue-opening automation.
@@ -217,7 +233,7 @@ Do not implement these as part of the next operational trial:
 - labels used only to mirror local state;
 - a separate service or queue.
 
-The next concrete action is to finish repository validation and review, commit
-the bounded investigation and quarantine lifecycle, then run one fresh
-read-only cycle from a checkout containing that commit. The scheduled workflow
-stays disabled until that manual run matches the recorded safety contract.
+The next concrete action is to exercise one individually approved
+comment-plus-close slice, reconcile it in a new collection, and then prepare one
+single-target quarantine trial. The scheduled workflow stays disabled until the
+staged actions preserve the recorded safety contract.
