@@ -11,6 +11,7 @@ from ci_shepherd.quarantine import (
     build_quarantine_session_request,
     read_quarantine_session_events,
     record_quarantine_session_event,
+    render_quarantine_session_section,
 )
 from quarantine_session import _load_request
 
@@ -153,6 +154,52 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertIsNone(plan["proposal"])
         self.assertEqual("another-session-active", plan["suppressionReason"])
         self.assertEqual("quarantine:fnv1a64:older", plan["activeBatchId"])
+
+    def test_reports_outstanding_work_when_current_cycle_has_no_candidates(self) -> None:
+        request = build_quarantine_session_request(
+            _prepared(),
+            {
+                **_judgments(),
+                "issues": [],
+            },
+        )
+        active_plan = build_quarantine_session_plan(
+            request,
+            [
+                {
+                    "repository": "owner/repo",
+                    "batchId": "quarantine:active",
+                    "status": "started",
+                }
+            ],
+        )
+        open_plan = build_quarantine_session_plan(
+            request,
+            [
+                {
+                    "repository": "owner/repo",
+                    "batchId": "quarantine:open",
+                    "status": "pull-request-open",
+                    "pullRequestUrl": "https://github.com/owner/repo/pull/99",
+                    "tests": [],
+                }
+            ],
+        )
+
+        self.assertEqual(
+            "another-session-active",
+            active_plan["suppressionReason"],
+        )
+        self.assertEqual("quarantine:active", active_plan["activeBatchId"])
+        self.assertEqual(
+            "awaiting-pull-request",
+            open_plan["suppressionReason"],
+        )
+        self.assertEqual(["quarantine:open"], open_plan["openBatchIds"])
+        self.assertIn(
+            "https://github.com/owner/repo/pull/99",
+            render_quarantine_session_section(open_plan),
+        )
 
     def test_records_one_active_session_and_terminal_result(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())

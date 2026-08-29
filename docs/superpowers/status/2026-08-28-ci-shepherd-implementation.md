@@ -66,7 +66,8 @@ The governing behavior and safety contract remains
   preserve every original issue URL.
 - A serialized one-active-session quarantine ledger with crash-safe appends,
   repository isolation, abandoned-session recovery, and precise partial-success
-  tracking.
+  tracking. Active sessions and open draft PRs remain visible even when current
+  evidence produces no quarantine candidates.
 - Separate `pull-request-open` and merge-confirmed `completed` states. An
   unmerged or closed draft cannot permanently suppress a test; a failed event
   makes its targets eligible again.
@@ -83,7 +84,7 @@ The governing behavior and safety contract remains
 The final repository validation passed:
 
 ```text
-917 tests passed
+918 tests passed
 python3 -m compileall passed
 git diff --check passed
 ```

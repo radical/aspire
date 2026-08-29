@@ -216,20 +216,28 @@ def build_quarantine_session_plan(
         ),
         None,
     )
+    open_pull_requests = [
+        event
+        for event in latest_by_batch.values()
+        if event.get("status") == "pull-request-open"
+    ]
     tests = request.get("tests")
     proposal: Mapping[str, Any] | None = request
     suppression_reason: str | None = None
-    active_batch_id: str | None = None
-    if not isinstance(tests, list) or not tests:
+    active_batch_id = str(active["batchId"]) if active is not None else None
+    if active is not None:
         proposal = None
-        suppression_reason = "no-candidates"
-    elif active is not None:
-        proposal = None
-        active_batch_id = str(active["batchId"])
         suppression_reason = (
             "session-already-active"
             if active_batch_id == request.get("batchId")
             else "another-session-active"
+        )
+    elif not isinstance(tests, list) or not tests:
+        proposal = None
+        suppression_reason = (
+            "awaiting-pull-request"
+            if open_pull_requests
+            else "no-candidates"
         )
     else:
         completed_test_names = {
@@ -281,15 +289,13 @@ def build_quarantine_session_plan(
         "activeBatchId": active_batch_id,
         "openBatchIds": sorted(
             str(event["batchId"])
-            for event in latest_by_batch.values()
-            if event.get("status") == "pull-request-open"
+            for event in open_pull_requests
         ),
         "pendingPullRequests": sorted(
             {
                 str(event["pullRequestUrl"])
-                for event in latest_by_batch.values()
-                if event.get("status") == "pull-request-open"
-                and isinstance(event.get("pullRequestUrl"), str)
+                for event in open_pull_requests
+                if isinstance(event.get("pullRequestUrl"), str)
             }
         ),
     }

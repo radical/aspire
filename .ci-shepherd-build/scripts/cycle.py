@@ -536,6 +536,10 @@ def finish_cycle(
         "proposalCount": len(proposals["proposals"]),
         "quarantineTestCount": len(quarantine_request["tests"]),
         "quarantineSessionProposed": quarantine_plan["proposal"] is not None,
+        "quarantineActiveBatchId": quarantine_plan["activeBatchId"],
+        "quarantinePendingPullRequestCount": len(
+            quarantine_plan["pendingPullRequests"]
+        ),
         "investigationRequestCount": len(investigation_plan["requests"]),
         "deferredInvestigationCount": len(
             investigation_plan["deferredRequests"]
