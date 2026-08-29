@@ -25,10 +25,17 @@ Implemented and covered by the local suite:
 - legacy-result migration and paginated comment reads;
 - issue-only executable proposals and mandatory explicit repositories.
 
-Still required before production enablement:
+Fork-only safety validation is complete:
 
-- completion of the fork-only interrupted-action and dependent-close
-  simulation.
+- a forced process exit after the issue #69 comment POST left only the persisted
+  intent and one live comment;
+- replay reconciled that exact comment through GET-only matching without a
+  duplicate mutation;
+- the dependent close accepted the comment's recorded post-mutation issue
+  version and closed issue #69 with reason `completed`.
+
+Production mutation remains independently denied until a separate rollout
+explicitly removes that remediation guard.
 
 Validated on 2026-08-29:
 
@@ -59,6 +66,8 @@ Validated on 2026-08-29:
   every leaf remains bounded;
 - comment and edit results carry the post-mutation issue version so dependent
   closes accept only that exact version;
+- fork issue #69 proved interrupted-intent reconciliation and dependent-close
+  execution with one comment and one close;
 - the final local suite passed 979 tests after these additions.
 
 ## Confirmed Failure Modes
