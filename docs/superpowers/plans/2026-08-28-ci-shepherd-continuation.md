@@ -26,6 +26,13 @@ Current implementation and evidence are recorded in
   bounded handoff.
 - [x] Handle pull requests conservatively and suppress low-value watch
   comments.
+- [x] Keep generic unknown failures with unavailable diagnostics in a
+  report-only investigation queue instead of posting passive watch comments.
+- [x] Recognize complete one-off incidents with a directly cited later
+  successful `main` run from the same workflow as closure candidates when no
+  contradictory blocker remains; never use age or silence alone as recovery.
+- [x] Retire an existing owned watch or human-request comment when the issue
+  moves to report-only investigation.
 - [x] Preserve a deterministic full default document and accept sparse model
   overrides.
 - [x] Render the Markdown report deterministically from validated JSON.
@@ -80,6 +87,8 @@ Exit criteria:
 
 - Incremental runs remain materially cheaper than the bootstrap run.
 - Stable watch cases do not produce repeated comment edits.
+- Unknown cases produce a status comment only when all current investigation
+  work is exhausted and a named future event is the remaining gate.
 - New recurring failures transition predictably.
 - Unchanged cases are reviewed at most once per seven days, and a completed
   review resets that deadline.
@@ -127,6 +136,8 @@ improved where deterministic producer changes can prevent noise.
 - [ ] Do not reopen a human-closed issue merely because its old identity
   matched; create or link a new episode according to an explicit producer
   policy.
+- [ ] When a recovered one-off incident is closed, create a new linked incident
+  for a future recurrence instead of reopening or reusing the closed record.
 - [ ] Preserve structured occurrence metadata so the shepherd does not have to
   parse prose or truncated comments.
 - [ ] Ensure producer-created issues expose enough run, job, test, and branch

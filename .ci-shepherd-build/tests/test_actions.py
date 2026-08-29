@@ -114,6 +114,28 @@ def _judgments() -> dict[str, object]:
     }
 
 
+def _investigate_judgments() -> dict[str, object]:
+    judgments = _judgments()
+    issue = judgments["issues"][0]
+    assert isinstance(issue, dict)
+    issue["category"] = "unknown"
+    recommendations = issue["recommendations"]
+    assert isinstance(recommendations, list)
+    recommendation = recommendations[0]
+    assert isinstance(recommendation, dict)
+    recommendation.update(
+        {
+            "disposition": "investigate",
+            "target": {"kind": "issue", "value": 21},
+            "confidence": "low",
+            "summary": "Investigate the missing diagnostic identity.",
+            "missingEvidence": ["diagnostic logs"],
+            "reassessWhen": "After the bounded investigation completes.",
+        }
+    )
+    return judgments
+
+
 def _resolved_prepared() -> dict[str, object]:
     prepared = _prepared()
     issue = prepared["issues"][0]
@@ -522,6 +544,89 @@ class WatchActionTests(unittest.TestCase):
             "<!-- ci-shepherd:idempotency-key=issue:21:status -->",
             proposal["body"],
         )
+
+    def test_report_only_investigation_does_not_propose_a_status_comment(self) -> None:
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _investigate_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], result["proposals"])
+
+    def test_investigation_retires_an_existing_watch_comment(self) -> None:
+        result = build_action_proposals(
+            _with_owned_comment(
+                _snapshot(),
+                "[automated] The CI shepherd is watching this failure.",
+            ),
+            _prepared(),
+            _investigate_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(1, len(result["proposals"]))
+        proposal = result["proposals"][0]
+        self.assertEqual("edit-comment", proposal["operation"])
+        self.assertEqual(900, proposal["commentId"])
+        self.assertEqual("issue:21:status", proposal["idempotencyKey"])
+        self.assertIn("no longer watching or requesting input", proposal["body"])
+        self.assertIn("report-only investigation", proposal["body"])
+
+    def test_retired_investigation_comment_is_not_edited_repeatedly(self) -> None:
+        first = build_action_proposals(
+            _with_owned_comment(
+                _snapshot(),
+                "[automated] The CI shepherd is watching this failure.",
+            ),
+            _prepared(),
+            _investigate_judgments(),
+            "ankj",
+        )
+        retired_body = first["proposals"][0]["body"]
+
+        result = build_action_proposals(
+            _with_owned_comment(_snapshot(), retired_body),
+            _prepared(),
+            _investigate_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], result["proposals"])
+        self.assertEqual([21], result["unchangedIssueNumbers"])
+
+    def test_multiple_report_only_investigations_share_one_retirement_edit(self) -> None:
+        judgments = _investigate_judgments()
+        recommendations = judgments["issues"][0]["recommendations"]
+        assert isinstance(recommendations, list)
+        second = copy.deepcopy(recommendations[0])
+        second.update(
+            {
+                "target": {
+                    "kind": "failure-fingerprint",
+                    "value": "second-cause",
+                },
+                "summary": "Investigate the second failure target.",
+                "evidenceIds": ["issue:21", "pr:22"],
+            }
+        )
+        recommendations.append(second)
+
+        result = build_action_proposals(
+            _with_owned_comment(
+                _snapshot(),
+                "[automated] The CI shepherd is watching this failure.",
+            ),
+            _prepared(),
+            judgments,
+            "ankj",
+        )
+
+        self.assertEqual(1, len(result["proposals"]))
+        proposal = result["proposals"][0]
+        self.assertEqual("edit-comment", proposal["operation"])
+        self.assertEqual(["issue:21", "run:777", "pr:22"], proposal["evidenceIds"])
 
     def test_build_watch_proposals_edits_changed_owned_comment(self) -> None:
         result = build_watch_proposals(

@@ -145,6 +145,7 @@ def _compact_issue(
     tier1_cause_id: str | None = None,
     tier2_exception_type: str | None = None,
     tier2_test_name: str | None = "Namespace.Type.Test",
+    tier3_error_code: str | None = None,
     candidate_state: str = "resolved",
     candidate_action: str = "recommend-close",
     blockers: list[str] | None = None,
@@ -158,6 +159,7 @@ def _compact_issue(
     markers: list[dict[str, object]] | None = None,
     author: str | None = None,
     run_payload: dict[str, object] | None = None,
+    run_availability: str = "available",
     pr_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     evidence_bundle: list[dict[str, object]] = []
@@ -203,7 +205,9 @@ def _compact_issue(
             {
                 "id": evidence_id,
                 "kind": kind,
-                "availability": "available",
+                "availability": (
+                    run_availability if kind == "workflow-run" else "available"
+                ),
                 "payload": payload,
             }
         )
@@ -230,7 +234,7 @@ def _compact_issue(
             "tier1CauseId": tier1_cause_id,
             "tier2TestName": tier2_test_name,
             "tier2ExceptionType": tier2_exception_type,
-            "tier3ErrorCode": None,
+            "tier3ErrorCode": tier3_error_code,
             "tier3Job": None,
         },
         "candidateState": candidate_state,
@@ -1141,6 +1145,293 @@ class PocValidationTests(unittest.TestCase):
         recommendation = default_judgment["recommendations"][0]
         self.assertIn("run:19149", recommendation["evidenceIds"])
 
+    def test_old_unknown_one_off_with_later_success_supports_review_close(self) -> None:
+        issue = _compact_issue(
+            19452,
+            title=(
+                "Java SDK Validation failed with exit code 1; "
+                "job logs unavailable"
+            ),
+            tier1_cause_id="polyglot-java-sdk-validation-build-image-failure",
+            tier2_test_name=None,
+            tier3_error_code="1",
+            candidate_state="observing",
+            candidate_action="wait",
+            ledger_rows=[
+                {
+                    "date": "2026-05-01",
+                    "sourceRun": 32082892403,
+                    "job": "Java SDK Validation",
+                }
+            ],
+            run_payload={
+                "runId": 32099999999,
+                "workflowId": 42,
+                "workflowName": "Tests",
+                "headBranch": "main",
+                "createdAt": "2026-08-10T12:00:00Z",
+            },
+        )
+        issue["evidenceBundle"].append(
+            {
+                "id": "run:19452:failed",
+                "kind": "workflow-run",
+                "availability": "available",
+                "payload": {
+                    "runId": 32082892403,
+                    "workflowId": 42,
+                    "workflowName": "Tests",
+                    "conclusion": "failure",
+                    "headBranch": "main",
+                    "createdAt": "2026-05-01T12:00:00Z",
+                },
+            }
+        )
+        prepared = _compact_prepared([issue])
+
+        compact = build_compact_poc_input(prepared)
+        compact_issue = compact["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "review-close"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+        self.assertEqual("run:19452", compact_issue["recoveredRunEvidenceId"])
+        self.assertIsNone(compact_issue["watchReason"])
+
+    def test_unknown_one_off_ignores_success_from_an_unrelated_workflow(self) -> None:
+        issue = _compact_issue(
+            19453,
+            title="Java SDK Validation failed with exit code 1; job logs unavailable",
+            tier1_cause_id="polyglot-java-sdk-validation-build-image-failure",
+            tier2_test_name=None,
+            tier3_error_code="1",
+            candidate_state="observing",
+            candidate_action="wait",
+            ledger_rows=[
+                {
+                    "date": "2026-05-01",
+                    "sourceRun": 32082892403,
+                    "job": "Java SDK Validation",
+                }
+            ],
+            run_payload={
+                "runId": 32099999999,
+                "workflowId": 99,
+                "workflowName": "Tests",
+                "headBranch": "main",
+                "createdAt": "2026-08-10T12:00:00Z",
+            },
+        )
+        issue["evidenceBundle"].append(
+            {
+                "id": "run:19453:failed",
+                "kind": "workflow-run",
+                "availability": "available",
+                "payload": {
+                    "runId": 32082892403,
+                    "workflowId": 42,
+                    "workflowName": "Tests",
+                    "conclusion": "failure",
+                    "headBranch": "main",
+                    "createdAt": "2026-05-01T12:00:00Z",
+                },
+            }
+        )
+
+        compact_issue = build_compact_poc_input(_compact_prepared([issue]))["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "investigate"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+
+    def test_unknown_one_off_does_not_match_missing_workflow_id_sentinels(self) -> None:
+        issue = _compact_issue(
+            19456,
+            title="Java SDK Validation failed with exit code 1; job logs unavailable",
+            tier1_cause_id="polyglot-java-sdk-validation-build-image-failure",
+            tier2_test_name=None,
+            tier3_error_code="1",
+            candidate_state="observing",
+            candidate_action="wait",
+            ledger_rows=[
+                {
+                    "date": "2026-05-01",
+                    "sourceRun": 32082892403,
+                    "job": "Java SDK Validation",
+                }
+            ],
+            run_payload={
+                "runId": 32099999999,
+                "workflowId": 0,
+                "workflow": "Documentation Spellcheck",
+                "headBranch": "main",
+                "createdAt": "2026-08-10T12:00:00Z",
+            },
+        )
+        issue["evidenceBundle"].append(
+            {
+                "id": "run:19456:failed",
+                "kind": "workflow-run",
+                "availability": "available",
+                "payload": {
+                    "runId": 32082892403,
+                    "workflowId": 0,
+                    "workflow": "Tests",
+                    "conclusion": "failure",
+                    "headBranch": "main",
+                    "createdAt": "2026-05-01T12:00:00Z",
+                },
+            }
+        )
+
+        compact_issue = build_compact_poc_input(_compact_prepared([issue]))["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "investigate"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+
+    def test_unknown_one_off_with_contradictory_blocker_is_not_closed(self) -> None:
+        issue = _compact_issue(
+            19454,
+            title="Java SDK Validation failed with exit code 1; job logs unavailable",
+            tier1_cause_id="polyglot-java-sdk-validation-build-image-failure",
+            tier2_test_name=None,
+            tier3_error_code="1",
+            candidate_state="needs-human",
+            candidate_action="recommend-close",
+            blockers=["issue-updated-after-fix-without-ledger-row"],
+            ledger_rows=[
+                {
+                    "date": "2026-05-01",
+                    "sourceRun": 32082892403,
+                    "job": "Java SDK Validation",
+                }
+            ],
+            run_payload={
+                "runId": 32099999999,
+                "workflowId": 42,
+                "workflowName": "Tests",
+                "headBranch": "main",
+                "createdAt": "2026-08-10T12:00:00Z",
+            },
+        )
+        issue["evidenceBundle"].append(
+            {
+                "id": "run:19454:failed",
+                "kind": "workflow-run",
+                "availability": "available",
+                "payload": {
+                    "runId": 32082892403,
+                    "workflowId": 42,
+                    "workflowName": "Tests",
+                    "conclusion": "failure",
+                    "headBranch": "main",
+                    "createdAt": "2026-05-01T12:00:00Z",
+                },
+            }
+        )
+
+        compact_issue = build_compact_poc_input(_compact_prepared([issue]))["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "investigate"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+
+    def test_recurrent_unknown_failure_is_not_closed_by_one_later_success(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    19453,
+                    title="Validation failed with exit code 1; job logs unavailable",
+                    parsed_row_count=2,
+                    tier1_cause_id="validation-exit-1",
+                    tier2_test_name=None,
+                    tier3_error_code="1",
+                    candidate_state="observing",
+                    candidate_action="wait",
+                    ledger_rows=[
+                        {
+                            "date": "2026-05-01",
+                            "sourceRun": 32080000001,
+                            "job": "Validation",
+                        },
+                        {
+                            "date": "2026-06-01",
+                            "sourceRun": 32080000002,
+                            "job": "Validation",
+                        },
+                    ],
+                    run_payload={
+                        "runId": 32099999998,
+                        "headBranch": "main",
+                        "createdAt": "2026-08-10T12:00:00Z",
+                    },
+                )
+            ]
+        )
+
+        compact = build_compact_poc_input(prepared)
+
+        self.assertEqual(
+            ("unknown", "investigate"),
+            _category_and_disposition(compact["issues"][0]["defaultJudgment"]),
+        )
+
+    def test_unknown_failure_waiting_only_for_recurrence_remains_watch(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    19454,
+                    title="Validation failed with exit code 1",
+                    tier1_cause_id="validation-exit-1",
+                    tier2_test_name=None,
+                    tier3_error_code="1",
+                    candidate_state="observing",
+                    candidate_action="wait",
+                    bundle_size=2,
+                )
+            ]
+        )
+
+        compact_issue = build_compact_poc_input(prepared)["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "watch"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+        self.assertEqual(
+            "missing-diagnostic-identity",
+            compact_issue["watchReason"],
+        )
+
+    def test_generic_unknown_with_partial_run_evidence_defaults_to_investigate(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    19455,
+                    title="Validation failed with exit code 1",
+                    tier1_cause_id="validation-exit-1",
+                    tier2_test_name=None,
+                    tier3_error_code="1",
+                    candidate_state="observing",
+                    candidate_action="wait",
+                    run_availability="partial",
+                )
+            ]
+        )
+
+        compact_issue = build_compact_poc_input(prepared)["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "investigate"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+        self.assertIsNone(compact_issue["watchReason"])
+
     def test_real_snapshot_same_day_recovery_closes_citing_recovery_run(self) -> None:
         # Regression for issue #19149, built through the real collector-shaped
         # pipeline (raw snapshot -> prepare_assessment -> build_compact_poc_input)
@@ -1197,6 +1488,62 @@ class PocValidationTests(unittest.TestCase):
         )
         recommendation = default_judgment["recommendations"][0]
         self.assertIn(f"run:{issue_number}:recovery", recommendation["evidenceIds"])
+
+    def test_real_snapshot_unknown_recovery_matches_projected_workflow_name(self) -> None:
+        issue_number = 19457
+        referenced_by = [{"sourceIssueNumber": issue_number}]
+        failed_run = _real_evidence(
+            f"run:{issue_number}:failed",
+            "workflow-run",
+            {
+                "runId": 32082892403,
+                "workflowId": 0,
+                "workflow": "Tests",
+                "conclusion": "failure",
+                "status": "completed",
+                "branch": "main",
+                "createdAt": "2026-05-01T09:00:00Z",
+                "referencedBy": referenced_by,
+            },
+        )
+        recovery_run = _real_evidence(
+            f"run:{issue_number}:recovery",
+            "workflow-run",
+            {
+                "runId": 32099999999,
+                "workflowId": 0,
+                "workflow": "Tests",
+                "conclusion": "success",
+                "status": "completed",
+                "branch": "main",
+                "createdAt": "2026-08-10T12:00:00Z",
+                "referencedBy": referenced_by,
+            },
+        )
+        raw_snapshot = _real_snapshot(
+            issue_number,
+            title="Validation failed with exit code 1; job logs unavailable",
+            ledger_rows=[
+                {
+                    "date": "2026-05-01",
+                    "sourceRun": 32082892403,
+                    "job": "Tests / Validation",
+                }
+            ],
+            extra_evidence=(failed_run, recovery_run),
+        )
+
+        prepared = prepare_assessment(raw_snapshot)
+        compact_issue = build_compact_poc_input(prepared)["issues"][0]
+
+        self.assertEqual(
+            ("unknown", "review-close"),
+            _category_and_disposition(compact_issue["defaultJudgment"]),
+        )
+        self.assertEqual(
+            f"run:{issue_number}:recovery",
+            compact_issue["recoveredRunEvidenceId"],
+        )
 
     def test_real_snapshot_earlier_success_does_not_close(self) -> None:
         # A success run at or before the latest directly referenced failed run
@@ -1924,6 +2271,7 @@ class PocValidationTests(unittest.TestCase):
                     title="Job failed with exit code 1; logs unavailable",
                     tier1_cause_id="generic-job-exit-1",
                     tier2_test_name=None,
+                    tier3_error_code="1",
                     candidate_state="observing",
                     candidate_action="wait",
                 ),
@@ -1953,8 +2301,12 @@ class PocValidationTests(unittest.TestCase):
         self.assertIn("different day", single_test_watch["reassessWhen"])
         self.assertEqual("same-day-test-recurrence", issues[332]["watchReason"])
         self.assertTrue(issues[332]["reviewRequired"])
-        self.assertEqual("missing-diagnostic-identity", issues[333]["watchReason"])
+        self.assertIsNone(issues[333]["watchReason"])
         self.assertTrue(issues[333]["reviewRequired"])
+        self.assertEqual(
+            ("unknown", "investigate"),
+            _category_and_disposition(issues[333]["defaultJudgment"]),
+        )
         self.assertEqual("subthreshold-infrastructure-recurrence", issues[334]["watchReason"])
         self.assertTrue(issues[334]["reviewRequired"])
         infrastructure_watch = issues[334]["defaultJudgment"]["recommendations"][0]

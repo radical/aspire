@@ -83,6 +83,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "runId",
         "attempt",
         "name",
+        "workflow",
         "workflowName",
         "workflowId",
         "event",

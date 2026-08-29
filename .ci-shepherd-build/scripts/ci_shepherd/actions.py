@@ -79,6 +79,38 @@ def _render_watch_body(
     )
 
 
+def _render_retired_status_body(
+    issue_number: int,
+    recommendation: dict[str, Any],
+    snapshot: dict[str, object],
+) -> str:
+    evidence_ids = recommendation.get("evidenceIds")
+    if not isinstance(evidence_ids, list) or not all(
+        isinstance(evidence_id, str) for evidence_id in evidence_ids
+    ):
+        raise TypeError("Investigation evidenceIds must contain strings.")
+    return "\n".join(
+        [
+            (
+                "[automated] The CI shepherd is no longer watching or requesting "
+                "input through this status comment."
+            ),
+            "",
+            f"**Current assessment:** {recommendation['summary']}",
+            "",
+            "**Evidence reviewed:**",
+            *_evidence_lines(snapshot, evidence_ids),
+            "",
+            (
+                "**Status:** This case moved to report-only investigation. "
+                "No GitHub action has been started."
+            ),
+            "",
+            _status_markers(issue_number),
+        ]
+    )
+
+
 def _render_ping_human_body(
     issue_number: int,
     recommendation: dict[str, Any],
@@ -583,6 +615,40 @@ def _selected_status_recommendation(
     return None
 
 
+def _selected_investigation_recommendation(
+    issue: dict[str, object],
+) -> dict[str, object] | None:
+    recommendations = issue.get("recommendations")
+    if not isinstance(recommendations, list):
+        raise TypeError("Validated recommendations must be a list.")
+    matches = [
+        recommendation
+        for recommendation in recommendations
+        if isinstance(recommendation, dict)
+        and recommendation.get("disposition") == "investigate"
+    ]
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    combined = dict(matches[0])
+    combined["summary"] = " ".join(
+        str(recommendation.get("summary") or "").strip()
+        for recommendation in matches
+        if str(recommendation.get("summary") or "").strip()
+    )
+    combined["evidenceIds"] = list(
+        dict.fromkeys(
+            evidence_id
+            for recommendation in matches
+            for evidence_id in recommendation.get("evidenceIds", [])
+            if isinstance(evidence_id, str)
+        )
+    )
+    return combined
+
+
 def build_watch_proposals(
     snapshot: object,
     prepared: object,
@@ -695,6 +761,47 @@ def build_action_proposals(
     for issue in judgments["issues"]:
         issue_number = issue["issueNumber"]
         status_recommendation = _selected_status_recommendation(issue)
+        if status_recommendation is None:
+            investigation = _selected_investigation_recommendation(issue)
+            if investigation is not None:
+                key = f"issue:{issue_number}:status"
+                existing = _owned_status_comments(snapshot, issue_number, key)
+                if len(existing) > 1:
+                    raise ValueError(
+                        f"Issue {issue_number} has multiple owned status comments."
+                    )
+                if existing:
+                    body = _render_retired_status_body(
+                        issue_number,
+                        investigation,
+                        snapshot,
+                    )
+                    existing_body = str(existing[0].get("body") or "").strip()
+                    if existing_body == body.strip():
+                        unchanged = result["unchangedIssueNumbers"]
+                        if (
+                            isinstance(unchanged, list)
+                            and issue_number not in unchanged
+                        ):
+                            unchanged.append(issue_number)
+                    else:
+                        proposals.append(
+                            {
+                                "actionId": (
+                                    f"{prepared['snapshotId']}:issue:{issue_number}:"
+                                    "retire-status-comment"
+                                ),
+                                "issueNumber": issue_number,
+                                "issueUrl": prepared_issues[issue_number]["issueUrl"],
+                                "operation": "edit-comment",
+                                "commentId": existing[0]["id"],
+                                "idempotencyKey": key,
+                                "body": body,
+                                "evidenceIds": list(investigation["evidenceIds"]),
+                                "expectedIssueState": "open",
+                                "requiresSeparateApproval": True,
+                            }
+                        )
         if (
             status_recommendation is not None
             and status_recommendation["disposition"] == "ping-human"

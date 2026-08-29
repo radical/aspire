@@ -41,6 +41,16 @@ The governing behavior and safety contract remains
 - Report-only pull-request `watch`, `investigate`, and `no-action` states.
   `ping-human` may create a comment; a later non-escalated state may only retire
   that existing comment.
+- Unknown issue categories remain separate from their disposition. Generic exit
+  codes with unavailable or budget-excluded diagnostics default to report-only
+  investigation instead of producing a passive watch comment.
+- Complete one-off unknown incidents may become closure candidates only when a
+  directly issue-scoped later successful `main` run from the same workflow
+  proves recovery and no contradictory blocker remains. Age or silence alone is
+  not recovery, and recurrent incidents stay open.
+- When an issue transitions from a visible watch or human request to report-only
+  investigation, the shepherd proposes retiring the existing owned status
+  comment in place rather than leaving stale guidance visible.
 - Collection completeness, warnings, error details, pull-request handoff
   exclusions, progress, and GET audit data in recorded artifacts.
 
@@ -100,6 +110,19 @@ Observed:
 The replay proves that model review is incremental. It does not yet prove
 post-execution comment suppression; that requires one explicitly approved live
 action followed by recollection.
+
+### Unknown-incident policy replay
+
+The frozen reassessment snapshot was replayed after tightening unknown-incident
+handling:
+
+- 892 CI shepherd tests pass; Python compilation and diff checks pass.
+- Issue #19452 remains category `unknown` but changes from `watch` to
+  report-only `investigate`.
+- No comment or other action is proposed for #19452.
+- Of 19 unknown issues, 13 default to `investigate`, 5 remain genuine bounded
+  watches, and 1 is an evidence-backed duplicate closure candidate.
+- No GitHub effect was executed.
 
 ## Persisted State
 

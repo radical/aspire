@@ -623,9 +623,15 @@ defaults and avoid contradicting safe queues:
    Recurrent actionable trackers without autoclose need investigation. Missing
    or unrecognized producer ledgers need human review.
 5. Do not ping a human solely because an issue is old. For an old single
-   occurrence, investigate positive execution coverage or continue watching;
-   silence is not recovery. `review-close` requires the prepared resolution
-   evidence and no contradictory blocker.
+   occurrence, investigate positive execution coverage; silence is not
+   recovery. A complete one-off record with a citable later successful run on
+   `main` may be `review-close`. The successful run must match the failed
+   workflow and no contradictory blocker may remain. Without that recovery
+   proof, investigate when machine-fetchable evidence remains or continue
+   watching for a named future event. A future recurrence must create a new
+   incident linked to the closed issue instead of reopening or reusing it.
+   `review-close` requires the prepared resolution evidence and no
+   contradictory blocker.
    Missing machine-fetchable evidence is `investigate`, not `ping-human`.
    `ping-human` is reserved for a decision, permission, ownership, or access
    question only a person can answer.
@@ -637,7 +643,11 @@ defaults and avoid contradicting safe queues:
    when useful investigation work can happen now, including fetching missing
    logs, reconciling related issues, or diagnosing repeated failures. Choose
    `watch` only after current evidence is exhausted and only a named future
-   event can change the decision.
+   event can change the decision. An `unknown` category does not itself justify
+   a status comment. `investigate` remains report-only; a status comment is
+   proposed only for a genuine `watch` or when specific human input is needed.
+   When an issue moves from a visible watch or human request to report-only
+   investigation, retire the existing owned status comment in place.
 7. `relatedIssues` is a candidate relationship, not proof of duplication.
    Aggregate `clusterOccurrenceSummary` only when the listed relationship and
    failure symptoms are compatible. Exact canonical tests with compatible

@@ -669,7 +669,12 @@ def _build_compact_issue(
         evidence_bundle,
         last_seen_date=effective_occurrence_summary.get("lastSeenDate"),
     )
-    recovered_run_evidence_id = _recovered_run_evidence_id(verification_context)
+    recovered_run_evidence_id = _recovered_run_evidence_id(
+        verification_context,
+        require_matching_workflow=(
+            _default_category(title, producer, identity) == "unknown"
+        ),
+    )
     if (
         recovered_run_evidence_id is not None
         and recovered_run_evidence_id not in allowed_evidence_ids
@@ -684,11 +689,17 @@ def _build_compact_issue(
         candidate_action=candidate_action,
         identity=identity,
         occurrence_summary=effective_occurrence_summary,
+        blockers=blockers,
         missing_prerequisites=missing_prerequisites,
         resolution_evidence=resolution_evidence,
         allowed_evidence_ids=allowed_evidence_ids,
         human_context=human_context,
         verification_context=verification_context,
+        diagnostics_unavailable=_diagnostics_unavailable(
+            title,
+            identity,
+            evidence_bundle,
+        ),
     )
     _apply_superseded_default(default_judgment, issue_number, action_context)
     _apply_canonical_cluster_summary(default_judgment, action_context)
@@ -1602,7 +1613,32 @@ def _build_verification_context(
     """
     merged_pull_requests: list[dict[str, Any]] = []
     later_successful_runs: list[dict[str, Any]] = []
+    matching_later_successful_runs: list[dict[str, Any]] = []
     latest_failed_run_instant = _latest_referenced_failed_run_instant(evidence_bundle)
+    failed_workflow_ids: set[int] = set()
+    failed_workflow_names: set[str] = set()
+    for raw_evidence in evidence_bundle:
+        if not isinstance(raw_evidence, Mapping):
+            continue
+        if (
+            raw_evidence.get("availability") != "available"
+            or raw_evidence.get("kind") != "workflow-run"
+        ):
+            continue
+        payload = raw_evidence.get("payload")
+        if not isinstance(payload, Mapping) or payload.get("conclusion") != "failure":
+            continue
+        workflow_id = payload.get("workflowId")
+        if (
+            isinstance(workflow_id, int)
+            and not isinstance(workflow_id, bool)
+            and workflow_id > 0
+        ):
+            failed_workflow_ids.add(workflow_id)
+        workflow_name = _normalized_workflow_name(payload)
+        if workflow_name is not None:
+            failed_workflow_names.add(workflow_name)
+
     for raw_evidence in evidence_bundle:
         evidence = _require_mapping(raw_evidence, "prepared evidence")
         if evidence.get("availability") != "available":
@@ -1670,19 +1706,52 @@ def _build_verification_context(
                 # directly referenced failed run's own instant.
                 if created_at_instant <= latest_failed_run_instant:
                     continue
-            later_successful_runs.append(
-                {"evidenceId": evidence_id, "headBranch": head_branch, "createdAt": created_at}
-            )
+            run_summary = {
+                "evidenceId": evidence_id,
+                "headBranch": head_branch,
+                "createdAt": created_at,
+            }
+            later_successful_runs.append(run_summary)
+            workflow_id = payload.get("workflowId")
+            workflow_name = _normalized_workflow_name(payload)
+            if (
+                isinstance(workflow_id, int)
+                and not isinstance(workflow_id, bool)
+                and workflow_id > 0
+                and failed_workflow_ids
+            ):
+                matches_failed_workflow = workflow_id in failed_workflow_ids
+            else:
+                matches_failed_workflow = (
+                    workflow_name is not None
+                    and workflow_name in failed_workflow_names
+                )
+            if matches_failed_workflow:
+                matching_later_successful_runs.append(run_summary)
 
     merged_pull_requests.sort(key=lambda item: item["mergedAt"])
     later_successful_runs.sort(key=lambda item: item["createdAt"])
+    matching_later_successful_runs.sort(key=lambda item: item["createdAt"])
     return {
         "issueScopedMergedPullRequests": merged_pull_requests,
         "laterSuccessfulRuns": later_successful_runs,
+        "matchingLaterSuccessfulRuns": matching_later_successful_runs,
     }
 
 
-def _recovered_run_evidence_id(verification_context: Mapping[str, Any] | None) -> str | None:
+def _normalized_workflow_name(payload: Mapping[str, Any]) -> str | None:
+    for field in ("workflow", "workflowName", "name"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.casefold().split())
+    return None
+
+
+def _recovered_run_evidence_id(
+    verification_context: Mapping[str, Any] | None,
+    *,
+    require_matching_workflow: bool = False,
+) -> str | None:
     """Return the earliest directly referenced later successful run, if any.
 
     The earliest run after the last occurrence is the most direct recovery
@@ -1691,7 +1760,11 @@ def _recovered_run_evidence_id(verification_context: Mapping[str, Any] | None) -
     """
     if not verification_context:
         return None
-    later_successful_runs = verification_context.get("laterSuccessfulRuns")
+    later_successful_runs = verification_context.get(
+        "matchingLaterSuccessfulRuns"
+        if require_matching_workflow
+        else "laterSuccessfulRuns"
+    )
     if not isinstance(later_successful_runs, list) or not later_successful_runs:
         return None
     first = later_successful_runs[0]
@@ -1839,11 +1912,13 @@ def _build_default_judgment(
     candidate_action: str,
     identity: Mapping[str, Any],
     occurrence_summary: Mapping[str, Any],
+    blockers: list[str],
     missing_prerequisites: list[str],
     resolution_evidence: Mapping[str, Any],
     allowed_evidence_ids: list[str],
     human_context: Mapping[str, Any] | None,
     verification_context: Mapping[str, Any] | None = None,
+    diagnostics_unavailable: bool = False,
 ) -> dict[str, Any]:
     category = _default_category(title, producer, identity)
     # A recovered run only counts as recovery evidence for the default
@@ -1851,7 +1926,10 @@ def _build_default_judgment(
     # allowedEvidence the agent (and any downstream reviewer) can see.
     # Otherwise review-close would cite a run that isn't in evidenceIds,
     # and isn't visible in allowedEvidence, at all.
-    recovered_run_evidence_id = _recovered_run_evidence_id(verification_context)
+    recovered_run_evidence_id = _recovered_run_evidence_id(
+        verification_context,
+        require_matching_workflow=category == "unknown",
+    )
     if (
         recovered_run_evidence_id is not None
         and recovered_run_evidence_id not in allowed_evidence_ids
@@ -1867,6 +1945,8 @@ def _build_default_judgment(
         occurrence_summary=occurrence_summary,
         human_context=human_context,
         recovered_run_evidence_id=recovered_run_evidence_id,
+        diagnostics_unavailable=diagnostics_unavailable,
+        has_blockers=bool(blockers),
     )
     target = _default_target(issue_number, category, identity)
     confidence = (
@@ -2061,6 +2141,29 @@ def _default_category(title: str, producer: str, identity: Mapping[str, Any]) ->
     return "unknown"
 
 
+def _diagnostics_unavailable(
+    title: str,
+    identity: Mapping[str, Any],
+    evidence_bundle: Sequence[Any],
+) -> bool:
+    error_code = identity.get("tier3ErrorCode")
+    if not isinstance(error_code, str) or error_code.strip() not in {"1", "-1"}:
+        return False
+    if identity.get("tier2TestName") or identity.get("tier2ExceptionType"):
+        return False
+
+    normalized_title = " ".join(title.lower().split())
+    if "logs unavailable" in normalized_title or "logs are unavailable" in normalized_title:
+        return True
+
+    return any(
+        isinstance(evidence, Mapping)
+        and evidence.get("kind") == "workflow-run"
+        and evidence.get("availability") in {"partial", "expired-or-unavailable", "not-enriched"}
+        for evidence in evidence_bundle
+    )
+
+
 def _default_disposition(
     *,
     producer: str,
@@ -2072,6 +2175,8 @@ def _default_disposition(
     occurrence_summary: Mapping[str, Any],
     human_context: Mapping[str, Any] | None,
     recovered_run_evidence_id: str | None = None,
+    diagnostics_unavailable: bool = False,
+    has_blockers: bool = False,
 ) -> str:
     if (
         candidate_state == "resolved"
@@ -2082,6 +2187,17 @@ def _default_disposition(
 
     independent_runs = _require_nonnegative_int(occurrence_summary, "independentRunCount")
     distinct_days = _require_nonnegative_int(occurrence_summary, "distinctDayCount")
+
+    if (
+        category == "unknown"
+        and recovered_run_evidence_id is not None
+        and independent_runs == 1
+        and occurrence_summary.get("ledgerComplete") is True
+        and occurrence_summary.get("schemaRecognized") is True
+        and candidate_state != "needs-human"
+        and not has_blockers
+    ):
+        return "review-close"
 
     if category == "automation-tracker":
         if autoclose is True:
@@ -2114,6 +2230,8 @@ def _default_disposition(
             return "ping-human"
         return "investigate"
     if category == "product-or-tooling":
+        return "investigate"
+    if category == "unknown" and diagnostics_unavailable:
         return "investigate"
     if candidate_action == "investigate":
         return "investigate"
