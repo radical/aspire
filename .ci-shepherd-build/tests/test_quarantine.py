@@ -124,6 +124,14 @@ class QuarantineSessionRequestTests(unittest.TestCase):
             "PR body must begin with `[automated] `",
             request["workerPrompt"],
         )
+        self.assertIn(
+            "If a target is already quarantined",
+            request["workerPrompt"],
+        )
+        self.assertIn(
+            "Identify the merged pull request",
+            request["workerPrompt"],
+        )
 
     def test_combines_duplicate_issue_owners_for_the_same_test(self) -> None:
         judgments = _judgments()
@@ -402,6 +410,37 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 read_quarantine_session_events(state),
             )
             self.assertIsNotNone(retried["proposal"])
+
+    def test_started_batch_can_reconcile_an_already_merged_pull_request(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+            )
+
+            completed = record_quarantine_session_event(
+                state,
+                request,
+                status="completed",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="session-123",
+                pull_request_url="https://github.com/owner/repo/pull/98",
+                completed_test_names=[
+                    "Tests.FirstTest",
+                    "Tests.SecondTest",
+                ],
+            )
+
+            self.assertEqual("completed", completed["status"])
+            self.assertEqual(
+                "https://github.com/owner/repo/pull/98",
+                completed["pullRequestUrl"],
+            )
 
     def test_repository_sessions_are_isolated(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())

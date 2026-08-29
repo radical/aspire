@@ -240,11 +240,16 @@ links, and exact worker prompt. After approval:
    continue validating the remaining targets. If unrelated files changed or a
    changed target still fails validation after one quarantine-only correction,
    record `failed` and stop.
-6. Show the draft PR title and full body. Only after approval, commit, push the
+6. If a target is already quarantined with the original issue URL, do not create
+   an empty commit or PR. Verify the merged PR that introduced the exact
+   attribute, then record `completed` directly from the started batch with that
+   PR URL and exact test list. This reconciles stale proposals without a false
+   `pull-request-open` event.
+7. Show the draft PR title and full body. Only after approval, commit, push the
    branch to the user's fork, and open a draft PR. The visible body begins with
    `[automated] ` and uses `Addresses #N`; the original failure issues remain
    open.
-7. Record `pull-request-open` with the draft PR URL and only the tests actually
+8. Record `pull-request-open` with the draft PR URL and only the tests actually
    changed and validated:
 
    ```bash
@@ -261,12 +266,19 @@ links, and exact worker prompt. After approval:
    Repeat `--completed-test` for every test represented in the pull request.
    Blocked targets are not recorded in the open-PR event and remain eligible
    for later reassessment.
-8. A draft PR is not completion. After GET-only reconciliation confirms that it
-   merged, record `completed` with the same URL and exact test list. If it closes
-   unmerged or is abandoned, record `failed` instead so the tests can be
-   proposed again. A later cycle can finish either transition by passing
-   `--batch-id` with its current `quarantine-session.json`; the session ID is
-   recovered from the ledger.
+9. A draft PR is not completion. Every later pass reconciles each pending PR
+   before proposing another quarantine batch:
+   - if it merged, record `completed` with the same URL and exact test list;
+   - if it is open with PR-caused failing checks, resume the recorded worktree
+     session to diagnose, fix, validate, commit, and push;
+   - if it is open with pending or successful checks, leave it awaiting the PR;
+   - if it closed unmerged or was abandoned, record `failed` so the tests can be
+     proposed again.
+
+   The follow-up worker preserves complete failing-command output and reports
+   each pushed commit. A later cycle can finish either terminal transition by
+   passing `--batch-id` with its current `quarantine-session.json`; the session
+   ID is recovered from the ledger.
 
 This is intentionally a lightweight coordinator protocol, not a scheduler or
 general job engine.

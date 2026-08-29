@@ -47,6 +47,9 @@ def _worker_prompt(repository: str, tests: list[dict[str, object]]) -> str:
     lines.extend(
         [
             "",
+            "Before editing:",
+            "If a target is already quarantined with its original issue URL, make no change. Identify the merged pull request that introduced the exact attribute, verify that it merged, and report its URL so the coordinator can reconcile the stale proposal directly to completion.",
+            "",
             "After editing:",
             "1. Confirm the diff contains only the expected quarantine attributes and required using directives.",
             "2. Run `./restore.sh` once.",
@@ -448,15 +451,24 @@ def record_quarantine_session_event(
                     f"Quarantine batch {batch_id} belongs to another session."
                 )
         elif status == "completed":
-            if previous is None or previous.get("status") != "pull-request-open":
+            if previous is None or previous.get("status") not in {
+                "started",
+                "pull-request-open",
+            }:
                 raise ValueError(
-                    f"Quarantine batch {batch_id} has no pull request awaiting merge."
+                    f"Quarantine batch {batch_id} has no active or open pull request."
                 )
             if previous.get("sessionId") != session_id:
                 raise ValueError(
                     f"Quarantine batch {batch_id} belongs to another session."
                 )
-            if previous.get("pullRequestUrl") != pull_request_url:
+            # A worker can discover that a stale proposal was already satisfied
+            # by a merged PR. In that case there is no truthful open-PR event to
+            # record, so reconcile the started batch directly to completion.
+            if (
+                previous.get("status") == "pull-request-open"
+                and previous.get("pullRequestUrl") != pull_request_url
+            ):
                 raise ValueError(
                     "Completed quarantine pull request does not match the recorded draft."
                 )
