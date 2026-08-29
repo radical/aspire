@@ -212,6 +212,10 @@ This is how a job fires based on *which tests run*, not on which file changed:
   targets: [job:winget-installer, job:homebrew-installer]
 ```
 
+The CLI starter validation jobs use this relationship too: whenever
+`Aspire.Cli.Tests` or `Aspire.Cli.EndToEnd.Tests` is selected, the selector also
+sets `job:cli-starter-validation`.
+
 ## Maintenance
 
 The map is hand-curated; there is no generator. Do not add a rule only because a

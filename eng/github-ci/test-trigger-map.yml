@@ -37,9 +37,6 @@ groups:
     # bundle (eng/Bundle.proj) must regenerate/validate them too.
     - job:winget-installer
     - job:homebrew-installer
-    # The starter validation installs this exact bundle from the PR build and runs `aspire new`/
-    # `aspire add`/`aspire run` with it on six platforms.
-    - job:cli-starter-validation
 
 # Conventions: <name> captures one path segment; the derived target is emitted only when that test
 # project exists in the matrix (existence guard), so a folder with no same-named test falls through to
@@ -195,10 +192,6 @@ path_rules:
     targets: [job:typescript-sdk]
     reason: vitest over generated TS SDK; ts-starter is a narrow sub-path of Aspire.Cli, not the whole project
   - paths:
-      - src/Aspire.Cli/Templating/Templates/ts-starter/**
-    targets: [job:cli-starter-validation]
-    reason: the starter validation creates and runs `aspire new aspire-ts-starter`, which is this embedded template
-  - paths:
       - src/**/*.tscompat.suppression.txt
       - tools/TypeScriptApiCompat/**
       - .github/workflows/typescript-api-compat.yml
@@ -253,9 +246,8 @@ path_rules:
   - paths:
       - .github/workflows/cli-starter-validation.yml
       - eng/scripts/cli-starter-validation.ps1
-      - eng/scripts/get-aspire-cli-pr.ps1
     targets: [job:cli-starter-validation]
-    reason: the reusable workflow and the script it runs ARE the starter validation; get-aspire-cli-pr.ps1 is how every one of its six platform jobs installs the PR CLI
+    reason: the reusable workflow and the script it runs ARE the starter validation
 
   # --- outerloop / e2e test targets: loose paths (production projects in affected_project_rules) --------
   - paths:
@@ -335,16 +327,16 @@ path_rules:
     reason: the Homebrew installer artifact job invokes this installed-CLI smoke test
   - paths:
       - eng/dashboardpack/**
-    targets: [test:Aspire.Hosting.Sdk.Tests, job:cli-starter-validation]
-    reason: AppHostSdkTargetsTests asserts Aspire.Dashboard.Sdk.* package ref; the starter validation launches the dashboard on every `aspire run`/`aspire start`
+    targets: [test:Aspire.Hosting.Sdk.Tests]
+    reason: AppHostSdkTargetsTests asserts Aspire.Dashboard.Sdk.* package ref
   - paths:
       - eng/dcppack/**
-    targets: [test:Aspire.Hosting.Sdk.Tests, test:Aspire.TerminalHost.Tests, job:cli-starter-validation]
-    reason: AppHostSdkTargetsTests asserts Aspire.Hosting.Orchestration.*; TerminalHost exercises DCP; the starter validation's resource-ready waits are orchestrated by DCP
+    targets: [test:Aspire.Hosting.Sdk.Tests, test:Aspire.TerminalHost.Tests]
+    reason: AppHostSdkTargetsTests asserts Aspire.Hosting.Orchestration.*; TerminalHost exercises DCP
   - paths:
       - src/Aspire.ProjectTemplates/**
-    targets: [test:Aspire.Templates.Tests, job:cli-starter-validation]
-    reason: Templates.Tests installs the template hive from src/Aspire.ProjectTemplates; the starter validation creates and runs `aspire new aspire-starter` from the same hive
+    targets: [test:Aspire.Templates.Tests]
+    reason: Templates.Tests installs the template hive from src/Aspire.ProjectTemplates
   - paths:
       - playground/**
     targets: [test:Aspire.Playground.Tests]
@@ -412,26 +404,6 @@ affected_project_rules:
   - projects: [Aspire.Hosting, Aspire.Hosting.AppHost, Aspire.Hosting.PostgreSQL, Aspire.Hosting.Redis]
     targets: [test:Aspire.EndToEnd.Tests]
     reason: OUTERLOOP-ONLY today; builds testproject apphost against built nugets
-  - projects:
-      - Aspire.Cli
-      - Aspire.TypeSystem
-      - Aspire.Managed
-      - Aspire.AppHost.Sdk
-      - Aspire.Dashboard
-      - Aspire.Hosting
-      - Aspire.Hosting.AppHost
-      - Aspire.Hosting.JavaScript
-      - Aspire.Hosting.CodeGeneration.TypeScript
-      - Aspire.Hosting.RemoteHost
-      - Aspire.Hosting.PostgreSQL
-    targets: [job:cli-starter-validation]
-    reason: >-
-      the six starter jobs run `aspire new` (aspire-starter + aspire-ts-starter), `aspire add
-      Aspire.Hosting.PostgreSQL`, then `aspire run`/`aspire start` and wait for resources -- so the
-      CLI, the AppHost SDK/host, the TypeScript AppHost stack that backs aspire-ts-starter, the
-      PostgreSQL integration it adds, and the dashboard launched by every run are all in the path.
-      Named individually rather than as Aspire.Hosting*: a leaf integration the starter apps never
-      reference must not spend six cross-platform runs.
   - projects: [Aspire.Cli, Aspire.TypeSystem, Aspire.Managed, Aspire.AppHost.Sdk]
     targets: [test:Aspire.Cli.EndToEnd.Tests]
     reason: consumes the CLI native archive (RequiresCliArchive=true) built from these sources
@@ -440,6 +412,9 @@ affected_project_rules:
 # Layer 2 selected tests, to a fixpoint (a derived test is itself expanded; cycle-safe). This is how
 # a job fires based on WHICH tests run, regardless of which file triggered them.
 derived_targets:
+  - tests: [test:Aspire.Cli.Tests, test:Aspire.Cli.EndToEnd.Tests]
+    targets: [job:cli-starter-validation]
+    reason: starter validation follows the same trigger set as the CLI and CLI end-to-end tests
   - tests: [test:Aspire.Acquisition.Tests]
     targets: [job:winget-installer, job:homebrew-installer]
     reason: acquisition covers the installers; prepare the WinGet/Homebrew installer artifacts too

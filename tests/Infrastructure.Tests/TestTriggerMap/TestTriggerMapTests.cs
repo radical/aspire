@@ -379,7 +379,7 @@ public sealed class TestTriggerMapTests
         },
         {
             "eng/scripts/load-cli-e2e-images.sh",
-            ["test:Aspire.Cli.EndToEnd.Tests"]
+            ["test:Aspire.Cli.EndToEnd.Tests", "job:cli-starter-validation"]
         },
         {
             "eng/scripts/cli-starter-validation.ps1",
@@ -430,6 +430,18 @@ public sealed class TestTriggerMapTests
         Assert.Empty(result.UnmatchedFiles);
         Assert.Empty(result.TestProjects);
         Assert.Empty(result.Jobs);
+    }
+
+    [Theory]
+    [InlineData("Aspire.Cli.Tests")]
+    [InlineData("Aspire.Cli.EndToEnd.Tests")]
+    public void CliStarterValidationRunsWhenCliTestsAreSelected(string selectedTest)
+    {
+        var result = SelectWithRealMap("src/Aspire.Cli/Commands/RunCommand.cs", selectedTest);
+
+        Assert.False(result.SelectsAll);
+        Assert.Contains(selectedTest, result.TestProjects);
+        Assert.Contains("job:cli-starter-validation", result.Jobs);
     }
 
     [Fact]
@@ -666,7 +678,7 @@ public sealed class TestTriggerMapTests
             $"ALL only through the unattributed fallback): {string.Join(", ", unrouted)}");
     }
 
-    private static SelectionResult SelectWithRealMap(string path)
+    private static SelectionResult SelectWithRealMap(string path, params string[] layer1Affected)
     {
         var projectPaths = LoadSolutionProjectPaths();
         var testProjects = projectPaths
@@ -680,7 +692,7 @@ public sealed class TestTriggerMapTests
         var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
         var selector = new TestSelector(mapPath, testProjects, projectDirectories);
 
-        return selector.Select([path], [], new SelectorOptions());
+        return selector.Select([path], layer1Affected, new SelectorOptions());
     }
 
     private static string TextBetween(string text, string startMarker, string endMarker)
