@@ -216,7 +216,7 @@ internal static class Selection
         // --from/--changed-files input.
         trace.EnterStage("resolve changed files");
         var changedFileSet = options.ForceAll
-            ? new ChangedFileSet(Array.Empty<string>(), new Dictionary<string, string>(StringComparer.Ordinal))
+            ? new ChangedFileSet(Array.Empty<string>())
             : ResolveChangedFiles(options);
         var rawChangedFiles = changedFileSet.Files;
 
@@ -245,7 +245,7 @@ internal static class Selection
 
         trace.EnterStage("select (Layer 2 trigger map + Layer 1 union)");
         var selector = new TestSelector(options.MapPath, allTestProjects, projectDirectories);
-        var result = selector.Select(changedFiles, layer1Affected, new SelectorOptions(options.ForceAll, options.ForceAllReason), layer1.AttributedPaths, layer1.Paths, changedFileSet.Renames);
+        var result = selector.Select(changedFiles, layer1Affected, new SelectorOptions(options.ForceAll, options.ForceAllReason), layer1.AttributedPaths, layer1.Paths);
 
         trace.EnterStage("write summary and outputs");
         WriteSummary(options, result, allTestProjects, changedFiles, layer1Affected, excludedFiles);
@@ -412,13 +412,11 @@ internal static class Selection
     {
         if (options.ChangedFilesPath is not null)
         {
-            // An externally supplied file list carries no rename information, so there is no old
-            // side to exempt from the run-all escalation below.
             var suppliedFiles = File.ReadAllLines(options.ChangedFilesPath)
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .ToList();
-            return new ChangedFileSet(suppliedFiles, new Dictionary<string, string>(StringComparer.Ordinal));
+            return new ChangedFileSet(suppliedFiles);
         }
 
         if (options.From is null)
@@ -432,26 +430,21 @@ internal static class Selection
         // diff -- the PR's own changes -- not a base-tip..head diff.
         var range = options.To is null ? new[] { options.From } : new[] { options.From, options.To };
         // --name-status -M (not --name-only --no-renames): a rename is reported as one "R###" record
-        // carrying BOTH paths, not decomposed into a separate delete(old) + add(new). We still
-        // glob-match both sides -- a file moved OUT of a mapped directory (e.g. eng/clipack/foo ->
-        // eng/elsewhere) must still hit that directory's rule via its old path (see
-        // SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests) -- but knowing the old->new
-        // pairing lets TestSelector stop treating a stale, no-longer-referenced old name as an unmapped
-        // "leftover" that forces the run-all fallback, PROVIDED the new side is actually still part of
-        // this diff's changed-file set (see TestSelector.Select and the root cause described there).
-        // Layer 1 already parses this same "-M" format (GraphAffectedProjects.GetChangedPathsFromGit);
-        // this keeps Layer 2 consistent.
+        // carrying BOTH paths, not decomposed into a separate delete(old) + add(new). We glob-match
+        // both sides identically to any other changed file -- a file moved OUT of a mapped directory
+        // (e.g. eng/clipack/foo -> eng/elsewhere) must still hit that directory's rule via its old path
+        // (see SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests), and an old path matched
+        // by nothing still forces the same run-all fallback as a plain deletion would (see
+        // TestSelector.Select). Layer 1 (GraphAffectedProjects.GetChangedPathsFromGit) parses the same
+        // "-M -z" format via ParseNameStatusOutput below -- one shared parser for both layers.
         // -z NUL-terminates every field instead of git's default newline-per-record, tab-per-field
         // text format. That default format quotes/escapes any path containing a byte >= 0x80, a tab,
         // a newline, a double-quote, or a backslash (e.g. a literal tab in a name becomes the 8
         // characters "old\tname.txt", with a literal backslash-t, not a real tab byte) -- and
         // `-c core.quotePath=false` only suppresses the non-ASCII-byte escaping, not the
         // tab/newline/quote/backslash escaping. A quoted/escaped path never glob-equals the real
-        // repo-relative path, so the map rules below would silently miss it, AND the mismatch would
-        // apply consistently to both the file list and renames -- so a rename whose path couldn't be
-        // attributed to any rule would still be wrongly exempted from the run-all fallback. NUL can
-        // never appear in a valid path, so `-z` lets git skip quoting entirely, for every path, with no
-        // exceptions.
+        // repo-relative path, so the map rules below would silently miss it. NUL can never appear in a
+        // valid path, so `-z` lets git skip quoting entirely, for every path, with no exceptions.
         var args = new List<string> { "diff", "--name-status", "-M", "-z" };
         args.AddRange(range);
 
@@ -461,8 +454,19 @@ internal static class Selection
             throw new InvalidOperationException($"git diff failed ({exitCode}): {stderr}");
         }
 
+        return ParseNameStatusOutput(stdout);
+    }
+
+    // Extracted from ResolveChangedFiles so tests can feed hand-crafted (including malformed)
+    // NUL-delimited `git diff --name-status -M -z` output directly, without needing an actual git
+    // process to produce it -- a real `git diff` that exits 0 never emits a truncated record, so the
+    // malformed-input path below can only be exercised synthetically. Also called directly by Layer 1
+    // (GraphAffectedProjects.GetChangedPathsFromGit), which runs the identical "-M -z" diff: sharing
+    // one parser guarantees both layers attribute byte-for-byte the same paths for every change,
+    // instead of two independently-maintained parsers that could silently drift apart.
+    internal static ChangedFileSet ParseNameStatusOutput(string stdout)
+    {
         var files = new List<string>();
-        var renames = new Dictionary<string, string>(StringComparer.Ordinal);
         // With -z the whole stream is just NUL-delimited fields back to back -- "status\0path\0" for a
         // plain change, "R100\0old\0new\0" for a rename (the numeric similarity suffix varies) -- with
         // no per-line framing to split on first. How many fields follow depends on the status, so walk
@@ -478,37 +482,40 @@ internal static class Selection
             {
                 if (tokenIndex + 1 >= tokens.Length)
                 {
-                    break; // truncated/malformed output; nothing left to parse
+                    // `git diff` exited 0 but the NUL-delimited stream ended mid-record (a status token
+                    // with no path(s) following it). This should never happen for well-formed output;
+                    // silently stopping here would return a partial change-file set to the selector,
+                    // which could omit a rule-matching path and under-select tests -- the opposite of
+                    // this tool's fail-safe design. Fail loudly instead.
+                    throw new InvalidOperationException(
+                        $"git diff --name-status -M -z produced a truncated rename/copy record: status '{status}' at token {tokenIndex - 1} of {tokens.Length} was not followed by both an old and new path.");
                 }
 
                 var oldPath = tokens[tokenIndex++];
                 var newPath = tokens[tokenIndex++];
                 files.Add(oldPath);
                 files.Add(newPath);
-                if (status.StartsWith('R'))
-                {
-                    renames[oldPath] = newPath;
-                }
             }
             else
             {
                 if (tokenIndex >= tokens.Length)
                 {
-                    break; // truncated/malformed output; nothing left to parse
+                    // Same reasoning as above: a plain-change status token with no path following it is
+                    // malformed output from a successful git invocation, not an expected empty diff.
+                    throw new InvalidOperationException(
+                        $"git diff --name-status -M -z produced a truncated record: status '{status}' at token {tokenIndex - 1} of {tokens.Length} was not followed by a path.");
                 }
 
                 files.Add(tokens[tokenIndex++]);
             }
         }
 
-        return new ChangedFileSet(files, renames);
+        return new ChangedFileSet(files);
     }
 
-    // The old path of a git-detected rename is still glob-matched like any other changed path (see
-    // ResolveChangedFiles), but TestSelector needs the old->new pairing (not just the old side) so it
-    // can verify the new path is actually part of this diff before exempting the old side from forcing
-    // the run-all fallback.
-    private sealed record ChangedFileSet(IReadOnlyCollection<string> Files, IReadOnlyDictionary<string, string> Renames);
+    // Both paths of a git-detected rename are glob-matched identically to any other changed path (see
+    // ResolveChangedFiles) -- there is no separate old->new pairing for TestSelector to consume.
+    internal sealed record ChangedFileSet(IReadOnlyCollection<string> Files);
 
     // Repo-relative, '/'-separated directories of every project in Aspire.slnx -- the universe the
     // Layer 1 graph walks. The selector treats a changed file under one of these dirs as

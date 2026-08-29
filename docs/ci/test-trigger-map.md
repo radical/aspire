@@ -282,42 +282,37 @@ carry it forward. Never silently regenerate it.
   no project in `Aspire.slnx`) forces the full matrix. A missed test is a silent
   regression; an extra run is just slower. Files that need no CI are dropped by
   the `prefilter` before this point.
-- **Renamed files and the fallback.** The old path of a git-detected rename
-  (`git diff -M`, default 50% content-similarity threshold) that matches no
-  Layer 2 rule is exempted from this fallback instead of forcing `ALL` — a
-  same-commit rename that also repoints the map's own rule at the new name (as
-  [microsoft/aspire#19486](https://github.com/microsoft/aspire/pull/19486)
-  did for `eng/scripts/aspire-skills-bundle.common.ps1` →
-  `aspire-skills-bundles.common.ps1`) would otherwise leave the stale old name
-  matching nothing and trip run-all, even though the new path already carries
-  whatever the map says about this content moving. This exemption only applies
-  when the rename's new path is itself present in the (post-`prefilter`)
-  changed-file set passed to the selector — i.e. something downstream actually
-  had a chance to account for it (matched a rule, was ignored, is
-  Layer-1-owned, or itself becomes an unmatched leftover that forces `ALL`). A
-  destination the `prefilter` already dropped entirely (e.g. renamed into a
-  doc-only path) never reaches that evaluation, so the old path is NOT
-  exempted in that case and the fallback still fires — silently trusting old-path
-  membership alone would otherwise under-select relative to what the
-  destination's content actually needs. The old path is still glob-matched
-  like any other changed path first, so a cross-directory rename still hits
-  the old directory's rule; only an old path matched by *nothing* is
-  exempted, and exemption can only skip forcing `ALL` — it never removes a
-  target that a rule matched. A rename git does not detect as such (below the
-  50% threshold — e.g. a move combined with a heavy rewrite in the same
-  commit) is unaffected by this exemption and reported as a plain delete + add,
-  which still forces the fallback if either side is otherwise unmapped.
-  - **Known residual limitation.** Rename detection is a content-similarity
-    heuristic, not a semantic guarantee, so it can occasionally pair an
-    unrelated deletion with an unrelated addition that merely look similar
-    (e.g. two near-identical or empty boilerplate files). If that mispaired
-    "old path" also lost its own rule in the same commit, its removal would be
-    exempted here even though it isn't really the deletion side of the rule's
-    file. This needs several independent, rare coincidences to line up, and
-    raising the similarity threshold to close it isn't viable — the real
-    rename above was only detected at 54% similarity, so any threshold high
-    enough to rule out coincidental pairing would also miss real renames like
-    it. Treated as an accepted, bounded tradeoff rather than a code fix.
+- **Rename handling.** Renames are not special-cased. Both the old and new path
+  of a git-detected rename (`git diff -M`, default 50% content-similarity
+  threshold) are evaluated exactly like any other changed path, including
+  against the run-all fallback above — an unmatched old path forces `ALL` just
+  like an unmatched deletion would.
+
+  An earlier version of this rule exempted a rename's old path from forcing
+  `ALL` when its new path was itself present in the (post-`prefilter`)
+  changed-file set, on the theory that the new path's own evaluation already
+  accounted for the moved content. That exemption was removed after an audit
+  found two ways it could silently under-select tests:
+  - **Shared-directory moves.** A `path_rules` glob scoped to the old
+    directory (e.g. `tests/Shared/Logging/**`) can have consumers beyond the
+    file that moved. Moving one file out of that directory into an unrelated
+    project's own directory exempted the old path once the new path matched
+    *its* rule — but any other file still left behind in the old directory,
+    and depending on the moved content, got no signal that anything changed.
+  - **Ignore/prefilter laundering.** A rename whose new path lands on an
+    `ignore`d glob, or is dropped by the `prefilter` before Layer 2 ever runs,
+    "satisfied" the exemption's presence check without the destination
+    contributing any real coverage — silently treating the old path as
+    accounted for when nothing had actually evaluated it.
+
+  Removing the exemption reopens
+  [microsoft/aspire#19486](https://github.com/microsoft/aspire/pull/19486)'s
+  own motivating case — a same-commit rename that also repoints the map's own
+  rule at the new name now correctly forces `ALL` again, because the stale old
+  name matches nothing. That is the accepted, safe tradeoff: an unnecessary
+  full run is strictly better than a silently skipped test, and it matches the
+  fallback's existing philosophy of failing safe to `ALL` for anything it
+  cannot positively account for.
 - **Layer 1 failure is fatal.** Audit mode returns run-all only after a
   successful selection. A graph-computation failure fails the selector in every
   mode.

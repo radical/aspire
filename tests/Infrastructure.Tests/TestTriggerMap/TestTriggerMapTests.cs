@@ -419,104 +419,32 @@ public sealed class TestTriggerMapTests
     // PR #19486 (https://github.com/microsoft/aspire/pull/19486) renamed several `eng/scripts/*`
     // helpers and, in the SAME commit, updated their own `test-trigger-map.yml` entries to reference
     // the new filenames. Two of those renames are pure/near-pure (git's default -M50% rename detector
-    // recognizes them: R095 and R054 similarity) -- these are the ones this fix targets. Empirically
-    // verified against the real PR diff (base fd9bbf76b4, head 1e46e48122) with the fixed selector:
-    // both old paths are now correctly exempted from forcing the run-all fallback.
+    // recognizes them: R095 and R054 similarity); the third (`verify-aspire-skills-bundle.ps1`) was
+    // rewritten heavily enough in the same commit (115 lines removed, 154 added -> ~30% content
+    // similarity) that git's default -M50% threshold reports it as a plain delete+add, not a rename
+    // (confirmed with `git diff -M10%`, which *does* detect it at R030).
     //
-    // A third renamed file in that PR, `verify-aspire-skills-bundle.ps1`, was rewritten heavily enough
-    // in the same commit (115 lines removed, 154 added -> ~30% content similarity) that git's DEFAULT
-    // -M50% threshold reports it as a plain delete+add, not a rename (confirmed with `git diff -M10%`,
-    // which *does* detect it at R030). That file is deliberately NOT part of this scenario: its old
-    // path is not git-rename-detected, so this fix's exemption does not (and, by design, should not)
-    // apply to it -- see docs/ci/test-trigger-map.md for the rationale (lowering the similarity
-    // threshold to catch it would risk pairing unrelated delete+add files as a false rename, hiding a
-    // genuine unmatched deletion). As a result, replaying the full, literal PR #19486 diff against
-    // today's fix still selects ALL -- for a narrower and more accurate reason than before the fix, but
-    // still ALL. That is expected, by-design, and covered by
-    // SameCommitRenameWithMapEntryMovedAndOneUndetectedPathStillForcesRunAll below, which replays all
-    // three renamed paths (not just the two this fix targets) against the same real map.
+    // Because the map's own path_rule/ignore entries for these paths move to the new filenames in the
+    // same commit, every old path -- rename-detected or not -- matches nothing at HEAD, so each is
+    // treated as an ordinary unmatched leftover and forces the run-all fallback. This is empirically
+    // verified against the real PR diff (base fd9bbf76b4, head 1e46e48122): the selector correctly
+    // selects ALL for the same reasons production reported at that head SHA.
     //
-    // This test uses a temp copy of the REAL map with just the two git-rename-detected paths'
-    // entries updated to their new names (simulating "as if PR #19486's own map.yml edit, for these
-    // two files, had already landed"), keeping every other rule, group, and affected-project mapping
-    // exactly as checked out on disk today. Because of that, `expectedTargets` below is coupled to the
-    // live map: an unrelated future change to test-trigger-map.yml's Aspire.Cli/Aspire.Cli.Tests
-    // routing (e.g. a new job gate or group added to their rules) can legitimately require updating
-    // this list, not just a regression in the selector.
+    // An earlier version of this fix exempted the git-rename-detected old paths from the fallback
+    // (trusting that their new paths' own evaluation already accounted for the moved content). That
+    // exemption was removed after an audit found it could silently under-select tests for
+    // cross-directory moves out of a shared-glob directory, and for renames into a destination the
+    // prefilter drops before anything evaluates it (see docs/ci/test-trigger-map.md). Selecting ALL
+    // for this in-place-rename-with-moved-map-entry case is the accepted, safe tradeoff -- an
+    // unnecessary full run is strictly better than a silently skipped test.
+    //
+    // This test uses a temp copy of the REAL map with all three paths' entries left exactly as
+    // checked out on disk today (i.e. still referencing the OLD names), so replaying the literal old
+    // paths reproduces "the map has not yet been updated for this rename" -- the same shape as the
+    // production run at PR #19486's head SHA.
     [Fact]
-    public void SameCommitRenameWithMapEntryMovedToNewPathSelectsExactTargetsWithoutEscalating()
+    public void SameCommitRenameWithMapEntryMovedToNewPathForcesRunAll()
     {
-        var realMapText = File.ReadAllText(Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml"));
-        const string oldCommonPath = "eng/scripts/aspire-skills-bundle.common.ps1";
-        const string newCommonPath = "eng/scripts/aspire-skills-bundles.common.ps1";
-        const string oldUpdatePath = "eng/scripts/update-aspire-skills-bundle.ps1";
-        const string newUpdatePath = "eng/scripts/update-aspire-skills-bundles.ps1";
-
-        Assert.Contains(oldCommonPath, realMapText);
-        Assert.Contains(oldUpdatePath, realMapText);
-
-        var simulatedMapText = realMapText
-            .Replace(oldCommonPath, newCommonPath, StringComparison.Ordinal)
-            .Replace(oldUpdatePath, newUpdatePath, StringComparison.Ordinal);
-
-        var tempDir = Directory.CreateTempSubdirectory();
-        try
-        {
-            var tempMapPath = Path.Combine(tempDir.FullName, "test-trigger-map.yml");
-            File.WriteAllText(tempMapPath, simulatedMapText);
-
-            var renames = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [oldCommonPath] = newCommonPath,
-                [oldUpdatePath] = newUpdatePath,
-            };
-            var changedFiles = new[] { oldCommonPath, newCommonPath, oldUpdatePath, newUpdatePath };
-
-            // Aspire.Cli (production) and Aspire.Cli.Tests (its test project) both changed, mirroring the
-            // production-code portion of PR #19486's actual diff (agent-init/telemetry commands).
-            var result = SelectWithRealMap(
-                changedFiles,
-                layer1Affected: ["Aspire.Cli", "Aspire.Cli.Tests"],
-                renames: renames,
-                mapPathOverride: tempMapPath);
-
-            Assert.False(result.SelectsAll, $"unexpectedly selected ALL: {result.EscalationReason}");
-            Assert.Empty(result.UnmatchedFiles);
-
-            var actualTargets = result.TestProjects.Select(name => $"test:{name}")
-                .Concat(result.Jobs)
-                .Order(StringComparer.Ordinal);
-            string[] expectedTargets =
-            [
-                "job:deployment-e2e",
-                "job:extension-e2e",
-                "job:polyglot",
-                "job:typescript-api-compat",
-                "test:Aspire.Cli.EndToEnd.Tests",
-                "test:Aspire.Cli.Tests",
-                "test:Infrastructure.Tests",
-            ];
-            Assert.Equal(expectedTargets.Order(StringComparer.Ordinal), actualTargets);
-        }
-        finally
-        {
-            Directory.Delete(tempDir.FullName, recursive: true);
-        }
-    }
-
-    // Companion to SameCommitRenameWithMapEntryMovedToNewPathSelectsExactTargetsWithoutEscalating above:
-    // that test isolates the mechanism this fix targets using only the two paths PR #19486 renamed that
-    // git's default -M50% threshold actually detects as renames. This test instead replays PR #19486's
-    // full three-path change set -- including `verify-aspire-skills-bundle.ps1`, which git reports as a
-    // plain delete+add (see RenameBelowGitSimilarityThresholdIsNotExemptedAndStillForcesRunAll in
-    // SelectTestsCliTests.cs for why) -- against the real production map, to make explicit and
-    // falsifiable that the LITERAL, complete PR #19486 diff still selects ALL today. That is expected:
-    // this PR fixes the in-place-rename-with-moved-map-entry mechanism, not git's own rename-similarity
-    // detection, and does not claim to change the fallback outcome for content-heavy rewrite+renames.
-    [Fact]
-    public void SameCommitRenameWithMapEntryMovedAndOneUndetectedPathStillForcesRunAll()
-    {
-        var realMapText = File.ReadAllText(Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml"));
         const string oldCommonPath = "eng/scripts/aspire-skills-bundle.common.ps1";
         const string newCommonPath = "eng/scripts/aspire-skills-bundles.common.ps1";
         const string oldUpdatePath = "eng/scripts/update-aspire-skills-bundle.ps1";
@@ -524,6 +452,7 @@ public sealed class TestTriggerMapTests
         const string oldVerifyPath = "eng/scripts/verify-aspire-skills-bundle.ps1";
         const string newVerifyPath = "eng/scripts/verify-aspire-skills-bundles.ps1";
 
+        var realMapText = File.ReadAllText(Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml"));
         Assert.Contains(oldCommonPath, realMapText);
         Assert.Contains(oldUpdatePath, realMapText);
         Assert.Contains(oldVerifyPath, realMapText);
@@ -539,14 +468,6 @@ public sealed class TestTriggerMapTests
             var tempMapPath = Path.Combine(tempDir.FullName, "test-trigger-map.yml");
             File.WriteAllText(tempMapPath, simulatedMapText);
 
-            // oldCommonPath/oldUpdatePath ARE git-rename-detected (see the golden test above); oldVerifyPath
-            // deliberately has NO entry here, modeling git's own real `--name-status -M` output for that
-            // specific pair: a plain "D" delete and a plain "A" add, with no "R###" record pairing them.
-            var renames = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [oldCommonPath] = newCommonPath,
-                [oldUpdatePath] = newUpdatePath,
-            };
             var changedFiles = new[]
             {
                 oldCommonPath, newCommonPath,
@@ -554,13 +475,16 @@ public sealed class TestTriggerMapTests
                 oldVerifyPath, newVerifyPath,
             };
 
+            // Aspire.Cli (production) and Aspire.Cli.Tests (its test project) both changed, mirroring the
+            // production-code portion of PR #19486's actual diff (agent-init/telemetry commands).
             var result = SelectWithRealMap(
                 changedFiles,
                 layer1Affected: ["Aspire.Cli", "Aspire.Cli.Tests"],
-                renames: renames,
                 mapPathOverride: tempMapPath);
 
-            Assert.True(result.SelectsAll, $"expected the undetected verify-aspire-skills-bundle(s).ps1 rename to force the run-all fallback, but selection was: {result.EscalationReason}");
+            Assert.True(result.SelectsAll, $"expected all three old paths to force the run-all fallback, but selection was: {result.EscalationReason}");
+            Assert.Contains(oldCommonPath, result.UnmatchedFiles);
+            Assert.Contains(oldUpdatePath, result.UnmatchedFiles);
             Assert.Contains(oldVerifyPath, result.UnmatchedFiles);
         }
         finally
@@ -806,8 +730,8 @@ public sealed class TestTriggerMapTests
 
     /// <summary>
     /// Same as the single-path overload, but exercises the full <see cref="TestSelector.Select"/>
-    /// signature (multiple changed files, Layer 1 affected projects, and rename-old-path exemption)
-    /// against the real map and real <c>Aspire.slnx</c> project directories.
+    /// signature (multiple changed files and Layer 1 affected projects) against the real map and real
+    /// <c>Aspire.slnx</c> project directories.
     /// </summary>
     /// <param name="mapPathOverride">
     /// When set, load the map from this path instead of the checked-out
@@ -817,7 +741,6 @@ public sealed class TestTriggerMapTests
     private static SelectionResult SelectWithRealMap(
         IReadOnlyCollection<string> paths,
         IReadOnlyCollection<string> layer1Affected,
-        IReadOnlyDictionary<string, string>? renames = null,
         string? mapPathOverride = null)
     {
         var projectPaths = LoadSolutionProjectPaths();
@@ -832,7 +755,7 @@ public sealed class TestTriggerMapTests
         var mapPath = mapPathOverride ?? Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
         var selector = new TestSelector(mapPath, testProjects, projectDirectories);
 
-        return selector.Select(paths, layer1Affected, new SelectorOptions(), renames: renames);
+        return selector.Select(paths, layer1Affected, new SelectorOptions());
     }
 
     private static string TextBetween(string text, string startMarker, string endMarker)

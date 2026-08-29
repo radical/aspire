@@ -224,6 +224,28 @@ public sealed class GraphAffectedProjectsTests
         Assert.Contains("Other", affected);
     }
 
+    // Failure mode: git's default text-mode `--name-status -M` output escapes a path containing a
+    // literal tab into a double-quoted, backslash-escaped literal (e.g. `"Other/da\tta.txt"`, nine
+    // literal characters, not one real tab byte) even with `core.quotePath=false` (that setting only
+    // suppresses non-ASCII-byte escaping, not tab/newline/quote/backslash escaping). The garbled string
+    // then fails to match Other's real directory prefix, so the new owner (Other) is silently dropped
+    // from the affected set even though the old owner (Core) and its dependents are still found via the
+    // unmangled old path. `-z` (shared with Layer 2's Selection.ParseNameStatusOutput) never escapes
+    // any byte, so both sides of the rename resolve correctly regardless of path content.
+    [Fact]
+    public void CrossProjectRenameIntoTabContainingPathAttributesTheNewOwner()
+    {
+        using var workspace = TemporaryWorkspace.Create(_outputHelper);
+        using var repo = new GitGraphFixture(workspace);
+
+        var affected = repo.RenameAcrossProjectsAndCompute("Core/data.txt", "Other/da\tta.txt");
+
+        Assert.Contains("Core", affected);
+        Assert.Contains("Mid", affected);
+        Assert.Contains("AppTests", affected);
+        Assert.Contains("Other", affected);
+    }
+
     /// <summary>
     /// Creates a disposable temp directory containing a minimal but real MSBuild project graph plus an
     /// <c>Aspire.slnx</c>, and runs <see cref="GraphAffectedProjects.Compute"/> against it using a

@@ -149,36 +149,31 @@ public sealed class TestSelector
     /// cause carries the seed file + reverse-dependency chain so the summary can show the full path. Null
     /// when Layer 1 did not run or produced no paths.
     /// </param>
-    /// <param name="renames">
-    /// Git-detected renames in this diff, old path -> new path (from a <c>git diff --name-status -M</c>
-    /// "R###\told\tnew" record). The old side is still glob-matched like any other changed file above --
-    /// a file moved OUT of a mapped directory must still hit that directory's rule via its old path
-    /// (see <c>SelectTestsCliTests.RenameOutOfMappedPathStillSelectsItsTests</c>) -- but if it ends up
-    /// matched by nothing, that is not necessarily a genuine unmapped leftover: the rename's new path may
-    /// already carry whatever the map says about this content moving. The old path is therefore exempted
-    /// from the run-all fallback below, but ONLY when its paired new path is present in
-    /// <paramref name="changedFiles"/> -- i.e. something downstream actually had a chance to account for
-    /// it (matched a rule, was ignored, is Layer-1-owned, or itself becomes an unmatched leftover that
-    /// forces ALL). A destination the caller's prefilter already dropped (e.g. classified as needing no
-    /// CI at all) never reaches that evaluation, so exempting the old side on its behalf would be an
-    /// unverified assumption, not a real accounting -- the fail-safe below still fires for it. Empty when
-    /// the caller has no rename information (e.g. <c>--changed-files</c> with an externally supplied
-    /// plain list).
-    /// </param>
+    /// <remarks>
+    /// A git-detected rename's old and new paths (from a <c>git diff --name-status -M</c>
+    /// "R###\told\tnew" record) both flow into <paramref name="changedFiles"/> and are evaluated
+    /// identically to any other changed path here -- there is no rename-specific handling. In
+    /// particular, an old path that ends up matched by nothing forces the same run-all fallback below
+    /// as a plain deletion would. A rename does not guarantee its new path's evaluation "covers" the
+    /// old path's content: the old location may have been part of a directory-scoped Layer 1 glob or
+    /// Layer 2 rule shared by other consumers that the new location does not carry (e.g.
+    /// <c>tests/Shared/Logging/*.cs</c> is glob-compiled by several real test projects; moving one of
+    /// its files into a single destination project's own folder would make the new path Layer-1-owned
+    /// by only that one project), or the new path may land somewhere the caller's prefilter drops
+    /// before either layer ever evaluates it. An earlier version of this method exempted an unmatched
+    /// rename old path from the fallback when its new path was present in <paramref name="changedFiles"/>;
+    /// that exemption was removed after an audit found both failure modes above are reachable in
+    /// practice. See docs/ci/test-trigger-map.md for the rationale.
+    /// </remarks>
     public SelectionResult Select(
         IReadOnlyCollection<string> changedFiles,
         IReadOnlyCollection<string> layer1Affected,
         SelectorOptions options,
         IReadOnlySet<string>? layer1AttributedPaths = null,
-        IReadOnlyDictionary<string, AffectedPath>? layer1Paths = null,
-        IReadOnlyDictionary<string, string>? renames = null)
+        IReadOnlyDictionary<string, AffectedPath>? layer1Paths = null)
     {
         var map = TriggerMap.Load(_mapPath);
         var attributedPaths = layer1AttributedPaths ?? new HashSet<string>(StringComparer.Ordinal);
-        var renamePairs = renames ?? new Dictionary<string, string>(StringComparer.Ordinal);
-        // Built once for the O(1) "is the rename's destination actually part of this diff" check below,
-        // rather than re-scanning changedFiles per rename candidate.
-        var changedFileLookup = new HashSet<string>(changedFiles, StringComparer.Ordinal);
 
         // name -> the reasons it was selected. The key set IS the selected set; the lists carry the
         // attribution surfaced in the PR comment / step summary.
@@ -246,43 +241,6 @@ public sealed class TestSelector
             if (fileMatched || ignored || layer1Owned)
             {
                 // Accounted for by some layer; nothing more to do for this file.
-                continue;
-            }
-
-            // The old side of a same-commit, in-place rename: e.g. this PR renamed
-            // aspire-skills-bundle.common.ps1 -> aspire-skills-bundles.common.ps1 AND updated the map's
-            // own path_rule to the new name in the same commit, so the old name now matches nothing.
-            // That is not a genuine unmapped leftover -- the new path already carries whatever targets
-            // this content's rename should select (additively; it can only add targets, never suppress
-            // them) -- so don't force ALL over it. See docs/ci/test-trigger-map.md for the full
-            // rationale and TestTriggerMapTests for the regression coverage.
-            //
-            // The exemption only fires when the new path is present in changedFiles (checked via
-            // changedFileLookup below), NOT merely because the old path is a known rename source. If the
-            // caller's prefilter already dropped the new path (e.g. a rename INTO a doc-only path that
-            // matches eng/github-ci/ci-skip-entirely-patterns.txt), nothing downstream ever evaluated
-            // whether that destination's content needs CI, so assuming it "carries whatever targets"
-            // would be an unverified guess, not a real accounting -- the fail-safe below must still fire
-            // for the old path in that case. When the new path IS present, either it matches something
-            // (the additive case this exemption exists for) or it matches nothing itself and becomes its
-            // own unmatched leftover (correctly still forcing ALL) -- so no separate check of what the
-            // new path resolved to is needed here.
-            //
-            // Known residual limitation: renamePairs comes from git's own "-M" similarity detection, a
-            // content heuristic, not a semantic guarantee -- it can occasionally pair an unrelated
-            // deletion with an unrelated addition that merely happen to be textually similar (e.g. two
-            // near-identical or empty boilerplate files). If that mispaired "old path" also lost its own
-            // map rule in the same commit, its removal would be exempted here even though it is not
-            // really the deletion side of the file this rule was written for. This requires several
-            // independent, rare coincidences (a same-commit rule move landing on a file whose deletion
-            // git also happens to mispair with something else), and raising the similarity threshold to
-            // close it is not viable: PR #19486's own real rename (the motivating case above) was only
-            // detected at R054 similarity (see
-            // RenameBelowGitSimilarityThresholdIsNotExemptedAndStillForcesRunAll), so any threshold high
-            // enough to rule out coincidental pairing would also stop detecting real renames like it.
-            // Accepted as a bounded, low-probability tradeoff rather than a code mitigation.
-            if (renamePairs.TryGetValue(file, out var renameDestination) && changedFileLookup.Contains(renameDestination))
-            {
                 continue;
             }
 
