@@ -11,7 +11,7 @@ KNOWN_OPERATIONS = frozenset({"create-comment", "edit-comment", "close-issue"})
 KNOWN_CLOSE_REASONS = frozenset({"completed", "not_planned", "duplicate"})
 KNOWN_ISSUE_STATES = frozenset({"open", "closed"})
 REPOSITORY_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-COMMON_PROPOSAL_FIELDS = frozenset(
+LEGACY_COMMON_PROPOSAL_FIELDS = frozenset(
     {
         "actionId",
         "dependsOn",
@@ -28,6 +28,36 @@ COMMON_PROPOSAL_FIELDS = frozenset(
         "expectedTargetState",
     }
 )
+EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
+    LEGACY_COMMON_PROPOSAL_FIELDS
+    - {"requiresSeparateApproval"}
+    | {"executionEligibility", "sourceEvidenceFingerprint"}
+)
+EXECUTION_ELIGIBILITY_FIELDS = frozenset(
+    {
+        "eligible",
+        "ciLabels",
+        "occurrenceCount",
+        "collectionComplete",
+        "unavailableEvidenceIds",
+        "untrustedReferenceEvidenceIds",
+        "blockingReasons",
+    }
+)
+EXECUTABLE_CI_LABELS = frozenset(
+    {"automation-broken", "ci-failure-cause", "test-failure"}
+)
+ELIGIBILITY_REASONS = frozenset(
+    {
+        "missing-ci-label",
+        "no-parsed-occurrences",
+        "incomplete-collection",
+        "unavailable-evidence",
+        "untrusted-reference-provenance",
+    }
+)
+MAX_EXECUTABLE_PROPOSAL_TTL_HOURS = 24
+MAX_EXECUTABLE_PROPOSALS_PER_ISSUE = 2
 OPERATION_FIELDS = {
     "create-comment": frozenset({"body"}),
     "edit-comment": frozenset({"body", "commentId"}),
@@ -102,6 +132,7 @@ def _validate_proposal(
     proposal: object,
     *,
     repository: str,
+    schema_version: int,
 ) -> dict[str, object]:
     if not isinstance(proposal, dict):
         raise TypeError("Each proposal must be an object.")
@@ -113,8 +144,13 @@ def _validate_proposal(
     )
     if operation not in KNOWN_OPERATIONS:
         raise ValueError(f"Unsupported operation for {action_id}: {operation}")
+    common_fields = (
+        EXECUTABLE_COMMON_PROPOSAL_FIELDS
+        if schema_version == 2
+        else LEGACY_COMMON_PROPOSAL_FIELDS
+    )
     unsupported_fields = set(proposal) - (
-        COMMON_PROPOSAL_FIELDS | OPERATION_FIELDS[operation]
+        common_fields | OPERATION_FIELDS[operation]
     )
     if unsupported_fields:
         raise ValueError(
@@ -128,6 +164,8 @@ def _validate_proposal(
     )
     if operation == "close-issue" and target_kind != "issue":
         raise ValueError(f"{action_id} cannot close a pull request.")
+    if schema_version == 2 and target_kind != "issue":
+        raise ValueError(f"{action_id} executable target must be an issue.")
 
     idempotency_key = _required_string(
         proposal.get("idempotencyKey"),
@@ -143,8 +181,18 @@ def _validate_proposal(
         or not all(isinstance(value, str) and value for value in evidence_ids)
     ):
         raise ValueError(f"{action_id}.evidenceIds must contain strings.")
-    if proposal.get("requiresSeparateApproval") is not True:
-        raise ValueError(f"{action_id} must require separate approval.")
+    if schema_version == 1:
+        if proposal.get("requiresSeparateApproval") is not True:
+            raise ValueError(f"{action_id} must require separate approval.")
+    else:
+        _validate_execution_eligibility(
+            proposal.get("executionEligibility"),
+            action_id=action_id,
+        )
+        _validate_source_evidence_fingerprint(
+            proposal.get("sourceEvidenceFingerprint"),
+            action_id=action_id,
+        )
 
     if operation in {"create-comment", "edit-comment"}:
         body = _required_string(
@@ -174,6 +222,159 @@ def _validate_proposal(
         _required_string(depends_on, field=f"{action_id}.dependsOn")
 
     return proposal
+
+
+def _validate_source_evidence_fingerprint(
+    value: object,
+    *,
+    action_id: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {"issueUpdatedAt"}:
+        raise ValueError(
+            f"{action_id}.sourceEvidenceFingerprint must contain exactly "
+            "issueUpdatedAt."
+        )
+    _required_string(
+        value.get("issueUpdatedAt"),
+        field=f"{action_id}.sourceEvidenceFingerprint.issueUpdatedAt",
+    )
+    return value
+
+
+def _validate_execution_eligibility(
+    value: object,
+    *,
+    action_id: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != EXECUTION_ELIGIBILITY_FIELDS:
+        raise ValueError(
+            f"{action_id}.executionEligibility must contain exactly the "
+            "supported fields."
+        )
+    eligible = value.get("eligible")
+    ci_labels = value.get("ciLabels")
+    occurrence_count = value.get("occurrenceCount")
+    collection_complete = value.get("collectionComplete")
+    unavailable_evidence_ids = value.get("unavailableEvidenceIds")
+    untrusted_reference_evidence_ids = value.get(
+        "untrustedReferenceEvidenceIds"
+    )
+    blocking_reasons = value.get("blockingReasons")
+    if not isinstance(eligible, bool):
+        raise ValueError(f"{action_id}.executionEligibility.eligible must be boolean.")
+    if (
+        not isinstance(ci_labels, list)
+        or not all(
+            isinstance(label, str) and label in EXECUTABLE_CI_LABELS
+            for label in ci_labels
+        )
+        or len(set(ci_labels)) != len(ci_labels)
+    ):
+        raise ValueError(
+            f"{action_id}.executionEligibility.ciLabels is invalid."
+        )
+    if (
+        not isinstance(occurrence_count, int)
+        or isinstance(occurrence_count, bool)
+        or occurrence_count < 0
+    ):
+        raise ValueError(
+            f"{action_id}.executionEligibility.occurrenceCount is invalid."
+        )
+    if not isinstance(collection_complete, bool):
+        raise ValueError(
+            f"{action_id}.executionEligibility.collectionComplete must be boolean."
+        )
+    if (
+        not isinstance(unavailable_evidence_ids, list)
+        or not all(
+            isinstance(evidence_id, str) and evidence_id
+            for evidence_id in unavailable_evidence_ids
+        )
+        or len(set(unavailable_evidence_ids))
+        != len(unavailable_evidence_ids)
+    ):
+        raise ValueError(
+            f"{action_id}.executionEligibility.unavailableEvidenceIds is invalid."
+        )
+    if (
+        not isinstance(untrusted_reference_evidence_ids, list)
+        or not all(
+            isinstance(evidence_id, str) and evidence_id
+            for evidence_id in untrusted_reference_evidence_ids
+        )
+        or len(set(untrusted_reference_evidence_ids))
+        != len(untrusted_reference_evidence_ids)
+    ):
+        raise ValueError(
+            f"{action_id}.executionEligibility."
+            "untrustedReferenceEvidenceIds is invalid."
+        )
+    if (
+        not isinstance(blocking_reasons, list)
+        or not all(reason in ELIGIBILITY_REASONS for reason in blocking_reasons)
+        or len(set(blocking_reasons)) != len(blocking_reasons)
+    ):
+        raise ValueError(
+            f"{action_id}.executionEligibility.blockingReasons is invalid."
+        )
+
+    derived_reasons: list[str] = []
+    if not ci_labels:
+        derived_reasons.append("missing-ci-label")
+    if occurrence_count <= 0:
+        derived_reasons.append("no-parsed-occurrences")
+    if not collection_complete:
+        derived_reasons.append("incomplete-collection")
+    if unavailable_evidence_ids:
+        derived_reasons.append("unavailable-evidence")
+    if untrusted_reference_evidence_ids:
+        derived_reasons.append("untrusted-reference-provenance")
+    if blocking_reasons != derived_reasons or eligible != (not derived_reasons):
+        raise ValueError(
+            f"{action_id}.executionEligibility is internally inconsistent."
+        )
+    return value
+
+
+def _validate_document_execution_eligibility(
+    value: object,
+    *,
+    proposals: list[object],
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {"status", "violations"}:
+        raise ValueError(
+            "executionEligibility must contain exactly status and violations."
+        )
+    status = value.get("status")
+    violations = value.get("violations")
+    if status not in {"eligible", "blocked"} or not isinstance(violations, list):
+        raise ValueError("executionEligibility document status is invalid.")
+
+    derived_violations: list[dict[str, object]] = []
+    for proposal in proposals:
+        assert isinstance(proposal, dict)
+        action_id = str(proposal["actionId"])
+        eligibility = _validate_execution_eligibility(
+            proposal.get("executionEligibility"),
+            action_id=action_id,
+        )
+        if eligibility["eligible"] is not True:
+            derived_violations.append(
+                {
+                    "actionId": action_id,
+                    "blockingReasons": list(eligibility["blockingReasons"]),
+                }
+            )
+    expected = {
+        "status": "blocked" if derived_violations else "eligible",
+        "violations": derived_violations,
+    }
+    if value != expected:
+        raise ValueError(
+            "executionEligibility document status is internally inconsistent."
+        )
+    return value
 
 
 def _proposal_target(
@@ -235,8 +436,59 @@ def _proposal_target(
 def validate_action_proposals(document: object) -> dict[str, object]:
     if not isinstance(document, dict):
         raise TypeError("Action proposals must be an object.")
-    if document.get("schemaVersion") != 1:
-        raise ValueError("Action proposals schemaVersion must be 1.")
+    schema_version = document.get("schemaVersion")
+    if schema_version not in {1, 2}:
+        raise ValueError("Action proposals schemaVersion must be 1 or 2.")
+    if schema_version == 2:
+        expected_fields = {
+            "schemaVersion",
+            "repository",
+            "snapshotId",
+            "shepherdAuthor",
+            "generatedAtUtc",
+            "proposalTtlHours",
+            "maxProposalsPerIssue",
+            "executionEligibility",
+            "proposals",
+            "unchangedIssueNumbers",
+        }
+        if set(document) != expected_fields:
+            raise ValueError(
+                "Executable action proposals must contain exactly the "
+                "supported document fields."
+            )
+        _required_string(document.get("generatedAtUtc"), field="generatedAtUtc")
+        proposal_ttl_hours = _required_int(
+            document.get("proposalTtlHours"),
+            field="proposalTtlHours",
+        )
+        if proposal_ttl_hours > MAX_EXECUTABLE_PROPOSAL_TTL_HOURS:
+            raise ValueError(
+                "proposalTtlHours exceeds the executor safety maximum."
+            )
+        max_proposals = _required_int(
+            document.get("maxProposalsPerIssue"),
+            field="maxProposalsPerIssue",
+        )
+        if max_proposals != MAX_EXECUTABLE_PROPOSALS_PER_ISSUE:
+            raise ValueError(
+                "maxProposalsPerIssue must equal the executor safety limit."
+            )
+        _required_string(document.get("snapshotId"), field="snapshotId")
+        _required_string(document.get("shepherdAuthor"), field="shepherdAuthor")
+        unchanged = document.get("unchangedIssueNumbers")
+        if (
+            not isinstance(unchanged, list)
+            or not all(
+                isinstance(issue_number, int)
+                and not isinstance(issue_number, bool)
+                and issue_number > 0
+                for issue_number in unchanged
+            )
+        ):
+            raise ValueError(
+                "unchangedIssueNumbers must contain positive integers."
+            )
 
     repository = _required_string(document.get("repository"), field="repository")
     repository_parts = repository.split("/")
@@ -253,7 +505,11 @@ def validate_action_proposals(document: object) -> dict[str, object]:
     action_ids: set[str] = set()
     idempotency_keys: set[str] = set()
     for raw_proposal in proposals:
-        proposal = _validate_proposal(raw_proposal, repository=repository)
+        proposal = _validate_proposal(
+            raw_proposal,
+            repository=repository,
+            schema_version=int(schema_version),
+        )
         action_id = str(proposal["actionId"])
         if action_id in action_ids:
             raise ValueError(f"Duplicate actionId: {action_id}")
@@ -270,6 +526,38 @@ def validate_action_proposals(document: object) -> dict[str, object]:
             raise ValueError(
                 f"{raw_proposal['actionId']}.dependsOn references an unknown action."
             )
+    for action_id in action_ids:
+        visited: set[str] = set()
+        current = action_id
+        while True:
+            if current in visited:
+                raise ValueError("Action proposal dependency graph contains a cycle.")
+            visited.add(current)
+            current_proposal = next(
+                proposal
+                for proposal in proposals
+                if isinstance(proposal, dict)
+                and proposal.get("actionId") == current
+            )
+            depends_on = current_proposal.get("dependsOn")
+            if depends_on is None:
+                break
+            current = str(depends_on)
+    if schema_version == 2:
+        _validate_document_execution_eligibility(
+            document.get("executionEligibility"),
+            proposals=proposals,
+        )
+        counts_by_issue: dict[int, int] = {}
+        for proposal in proposals:
+            assert isinstance(proposal, dict)
+            issue_number = _required_int(
+                proposal.get("issueNumber"),
+                field=f"{proposal['actionId']}.issueNumber",
+            )
+            counts_by_issue[issue_number] = counts_by_issue.get(issue_number, 0) + 1
+        if any(count > max_proposals for count in counts_by_issue.values()):
+            raise ValueError("Action proposals exceed maxProposalsPerIssue.")
     return document
 
 
@@ -422,19 +710,61 @@ def execute_action(
     prior_results: object,
     client: ActorClient,
     now: Callable[[], datetime],
+    override_suppression: bool = False,
 ) -> dict[str, object]:
     validated = validate_action_proposals(document)
     repository = str(validated["repository"])
     proposal = select_action(validated, action_id)
+    if validated["schemaVersion"] == 2:
+        document_eligibility = _validate_document_execution_eligibility(
+            validated.get("executionEligibility"),
+            proposals=validated["proposals"],
+        )
+        if document_eligibility["status"] != "eligible":
+            raise ValueError("Proposal document is not eligible for execution.")
+        eligibility = _validate_execution_eligibility(
+            proposal.get("executionEligibility"),
+            action_id=action_id,
+        )
+        if eligibility["eligible"] is not True:
+            raise ValueError(f"{action_id} is not eligible for execution.")
     attempted_at = _timestamp(now)
     results = _validated_results(prior_results, repository=repository)
+    target_kind, target_number, target_url, expected_state = _proposal_target(
+        proposal,
+        repository=repository,
+        action_id=action_id,
+    )
 
-    if any(result.get("actionId") == action_id for result in results):
+    if any(
+        result.get("actionId") == action_id
+        and result.get("outcome")
+        in {"executed", "skipped", "stale", "failed", "indeterminate"}
+        for result in results
+    ):
         return _terminal_result(
             action_id=action_id,
             attempted_at=attempted_at,
             outcome="stale",
             reason="action-already-attempted",
+        )
+
+    if (
+        proposal["operation"] == "create-comment"
+        and not override_suppression
+        and any(
+            result.get("outcome") == "executed"
+            and result.get("idempotencyKey") == proposal["idempotencyKey"]
+            and result.get("target")
+            == {"kind": target_kind, "number": target_number}
+            for result in results
+        )
+    ):
+        return _terminal_result(
+            action_id=action_id,
+            attempted_at=attempted_at,
+            outcome="stale",
+            reason="stable-idempotency-key-already-executed",
         )
 
     depends_on = proposal.get("dependsOn")
@@ -450,11 +780,7 @@ def execute_action(
             reason="dependency-not-executed",
         )
 
-    target_kind, target_number, target_url, expected_state = _proposal_target(
-        proposal,
-        repository=repository,
-        action_id=action_id,
-    )
+    mutation_attempted = False
     try:
         issue = client.get_issue(repository, target_number)
         issue_state = issue.get("state")
@@ -503,6 +829,52 @@ def execute_action(
                 reason="issue-state-changed",
                 preflight=preflight,
             )
+        if validated["schemaVersion"] == 2:
+            fingerprint = _validate_source_evidence_fingerprint(
+                proposal.get("sourceEvidenceFingerprint"),
+                action_id=action_id,
+            )
+            expected_updated_at = fingerprint["issueUpdatedAt"]
+            if depends_on is not None:
+                dependency_result = next(
+                    (
+                        result
+                        for result in reversed(results)
+                        if result.get("actionId") == depends_on
+                        and result.get("outcome") == "executed"
+                    ),
+                    None,
+                )
+                dependency_payload = (
+                    dependency_result.get("result")
+                    if isinstance(dependency_result, dict)
+                    else None
+                )
+                dependency_updated_at = (
+                    dependency_payload.get("sourceIssueUpdatedAt")
+                    if isinstance(dependency_payload, dict)
+                    else None
+                )
+                if isinstance(dependency_updated_at, str):
+                    expected_updated_at = dependency_updated_at
+            if issue.get("updated_at") != expected_updated_at:
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="stale",
+                    reason="source-evidence-changed",
+                    preflight=preflight,
+                )
+
+        login = client.get_authenticated_login()
+        if login != validated.get("shepherdAuthor"):
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="stale",
+                reason="actor-identity-changed",
+                preflight=preflight,
+            )
 
         operation = proposal["operation"]
         if operation == "create-comment":
@@ -513,8 +885,7 @@ def execute_action(
                 key,
             )
             comments = client.list_comments(repository, target_number)
-            login = client.get_authenticated_login()
-            if any(
+            if not override_suppression and any(
                 any(
                     f"ci-shepherd:idempotency-key={accepted_key}"
                     in str(comment.get("body") or "")
@@ -530,6 +901,7 @@ def execute_action(
                     reason="idempotency-marker-exists",
                     preflight=preflight,
                 )
+            mutation_attempted = True
             created = client.create_comment(
                 repository,
                 target_number,
@@ -545,6 +917,11 @@ def execute_action(
                 or _comment_user(live) != login
             ):
                 raise RuntimeError("Created comment did not reconcile.")
+            source_issue = (
+                client.get_issue(repository, target_number)
+                if validated["schemaVersion"] == 2
+                else None
+            )
             return _terminal_result(
                 action_id=action_id,
                 attempted_at=attempted_at,
@@ -553,13 +930,22 @@ def execute_action(
                 result={
                     "commentId": comment_id,
                     "commentUrl": live.get("html_url"),
+                    **(
+                        {
+                            "sourceIssueUpdatedAt": _required_string(
+                                source_issue.get("updated_at"),
+                                field=f"{action_id}.sourceIssueUpdatedAt",
+                            )
+                        }
+                        if isinstance(source_issue, dict)
+                        else {}
+                    ),
                 },
             )
 
         if operation == "edit-comment":
             comment_id = int(proposal["commentId"])
             live = client.get_comment(repository, comment_id)
-            login = client.get_authenticated_login()
             key = str(proposal["idempotencyKey"])
             accepted_keys = _accepted_comment_keys(
                 target_kind,
@@ -581,6 +967,7 @@ def execute_action(
                     reason="comment-ownership-changed",
                     preflight=preflight,
                 )
+            mutation_attempted = True
             client.edit_comment(
                 repository,
                 comment_id,
@@ -592,6 +979,11 @@ def execute_action(
                 or _comment_user(reconciled) != login
             ):
                 raise RuntimeError("Edited comment did not reconcile.")
+            source_issue = (
+                client.get_issue(repository, target_number)
+                if validated["schemaVersion"] == 2
+                else None
+            )
             return _terminal_result(
                 action_id=action_id,
                 attempted_at=attempted_at,
@@ -600,10 +992,21 @@ def execute_action(
                 result={
                     "commentId": comment_id,
                     "commentUrl": reconciled.get("html_url"),
+                    **(
+                        {
+                            "sourceIssueUpdatedAt": _required_string(
+                                source_issue.get("updated_at"),
+                                field=f"{action_id}.sourceIssueUpdatedAt",
+                            )
+                        }
+                        if isinstance(source_issue, dict)
+                        else {}
+                    ),
                 },
             )
 
         close_reason = str(proposal["closeReason"])
+        mutation_attempted = True
         client.close_issue(repository, target_number, close_reason)
         reconciled_issue = client.get_issue(repository, target_number)
         if (
@@ -626,6 +1029,156 @@ def execute_action(
         return _terminal_result(
             action_id=action_id,
             attempted_at=attempted_at,
-            outcome="failed",
+            outcome="indeterminate" if mutation_attempted else "failed",
             reason=str(exc),
         )
+
+
+def reconcile_action(
+    document: object,
+    *,
+    action_id: str,
+    client: ActorClient,
+    now: Callable[[], datetime],
+) -> dict[str, object]:
+    """Reconcile an interrupted action without issuing a second mutation."""
+
+    validated = validate_action_proposals(document)
+    repository = str(validated["repository"])
+    proposal = select_action(validated, action_id)
+    attempted_at = _timestamp(now)
+    target_kind, target_number, _, _ = _proposal_target(
+        proposal,
+        repository=repository,
+        action_id=action_id,
+    )
+
+    try:
+        operation = proposal["operation"]
+        if operation == "create-comment":
+            comments = client.list_comments(repository, target_number)
+            login = client.get_authenticated_login()
+            expected_login = str(validated["shepherdAuthor"])
+            marker = (
+                "ci-shepherd:idempotency-key="
+                f"{proposal['idempotencyKey']}"
+            )
+            matches = [
+                comment
+                for comment in comments
+                if marker in str(comment.get("body") or "")
+                and comment.get("body") == proposal["body"]
+                and _comment_user(comment) == login == expected_login
+            ]
+            if matches:
+                match = max(
+                    matches,
+                    key=lambda comment: (
+                        comment.get("id")
+                        if isinstance(comment.get("id"), int)
+                        else -1
+                    ),
+                )
+                source_issue = (
+                    client.get_issue(repository, target_number)
+                    if validated["schemaVersion"] == 2
+                    else None
+                )
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="executed",
+                    result={
+                        "commentId": _required_int(
+                            match.get("id"),
+                            field=f"{action_id}.reconciledCommentId",
+                        ),
+                        "commentUrl": match.get("html_url"),
+                        "reconciledAfterInterruption": True,
+                        **(
+                            {
+                                "sourceIssueUpdatedAt": _required_string(
+                                    source_issue.get("updated_at"),
+                                    field=f"{action_id}.sourceIssueUpdatedAt",
+                                )
+                            }
+                            if isinstance(source_issue, dict)
+                            else {}
+                        ),
+                    },
+                )
+
+        elif operation == "edit-comment":
+            comment_id = int(proposal["commentId"])
+            comment = client.get_comment(repository, comment_id)
+            login = client.get_authenticated_login()
+            expected_login = str(validated["shepherdAuthor"])
+            marker = (
+                "ci-shepherd:idempotency-key="
+                f"{proposal['idempotencyKey']}"
+            )
+            if (
+                marker in str(comment.get("body") or "")
+                and comment.get("body") == proposal["body"]
+                and _comment_user(comment) == login == expected_login
+            ):
+                source_issue = (
+                    client.get_issue(repository, target_number)
+                    if validated["schemaVersion"] == 2
+                    else None
+                )
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="executed",
+                    result={
+                        "commentId": comment_id,
+                        "commentUrl": comment.get("html_url"),
+                        "reconciledAfterInterruption": True,
+                        **(
+                            {
+                                "sourceIssueUpdatedAt": _required_string(
+                                    source_issue.get("updated_at"),
+                                    field=f"{action_id}.sourceIssueUpdatedAt",
+                                )
+                            }
+                            if isinstance(source_issue, dict)
+                            else {}
+                        ),
+                    },
+                )
+
+        elif operation == "close-issue":
+            issue = client.get_issue(repository, target_number)
+            if (
+                target_kind == "issue"
+                and issue.get("state") == "closed"
+                and issue.get("state_reason") == proposal["closeReason"]
+            ):
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="executed",
+                    result={
+                        "issueState": "closed",
+                        "stateReason": issue.get("state_reason"),
+                        "issueUrl": issue.get("html_url"),
+                        "reconciledAfterInterruption": True,
+                    },
+                )
+        else:
+            raise ValueError(f"Unsupported action operation: {operation}")
+    except Exception as exc:
+        return _terminal_result(
+            action_id=action_id,
+            attempted_at=attempted_at,
+            outcome="indeterminate",
+            reason=f"reconciliation-failed: {exc}",
+        )
+
+    return _terminal_result(
+        action_id=action_id,
+        attempted_at=attempted_at,
+        outcome="indeterminate",
+        reason="mutation-not-confirmed",
+    )

@@ -9,6 +9,12 @@ behind explicit per-action approval.
 Current implementation and evidence are recorded in
 [CI Shepherd Implementation Status](../status/2026-08-28-ci-shepherd-implementation.md).
 
+The staged live-action trials exposed authorization, crash-recovery, proposal
+integrity, and observability defects. All further live mutation is suspended
+until the tracked
+[CI Shepherd Safety Remediation Plan](2026-08-29-ci-shepherd-safety-remediation.md)
+passes its local and `radical/aspire` gates.
+
 ## Completed Foundation
 
 - [x] Collect all target-labeled issues and pull requests.
@@ -161,13 +167,11 @@ Recommended order:
 - [ ] Exercise a pull-request `ping-human` comment and later confirm that the
   terminal retirement edit is stable.
 
-The approved production policy now authorizes frozen issue comments and their
-dependent closes when independent validation succeeds. These inexpensive
-actions run sequentially in the same shepherd cycle. Each action still requires
-an unchanged evidence fingerprint, an expected live target state, no terminal
-ledger record, and successful reconciliation. A dependent close runs only
-after its comment reconciles. A stale preflight or failed dependency blocks
-that action without blocking independent actions.
+The former prose pre-authorization is revoked. Sequential execution did not
+bound total impact, and `requiresSeparateApproval` was not an executable gate.
+Future mutations require an exact, expiring, snapshot-bound authorization grant
+with a persistent mutation budget. No such grant exists until the safety
+remediation plan is implemented and validated.
 
 ## Phase 4: Improve the Issue Producers
 

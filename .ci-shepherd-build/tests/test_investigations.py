@@ -65,6 +65,30 @@ def _judgments() -> dict[str, object]:
 
 
 class InvestigationLifecycleTests(unittest.TestCase):
+    def test_record_rejects_invalid_recorded_at_timestamp(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+
+        with TemporaryDirectory() as scratch:
+            with self.assertRaisesRegex(
+                ValueError,
+                "recordedAt must be a timezone-aware ISO-8601 timestamp",
+            ):
+                record_investigation_result(
+                    Path(scratch),
+                    request,
+                    {
+                        "outcome": "inconclusive",
+                        "summary": "No decisive evidence was found.",
+                        "evidenceIds": ["issue:21"],
+                        "reassessWhen": "When new evidence is available.",
+                        "fixHandoff": None,
+                    },
+                    recorded_at="not-a-timestamp",
+                    session_id="investigation-session-1",
+                )
+
     def test_completed_result_is_reused_until_source_evidence_changes(self) -> None:
         prepared = _prepared()
         first_plan = build_investigation_plan(prepared, _judgments(), [])

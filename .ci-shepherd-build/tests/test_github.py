@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import shutil
+import threading
 import unittest
 from dataclasses import dataclass
 from io import BytesIO
@@ -37,7 +38,7 @@ class FakeRunner:
         self.calls: list[tuple[list[str], dict[str, object]]] = []
 
     def __call__(self, command: list[str], **kwargs: object) -> FakeCompletedProcess:
-        expected_keys = {"env", "stdout", "stderr", "check", "text"}
+        expected_keys = {"env", "stdout", "stderr", "check", "text", "timeout"}
         if set(kwargs) != expected_keys:
             raise AssertionError(
                 f"Unexpected runner kwargs: {sorted(kwargs)}; expected {sorted(expected_keys)}"
@@ -54,6 +55,8 @@ class FakeRunner:
             raise AssertionError("runner check must be False")
         if kwargs["text"] is not True:
             raise AssertionError("runner text must be True")
+        if kwargs["timeout"] != 60:
+            raise AssertionError("runner timeout must be 60 seconds")
 
         recorded_kwargs = dict(kwargs)
         recorded_kwargs["env"] = dict(env)
@@ -94,12 +97,16 @@ class FakeProcess:
         self.stderr_payload = stderr
         self.returncode = returncode
         self.terminated = False
+        self.killed = False
         self.wait_calls = 0
 
     def terminate(self) -> None:
         self.terminated = True
 
-    def wait(self) -> int:
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
         self.wait_calls += 1
         return self.returncode
 
@@ -118,6 +125,31 @@ class FakePopenFactory:
             stderr.write(process.stderr_payload)
             stderr.flush()
         return process
+
+
+class BlockingStream:
+    def __init__(self) -> None:
+        self.released = threading.Event()
+
+    def read(self, _size: int) -> bytes:
+        self.released.wait()
+        return b""
+
+
+class FakeBlockingProcess:
+    def __init__(self) -> None:
+        self.stdout = BlockingStream()
+        self.stderr_payload = b""
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+        self.stdout.released.set()
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self.killed:
+            raise subprocess.TimeoutExpired("gh api", timeout)
+        return -9
 
 
 class GitHubClientTests(unittest.TestCase):
@@ -139,6 +171,7 @@ class GitHubClientTests(unittest.TestCase):
         max_attempts: int = 3,
         max_retry_delay: int = 60,
         audit_path: Path | None = None,
+        request_observer: object | None = None,
     ) -> GitHubClient:
         return GitHubClient(
             runner=runner,
@@ -148,7 +181,35 @@ class GitHubClientTests(unittest.TestCase):
             max_attempts=max_attempts,
             max_retry_delay=max_retry_delay,
             audit_path=audit_path,
+            request_observer=request_observer,
         )
+
+    def test_get_notifies_observer_and_has_a_subprocess_timeout(self) -> None:
+        runner = FakeRunner(
+            [FakeCompletedProcess(0, build_response(200, {"ok": True}))]
+        )
+        observed: list[str] = []
+        client = self.make_client(runner, request_observer=observed.append)
+
+        self.assertEqual({"ok": True}, client.get("repos/owner/repo/issues/1"))
+
+        self.assertEqual(["repos/owner/repo/issues/1"], observed)
+        self.assertEqual(60, runner.calls[0][1]["timeout"])
+
+    def test_get_text_kills_a_stream_that_exceeds_the_request_timeout(self) -> None:
+        process = FakeBlockingProcess()
+        client = GitHubClient(
+            runner=FakeRunner([]),
+            popen_factory=FakePopenFactory([process]),
+            sleep=FakeSleep(),
+            now=FakeClock(0.0),
+            request_timeout_seconds=0.01,
+        )
+
+        with self.assertRaisesRegex(GitHubApiError, "request-timeout"):
+            client.get_text("repos/owner/repo/actions/jobs/1/logs")
+
+        self.assertTrue(process.killed)
 
     def test_get_pages_collects_top_level_arrays_until_short_page(self) -> None:
         runner = FakeRunner(
@@ -217,6 +278,7 @@ class GitHubClientTests(unittest.TestCase):
             stderr: object,
             check: bool,
             text: bool,
+            timeout: float,
         ) -> FakeCompletedProcess:
             calls.append(
                 (
@@ -227,6 +289,7 @@ class GitHubClientTests(unittest.TestCase):
                         "stderr": stderr,
                         "check": check,
                         "text": text,
+                        "timeout": timeout,
                     },
                 )
             )
@@ -244,11 +307,15 @@ class GitHubClientTests(unittest.TestCase):
         command, kwargs = calls[0]
         self.assertEqual("/repos/owner/repo/actions/runs/123", command[-1])
         self.assertEqual("cat", kwargs["env"]["GH_PAGER"])
-        self.assertEqual({"env", "stdout", "stderr", "check", "text"}, set(kwargs))
+        self.assertEqual(
+            {"env", "stdout", "stderr", "check", "text", "timeout"},
+            set(kwargs),
+        )
         self.assertIs(subprocess.PIPE, kwargs["stdout"])
         self.assertIs(subprocess.PIPE, kwargs["stderr"])
         self.assertIs(False, kwargs["check"])
         self.assertIs(True, kwargs["text"])
+        self.assertEqual(60, kwargs["timeout"])
 
     def test_get_retries_transient_server_errors_with_backoff(self) -> None:
         runner = FakeRunner(

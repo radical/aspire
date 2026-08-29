@@ -23,15 +23,7 @@ class PolicyTests(unittest.TestCase):
 
         self.assertEqual(1, policy.as_public_dict()["schemaVersion"])
         self.assertEqual("manual-v1", policy.policy_version)
-        self.assertEqual(2, policy.quarantine_review_min_distinct_runs)
-        self.assertEqual(2, policy.quarantine_review_min_distinct_commits)
-        self.assertEqual(2, policy.recovery_min_independent_successes)
-        self.assertEqual(7, policy.dormant_human_review_after_days)
         self.assertEqual(14, policy.systemic_transient_window_days)
-        self.assertEqual(3, policy.systemic_transient_min_occurrences)
-        self.assertEqual(0.05, policy.systemic_transient_min_failure_rate)
-        self.assertEqual(24, policy.proposal_ttl_hours)
-        self.assertEqual(3, policy.max_proposals_per_issue)
         self.assertEqual(frozenset(), policy.retry_safe_pattern_ids)
 
     def test_manual_policy_as_public_dict_returns_fresh_camel_case_projection(self) -> None:
@@ -43,15 +35,7 @@ class PolicyTests(unittest.TestCase):
             {
                 "schemaVersion": 1,
                 "policyVersion": "manual-v1",
-                "quarantineReviewMinDistinctRuns": 2,
-                "quarantineReviewMinDistinctCommits": 2,
-                "recoveryMinIndependentSuccesses": 2,
-                "dormantHumanReviewAfterDays": 7,
                 "systemicTransientWindowDays": 14,
-                "systemicTransientMinOccurrences": 3,
-                "systemicTransientMinFailureRate": 0.05,
-                "proposalTtlHours": 24,
-                "maxProposalsPerIssue": 3,
                 "retrySafePatternIds": [],
             },
             public,
@@ -68,36 +52,6 @@ class PolicyTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PolicyError, "unknown fields"):
             load_policy_document(document)
-
-    def test_policy_rejects_nonpositive_quarantine_review_min_distinct_runs(self) -> None:
-        document = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-        document["quarantineReviewMinDistinctRuns"] = 0
-
-        with self.assertRaisesRegex(PolicyError, "must be positive"):
-            load_policy_document(document)
-
-    def test_policy_rejects_bool_quarantine_review_min_distinct_runs(self) -> None:
-        document = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-        document["quarantineReviewMinDistinctRuns"] = True
-
-        with self.assertRaisesRegex(PolicyError, "must be positive"):
-            load_policy_document(document)
-
-    def test_policy_rejects_invalid_failure_rate(self) -> None:
-        document = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-        document["systemicTransientMinFailureRate"] = 1.5
-
-        with self.assertRaisesRegex(PolicyError, r"within \(0, 1\]"):
-            load_policy_document(document)
-
-    def test_policy_rejects_non_finite_failure_rates(self) -> None:
-        for value in (float("nan"), float("inf"), float("-inf")):
-            with self.subTest(value=value):
-                document = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-                document["systemicTransientMinFailureRate"] = value
-
-                with self.assertRaisesRegex(PolicyError, r"within \(0, 1\]"):
-                    load_policy_document(document)
 
     def test_policy_rejects_non_string_keys(self) -> None:
         document = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
@@ -149,23 +103,15 @@ class PolicyTests(unittest.TestCase):
 {
   "schemaVersion": 1,
   "policyVersion": "manual-v1",
-  "quarantineReviewMinDistinctRuns": 2,
-  "quarantineReviewMinDistinctCommits": 2,
-  "recoveryMinIndependentSuccesses": 2,
-  "dormantHumanReviewAfterDays": 7,
   "systemicTransientWindowDays": 14,
-  "systemicTransientMinOccurrences": 3,
-  "systemicTransientMinFailureRate": 0.05,
-  "proposalTtlHours": 24,
-  "maxProposalsPerIssue": 3,
   "retrySafePatternIds": [],
-  "quarantineReviewMinDistinctRuns": 4
+  "retrySafePatternIds": ["duplicate"]
 }
 """.strip(),
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(PolicyError, "duplicate JSON key: quarantineReviewMinDistinctRuns"):
+        with self.assertRaisesRegex(PolicyError, "duplicate JSON key: retrySafePatternIds"):
             load_policy(path)
 
     def test_policy_rejects_invalid_utf8(self) -> None:
@@ -189,15 +135,7 @@ class PolicyTests(unittest.TestCase):
 def manual_policy(retry_safe_pattern_ids: object) -> ManualPolicy:
     return ManualPolicy(
         policy_version="manual-v1",
-        quarantine_review_min_distinct_runs=2,
-        quarantine_review_min_distinct_commits=2,
-        recovery_min_independent_successes=2,
-        dormant_human_review_after_days=7,
         systemic_transient_window_days=14,
-        systemic_transient_min_occurrences=3,
-        systemic_transient_min_failure_rate=0.05,
-        proposal_ttl_hours=24,
-        max_proposals_per_issue=3,
         retry_safe_pattern_ids=retry_safe_pattern_ids,
     )
 

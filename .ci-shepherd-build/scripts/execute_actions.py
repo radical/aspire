@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
+import hashlib
 import json
-import os
 from pathlib import Path
-import tempfile
 from typing import Sequence
 
-from ci_shepherd.actor import build_dry_run, execute_action
+from ci_shepherd.actor import build_dry_run, execute_action, reconcile_action
+from ci_shepherd.authorization import load_authorized_execution
+from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.github_actor import GitHubActorClient
 
 
@@ -25,6 +26,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Persist execution history as STATE_DIR/action-results.json.",
     )
     parser.add_argument("--action-id")
+    parser.add_argument("--authorization", type=Path)
     parser.add_argument("--execute", action="store_true")
     return parser
 
@@ -39,39 +41,6 @@ def _load_json(path: Path) -> dict[str, object]:
     return payload
 
 
-def _load_results(
-    path: Path,
-    *,
-    repository: str,
-) -> dict[str, object]:
-    if not path.exists():
-        return {
-            "schemaVersion": 1,
-            "repository": repository,
-            "results": [],
-        }
-    return _load_json(path)
-
-
-def _write_private_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-        os.replace(temporary_path, path)
-        path.chmod(0o600)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
 def _print_json(payload: object) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -81,42 +50,105 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.execute and args.action_id is None:
         parser.error("--execute requires --action-id")
-    if args.execute and args.results is None and args.state_dir is None:
-        parser.error("--execute requires --results or --state-dir")
+    if args.execute and args.authorization is None:
+        parser.error("--execute requires --authorization")
+    if args.execute and args.results is not None:
+        parser.error("--execute requires --state-dir; --results is dry-run only")
+    if args.execute and args.state_dir is None:
+        parser.error("--execute requires --state-dir")
 
-    proposals_path = args.proposals.resolve()
+    proposals_path = args.proposals.expanduser().absolute()
     if args.state_dir is not None:
         state_dir = args.state_dir.expanduser().absolute()
         if state_dir.exists() and state_dir.is_symlink():
             parser.error("--state-dir must not be a symlink")
-        results_path = state_dir / "action-results.json"
     else:
-        results_path = args.results.resolve() if args.results is not None else None
+        state_dir = None
+    results_path = args.results.resolve() if args.results is not None else None
     if results_path is not None and proposals_path == results_path:
         parser.error("--proposals and --results must be different paths")
 
-    proposals = _load_json(proposals_path)
     if not args.execute:
+        proposals = _load_json(proposals_path)
         _print_json(build_dry_run(proposals, action_id=args.action_id))
         return 0
-    assert results_path is not None
+    assert state_dir is not None
 
-    repository = proposals.get("repository")
-    if not isinstance(repository, str) or not repository:
-        raise ValueError("Proposal repository must be a non-empty string.")
-    results = _load_results(results_path, repository=repository)
-    result = execute_action(
-        proposals,
+    authorized = load_authorized_execution(
+        proposals_path,
+        args.authorization,
+        state_dir=args.state_dir,
         action_id=args.action_id,
-        prior_results=results,
-        client=GitHubActorClient(),
-        now=lambda: datetime.now(UTC),
     )
-    result_items = results.setdefault("results", [])
-    if not isinstance(result_items, list):
-        raise ValueError("Action results must contain a results array.")
-    result_items.append(result)
-    _write_private_json(results_path, results)
+    proposals = authorized.proposal_document
+    proposal = authorized.proposal
+    body = proposal.get("body")
+    body_digest = (
+        f"sha256:{hashlib.sha256(body.encode('utf-8')).hexdigest()}"
+        if isinstance(body, str)
+        else None
+    )
+    store = ActionEventStore(state_dir)
+    store.migrate_legacy_results()
+    with store.transaction(
+        authorized.grant,
+        action_id=args.action_id,
+        chain_root=authorized.chain_root,
+        operation=str(proposal["operation"]),
+        target_kind="issue",
+        target_number=int(proposal["issueNumber"]),
+        idempotency_key=str(proposal["idempotencyKey"]),
+        body_digest=body_digest,
+        expected_actor_login=str(proposals["shepherdAuthor"]),
+        at=datetime.now(UTC),
+    ) as execution:
+        reservation = execution.reservation
+        if reservation.mode == "terminal":
+            assert reservation.prior_terminal is not None
+            result = {
+                key: value
+                for key, value in reservation.prior_terminal.items()
+                if key
+                not in {
+                    "schemaVersion",
+                    "eventType",
+                    "recordedAt",
+                    "grantId",
+                    "repository",
+                    "snapshotId",
+                }
+            }
+            _print_json(result)
+            return 0
+
+        client = GitHubActorClient(
+            allowed_repositories={authorized.grant.repository}
+        )
+        if reservation.mode == "reconcile":
+            result = reconcile_action(
+                proposals,
+                action_id=args.action_id,
+                client=client,
+                now=lambda: datetime.now(UTC),
+            )
+        else:
+            result = execute_action(
+                proposals,
+                action_id=args.action_id,
+                prior_results=execution.prior_results(
+                    repository=authorized.grant.repository
+                ),
+                client=client,
+                now=lambda: datetime.now(UTC),
+                override_suppression=(
+                    args.action_id
+                    in authorized.grant.override_suppression_for_action_ids
+                ),
+            )
+        execution.append_terminal(
+            result=result,
+            at=datetime.now(UTC),
+        )
     _print_json(result)
     return 0
 

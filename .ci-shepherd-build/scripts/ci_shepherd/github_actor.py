@@ -6,15 +6,36 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, Collection
 
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPOSITORY_ENDPOINT_RE = re.compile(
+    r"^repos/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/|$)"
+)
+_PROTECTED_REPOSITORIES = frozenset({"microsoft/aspire"})
+
+
+class MutationRepositoryError(ValueError):
+    """Raised before a mutation targets a repository outside the allowed set."""
 
 
 class GitHubActorClient:
-    def __init__(self, *, runner: Any = subprocess.run) -> None:
+    def __init__(
+        self,
+        *,
+        allowed_repositories: Collection[str] = (),
+        runner: Any = subprocess.run,
+        request_timeout_seconds: float = 60,
+    ) -> None:
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive.")
+        self._allowed_repositories = frozenset(
+            self._repository(repository).casefold()
+            for repository in allowed_repositories
+        )
         self._runner = runner
+        self._request_timeout_seconds = request_timeout_seconds
 
     def get_authenticated_login(self) -> str:
         payload = self._request("GET", "user")
@@ -55,18 +76,26 @@ class GitHubActorClient:
         repository: str,
         issue_number: int,
     ) -> list[dict[str, object]]:
-        payload = self._request(
-            "GET",
-            (
-                f"repos/{self._repository(repository)}/issues/"
-                f"{self._number(issue_number)}/comments?per_page=100"
-            ),
+        comments: list[dict[str, object]] = []
+        for page in range(1, 101):
+            payload = self._request(
+                "GET",
+                (
+                    f"repos/{self._repository(repository)}/issues/"
+                    f"{self._number(issue_number)}/comments"
+                    f"?per_page=100&page={page}"
+                ),
+            )
+            if not isinstance(payload, list) or not all(
+                isinstance(comment, dict) for comment in payload
+            ):
+                raise RuntimeError("GitHub returned malformed issue comments.")
+            comments.extend(payload)
+            if len(payload) < 100:
+                return comments
+        raise RuntimeError(
+            "Issue comment pagination exceeded the 10,000-comment safety bound."
         )
-        if not isinstance(payload, list) or not all(
-            isinstance(comment, dict) for comment in payload
-        ):
-            raise RuntimeError("GitHub returned malformed issue comments.")
-        return payload
 
     def create_comment(
         self,
@@ -124,6 +153,23 @@ class GitHubActorClient:
         endpoint: str,
         payload: dict[str, object] | None = None,
     ) -> object:
+        if method != "GET":
+            match = _REPOSITORY_ENDPOINT_RE.match(endpoint)
+            repository = match.group("repository") if match else None
+            if repository is None:
+                raise MutationRepositoryError(
+                    "Mutation endpoint must identify one repository."
+                )
+            normalized_repository = repository.casefold()
+            if normalized_repository in _PROTECTED_REPOSITORIES:
+                raise MutationRepositoryError(
+                    f"Mutation repository is protected: {repository}"
+                )
+            if normalized_repository not in self._allowed_repositories:
+                raise MutationRepositoryError(
+                    f"Mutation repository is not explicitly allowed: {repository}"
+                )
+
         command = [
             "gh",
             "api",
@@ -150,14 +196,21 @@ class GitHubActorClient:
                 temporary_path.chmod(0o600)
                 command.extend(["--input", str(temporary_path)])
             command.append(endpoint)
-            completed = self._runner(
-                command,
-                env=self._environment(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            )
+            try:
+                completed = self._runner(
+                    command,
+                    env=self._environment(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    text=True,
+                    timeout=self._request_timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"GitHub API {method} timed out after "
+                    f"{self._request_timeout_seconds} seconds."
+                ) from exc
             if completed.returncode != 0:
                 raise RuntimeError(
                     f"GitHub API {method} failed: {completed.stderr.strip()}"

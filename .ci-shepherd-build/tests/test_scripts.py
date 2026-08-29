@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import UTC, datetime
 import importlib.util
 import io
 import json
@@ -9,9 +10,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from ci_shepherd.authorization import AuthorizationBudget, AuthorizationGrant
 from ci_shepherd.collector import CollectionError, InventoryResult
 from ci_shepherd.history import HistoryError
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
@@ -680,16 +683,25 @@ class PrototypeScriptTests(unittest.TestCase):
 
         for phrase in (
             "canonical CI shepherd status comment",
-            "Every issue- or pull-request-visible effect must be explicitly approved "
-            "or covered by a configured pre-authorization policy.",
+            "Every mutation requires an exact machine-readable authorization grant.",
             "All automatically posted GitHub text starts with `[automated] `.",
             "Shepherd-authored status comments must not contribute markers, facts, or references.",
             "An unchanged watch state must not create or edit a comment.",
             "The assessment agent never executes actions.",
-            "Execute eligible comment and close actions in the same shepherd run",
+            "Execute only action IDs explicitly enumerated by the grant",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_skill)
+
+    def test_skill_requires_exact_authorization_grant_for_mutation(self) -> None:
+        normalized_skill = " ".join(SKILL_PATH.read_text().split())
+
+        self.assertIn(
+            "Every mutation requires an exact machine-readable authorization grant.",
+            normalized_skill,
+        )
+        self.assertNotIn("execute every proposal", normalized_skill.casefold())
+        self.assertNotIn("without requiring another prompt", normalized_skill.casefold())
 
     def test_skill_documents_final_fresh_retrospective(self) -> None:
         normalized_skill = " ".join(SKILL_PATH.read_text().split())
@@ -936,7 +948,97 @@ class PrototypeScriptTests(unittest.TestCase):
 
         self.assertEqual(2, raised.exception.code)
 
-    def test_execute_actions_appends_owner_only_execution_result(self) -> None:
+    def test_execute_actions_rejects_execute_without_authorization(self) -> None:
+        execute_script = load_script("execute_actions")
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "execute_actions.py",
+                    "--proposals",
+                    "action-proposals.json",
+                    "--state-dir",
+                    "state",
+                    "--action-id",
+                    "action:1",
+                    "--execute",
+                ],
+            ),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            execute_script.main()
+
+        self.assertEqual(2, raised.exception.code)
+
+    def test_execute_actions_rejects_caller_selected_results_path(self) -> None:
+        execute_script = load_script("execute_actions")
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "execute_actions.py",
+                    "--proposals",
+                    "action-proposals.json",
+                    "--authorization",
+                    "authorization-grant.json",
+                    "--results",
+                    "fresh-results.json",
+                    "--action-id",
+                    "action:1",
+                    "--execute",
+                ],
+            ),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            execute_script.main()
+
+        self.assertEqual(2, raised.exception.code)
+
+    def test_execute_actions_invalid_authorization_performs_zero_actor_calls(self) -> None:
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        authorization_path = scratch / "authorization-grant.json"
+        state_path = scratch / "state"
+        proposals_path.write_text("{}", encoding="utf-8")
+        authorization_path.write_text("{}", encoding="utf-8")
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "execute_actions.py",
+                        "--proposals",
+                        str(proposals_path),
+                        "--authorization",
+                        str(authorization_path),
+                        "--state-dir",
+                        str(state_path),
+                        "--action-id",
+                        "action:1",
+                        "--execute",
+                    ],
+                ),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    side_effect=ValueError("invalid authorization"),
+                ),
+                patch.object(execute_script, "GitHubActorClient") as client_factory,
+                self.assertRaisesRegex(ValueError, "invalid authorization"),
+            ):
+                execute_script.main()
+
+            self.assertFalse(client_factory.called)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_execute_actions_appends_owner_only_execution_events(self) -> None:
         if os.name == "nt":
             self.skipTest("POSIX mode assertions are not portable to Windows")
         execute_script = load_script("execute_actions")
@@ -945,15 +1047,43 @@ class PrototypeScriptTests(unittest.TestCase):
         scratch.mkdir(parents=True)
         proposals_path = scratch / "action-proposals.json"
         state_path = scratch / "state"
-        results_path = state_path / "action-results.json"
+        events_path = state_path / "action-events.jsonl"
+        action_id = "action:1"
+        proposal = {
+            "actionId": action_id,
+            "issueNumber": 1,
+            "operation": "create-comment",
+            "idempotencyKey": "issue:1:status",
+            "body": "[automated] Watching.",
+        }
         proposals = {
             "schemaVersion": 1,
             "repository": "owner/repo",
-            "proposals": [],
+            "snapshotId": "snapshot:owner/repo:1",
+            "shepherdAuthor": "ankj",
+            "proposals": [proposal],
         }
         proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
+        grant = AuthorizationGrant(
+            grant_id="grant:test",
+            repository="owner/repo",
+            state_directory=state_path.resolve(),
+            issued_at=datetime(2026, 8, 21, 19, tzinfo=UTC),
+            expires_at=datetime(2026, 8, 21, 21, tzinfo=UTC),
+            snapshot_id="snapshot:owner/repo:1",
+            proposals_digest="sha256:" + ("0" * 64),
+            allowed_action_ids=(action_id,),
+            allowed_operations=frozenset({"create-comment"}),
+            allowed_targets=frozenset({("issue", 1)}),
+            allowed_chain_roots=(action_id,),
+            override_suppression_for_action_ids=frozenset({action_id}),
+            budget=AuthorizationBudget(
+                max_mutation_attempts=1,
+                max_chains=1,
+            ),
+        )
         terminal_result = {
-            "actionId": "action:1",
+            "actionId": action_id,
             "attemptedAt": "2026-08-21T20:00:00Z",
             "outcome": "executed",
         }
@@ -969,25 +1099,165 @@ class PrototypeScriptTests(unittest.TestCase):
                         str(proposals_path),
                         "--state-dir",
                         str(state_path),
+                        "--authorization",
+                        str(scratch / "authorization-grant.json"),
                         "--action-id",
-                        "action:1",
+                        action_id,
                         "--execute",
                     ],
+                ),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    return_value=SimpleNamespace(
+                        proposal_document=proposals,
+                        proposal=proposal,
+                        chain_root=action_id,
+                        grant=grant,
+                    ),
                 ),
                 patch.object(execute_script, "GitHubActorClient", return_value=object()),
                 patch.object(
                     execute_script,
                     "execute_action",
                     return_value=terminal_result,
-                ),
+                ) as execute,
                 contextlib.redirect_stdout(stdout),
             ):
                 self.assertEqual(0, execute_script.main())
 
-            document = json.loads(results_path.read_text(encoding="utf-8"))
-            self.assertEqual([terminal_result], document["results"])
-            self.assertEqual(0o600, results_path.stat().st_mode & 0o777)
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(["intent", "terminal"], [
+                event["eventType"] for event in events
+            ])
+            self.assertEqual(terminal_result["outcome"], events[-1]["outcome"])
+            self.assertEqual(0o600, events_path.stat().st_mode & 0o777)
             self.assertEqual(terminal_result, json.loads(stdout.getvalue()))
+            self.assertTrue(execute.call_args.kwargs["override_suppression"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_execute_actions_recovers_interrupted_intent_without_remutating(self) -> None:
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        state_path = scratch / "state"
+        action_id = "action:1"
+        proposal = {
+            "actionId": action_id,
+            "issueNumber": 1,
+            "operation": "create-comment",
+            "idempotencyKey": "issue:1:status",
+            "body": "[automated] Watching.",
+        }
+        proposals = {
+            "schemaVersion": 1,
+            "repository": "owner/repo",
+            "snapshotId": "snapshot:owner/repo:1",
+            "shepherdAuthor": "ankj",
+            "proposals": [proposal],
+        }
+        proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
+        grant = AuthorizationGrant(
+            grant_id="grant:interrupted",
+            repository="owner/repo",
+            state_directory=state_path.resolve(),
+            issued_at=datetime(2026, 8, 21, 19, tzinfo=UTC),
+            expires_at=datetime(2026, 8, 21, 21, tzinfo=UTC),
+            snapshot_id="snapshot:owner/repo:1",
+            proposals_digest="sha256:" + ("0" * 64),
+            allowed_action_ids=(action_id,),
+            allowed_operations=frozenset({"create-comment"}),
+            allowed_targets=frozenset({("issue", 1)}),
+            allowed_chain_roots=(action_id,),
+            override_suppression_for_action_ids=frozenset(),
+            budget=AuthorizationBudget(
+                max_mutation_attempts=1,
+                max_chains=1,
+            ),
+        )
+        authorized = SimpleNamespace(
+            proposal_document=proposals,
+            proposal=proposal,
+            chain_root=action_id,
+            grant=grant,
+        )
+        argv = [
+            "execute_actions.py",
+            "--proposals",
+            str(proposals_path),
+            "--state-dir",
+            str(state_path),
+            "--authorization",
+            str(scratch / "authorization-grant.json"),
+            "--action-id",
+            action_id,
+            "--execute",
+        ]
+        try:
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    return_value=authorized,
+                ),
+                patch.object(execute_script, "GitHubActorClient", return_value=object()),
+                patch.object(
+                    execute_script,
+                    "execute_action",
+                    side_effect=SystemExit(70),
+                ),
+                self.assertRaises(SystemExit),
+            ):
+                execute_script.main()
+
+            events_path = state_path / "action-events.jsonl"
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(["intent"], [event["eventType"] for event in events])
+
+            reconciled = {
+                "actionId": action_id,
+                "attemptedAt": "2026-08-21T20:01:00Z",
+                "outcome": "executed",
+            }
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    return_value=authorized,
+                ),
+                patch.object(execute_script, "GitHubActorClient", return_value=object()),
+                patch.object(execute_script, "execute_action") as execute,
+                patch.object(
+                    execute_script,
+                    "reconcile_action",
+                    autospec=True,
+                    return_value=reconciled,
+                ) as reconcile,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(0, execute_script.main())
+
+            self.assertFalse(execute.called)
+            self.assertTrue(reconcile.called)
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                ["intent", "terminal"],
+                [event["eventType"] for event in events],
+            )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -1005,7 +1275,8 @@ class PrototypeScriptTests(unittest.TestCase):
 
         self.assertIn("The actor is dry-run by default.", normalized_skill)
         self.assertIn(
-            "`--execute` requires one exact `--action-id`.",
+            "`--execute` requires one exact `--action-id`, one exact "
+            "`--authorization` grant, and the grant-bound `--state-dir`.",
             normalized_skill,
         )
         self.assertIn("Dry-run performs no GitHub access", normalized_skill)

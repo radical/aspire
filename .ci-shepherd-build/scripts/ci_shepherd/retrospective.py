@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from .execution_state import ActionEventStore
 from .jsonl import read_jsonl_rows
 
 
@@ -109,14 +110,46 @@ def build_run_completion(
     if len(action_ids) != len(raw_proposals):
         raise ValueError("Every action proposal must have a unique actionId.")
 
-    action_results_document = _load_object(
-        state_dir / "action-results.json",
-        "action results",
-    ) if (state_dir / "action-results.json").is_file() else {
-        "schemaVersion": 1,
-        "repository": repository,
-        "results": [],
-    }
+    events_path = state_dir / "action-events.jsonl"
+    action_events = (
+        ActionEventStore(state_dir).events(repository=repository)
+        if events_path.is_file()
+        else []
+    )
+    action_results_document = (
+        {
+            "schemaVersion": 1,
+            "repository": repository,
+            "results": [
+                {
+                    key: value
+                    for key, value in event.items()
+                    if key
+                    not in {
+                        "schemaVersion",
+                        "eventType",
+                        "recordedAt",
+                        "grantId",
+                        "repository",
+                        "snapshotId",
+                    }
+                }
+                for event in action_events
+                if event.get("eventType") == "terminal"
+            ],
+        }
+        if action_events
+        else _load_object(
+            state_dir / "action-results.json",
+            "legacy action results",
+        )
+        if (state_dir / "action-results.json").is_file()
+        else {
+            "schemaVersion": 1,
+            "repository": repository,
+            "results": [],
+        }
+    )
     if action_results_document.get("repository") != repository:
         raise ValueError("Action results repository must match the completed cycle.")
     raw_action_results = action_results_document.get("results")
@@ -136,6 +169,27 @@ def build_run_completion(
         ),
     )
     recorded_action_ids = {result.get("actionId") for result in action_results}
+    scoped_action_events = sorted(
+        (
+            event
+            for event in action_events
+            if event.get("actionId") in action_ids
+        ),
+        key=lambda event: (
+            str(event.get("actionId")),
+            str(event.get("recordedAt", "")),
+        ),
+    )
+    intent_action_ids = {
+        event.get("actionId")
+        for event in scoped_action_events
+        if event.get("eventType") == "intent"
+    }
+    terminal_action_ids = {
+        event.get("actionId")
+        for event in scoped_action_events
+        if event.get("eventType") == "terminal"
+    }
 
     investigation_plan = _load_object(
         work_dir / "investigation-plan.json",
@@ -181,7 +235,9 @@ def build_run_completion(
         "repository": repository,
         "snapshotId": snapshot_id,
         "sealedAt": sealed_at,
+        "actionEvents": scoped_action_events,
         "actionResults": action_results,
+        "interruptedActionIds": sorted(intent_action_ids - terminal_action_ids),
         "unrecordedActionIds": sorted(action_ids - recorded_action_ids),
         "investigationResults": investigation_results,
         "missingInvestigationIds": sorted(

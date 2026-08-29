@@ -5,10 +5,12 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -69,7 +71,11 @@ class GitHubClient:
         max_attempts: int = 3,
         max_retry_delay: int = 60,
         audit_path: Path | str | None = None,
+        request_timeout_seconds: float = 60,
+        request_observer: Callable[[str], None] | None = None,
     ) -> None:
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive.")
         self._runner = runner
         self._popen_factory = popen_factory
         self._sleep = sleep
@@ -77,6 +83,8 @@ class GitHubClient:
         self._max_attempts = max_attempts
         self._max_retry_delay = max_retry_delay
         self._audit_path = Path(audit_path) if audit_path is not None else None
+        self._request_timeout_seconds = request_timeout_seconds
+        self._request_observer = request_observer
 
     def get(self, endpoint: str) -> Any:
         parsed, attempts, stderr = self._request(endpoint)
@@ -108,6 +116,7 @@ class GitHubClient:
 
     def get_text(self, endpoint: str, max_bytes: int = 200000) -> GitHubTextResponse:
         for attempt in range(1, self._max_attempts + 1):
+            self._notify_request(endpoint)
             command = self._build_command(endpoint)
             with tempfile.TemporaryFile() as stderr_file:
                 process = self._popen_factory(
@@ -116,7 +125,30 @@ class GitHubClient:
                     stdout=subprocess.PIPE,
                     stderr=stderr_file,
                 )
-                raw_stdout = process.stdout.read(max_bytes + 1)
+                started_at = time.monotonic()
+                stdout_result: list[bytes] = []
+                stdout_error: list[Exception] = []
+
+                def read_stdout() -> None:
+                    try:
+                        stdout_result.append(process.stdout.read(max_bytes + 1))
+                    except Exception as exc:
+                        stdout_error.append(exc)
+
+                reader = threading.Thread(target=read_stdout, daemon=True)
+                reader.start()
+                reader.join(self._request_timeout_seconds)
+                if reader.is_alive():
+                    process.kill()
+                    reader.join(self._request_timeout_seconds)
+                    try:
+                        process.wait(timeout=self._request_timeout_seconds)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    raise self._timeout_error(endpoint, attempt)
+                if stdout_error:
+                    raise stdout_error[0]
+                raw_stdout = stdout_result[0]
                 truncated = len(raw_stdout) > max_bytes
                 terminated_for_truncation = False
                 if truncated:
@@ -124,7 +156,15 @@ class GitHubClient:
                     terminated_for_truncation = True
                     process.terminate()
 
-                returncode = process.wait()
+                remaining = self._request_timeout_seconds - (
+                    time.monotonic() - started_at
+                )
+                try:
+                    returncode = process.wait(timeout=max(remaining, 0.001))
+                except subprocess.TimeoutExpired as exc:
+                    process.kill()
+                    process.wait(timeout=self._request_timeout_seconds)
+                    raise self._timeout_error(endpoint, attempt) from exc
                 stderr_file.seek(0)
                 raw_stderr = stderr_file.read()
             parsed = _parse_response(raw_stdout.decode("utf-8", errors="replace"))
@@ -154,16 +194,41 @@ class GitHubClient:
 
         raise AssertionError("Unreachable")
 
+    @staticmethod
+    def _timeout_error(endpoint: str, attempt: int) -> GitHubApiError:
+        return GitHubApiError(
+            category="request-timeout",
+            endpoint=endpoint,
+            status=0,
+            headers={},
+            retryable=False,
+            attempts=attempt,
+            sanitized_stderr="",
+        )
+
     def _request(self, endpoint: str) -> tuple[_ParsedResponse, int, str]:
         for attempt in range(1, self._max_attempts + 1):
-            result = self._runner(
-                self._build_command(endpoint),
-                env=self._build_env(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            )
+            self._notify_request(endpoint)
+            try:
+                result = self._runner(
+                    self._build_command(endpoint),
+                    env=self._build_env(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    text=True,
+                    timeout=self._request_timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise GitHubApiError(
+                    category="request-timeout",
+                    endpoint=endpoint,
+                    status=0,
+                    headers={},
+                    retryable=False,
+                    attempts=attempt,
+                    sanitized_stderr="",
+                ) from exc
             parsed = _parse_response(result.stdout)
             sanitized_stderr = _sanitize_stderr(getattr(result, "stderr", ""))
             self._append_audit(endpoint, parsed.status)
@@ -185,6 +250,10 @@ class GitHubClient:
             self._sleep(delay)
 
         raise AssertionError("Unreachable")
+
+    def _notify_request(self, endpoint: str) -> None:
+        if self._request_observer is not None:
+            self._request_observer(endpoint)
 
     def _build_command(self, endpoint: str) -> list[str]:
         if not endpoint or endpoint.startswith(("http://", "https://")):

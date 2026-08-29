@@ -101,6 +101,7 @@ def main() -> int:
                         for path in retrospective_evidence_paths(args.work_dir)
                         if path.name != "run-completion.json"
                     ),
+                    args.state_dir / "action-events.jsonl",
                     args.state_dir / "action-results.json",
                     args.state_dir / "ledgers" / "investigation-results.jsonl",
                 ),

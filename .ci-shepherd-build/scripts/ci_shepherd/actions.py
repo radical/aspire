@@ -464,6 +464,205 @@ def _render_duplicate_close_body(
     )
 
 
+EXECUTABLE_CI_LABELS = frozenset(
+    {"automation-broken", "ci-failure-cause", "test-failure"}
+)
+DEFAULT_PROPOSAL_TTL_HOURS = 24
+MAX_PROPOSALS_PER_ISSUE = 2
+TRUSTED_ACTION_REFERENCE_METHODS = frozenset(
+    {
+        "full-issue-url",
+        "full-pull-url",
+        "triggering-pull-request",
+        "occurrence-pull-request",
+    }
+)
+
+
+def _execution_eligibility(
+    snapshot: dict[str, object],
+    *,
+    issue_number: int,
+    evidence_ids: list[object],
+) -> dict[str, object]:
+    evidence = snapshot.get("evidence")
+    if not isinstance(evidence, dict):
+        raise TypeError("Validated snapshot evidence must be an object.")
+    issue_record = evidence.get(f"issue:{issue_number}")
+    issue_payload = (
+        issue_record.get("payload")
+        if isinstance(issue_record, dict)
+        else None
+    )
+    if not isinstance(issue_payload, dict):
+        raise ValueError(f"Issue {issue_number} has no factual issue evidence.")
+
+    labels: set[str] = set()
+    raw_labels = issue_payload.get("labels")
+    if isinstance(raw_labels, list):
+        for raw_label in raw_labels:
+            if isinstance(raw_label, str) and raw_label:
+                labels.add(raw_label)
+            elif (
+                isinstance(raw_label, dict)
+                and isinstance(raw_label.get("name"), str)
+                and raw_label["name"]
+            ):
+                labels.add(str(raw_label["name"]))
+
+    occurrences = issue_payload.get("occurrences")
+    occurrence_count = len(occurrences) if isinstance(occurrences, list) else 0
+    collection_errors = snapshot.get("collectionErrors")
+    if not isinstance(collection_errors, list):
+        raise TypeError("Validated snapshot collectionErrors must be a list.")
+
+    unavailable_evidence_ids = sorted(
+        {
+            evidence_id
+            for evidence_id in evidence_ids
+            if isinstance(evidence_id, str)
+            and (
+                not isinstance(evidence.get(evidence_id), dict)
+                or evidence[evidence_id].get("availability") != "available"
+            )
+        }
+    )
+    untrusted_reference_evidence_ids: list[str] = []
+    for evidence_id in evidence_ids:
+        if not isinstance(evidence_id, str) or evidence_id == f"issue:{issue_number}":
+            continue
+        record = evidence.get(evidence_id)
+        if (
+            not isinstance(record, dict)
+            or record.get("kind") not in {"issue-event", "pull-request"}
+        ):
+            continue
+        payload = record.get("payload")
+        referenced_by = payload.get("referencedBy") if isinstance(payload, dict) else None
+        trusted = isinstance(referenced_by, list) and any(
+            isinstance(reference, dict)
+            and reference.get("sourceIssueNumber") == issue_number
+            and (
+                reference.get("extractionMethod")
+                in TRUSTED_ACTION_REFERENCE_METHODS
+                or reference.get("decisionValue") == "explicit-resolution"
+            )
+            for reference in referenced_by
+        )
+        if not trusted:
+            untrusted_reference_evidence_ids.append(evidence_id)
+
+    blocking_reasons: list[str] = []
+    ci_labels = sorted(labels.intersection(EXECUTABLE_CI_LABELS))
+    if not ci_labels:
+        blocking_reasons.append("missing-ci-label")
+    if occurrence_count <= 0:
+        blocking_reasons.append("no-parsed-occurrences")
+    if collection_errors:
+        blocking_reasons.append("incomplete-collection")
+    if unavailable_evidence_ids:
+        blocking_reasons.append("unavailable-evidence")
+    if untrusted_reference_evidence_ids:
+        blocking_reasons.append("untrusted-reference-provenance")
+
+    return {
+        "eligible": not blocking_reasons,
+        "ciLabels": ci_labels,
+        "occurrenceCount": occurrence_count,
+        "collectionComplete": not collection_errors,
+        "unavailableEvidenceIds": unavailable_evidence_ids,
+        "untrustedReferenceEvidenceIds": sorted(
+            untrusted_reference_evidence_ids
+        ),
+        "blockingReasons": blocking_reasons,
+    }
+
+
+def _finalize_execution_metadata(
+    result: dict[str, object],
+    snapshot: dict[str, object],
+) -> None:
+    proposals = result.get("proposals")
+    if not isinstance(proposals, list):
+        raise TypeError("Validated proposals must be a list.")
+
+    counts_by_issue: dict[int, int] = {}
+    document_violations: list[dict[str, object]] = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            raise TypeError("Validated proposal must be an object.")
+        issue_number = proposal.get("issueNumber")
+        if not isinstance(issue_number, int) or isinstance(issue_number, bool):
+            raise ValueError("Issue action proposal must have an issueNumber.")
+        counts_by_issue[issue_number] = counts_by_issue.get(issue_number, 0) + 1
+        evidence_ids = proposal.get("evidenceIds")
+        if not isinstance(evidence_ids, list):
+            raise TypeError("Action proposal evidenceIds must be a list.")
+        eligibility = _execution_eligibility(
+            snapshot,
+            issue_number=issue_number,
+            evidence_ids=evidence_ids,
+        )
+        proposal["executionEligibility"] = eligibility
+        evidence = snapshot.get("evidence")
+        issue_record = (
+            evidence.get(f"issue:{issue_number}")
+            if isinstance(evidence, dict)
+            else None
+        )
+        issue_payload = (
+            issue_record.get("payload")
+            if isinstance(issue_record, dict)
+            else None
+        )
+        issue_updated_at = (
+            issue_payload.get("updatedAt")
+            if isinstance(issue_payload, dict)
+            else None
+        )
+        if not isinstance(issue_updated_at, str) or not issue_updated_at:
+            raise ValueError(
+                f"Issue {issue_number} evidence must include updatedAt."
+            )
+        proposal["sourceEvidenceFingerprint"] = {
+            "issueUpdatedAt": issue_updated_at,
+        }
+        if eligibility["eligible"] is not True:
+            document_violations.append(
+                {
+                    "actionId": proposal["actionId"],
+                    "blockingReasons": list(eligibility["blockingReasons"]),
+                }
+            )
+
+    excessive = sorted(
+        issue_number
+        for issue_number, count in counts_by_issue.items()
+        if count > MAX_PROPOSALS_PER_ISSUE
+    )
+    if excessive:
+        raise ValueError(
+            "Proposal count exceeds maxProposalsPerIssue for issues: "
+            f"{excessive}"
+        )
+
+    generated_at = snapshot.get("collectedAt")
+    if not isinstance(generated_at, str) or not generated_at:
+        raise ValueError("Snapshot collectedAt must be a non-empty string.")
+    result.update(
+        {
+            "schemaVersion": 2,
+            "generatedAtUtc": generated_at,
+            "proposalTtlHours": DEFAULT_PROPOSAL_TTL_HOURS,
+            "maxProposalsPerIssue": MAX_PROPOSALS_PER_ISSUE,
+            "executionEligibility": {
+                "status": "blocked" if document_violations else "eligible",
+                "violations": document_violations,
+            },
+        }
+    )
+
+
 def _action_clusters(
     agent_input: object | None,
     *,
@@ -704,7 +903,6 @@ def build_watch_proposals(
             "body": body,
             "evidenceIds": list(recommendation["evidenceIds"]),
             "expectedIssueState": "open",
-            "requiresSeparateApproval": True,
         }
         if existing:
             proposal["commentId"] = existing[0]["id"]
@@ -712,7 +910,7 @@ def build_watch_proposals(
 
     proposals.sort(key=lambda item: int(item["issueNumber"]))
     unchanged.sort()
-    return {
+    result = {
         "schemaVersion": 1,
         "repository": prepared["repository"],
         "snapshotId": prepared["snapshotId"],
@@ -720,6 +918,8 @@ def build_watch_proposals(
         "proposals": proposals,
         "unchangedIssueNumbers": unchanged,
     }
+    _finalize_execution_metadata(result, snapshot)
+    return result
 
 
 def build_action_proposals(
@@ -799,7 +999,6 @@ def build_action_proposals(
                                 "body": body,
                                 "evidenceIds": list(investigation["evidenceIds"]),
                                 "expectedIssueState": "open",
-                                "requiresSeparateApproval": True,
                             }
                         )
         if (
@@ -842,7 +1041,6 @@ def build_action_proposals(
                     "body": body,
                     "evidenceIds": list(recommendation["evidenceIds"]),
                     "expectedIssueState": "open",
-                    "requiresSeparateApproval": True,
                 }
                 if existing:
                     proposal["commentId"] = existing[0]["id"]
@@ -927,7 +1125,6 @@ def build_action_proposals(
                 "body": body,
                 "evidenceIds": list(recommendation["evidenceIds"]),
                 "expectedIssueState": "open",
-                "requiresSeparateApproval": True,
             }
             if existing:
                 comment["commentId"] = existing[0]["id"]
@@ -941,7 +1138,6 @@ def build_action_proposals(
             "issueUrl": prepared_issue["issueUrl"],
             "operation": "close-issue",
             "closeReason": close_reason,
-            "requiresSeparateApproval": True,
             "idempotencyKey": f"issue:{issue_number}:close:{close_reason}",
             "evidenceIds": list(recommendation["evidenceIds"]),
             "expectedIssueState": "open",
@@ -961,4 +1157,5 @@ def build_action_proposals(
             operation_order.get(str(item["operation"]), 2),
         )
     )
+    _finalize_execution_metadata(result, snapshot)
     return result

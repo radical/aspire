@@ -95,6 +95,11 @@ def collect(
             sleep=time.sleep,
             now=lambda: datetime.now(UTC),
             audit_path=output_dir / "api-calls.jsonl",
+            request_timeout_seconds=60,
+            request_observer=lambda _endpoint: progress.heartbeat(
+                current_stage,
+                message=f"GitHub GET activity in {current_stage}.",
+            ),
         )
         budgets = {
             **DEFAULT_COLLECTION_BUDGETS,
@@ -212,7 +217,7 @@ def collect(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Collect read-only Aspire CI shepherd evidence.")
-    parser.add_argument("--repository", default="microsoft/aspire")
+    parser.add_argument("--repository", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--checkout", type=Path)
     parser.add_argument("--state-dir", type=Path)

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
+from .timeutils import parse_aware_iso8601
 
 
 _OUTCOMES = frozenset(
@@ -221,6 +222,7 @@ def record_investigation_result(
     recorded_at: str,
     session_id: str,
 ) -> dict[str, object]:
+    parse_aware_iso8601(recorded_at, "recordedAt")
     outcome = result.get("outcome")
     if outcome not in _OUTCOMES:
         raise ValueError(f"Unsupported investigation outcome: {outcome}")

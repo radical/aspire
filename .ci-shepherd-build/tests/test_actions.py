@@ -4,6 +4,7 @@ import copy
 import unittest
 
 from ci_shepherd.actions import build_action_proposals, build_watch_proposals
+from ci_shepherd.actor import build_dry_run
 
 
 def _snapshot() -> dict[str, object]:
@@ -22,6 +23,16 @@ def _snapshot() -> dict[str, object]:
                 "payload": {
                     "number": 21,
                     "state": "open",
+                    "updatedAt": "2026-08-21T15:59:00Z",
+                    "labels": [{"name": "ci-failure-cause"}],
+                    "occurrences": [
+                        {
+                            "date": "2026-08-21",
+                            "sourceRun": 777,
+                            "job": "CI",
+                            "pullRequest": None,
+                        }
+                    ],
                     "facts": [
                         {
                             "field": "failureType",
@@ -57,6 +68,12 @@ def _snapshot() -> dict[str, object]:
                     "state": "closed",
                     "mergedAt": "2026-08-21T15:00:00Z",
                     "mergeCommitSha": "abc123",
+                    "referencedBy": [
+                        {
+                            "sourceIssueNumber": 21,
+                            "extractionMethod": "full-pull-url",
+                        }
+                    ],
                 },
             },
         },
@@ -295,6 +312,101 @@ def _with_owned_comment(
 
 
 class WatchActionTests(unittest.TestCase):
+    def test_executable_proposal_carries_source_issue_version(self) -> None:
+        proposals = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        proposal = proposals["proposals"][0]
+        self.assertEqual(
+            {"issueUpdatedAt": "2026-08-21T15:59:00Z"},
+            proposal["sourceEvidenceFingerprint"],
+        )
+
+    def test_unverified_bare_reference_blocks_the_complete_document(self) -> None:
+        snapshot = _snapshot()
+        pull_request = snapshot["evidence"]["pr:22"]
+        pull_request["payload"]["referencedBy"] = [
+            {
+                "sourceIssueNumber": 21,
+                "extractionMethod": "local-issue",
+            }
+        ]
+
+        proposals = build_action_proposals(
+            snapshot,
+            _resolved_prepared(),
+            _close_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual("blocked", proposals["executionEligibility"]["status"])
+        for proposal in proposals["proposals"]:
+            self.assertIn(
+                "untrusted-reference-provenance",
+                proposal["executionEligibility"]["blockingReasons"],
+            )
+        build_dry_run(proposals, action_id=None)
+
+    def test_unlabeled_issue_is_explicitly_ineligible_for_execution(self) -> None:
+        snapshot = _snapshot()
+        issue = snapshot["evidence"]["issue:21"]["payload"]
+        assert isinstance(issue, dict)
+        issue["labels"] = []
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(2, proposals["schemaVersion"])
+        self.assertFalse(
+            proposals["proposals"][0]["executionEligibility"]["eligible"]
+        )
+        self.assertEqual("blocked", proposals["executionEligibility"]["status"])
+        self.assertIn(
+            "missing-ci-label",
+            proposals["proposals"][0]["executionEligibility"]["blockingReasons"],
+        )
+
+    def test_any_collection_error_blocks_the_entire_proposal_document(self) -> None:
+        snapshot = _snapshot()
+        snapshot["collectionErrors"] = [
+            {
+                "stage": "comments",
+                "endpoint": "/repos/owner/repo/issues/21/comments?page=1",
+                "message": "request failed",
+            }
+        ]
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        eligibility = proposals["proposals"][0]["executionEligibility"]
+        self.assertFalse(eligibility["eligible"])
+        self.assertIn("incomplete-collection", eligibility["blockingReasons"])
+        self.assertEqual(
+            {
+                "status": "blocked",
+                "violations": [
+                    {
+                        "actionId": proposals["proposals"][0]["actionId"],
+                        "blockingReasons": ["incomplete-collection"],
+                    }
+                ],
+            },
+            proposals["executionEligibility"],
+        )
+
     def test_legacy_watch_comment_is_migrated_in_place(self) -> None:
         result = build_watch_proposals(
             _with_owned_comment(
@@ -425,9 +537,11 @@ class WatchActionTests(unittest.TestCase):
         )
         self.assertNotIn("Proposed action", comment["body"])
         self.assertNotIn("separate approval", comment["body"])
-        self.assertTrue(comment["requiresSeparateApproval"])
+        self.assertNotIn("requiresSeparateApproval", comment)
+        self.assertTrue(comment["executionEligibility"]["eligible"])
         self.assertEqual("completed", close["closeReason"])
-        self.assertTrue(close["requiresSeparateApproval"])
+        self.assertNotIn("requiresSeparateApproval", close)
+        self.assertTrue(close["executionEligibility"]["eligible"])
         self.assertEqual(comment["actionId"], close["dependsOn"])
 
     def test_build_action_proposals_renders_direct_run_recovery_close(self) -> None:
@@ -519,8 +633,13 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual([], result["unchangedIssueNumbers"])
         self.assertEqual(1, len(result["proposals"]))
         proposal = result["proposals"][0]
+        self.assertEqual(
+            {"status": "eligible", "violations": []},
+            result["executionEligibility"],
+        )
         self.assertEqual("create-comment", proposal["operation"])
-        self.assertIs(True, proposal["requiresSeparateApproval"])
+        self.assertNotIn("requiresSeparateApproval", proposal)
+        self.assertTrue(proposal["executionEligibility"]["eligible"])
         self.assertEqual("issue:21:status", proposal["idempotencyKey"])
         self.assertTrue(proposal["body"].startswith("[automated] "))
         self.assertIn(

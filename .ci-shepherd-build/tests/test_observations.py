@@ -36,15 +36,7 @@ class MappingSubclass(Mapping):
 def policy(*retry_safe_pattern_ids: str) -> ManualPolicy:
     return ManualPolicy(
         policy_version="manual-v1",
-        quarantine_review_min_distinct_runs=2,
-        quarantine_review_min_distinct_commits=2,
-        recovery_min_independent_successes=2,
-        dormant_human_review_after_days=7,
         systemic_transient_window_days=14,
-        systemic_transient_min_occurrences=3,
-        systemic_transient_min_failure_rate=0.05,
-        proposal_ttl_hours=24,
-        max_proposals_per_issue=3,
         retry_safe_pattern_ids=frozenset(retry_safe_pattern_ids),
     )
 

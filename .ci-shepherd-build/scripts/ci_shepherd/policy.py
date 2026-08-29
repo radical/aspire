@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -19,15 +18,7 @@ __all__ = ["ManualPolicy", "PolicyError", "load_policy", "load_policy_document"]
 @dataclass(frozen=True, slots=True)
 class ManualPolicy:
     policy_version: str
-    quarantine_review_min_distinct_runs: int
-    quarantine_review_min_distinct_commits: int
-    recovery_min_independent_successes: int
-    dormant_human_review_after_days: int
     systemic_transient_window_days: int
-    systemic_transient_min_occurrences: int
-    systemic_transient_min_failure_rate: float
-    proposal_ttl_hours: int
-    max_proposals_per_issue: int
     retry_safe_pattern_ids: frozenset[str]
 
     def __post_init__(self) -> None:
@@ -48,15 +39,7 @@ class ManualPolicy:
         return {
             "schemaVersion": _SCHEMA_VERSION,
             "policyVersion": self.policy_version,
-            "quarantineReviewMinDistinctRuns": self.quarantine_review_min_distinct_runs,
-            "quarantineReviewMinDistinctCommits": self.quarantine_review_min_distinct_commits,
-            "recoveryMinIndependentSuccesses": self.recovery_min_independent_successes,
-            "dormantHumanReviewAfterDays": self.dormant_human_review_after_days,
             "systemicTransientWindowDays": self.systemic_transient_window_days,
-            "systemicTransientMinOccurrences": self.systemic_transient_min_occurrences,
-            "systemicTransientMinFailureRate": self.systemic_transient_min_failure_rate,
-            "proposalTtlHours": self.proposal_ttl_hours,
-            "maxProposalsPerIssue": self.max_proposals_per_issue,
             "retrySafePatternIds": sorted(self.retry_safe_pattern_ids),
         }
 
@@ -66,15 +49,7 @@ _POLICY_FIELDS = frozenset(
     {
         "schemaVersion",
         "policyVersion",
-        "quarantineReviewMinDistinctRuns",
-        "quarantineReviewMinDistinctCommits",
-        "recoveryMinIndependentSuccesses",
-        "dormantHumanReviewAfterDays",
         "systemicTransientWindowDays",
-        "systemicTransientMinOccurrences",
-        "systemicTransientMinFailureRate",
-        "proposalTtlHours",
-        "maxProposalsPerIssue",
         "retrySafePatternIds",
     }
 )
@@ -108,49 +83,14 @@ def load_policy_document(document: object) -> ManualPolicy:
         raise PolicyError(f"schemaVersion must be {_SCHEMA_VERSION}.")
 
     policy_version = _require_nonempty_string(mapping, "policyVersion")
-    quarantine_review_min_distinct_runs = _require_positive_int(
-        mapping,
-        "quarantineReviewMinDistinctRuns",
-    )
-    quarantine_review_min_distinct_commits = _require_positive_int(
-        mapping,
-        "quarantineReviewMinDistinctCommits",
-    )
-    recovery_min_independent_successes = _require_positive_int(
-        mapping,
-        "recoveryMinIndependentSuccesses",
-    )
-    dormant_human_review_after_days = _require_positive_int(
-        mapping,
-        "dormantHumanReviewAfterDays",
-    )
     systemic_transient_window_days = _require_positive_int(
-        mapping,
-        "systemicTransientWindowDays",
+        mapping, "systemicTransientWindowDays"
     )
-    systemic_transient_min_occurrences = _require_positive_int(
-        mapping,
-        "systemicTransientMinOccurrences",
-    )
-    systemic_transient_min_failure_rate = _require_rate(
-        mapping,
-        "systemicTransientMinFailureRate",
-    )
-    proposal_ttl_hours = _require_positive_int(mapping, "proposalTtlHours")
-    max_proposals_per_issue = _require_positive_int(mapping, "maxProposalsPerIssue")
     retry_safe_pattern_ids = _require_retry_safe_pattern_ids(mapping)
 
     return ManualPolicy(
         policy_version=policy_version,
-        quarantine_review_min_distinct_runs=quarantine_review_min_distinct_runs,
-        quarantine_review_min_distinct_commits=quarantine_review_min_distinct_commits,
-        recovery_min_independent_successes=recovery_min_independent_successes,
-        dormant_human_review_after_days=dormant_human_review_after_days,
         systemic_transient_window_days=systemic_transient_window_days,
-        systemic_transient_min_occurrences=systemic_transient_min_occurrences,
-        systemic_transient_min_failure_rate=systemic_transient_min_failure_rate,
-        proposal_ttl_hours=proposal_ttl_hours,
-        max_proposals_per_issue=max_proposals_per_issue,
         retry_safe_pattern_ids=retry_safe_pattern_ids,
     )
 
@@ -203,21 +143,8 @@ def _require_exact_int(mapping: Mapping[str, Any], field_name: str, expected: in
 def _require_positive_int(mapping: Mapping[str, Any], field_name: str) -> int:
     value = mapping.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise PolicyError(f"{field_name} must be positive.")
+        raise PolicyError(f"{field_name} must be a positive integer.")
     return value
-
-
-def _require_rate(mapping: Mapping[str, Any], field_name: str) -> float:
-    value = mapping.get(field_name)
-    if (
-        not isinstance(value, (int, float))
-        or isinstance(value, bool)
-        or not math.isfinite(value)
-        or value <= 0
-        or value > 1
-    ):
-        raise PolicyError(f"{field_name} must be within (0, 1].")
-    return float(value)
 
 
 def _require_retry_safe_pattern_ids(mapping: Mapping[str, Any]) -> frozenset[str]:

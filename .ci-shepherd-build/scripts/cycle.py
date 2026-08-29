@@ -24,7 +24,6 @@ from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.poc_state import load_review_schedule, record_review_events
 from ci_shepherd.pull_requests import build_pull_request_handoff
 from ci_shepherd.pull_requests import (
-    build_pull_request_comment_proposals,
     merge_pull_request_judgments,
     render_pull_request_section,
 )
@@ -461,26 +460,7 @@ def finish_cycle(
         shepherd_author,
         agent_input=compact,
     )
-    pull_request_proposals = build_pull_request_comment_proposals(
-        snapshot,
-        pull_request_handoff,
-        pull_request_judgments,
-        shepherd_author,
-    )
-    proposals = {
-        **issue_proposals,
-        "proposals": sorted(
-            [
-                *issue_proposals["proposals"],
-                *pull_request_proposals["proposals"],
-            ],
-            key=lambda proposal: str(proposal["actionId"]),
-        ),
-        "unchangedPullRequestNumbers": pull_request_proposals[
-            "unchangedPullRequestNumbers"
-        ],
-        "suppressedPullRequests": pull_request_proposals["suppressedPullRequests"],
-    }
+    proposals = issue_proposals
     _write_private_json(paths["proposals"], proposals)
     dry_run = build_dry_run(proposals, action_id=None)
     _write_private_json(paths["dryRun"], dry_run)
@@ -563,7 +543,7 @@ def main() -> int:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     start = subparsers.add_parser("start")
-    start.add_argument("--repository", default="microsoft/aspire")
+    start.add_argument("--repository", required=True)
     start.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     start.add_argument("--work-dir", type=Path)
     start.add_argument("--checkout", type=Path)

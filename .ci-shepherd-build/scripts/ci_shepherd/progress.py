@@ -7,6 +7,12 @@ from pathlib import Path
 import tempfile
 from typing import Any, Callable
 
+from .timeutils import parse_aware_iso8601
+
+
+class StageDeadlineExceeded(TimeoutError):
+    """Raised when a progress stage exceeds its configured wall-clock budget."""
+
 
 class ProgressTracker:
     def __init__(
@@ -14,10 +20,18 @@ class ProgressTracker:
         output_dir: Path,
         *,
         now: Callable[[], datetime] | None = None,
+        heartbeat_interval_seconds: float = 30,
+        stage_deadline_seconds: float = 900,
     ) -> None:
+        if heartbeat_interval_seconds <= 0:
+            raise ValueError("heartbeat_interval_seconds must be positive.")
+        if stage_deadline_seconds <= 0:
+            raise ValueError("stage_deadline_seconds must be positive.")
         self._output_dir = output_dir
         self._path = output_dir / "progress.json"
         self._now = now or (lambda: datetime.now(UTC))
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._stage_deadline_seconds = stage_deadline_seconds
 
     def update(
         self,
@@ -33,6 +47,8 @@ class ProgressTracker:
         self._output_dir.chmod(0o700)
         timestamp = self._timestamp()
         document = self._load(timestamp)
+        if event_status == "completed":
+            self._enforce_deadline(document, stage, timestamp)
         event: dict[str, Any] = {
             "stage": stage,
             "status": event_status,
@@ -68,6 +84,108 @@ class ProgressTracker:
             if value is not None:
                 document[key] = value
         self._write(document)
+
+    def heartbeat(
+        self,
+        stage: str,
+        *,
+        message: str | None = None,
+    ) -> bool:
+        """Record bounded progress without writing more often than configured."""
+
+        timestamp = self._timestamp()
+        instant = parse_aware_iso8601(timestamp, "progress heartbeat")
+        document = self._load(timestamp)
+        self._enforce_deadline(document, stage, timestamp)
+        stage_events = [
+            event
+            for event in document["events"]
+            if isinstance(event, dict) and event.get("stage") == stage
+        ]
+        if not any(event.get("status") == "started" for event in stage_events):
+            raise ValueError(f"Progress stage has not started: {stage}")
+
+        if stage_events:
+            latest_at = parse_aware_iso8601(
+                stage_events[-1].get("at"),
+                f"{stage} latest progress",
+            )
+            if (
+                instant - latest_at
+            ).total_seconds() < self._heartbeat_interval_seconds:
+                return False
+
+        event: dict[str, Any] = {
+            "stage": stage,
+            "status": "progress",
+            "at": timestamp,
+        }
+        if message is not None:
+            event["message"] = message
+        document["events"].append(event)
+        document.update(
+            {
+                "updatedAt": timestamp,
+                "currentStage": stage,
+                "status": "running",
+            }
+        )
+        if message is not None:
+            document["message"] = message
+        self._write(document)
+        return True
+
+    def _enforce_deadline(
+        self,
+        document: dict[str, Any],
+        stage: str,
+        timestamp: str,
+    ) -> None:
+        if stage in {"collection", "pipeline"}:
+            return
+        started = next(
+            (
+                event
+                for event in reversed(document["events"])
+                if isinstance(event, dict)
+                and event.get("stage") == stage
+                and event.get("status") == "started"
+            ),
+            None,
+        )
+        if started is None:
+            return
+        instant = parse_aware_iso8601(timestamp, "progress timestamp")
+        started_at = parse_aware_iso8601(
+            started.get("at"),
+            f"{stage} startedAt",
+        )
+        if (instant - started_at).total_seconds() <= self._stage_deadline_seconds:
+            return
+
+        deadline = f"{self._stage_deadline_seconds:g}"
+        error = "stage-deadline-exceeded"
+        message = f"{stage} exceeded its {deadline}-second deadline."
+        document["events"].append(
+            {
+                "stage": stage,
+                "status": "failed",
+                "at": timestamp,
+                "message": message,
+                "error": error,
+            }
+        )
+        document.update(
+            {
+                "updatedAt": timestamp,
+                "currentStage": stage,
+                "status": "failed",
+                "message": message,
+                "error": error,
+            }
+        )
+        self._write(document)
+        raise StageDeadlineExceeded(message)
 
     def _load(self, timestamp: str) -> dict[str, Any]:
         if not self._path.exists():

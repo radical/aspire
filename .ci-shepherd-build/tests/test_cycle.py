@@ -562,7 +562,7 @@ class CycleTests(unittest.TestCase):
                 changed_selection["selected"][0]["previousDisposition"],
             )
 
-    def test_finishes_pull_request_review_into_report_and_shared_proposals(self) -> None:
+    def test_finishes_pull_request_review_without_executable_pr_proposals(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
         with TemporaryDirectory(dir=artifacts) as scratch:
@@ -609,7 +609,8 @@ class CycleTests(unittest.TestCase):
                 (work / "action-proposals.json").read_text(encoding="utf-8")
             )
             self.assertEqual([], proposals["proposals"])
-            self.assertEqual([], proposals["unchangedPullRequestNumbers"])
+            self.assertNotIn("unchangedPullRequestNumbers", proposals)
+            self.assertNotIn("suppressedPullRequests", proposals)
 
     def test_report_surfaces_incomplete_collection(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"

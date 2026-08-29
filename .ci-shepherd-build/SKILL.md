@@ -107,11 +107,14 @@ never read as a clean one.
   local worktree session. The worker may edit and validate locally, but must not
   push or open a pull request until its draft title and body receive approval.
 - Push, pull-request creation, quarantine, rerun, and retry remain individually
-  approval-gated unless a future policy explicitly adds a narrower safe case.
-- Every issue- or pull-request-visible effect must be explicitly approved or
-  covered by a configured pre-authorization policy. The initial
-  pre-authorization policy may cover only frozen issue comments and their
-  dependent issue closures after independent validation.
+  approval-gated.
+- Every mutation requires an exact machine-readable authorization grant. The
+  grant enumerates action IDs, targets, operations, expiry, proposal identity,
+  and a persistent mutation budget. Prose, labels, disposition names, and
+  sequential invocation are never authorization.
+- Executable proposals are limited to issue comments, issue-comment edits, and
+  issue closure. Pull-request findings and all other high-risk actions remain
+  advisory and never enter the executable proposal document.
 
 ### Pull-request assessment
 
@@ -158,23 +161,32 @@ The assessment agent never executes actions. It emits evidence-backed
 recommendations only. The coordinator may render local action proposals after
 finalization and validation, but a proposal is not authorization to post.
 
-Every issue- or pull-request-visible effect must be explicitly approved or
-covered by a configured pre-authorization policy. Before an individually
-approved effect, show the exact target, complete rendered text or command, cited
-evidence, and expected result. A pre-authorized effect must satisfy the same
-frozen-proposal, preflight, execution-ledger, and reconciliation checks without
-requiring another prompt. If neither authorization applies, leave the effect
-proposed and make no GitHub write.
+Before approval, show the exact target, complete rendered text or command, cited
+evidence, expected result, dependency chain, and maximum mutation count. Record
+that approval in an exact machine-readable grant bound to the frozen proposal
+document and state directory. If the executor does not receive a valid grant,
+leave every effect proposed and make no GitHub write.
 
-`action-proposals.json` remains the only source of GitHub-visible effects.
-Execute eligible comment and close actions in the same shepherd run after
-independent validation and proposal freezing. Recheck that the evidence
-fingerprint is unchanged, the target remains in its expected state, and the
-exact action has no terminal ledger result. Use the frozen comment body. Run a
-dependent close only after its comment reconciles successfully. Log complete
-unexpected errors to standard output and the operator log, record each terminal
-result, and continue with independent actions when safe. Reconcile live state
-and update the report after all attempted effects.
+`action-proposals.json` remains the only source of GitHub-visible effects, but it
+is not authorization. Execute only action IDs explicitly enumerated by the
+grant, and stop when its persisted mutation or chain budget is exhausted.
+Recheck that the evidence fingerprint is unchanged, the target remains in its
+expected state, and the exact action has no terminal ledger result. Use the
+frozen comment body. Run a dependent close only after its comment reconciles
+successfully. Any grant, document-integrity, collection-completeness, or budget
+violation fails closed before GitHub mutation. Reconcile live state and update
+the report after all attempted effects.
+
+Only explicit issue or pull-request URLs, structured triggering-PR fields,
+occurrence-table PRs, and references in an explicit resolution context may
+support a GitHub-visible action. A bare `#1234` mention proves neither
+relatedness nor that the target is even the intended kind; proposals citing
+only that provenance are execution-ineligible.
+
+Collection GET subprocesses and mutation subprocesses each have a 60-second
+timeout. Collection stages emit throttled owner-only progress heartbeats and
+fail after 15 minutes rather than advancing persistent state after an
+unbounded stall.
 
 Use one canonical CI shepherd status comment per issue. All automatically
 posted GitHub text starts with `[automated] `. The comment uses identity-only
@@ -331,26 +343,41 @@ python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
 ```
 
 Dry-run performs no GitHub access and does not create or modify
-`action-results.json`. Add `--action-id <exact-id>` to preview only one
+`action-events.jsonl`. Add `--action-id <exact-id>` to preview only one
 proposal. `--state-dir` is optional for dry-run.
 
-Mutation is a separate validated step. It requires either individual approval
-or a match against the pre-authorization policy configured in the workflow
-prompt. The coordinator invokes eligible actions sequentially rather than
-granting document-wide execution. `--execute` requires one exact `--action-id`.
+Mutation is a separate validated step. `--execute` requires one exact
+`--action-id`, one exact `--authorization` grant, and the grant-bound
+`--state-dir`. Sequential invocation does not limit total impact; only the
+persisted grant budget does.
+
+The authorization file is an exact grant, not an operator note. It must bind
+the repository, absolute state directory, snapshot ID, SHA-256 digest of the
+raw proposal bytes, explicit action IDs, operations, issue targets, chain
+roots, expiry, and mutation/chain budgets. Unknown or duplicate fields are
+rejected. Copying the grant does not reset its budget because consumption is
+derived from the grant ID in the grant-bound append-only event log.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
+  --authorization "$SCRATCH/authorization-grant.json" \
   --state-dir "$STATE" \
   --action-id "snapshot:...:issue:19149:review-close-comment" \
   --execute
 ```
 
-Execute mode checks dependencies and current GitHub state, performs one fixed
-operation, refetches the target, and appends one `executed`, `stale`, or
-`failed` record to owner-only `$STATE/action-results.json`. It never treats
-`--execute` as approval for the whole proposal document.
+Execute mode accepts only proposal schema v2 and re-derives its CI-label,
+occurrence, collection-completeness, and evidence-availability eligibility
+checks. Before any mutation it fsyncs an `intent` event under a bounded lock.
+It then checks dependencies and current GitHub state, performs one fixed
+operation, refetches the target, and appends a terminal event to owner-only
+`$STATE/action-events.jsonl`. A surviving `intent` or `indeterminate` event
+permits reconciliation only; it never permits another mutation. Reconciliation
+requires the exact idempotency key, body, and authenticated author. The
+executor never treats `--execute` as approval for the whole proposal document,
+never accepts `--results` in execute mode, and hard-denies mutations to
+`microsoft/aspire` while remediation remains active.
 
 ## Artifacts
 
@@ -393,7 +420,8 @@ $STATE/
   ledgers/review-events.jsonl
   ledgers/investigation-results.jsonl
   ledgers/quarantine-sessions.jsonl
-  action-results.json
+  action-events.jsonl
+  action-results-migration-v1.json
 ```
 
 `input.json` is the coordinator-owned raw collection. `assessment-input.json`
@@ -726,9 +754,9 @@ using the checkout that contains this skill. The workflow prompt must:
 5. launch and record new read-only requests in `investigation-plan.json`;
 6. independently validate investigation results and regenerate frozen
    `action-proposals.json`;
-7. execute every proposal covered by the configured pre-authorization policy,
-   in dependency order, and reconcile its live result before continuing;
-8. never execute a proposal outside that policy or start
+7. execute only exact action IDs enumerated by a valid authorization grant, in
+   dependency order, stopping at its persisted mutation and chain budgets;
+8. never execute a proposal without that grant or start
    `quarantine-session.json` without the required approval;
 9. update the final report with investigation and action outcomes, proposals
    still needing approval, and structurally incomplete evidence; and
