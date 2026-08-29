@@ -473,6 +473,17 @@ internal static class Selection
         // the flat token stream and consume 1 or 2 fields per record accordingly. -M alone won't emit
         // "C" copy records -- see GraphAffectedProjects.GetChangedPathsFromGit for the same format with
         // more examples.
+        // Well-formed `-z` output always ends its last field with a NUL, same as every other field --
+        // there is no special "no trailing NUL" case. `Split` doesn't care whether the string ends with
+        // the delimiter, so a stream truncated mid-path (the final field's NUL never arrived, e.g. a
+        // killed process or a partial pipe read) would otherwise parse as a shorter-but-plausible-looking
+        // path instead of failing loudly like every other truncation case below.
+        if (stdout.Length > 0 && stdout[^1] != '\0')
+        {
+            throw new InvalidOperationException(
+                "git diff --name-status -M -z produced a truncated stream: output did not end with a NUL terminator, so the final path may be incomplete.");
+        }
+
         var tokens = stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
         var tokenIndex = 0;
         while (tokenIndex < tokens.Length)
@@ -1038,6 +1049,44 @@ internal static class Selection
         return $"`{member.Key}`";
     }
 
+    // Escapes bytes a `-z`-parsed path (see ParseNameStatusOutput) can legally contain but that would
+    // otherwise corrupt the Markdown this method renders into: `-z` intentionally preserves a path's raw
+    // bytes -- including a literal newline, carriage return, or backtick -- that git's older text-mode
+    // format would have quoted away. Left raw, such a path could inject extra lines/headings into the
+    // step summary or PR comment, or break out of its enclosing `code span`. Escaping is display-only;
+    // callers still match/attribute the unescaped path everywhere else.
+    private static string EscapeForDisplay(string value)
+    {
+        if (value.AsSpan().IndexOfAny('\r', '\n', '`') < 0)
+        {
+            return value;
+        }
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '\r':
+                    sb.Append("\\r");
+                    break;
+                case '\n':
+                    sb.Append("\\n");
+                    break;
+                case '`':
+                    // A raw backtick would close the enclosing inline code span early; substitute a
+                    // visually similar character that can't be confused with real path content.
+                    sb.Append('\'');
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
     // The trigger a cause groups under. Direct file matches and graph fan-out from the same seed file
     // share a "file:" key so they render under one heading; affected-project and derived-test causes
     // get their own keyed groups.
@@ -1054,10 +1103,11 @@ internal static class Selection
     private static string CauseGroupHeader(string key)
     {
         var sep = key.IndexOf(':', StringComparison.Ordinal);
-        var (kind, value) = (key[..sep], key[(sep + 1)..]);
+        var (kind, rawValue) = (key[..sep], key[(sep + 1)..]);
+        var value = EscapeForDisplay(rawValue);
         return kind switch
         {
-            "file" => $"**{FileEmoji(value)} `{value}`** *({FileChangeKind(value)})*",
+            "file" => $"**{FileEmoji(rawValue)} `{value}`** *({FileChangeKind(rawValue)})*",
             "affected" => $"**📦 affected project `{value}`**",
             "derived" => $"**🧪 derived from test `{value}`**",
             _ => $"**`{value}`**",
@@ -1068,7 +1118,8 @@ internal static class Selection
     private static string CauseGroupDescriptor(string key)
     {
         var sep = key.IndexOf(':', StringComparison.Ordinal);
-        var (kind, value) = (key[..sep], key[(sep + 1)..]);
+        var (kind, rawValue) = (key[..sep], key[(sep + 1)..]);
+        var value = EscapeForDisplay(rawValue);
         return kind switch
         {
             "file" => $"`{value}`",
@@ -1181,7 +1232,7 @@ internal static class Selection
         sb.AppendLine();
         foreach (var file in changedFiles.OrderBy(f => f, StringComparer.Ordinal))
         {
-            sb.AppendLine(CultureInfo.InvariantCulture, $"- `{file}`");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"- `{EscapeForDisplay(file)}`");
         }
         sb.AppendLine();
         sb.AppendLine("</details>");
@@ -1198,7 +1249,7 @@ internal static class Selection
             sb.AppendLine();
             foreach (var file in excludedFiles.OrderBy(f => f, StringComparer.Ordinal))
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"- `{file}`");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- `{EscapeForDisplay(file)}`");
             }
             sb.AppendLine();
         }
@@ -1221,7 +1272,7 @@ internal static class Selection
             sb.AppendLine();
             foreach (var file in unmatched)
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"- `{file}`");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- `{EscapeForDisplay(file)}`");
             }
         }
         sb.AppendLine();
@@ -1351,9 +1402,9 @@ internal static class Selection
     // Terse, one-line cause for the PR comment (no rule reason text).
     private static string ShortCause(Cause cause) => cause.Kind switch
     {
-        CauseKind.Convention => $"`{cause.Trigger}`",
-        CauseKind.PathRule => $"`{cause.Trigger}`",
-        CauseKind.AffectedProject => $"affected project `{cause.Trigger}`",
+        CauseKind.Convention => $"`{EscapeForDisplay(cause.Trigger)}`",
+        CauseKind.PathRule => $"`{EscapeForDisplay(cause.Trigger)}`",
+        CauseKind.AffectedProject => $"affected project `{EscapeForDisplay(cause.Trigger)}`",
         // Name the seed changed file (and hop count) rather than the full chain, which the summary
         // carries -- the comment stays scannable. Falls back to a generic label when no path was tracked.
         CauseKind.Layer1Graph => Layer1ShortCause(cause),
@@ -1361,8 +1412,8 @@ internal static class Selection
         // derived_targets rule pulls this job in because that test project was selected. Phrasing it as a
         // noun -- not "derived from test X" -- avoids a dangling "from" that reads as if the line above it
         // in the job-reasons cell flows through this test.
-        CauseKind.DerivedFromTest => $"selected test `{cause.Trigger}`",
-        _ => cause.Trigger,
+        CauseKind.DerivedFromTest => $"selected test `{EscapeForDisplay(cause.Trigger)}`",
+        _ => EscapeForDisplay(cause.Trigger),
     };
 
     // "via graph from `seed.cs`" (+ "(N hops)" when the reverse-dependency chain is more than one edge).
@@ -1376,7 +1427,7 @@ internal static class Selection
         // path = [seedFile, project0, ..., affectedTest]; project edges = (count - 1 projects) - 1.
         var hops = path.Count - 2;
         var suffix = hops > 1 ? $" ({hops} hops)" : "";
-        return $"via graph from `{path[0]}`{suffix}";
+        return $"via graph from `{EscapeForDisplay(path[0])}`{suffix}";
     }
 
     // Full cause for the step summary, including the curated rule reason when present.
@@ -1384,16 +1435,16 @@ internal static class Selection
     {
         var head = cause.Kind switch
         {
-            CauseKind.Convention => $"convention match `{cause.Trigger}`",
-            CauseKind.PathRule => $"path rule `{cause.Trigger}`",
-            CauseKind.AffectedProject => $"affected project `{cause.Trigger}`",
+            CauseKind.Convention => $"convention match `{EscapeForDisplay(cause.Trigger)}`",
+            CauseKind.PathRule => $"path rule `{EscapeForDisplay(cause.Trigger)}`",
+            CauseKind.AffectedProject => $"affected project `{EscapeForDisplay(cause.Trigger)}`",
             // Render the full decision path (seed file -> ... -> affected test) when available, so the
             // summary explains HOW the change reached the test, not just THAT it did.
             CauseKind.Layer1Graph => cause.Path is { Count: > 0 } path
-                ? $"graph closure: {string.Join(" → ", path)}"
+                ? $"graph closure: {string.Join(" → ", path.Select(EscapeForDisplay))}"
                 : "affected by changed source (graph closure)",
-            CauseKind.DerivedFromTest => $"derived from selected test `{cause.Trigger}`",
-            _ => cause.Trigger,
+            CauseKind.DerivedFromTest => $"derived from selected test `{EscapeForDisplay(cause.Trigger)}`",
+            _ => EscapeForDisplay(cause.Trigger),
         };
 
         // Map reasons can be YAML folded scalars spanning lines; collapse to one line for the bullet.

@@ -963,13 +963,13 @@ public sealed class SelectTestsCliTests
     }
 
     // P1-6c. A rename must attribute BOTH sides so a file moved OUT of a mapped directory still runs
-    // that directory's tests. The selector diffs with `-M` (git rename detection on), which reports a
-    // rename as one "R###\told\tnew" record carrying both paths; the selector globs each side against
-    // every rule rather than only the new path. other.txt (-> Aspire.Cli.Tests) is renamed to
-    // renamed.txt, which the map ignores so the new side adds nothing and does not trip the run-all
-    // fallback -- isolating the assertion to the old side: the move of other.txt must still select
-    // Aspire.Cli.Tests. Failure mode: matching only the rename's new path would see just the ignored
-    // renamed.txt, the rule would never fire, and the move would silently skip its tests.
+    // that directory's tests. The selector diffs with `-M -z` (git rename detection on, NUL-delimited),
+    // which reports a rename as one "R###\0old\0new\0" record carrying both paths; the selector globs
+    // each side against every rule rather than only the new path. other.txt (-> Aspire.Cli.Tests) is
+    // renamed to renamed.txt, which the map ignores so the new side adds nothing and does not trip the
+    // run-all fallback -- isolating the assertion to the old side: the move of other.txt must still
+    // select Aspire.Cli.Tests. Failure mode: matching only the rename's new path would see just the
+    // ignored renamed.txt, the rule would never fire, and the move would silently skip its tests.
     [Fact]
     public void RenameOutOfMappedPathStillSelectsItsTests()
     {
@@ -1263,6 +1263,20 @@ public sealed class SelectTestsCliTests
 
         var ex = Assert.Throws<InvalidOperationException>(() => Selection.ParseNameStatusOutput(truncated));
         Assert.Contains("produced a truncated record", ex.Message, StringComparison.Ordinal);
+    }
+
+    // Regression: `Split('\0', ...)` doesn't require the string to end with the delimiter, so a stream
+    // truncated mid-path (the final field's terminating NUL never arrived -- e.g. a killed process or a
+    // partial pipe read) would otherwise parse as a shorter-but-plausible-looking path instead of failing
+    // loudly like the mid-record truncation cases above. "M\0src/Foo.cs" (missing the trailing NUL) looks
+    // exactly like a well-formed one-token record to a naive split and must still throw.
+    [Fact]
+    public void ParseNameStatusOutputThrowsOnMissingFinalTerminator()
+    {
+        var truncated = "M\0src/Foo.cs";
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Selection.ParseNameStatusOutput(truncated));
+        Assert.Contains("truncated stream", ex.Message, StringComparison.Ordinal);
     }
 
     // P1-7. --changed-files trims surrounding whitespace and drops blank lines before glob matching.

@@ -150,8 +150,8 @@ public sealed class TestSelector
     /// when Layer 1 did not run or produced no paths.
     /// </param>
     /// <remarks>
-    /// A git-detected rename's old and new paths (from a <c>git diff --name-status -M</c>
-    /// "R###\told\tnew" record) both flow into <paramref name="changedFiles"/> and are evaluated
+    /// A git-detected rename's old and new paths (from a <c>git diff --name-status -M -z</c>
+    /// "R###\0old\0new\0" record) both flow into <paramref name="changedFiles"/> and are evaluated
     /// identically to any other changed path here -- there is no rename-specific handling. In
     /// particular, an old path that ends up matched by nothing forces the same run-all fallback below
     /// as a plain deletion would. A rename does not guarantee its new path's evaluation "covers" the

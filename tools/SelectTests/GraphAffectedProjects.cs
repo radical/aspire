@@ -473,13 +473,18 @@ internal static class GraphAffectedProjects
         // attribution, so an excluded file (e.g. a packed README.md <None> item) never gets mapped to a
         // project and fanned out. The same filter is applied to the Layer 2 input in Program.cs, so both
         // layers see the identical post-exclude change set.
-        var normalized = relativePaths.Select(rel => rel.Replace('\\', '/'));
-        if (filter is not null)
-        {
-            normalized = normalized.Where(rel => !filter.IsExcluded(rel));
-        }
+        //
+        // No `\` -> `/` normalization here: git always reports repo-relative paths with `/` separators on
+        // every OS (see GetChangedPathsFromGit), and Layer 2's own --changed-files handling (Program.cs's
+        // ResolveChangedFiles) makes the identical assumption without normalizing. A literal `\` in either
+        // source is a real filename byte on Unix, not a separator -- rewriting it to `/` would silently
+        // desync this path from the byte-identical string Layer 2 and the map's path rules match against,
+        // so a change could be attributed to the wrong project (or none) without either layer noticing.
+        var filtered = filter is null
+            ? relativePaths
+            : relativePaths.Where(rel => !filter.IsExcluded(rel));
 
-        return normalized
+        return filtered
             .Select(rel => new ChangedPath(
                 rel,
                 NormalizeFullPath(Path.Combine(repoRoot, rel.Replace('/', Path.DirectorySeparatorChar)))))

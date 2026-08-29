@@ -438,10 +438,13 @@ public sealed class TestTriggerMapTests
     // for this in-place-rename-with-moved-map-entry case is the accepted, safe tradeoff -- an
     // unnecessary full run is strictly better than a silently skipped test.
     //
-    // This test uses a temp copy of the REAL map with all three paths' entries left exactly as
-    // checked out on disk today (i.e. still referencing the OLD names), so replaying the literal old
-    // paths reproduces "the map has not yet been updated for this rename" -- the same shape as the
-    // production run at PR #19486's head SHA.
+    // This test starts from the REAL map (its entries still reference the OLD names, same as checked
+    // out on disk today) and builds a temp copy with those three entries rewritten to the NEW names --
+    // simulating the map already updated for the rename, exactly as PR #19486's own commit left it (the
+    // rename and the matching map update landed together). Replaying the rename diff (both the old and
+    // new path of each file, as git reports for an R-record) against that up-to-date map reproduces the
+    // production run at PR #19486's head SHA: the new paths are fully covered, but the old paths --
+    // still present in the diff -- match nothing, which is what forces the run-all fallback below.
     [Fact]
     public void SameCommitRenameWithMapEntryMovedToNewPathForcesRunAll()
     {
