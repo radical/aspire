@@ -680,11 +680,29 @@ class PrototypeScriptTests(unittest.TestCase):
 
         for phrase in (
             "canonical CI shepherd status comment",
-            "Every issue- or pull-request-visible effect requires individual user approval.",
+            "Every issue- or pull-request-visible effect must be explicitly approved "
+            "or covered by a configured pre-authorization policy.",
             "All automatically posted GitHub text starts with `[automated] `.",
             "Shepherd-authored status comments must not contribute markers, facts, or references.",
             "An unchanged watch state must not create or edit a comment.",
             "The assessment agent never executes actions.",
+            "Execute eligible comment and close actions in the same shepherd run",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized_skill)
+
+    def test_skill_documents_final_fresh_retrospective(self) -> None:
+        normalized_skill = " ".join(SKILL_PATH.read_text().split())
+
+        for phrase in (
+            "The retrospective is the final phase of the run.",
+            "fresh, read-only retrospective reviewer",
+            "`run_retrospective.py seal`",
+            "`run_retrospective.py prepare`",
+            "`run_retrospective.py finalize`",
+            "`run-completion.json`",
+            "`retrospective.md`",
+            "must not modify the shepherd automatically",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_skill)

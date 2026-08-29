@@ -106,8 +106,12 @@ never read as a clean one.
 - A quarantine recommendation is a separately approved request for one isolated
   local worktree session. The worker may edit and validate locally, but must not
   push or open a pull request until its draft title and body receive approval.
-- Retry, rerun, closure, comment, push, and pull-request creation remain
-  individually approval-gated.
+- Push, pull-request creation, quarantine, rerun, and retry remain individually
+  approval-gated unless a future policy explicitly adds a narrower safe case.
+- Every issue- or pull-request-visible effect must be explicitly approved or
+  covered by a configured pre-authorization policy. The initial
+  pre-authorization policy may cover only frozen issue comments and their
+  dependent issue closures after independent validation.
 
 ### Pull-request assessment
 
@@ -154,10 +158,23 @@ The assessment agent never executes actions. It emits evidence-backed
 recommendations only. The coordinator may render local action proposals after
 finalization and validation, but a proposal is not authorization to post.
 
-Every issue- or pull-request-visible effect requires individual user approval.
-Before an effect, show the exact target, complete rendered text or command,
-cited evidence, and expected result. If the user is unavailable, leave the
-effect proposed and make no GitHub write.
+Every issue- or pull-request-visible effect must be explicitly approved or
+covered by a configured pre-authorization policy. Before an individually
+approved effect, show the exact target, complete rendered text or command, cited
+evidence, and expected result. A pre-authorized effect must satisfy the same
+frozen-proposal, preflight, execution-ledger, and reconciliation checks without
+requiring another prompt. If neither authorization applies, leave the effect
+proposed and make no GitHub write.
+
+`action-proposals.json` remains the only source of GitHub-visible effects.
+Execute eligible comment and close actions in the same shepherd run after
+independent validation and proposal freezing. Recheck that the evidence
+fingerprint is unchanged, the target remains in its expected state, and the
+exact action has no terminal ledger result. Use the frozen comment body. Run a
+dependent close only after its comment reconciles successfully. Log complete
+unexpected errors to standard output and the operator log, record each terminal
+result, and continue with independent actions when safe. Reconcile live state
+and update the report after all attempted effects.
 
 Use one canonical CI shepherd status comment per issue. All automatically
 posted GitHub text starts with `[automated] `. The comment uses identity-only
@@ -317,8 +334,10 @@ Dry-run performs no GitHub access and does not create or modify
 `action-results.json`. Add `--action-id <exact-id>` to preview only one
 proposal. `--state-dir` is optional for dry-run.
 
-Mutation is a separate, individually approved step. `--execute` requires one
-exact `--action-id`.
+Mutation is a separate validated step. It requires either individual approval
+or a match against the pre-authorization policy configured in the workflow
+prompt. The coordinator invokes eligible actions sequentially rather than
+granting document-wide execution. `--execute` requires one exact `--action-id`.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
@@ -356,6 +375,10 @@ actor-dry-run.json
 progress.json
 api-calls.jsonl
 cycle.json
+run-completion.json
+retrospective-request.json
+retrospective.json
+retrospective.md
 ```
 
 Cross-cycle lifecycle state is stored separately from the immutable scratch
@@ -701,15 +724,78 @@ using the checkout that contains this skill. The workflow prompt must:
 4. if the manifest says `awaiting-review`, read only the three bounded handoff
    files, write the typed sparse judgment files, and run `cycle.py finish`;
 5. launch and record new read-only requests in `investigation-plan.json`;
-6. never execute `action-proposals.json` or start
-   `quarantine-session.json` without the required approval; and
-7. report deltas, investigation outcomes, proposals needing approval, and any
-   structurally incomplete evidence.
+6. independently validate investigation results and regenerate frozen
+   `action-proposals.json`;
+7. execute every proposal covered by the configured pre-authorization policy,
+   in dependency order, and reconcile its live result before continuing;
+8. never execute a proposal outside that policy or start
+   `quarantine-session.json` without the required approval;
+9. update the final report with investigation and action outcomes, proposals
+   still needing approval, and structurally incomplete evidence; and
+10. run the completed-cycle retrospective described below as the last phase.
 
 Run daily initially. Do not overlap cycles against the same state directory;
 the append-only ledgers and `current.json` have a single-writer contract.
 GitHub-hosted scheduling is unsupported until the private state directory has
 a durable remote persistence design.
+
+## Final run retrospective
+
+The retrospective is the final phase of the run. Run it only after all
+investigations, authorized effects, reconciliation, ledger updates, and report
+rendering are complete. A retrospective failure does not roll back completed
+actions; record the failure in the operator output and preserve the completed
+run artifacts for later review.
+
+First use `run_retrospective.py seal` to snapshot the current run's matching
+action and investigation ledger outcomes into `run-completion.json`. This is
+the explicit post-action reconciliation marker; a completed `cycle.json` alone
+is not sufficient because cycle finalization precedes external effects.
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" seal \
+  --work-dir "$SCRATCH" \
+  --state-dir "$STATE" \
+  --sealed-at "$CURRENT_TIMESTAMP" \
+  --output "$SCRATCH/run-completion.json"
+```
+
+The seal filters the persistent ledgers to action IDs in
+`action-proposals.json` and investigation IDs in `investigation-plan.json`.
+It records unrecorded action IDs and missing investigation results explicitly
+so an interrupted or intentionally deferred phase cannot look like a clean
+run.
+
+Then use `run_retrospective.py prepare` to create the bounded handoff:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" prepare \
+  --work-dir "$SCRATCH" \
+  --reviewed-session-id "$CURRENT_SESSION_ID" \
+  --output "$SCRATCH/retrospective-request.json"
+```
+
+Launch one fresh, read-only retrospective reviewer in a new local session. Give
+it only `workerPrompt` from `retrospective-request.json`. It may read only the
+listed run artifacts and must not access GitHub, run `gh`, edit code, mutate
+state, post comments, close issues, assign actors, or start implementation.
+The reviewer writes its JSON response to
+`$SCRATCH/agent-retrospective.json`.
+
+Use `run_retrospective.py finalize` to validate and render the result:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" finalize \
+  --request "$SCRATCH/retrospective-request.json" \
+  --result "$SCRATCH/agent-retrospective.json" \
+  --json-output "$SCRATCH/retrospective.json" \
+  --markdown-output "$SCRATCH/retrospective.md"
+```
+
+The validated retrospective records evidence-linked observations, future watch
+conditions, and safeguards that worked in `retrospective.md`. It is advisory
+and must not modify the shepherd automatically. Recommendations require later
+review and a separate implementation decision.
 
 For each prepared issue, choose a category and one or more recommendations.
 Prefer `unknown` or `investigate` over unsupported certainty. Distinguish

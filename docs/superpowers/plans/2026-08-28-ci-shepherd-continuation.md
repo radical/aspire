@@ -2,8 +2,9 @@
 
 **Agreed direction:** run a cheap evidence refresh and selective assessment
 regularly, preserve deterministic JSON as the authority, avoid repetitive
-comments, and keep every GitHub-visible action behind explicit per-action
-approval.
+comments, execute independently validated low-risk actions in the same run
+under a configured pre-authorization policy, and keep higher-risk actions
+behind explicit per-action approval.
 
 Current implementation and evidence are recorded in
 [CI Shepherd Implementation Status](../status/2026-08-28-ci-shepherd-implementation.md).
@@ -55,6 +56,15 @@ Current implementation and evidence are recorded in
 - [x] Persist immutable cycle artifacts and lifecycle ledgers.
 - [x] Validate a full live read-only cycle and an incremental replay.
 - [x] Create a disabled local daily workflow using a low-cost model.
+- [x] Execute and reconcile a frozen review-close batch: 26 new comment/close
+  pairs completed, one terminal-ledger duplicate was skipped, and recollection
+  reproposed none of the 27 cases.
+- [x] Exercise one exact quarantine session and reconcile it without an empty
+  commit or misleading pull request when the test was already quarantined on
+  `origin/main`.
+- [x] Exercise bounded investigation at concurrency one, independently reject
+  unsupported initial verdicts, and persist corrected evidence-backed results.
+- [x] Define a final fresh, read-only retrospective over bounded run artifacts.
 
 ## Phase 1: Land and Activate the Read-Only Loop
 
@@ -110,10 +120,10 @@ Exit criteria:
 - Closure proposals cite current deterministic recovery or duplicate evidence.
 - Human escalations contain one answerable question and a routing hint.
 
-## Phase 3: Exercise Staged Live Actions
+## Phase 3: Exercise and Promote Staged Live Actions
 
-Use the staged vertical-slice approach from the full-cycle design. For each
-slice:
+The vertical slices proved the execution and reconciliation path. During a
+staged trial:
 
 1. Show the exact proposal, full visible text, cited evidence, expected result,
    and abort behavior.
@@ -132,17 +142,18 @@ creating disconnected progress notes.
 
 Recommended order:
 
-- [ ] Edit or create one canonical shepherd status comment where the message
+- [x] Edit or create one canonical shepherd status comment where the message
   provides clear new value.
-- [ ] Execute one evidence-backed comment-plus-close sequence for a resolved or
+- [x] Execute one evidence-backed comment-plus-close sequence for a resolved or
   superseded issue.
-- [ ] Launch and record one bounded read-only investigation for a concrete
+- [x] Launch and record one bounded read-only investigation for a concrete
   unresolved case. Recollect afterward and confirm unchanged evidence reuses the
   result while changed evidence creates a new request.
-- [ ] Approve one exact `quarantine-session.json` batch, create one local
+- [x] Approve one exact `quarantine-session.json` batch, create one local
   worktree session, run QuarantineTools for every listed test, build each
   affected test project, review the draft PR title/body, and only then push and
-  open the draft PR.
+  open the draft PR. The trial correctly stopped before commit and PR creation
+  because the target was already quarantined on `origin/main`.
 - [ ] Recollect after the quarantine PR is opened and confirm its tests are
   suppressed only as in-flight work. Reconcile merge or close state, record
   `completed` only after merge, and confirm closed-unmerged work becomes
@@ -150,8 +161,13 @@ Recommended order:
 - [ ] Exercise a pull-request `ping-human` comment and later confirm that the
   terminal retirement edit is stable.
 
-No slice authorizes later slices. A stale preflight or failed reconciliation
-stops the slice.
+The approved production policy now authorizes frozen issue comments and their
+dependent closes when independent validation succeeds. These inexpensive
+actions run sequentially in the same shepherd cycle. Each action still requires
+an unchanged evidence fingerprint, an expected live target state, no terminal
+ledger record, and successful reconciliation. A dependent close runs only
+after its comment reconciles. A stale preflight or failed dependency blocks
+that action without blocking independent actions.
 
 ## Phase 4: Improve the Issue Producers
 
@@ -190,17 +206,26 @@ rewrites of all issue-opening automation.
 After the read-only and staged-action trials, decide separately whether to add:
 
 - watched labels;
-- automatic low-risk comment edits;
-- automatic closure of deterministic duplicates or recovered incidents;
+- [x] automatic low-risk comment edits under the frozen-proposal policy;
+- [x] dependent closure of deterministic duplicates or recovered incidents
+  after comment reconciliation;
 - multi-repository inventory;
 - GitHub-hosted scheduling;
 - remote or replicated state;
 - multiple concurrent workers;
 - batch approval.
 
-Default answer remains no. Each expansion requires evidence that the current
-manual approval cost is the limiting problem and a testable rollback or
+Unmarked expansions remain disabled. Each expansion requires evidence that the
+current bounded design is the limiting problem and a testable rollback or
 reconciliation story.
+
+Every completed run ends with one fresh read-only retrospective reviewer. It
+starts only after reconciliation and final report rendering create
+`run-completion.json`, an explicit seal containing the run's matching action
+and investigation ledger outcomes. It then reads only allowlisted run
+artifacts and produces validated `retrospective.json` plus deterministic
+`retrospective.md`. Its findings are advisory; they do not modify GitHub,
+state, or shepherd code automatically.
 
 ## Stop Conditions
 
@@ -225,15 +250,16 @@ Disable the workflow and investigate if:
 
 Do not implement these as part of the next operational trial:
 
-- autonomous GitHub mutation;
-- bulk execution;
+- broad or unbounded GitHub mutation;
+- concurrent mutation;
 - remote multi-writer state;
 - automatic rollback;
 - generalized retries;
 - labels used only to mirror local state;
 - a separate service or queue.
 
-The next concrete action is to exercise one individually approved
-comment-plus-close slice, reconcile it in a new collection, and then prepare one
-single-target quarantine trial. The scheduled workflow stays disabled until the
-staged actions preserve the recorded safety contract.
+The next concrete action is one full end-to-end run with investigation
+concurrency one, same-run execution of eligible pre-authorized actions,
+reconciliation, final report rendering, and the fresh retrospective. Repeat the
+same full run to verify idempotency, evidence reuse, stable reports, and useful
+retrospective findings before increasing investigation concurrency.
