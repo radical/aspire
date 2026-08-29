@@ -21,6 +21,19 @@ public sealed class TestTriggerMapTests
     // "does this glob match a real file" and "what source projects exist". Loaded once.
     private static readonly IReadOnlyList<string> s_trackedFiles = LoadTrackedFiles();
 
+    // job:cli-starter-validation resolves to one tests.yml job per platform, all calling the same
+    // reusable workflow and all gated on the same run_cli_starter_validation boolean. Listed once so
+    // the existence check and the per-job gate binding below cannot drift from each other.
+    private static readonly string[] s_cliStarterValidationJobIds =
+    [
+        "cli_starter_validation_linux_x64",
+        "cli_starter_validation_linux_arm64",
+        "cli_starter_validation_windows_x64",
+        "cli_starter_validation_windows_arm64",
+        "cli_starter_validation_macos_x64",
+        "cli_starter_validation_macos_arm64",
+    ];
+
     [Fact]
     public void MapLoadsWithExpectedVersion()
     {
@@ -285,6 +298,8 @@ public sealed class TestTriggerMapTests
             ["job:winget-installer"] = () => JobExists("prepare_winget_installer_artifacts"),
             ["job:homebrew-installer"] = () => JobExists("prepare_homebrew_installer_artifacts"),
             ["job:nix-package"] = () => JobExists("nix_package"),
+            ["job:cli-starter-validation"] = () => WorkflowExists("cli-starter-validation.yml")
+                && s_cliStarterValidationJobIds.All(JobExists),
             ["job:deployment-e2e"] = () => WorkflowExists("deployment-tests.yml"),
         };
 
@@ -366,6 +381,10 @@ public sealed class TestTriggerMapTests
             "eng/scripts/load-cli-e2e-images.sh",
             ["test:Aspire.Cli.EndToEnd.Tests"]
         },
+        {
+            "eng/scripts/cli-starter-validation.ps1",
+            ["job:cli-starter-validation"]
+        },
     };
 
     [Theory]
@@ -403,7 +422,6 @@ public sealed class TestTriggerMapTests
     [InlineData("eng/generate-catalog.ps1")]
     [InlineData("eng/scripts/update-aspire-skills-bundle.ps1")]
     [InlineData("eng/scripts/verify-aspire-skills-bundle.ps1")]
-    [InlineData("eng/scripts/cli-starter-validation.ps1")]
     public void PathHandledOutsideSelectorDoesNotForceTestSelection(string path)
     {
         var result = SelectWithRealMap(path);
@@ -509,7 +527,9 @@ public sealed class TestTriggerMapTests
             ("prepare_winget_installer_artifacts", "run_winget_installer"),
             ("prepare_homebrew_installer_artifacts", "run_homebrew_installer"),
             ("nix_package", "run_nix_package"),
-        };
+        }
+        .Concat(s_cliStarterValidationJobIds.Select(jobId => (jobId, "run_cli_starter_validation")))
+        .ToArray();
 
         var wrong = new List<string>();
         foreach (var (jobId, runVar) in bindings)
