@@ -8,9 +8,10 @@ description: "Incremental CI shepherd for microsoft/aspire. A coordinator refres
 The shepherd refreshes the complete eligible issue and pull-request inventory,
 reuses unchanged factual evidence, and sends first-seen, materially changed, or
 periodically due cases to a fresh assessment agent. Stable reviewed cases stay
-out of model input until their seven-day reassessment deadline. The collection
-and assessment pipeline is advisory only. A separate final actor can apply one
-individually approved proposal under the explicit execution contract below.
+out of model input until their seven-day reassessment deadline. Collection and
+assessment are advisory. The coordinator may run bounded read-only
+investigations without approval. GitHub-visible effects and local quarantine
+work remain separate, individually approved actions.
 
 ## Supported cycle
 
@@ -56,10 +57,11 @@ python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
 ```
 
 The supported cycle writes deterministic `report.md`,
-`action-proposals.json`, and `actor-dry-run.json`, then records the validated
-snapshot, judgments, and artifacts under `$STATE/runs/<cycle-id>/`. A failed or
-interrupted cycle does not advance `current.json`. Successfully selected issue
-and pull-request reviews are recorded in
+`action-proposals.json`, `actor-dry-run.json`, `investigation-plan.json`, and
+`quarantine-session.json`, then records the validated snapshot, judgments, and
+artifacts under `$STATE/runs/<cycle-id>/`. A failed or interrupted cycle does
+not advance `current.json`. Successfully selected issue and pull-request reviews
+are recorded in
 `$STATE/ledgers/review-events.jsonl`; merely refreshing an unchanged case does
 not reset its reassessment clock.
 
@@ -96,13 +98,16 @@ never read as a clean one.
 
 ## Safety boundary
 
-- The coordinator may use the existing GET-only collector to access GitHub.
+- The coordinator and a bounded issue investigator may use GET-only GitHub
+  access.
 - The fresh assessment agent must never access GitHub, run `gh`, browse
   GitHub, use web search, or call GitHub APIs.
-- Neither role may write to GitHub: do not close, reopen, label, assign,
-  comment, rerun, quarantine, or edit anything.
-- Treat quarantine, retry, rerun, and closure recommendations as review-only.
-  They are queues for a human reviewer, not commands.
+- Collection, assessment, and investigation must never write to GitHub.
+- A quarantine recommendation is a separately approved request for one isolated
+  local worktree session. The worker may edit and validate locally, but must not
+  push or open a pull request until its draft title and body receive approval.
+- Retry, rerun, closure, comment, push, and pull-request creation remain
+  individually approval-gated.
 
 ### Pull-request assessment
 
@@ -167,6 +172,102 @@ Shepherd-authored status comments must not contribute markers, facts, or
 references. Retain their owned comment identity only for idempotency. An
 unchanged watch state must not create or edit a comment. A changed comment body
 is a new reviewable proposal and requires separate approval.
+
+## Bounded investigation lifecycle
+
+`investigation-plan.json` contains at most five new requests per cycle for
+current `investigate` recommendations whose issue, target, or source evidence
+has not already been investigated. Additional requests remain visible under
+`deferredRequests` and become eligible after earlier requests are recorded.
+Each request has a deterministic
+`investigationId`, the issue URL, evidence IDs, missing evidence, stop
+condition, and an exact `workerPrompt`.
+
+Launch each new request in a fresh read-only agent. Give the worker only the
+request and its prompt. The worker must use the issue-investigation workflow,
+must not edit code or write to GitHub, and must return the required JSON result.
+Validate and record it with:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
+  --state-dir "$STATE" \
+  --plan "$SCRATCH/investigation-plan.json" \
+  --investigation-id "investigation:..." \
+  --result "$SCRATCH/investigation-result.json" \
+  --recorded-at "2026-08-28T20:30:00Z" \
+  --session-id "<worker-session-id>"
+```
+
+The next cycle attaches every target-specific result whose source-evidence
+fingerprint still matches. An unchanged issue reuses the completed results and
+starts no duplicate investigations. Materially changed evidence creates new
+requests and the stale results are not shown to the assessment agent. A
+`fixable` result is only a structured handoff candidate; it does not authorize
+code changes, assignment, or a pull request.
+
+## Approved quarantine session
+
+`quarantine-session.json` combines all current `review-quarantine`
+recommendations into one deterministic proposal. It preserves each exact test
+name and every original issue URL. Multiple issues for the same test become one
+test edit whose PR body addresses every source issue. Tests in an open
+quarantine PR and tests in a merged PR are removed from later batches, and an
+active local session suppresses every new quarantine proposal.
+
+Before starting, show the user the batch ID, complete test list, original issue
+links, and exact worker prompt. After approval:
+
+1. Create one idle local worktree session from the repository default branch.
+2. Record `started` before sending work to that session:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/quarantine_session.py" \
+     --state-dir "$STATE" \
+     --request "$SCRATCH/quarantine-session.json" \
+     --status started \
+     --recorded-at "2026-08-28T20:30:00Z" \
+     --session-id "<worktree-session-id>"
+   ```
+
+3. Send the proposal's exact `workerPrompt` to the session. Do not start a
+   second quarantine worker.
+4. Require the worker to run QuarantineTools once per test, restore once, build
+   every affected test project, verify every target is excluded as quarantined,
+   and return the exact diff, commands, results, and draft PR title/body.
+5. Leave an unresolved or non-method target unchanged, report it as blocked, and
+   continue validating the remaining targets. If unrelated files changed or a
+   changed target still fails validation after one quarantine-only correction,
+   record `failed` and stop.
+6. Show the draft PR title and full body. Only after approval, commit, push the
+   branch to the user's fork, and open a draft PR. The visible body begins with
+   `[automated] ` and uses `Addresses #N`; the original failure issues remain
+   open.
+7. Record `pull-request-open` with the draft PR URL and only the tests actually
+   changed and validated:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/quarantine_session.py" \
+    --state-dir "$STATE" \
+    --request "$SCRATCH/quarantine-session.json" \
+    --status pull-request-open \
+    --recorded-at "2026-08-28T21:00:00Z" \
+    --session-id "<worktree-session-id>" \
+    --pull-request-url "https://github.com/microsoft/aspire/pull/..." \
+     --completed-test "Namespace.Type.Method"
+   ```
+
+   Repeat `--completed-test` for every test represented in the pull request.
+   Blocked targets are not recorded in the open-PR event and remain eligible
+   for later reassessment.
+8. A draft PR is not completion. After GET-only reconciliation confirms that it
+   merged, record `completed` with the same URL and exact test list. If it closes
+   unmerged or is abandoned, record `failed` instead so the tests can be
+   proposed again. A later cycle can finish either transition by passing
+   `--batch-id` with its current `quarantine-session.json`; the session ID is
+   recovered from the ledger.
+
+This is intentionally a lightweight coordinator protocol, not a scheduler or
+general job engine.
 
 ## Dry-run action actor
 
@@ -233,6 +334,8 @@ agent-judgments.json
 agent-pull-request-judgments.json
 judgments.json
 pull-request-judgments.json
+investigation-plan.json
+quarantine-session.json
 report.md
 action-proposals.json
 actor-dry-run.json
@@ -251,6 +354,8 @@ $STATE/
   ledgers/fingerprints.jsonl
   ledgers/case-events.jsonl
   ledgers/review-events.jsonl
+  ledgers/investigation-results.jsonl
+  ledgers/quarantine-sessions.jsonl
   action-results.json
 ```
 
@@ -268,6 +373,10 @@ under `$STATE/ledgers`, so recurrence survives scratch cleanup.
 `review-events.jsonl` records only cases actually handed to the assessment
 agent. Its latest timestamp per target drives the seven-day reassessment
 backstop; automatic unchanged cycles do not postpone that review.
+`investigation-results.jsonl` records validated read-only conclusions keyed by
+the issue, target, and source-evidence fingerprint.
+`quarantine-sessions.jsonl` records the one-at-a-time local quarantine
+lifecycle, including the completed draft pull-request URL.
 After ledger bootstrap has converged, replaying unchanged evidence must append
 no case event when the deterministic pipeline and agent override input produce
 the same material case state.
@@ -577,9 +686,11 @@ using the checkout that contains this skill. The workflow prompt must:
 3. run `cycle.py start`;
 4. if the manifest says `awaiting-review`, read only the three bounded handoff
    files, write the typed sparse judgment files, and run `cycle.py finish`;
-5. never execute `action-proposals.json`; and
-6. report deltas, proposals needing approval, and any structurally incomplete
-   evidence.
+5. launch and record new read-only requests in `investigation-plan.json`;
+6. never execute `action-proposals.json` or start
+   `quarantine-session.json` without the required approval; and
+7. report deltas, investigation outcomes, proposals needing approval, and any
+   structurally incomplete evidence.
 
 Run daily initially. Do not overlap cycles against the same state directory;
 the append-only ledgers and `current.json` have a single-writer contract.

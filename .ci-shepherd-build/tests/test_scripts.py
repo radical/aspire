@@ -640,11 +640,11 @@ class PrototypeScriptTests(unittest.TestCase):
             "Report the number of overrides",
             "Distinguish same-run reruns from independent recovery.",
             "Surface missing positive execution coverage.",
-            "Treat quarantine, retry, rerun, and closure recommendations as review-only.",
+            "A quarantine recommendation is a separately approved request for one isolated local worktree session.",
             "Use multiple recommendations for one issue only when the targets differ.",
             "The fresh assessment agent must never access GitHub",
-            "Neither role may write to GitHub",
-            "The coordinator may use the existing GET-only collector",
+            "Collection, assessment, and investigation must never write to GitHub.",
+            "The coordinator and a bounded issue investigator may use GET-only GitHub access.",
             "The coordinator collects, prepares, validates, renders, and records artifacts.",
         ):
             with self.subTest(phrase=phrase):

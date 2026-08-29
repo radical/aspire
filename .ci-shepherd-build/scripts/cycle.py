@@ -12,6 +12,12 @@ from typing import Any, Mapping
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import build_dry_run
 from ci_shepherd.history import load_current
+from ci_shepherd.investigations import (
+    attach_latest_investigation_results,
+    build_investigation_plan,
+    read_investigation_results,
+    render_investigation_section,
+)
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.poc import build_compact_poc_input
@@ -21,6 +27,12 @@ from ci_shepherd.pull_requests import (
     build_pull_request_comment_proposals,
     merge_pull_request_judgments,
     render_pull_request_section,
+)
+from ci_shepherd.quarantine import (
+    build_quarantine_session_plan,
+    build_quarantine_session_request,
+    read_quarantine_session_events,
+    render_quarantine_session_section,
 )
 from ci_shepherd.review_selection import build_review_selection
 from collect import collect
@@ -240,7 +252,10 @@ def start_cycle(
             - set(pull_request_reassessment_context)
         )
 
-    prepared = prepare_assessment(snapshot)
+    prepared = attach_latest_investigation_results(
+        prepare_assessment(snapshot),
+        read_investigation_results(state_dir),
+    )
     compact = build_compact_poc_input(prepared)
     source_changed_issue_numbers = set(
         _refresh_issue_numbers(snapshot, "changedIssueNumbers")
@@ -377,6 +392,8 @@ def finish_cycle(
         "report": work_dir / "report.md",
         "proposals": work_dir / "action-proposals.json",
         "dryRun": work_dir / "actor-dry-run.json",
+        "quarantineSession": work_dir / "quarantine-session.json",
+        "investigationPlan": work_dir / "investigation-plan.json",
     }
     finalize(
         agent_input_path=paths["defaults"],
@@ -403,6 +420,21 @@ def finish_cycle(
         sparse_pull_request_judgments,
     )
     _write_private_json(paths["pullRequestJudgments"], pull_request_judgments)
+    quarantine_request = build_quarantine_session_request(
+        prepared,
+        final_judgments,
+    )
+    quarantine_plan = build_quarantine_session_plan(
+        quarantine_request,
+        read_quarantine_session_events(state_dir),
+    )
+    _write_private_json(paths["quarantineSession"], quarantine_plan)
+    investigation_plan = build_investigation_plan(
+        prepared,
+        final_judgments,
+        read_investigation_results(state_dir),
+    )
+    _write_private_json(paths["investigationPlan"], investigation_plan)
     report_markdown = render_poc_markdown(
         prepared,
         final_judgments,
@@ -416,6 +448,10 @@ def finish_cycle(
             pull_request_handoff,
             pull_request_judgments,
         ).lstrip()
+        + "\n"
+        + render_investigation_section(investigation_plan)
+        + "\n"
+        + render_quarantine_session_section(quarantine_plan)
     )
     _write_private_text(paths["report"], report_markdown)
     issue_proposals = build_action_proposals(
@@ -463,6 +499,8 @@ def finish_cycle(
             paths["pullRequestJudgments"],
             paths["proposals"],
             paths["dryRun"],
+            paths["quarantineSession"],
+            paths["investigationPlan"],
             *[
                 path
                 for path in (work_dir / "api-calls.jsonl", work_dir / "progress.json")
@@ -496,6 +534,15 @@ def finish_cycle(
         "stage": "completed",
         "runDirectory": str(run_directory),
         "proposalCount": len(proposals["proposals"]),
+        "quarantineTestCount": len(quarantine_request["tests"]),
+        "quarantineSessionProposed": quarantine_plan["proposal"] is not None,
+        "investigationRequestCount": len(investigation_plan["requests"]),
+        "deferredInvestigationCount": len(
+            investigation_plan["deferredRequests"]
+        ),
+        "reusedInvestigationCount": len(
+            investigation_plan["reusedInvestigationIds"]
+        ),
     }
     _write_private_json(manifest_path, completed)
     return completed

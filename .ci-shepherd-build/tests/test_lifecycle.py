@@ -117,6 +117,32 @@ def snapshot(
 
 
 class LifecycleAssessmentTests(unittest.TestCase):
+    def test_preserves_exact_test_name_for_actions(self) -> None:
+        payload = issue_payload(
+            1,
+            producer="ci-failure-cause",
+            autoclose=None,
+            ledger=complete_ledger(1001),
+            facts=[
+                {
+                    "field": "testName",
+                    "raw": "Namespace.Type.FlakyTest",
+                    "normalized": "namespace.type.flakytest",
+                }
+            ],
+        )
+
+        candidate = candidate_for(prepare_assessment(snapshot(payload)), 1)
+
+        self.assertEqual(
+            "namespace.type.flakytest",
+            candidate["identity"]["tier2TestName"],
+        )
+        self.assertEqual(
+            "Namespace.Type.FlakyTest",
+            candidate["identity"]["tier2TestNameRaw"],
+        )
+
     def test_expanded_snapshot_has_round_qualified_identity(self) -> None:
         payload = issue_payload(
             1,

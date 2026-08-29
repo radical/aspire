@@ -145,6 +145,7 @@ def _compact_issue(
     tier1_cause_id: str | None = None,
     tier2_exception_type: str | None = None,
     tier2_test_name: str | None = "Namespace.Type.Test",
+    tier2_test_name_raw: str | None = None,
     tier3_error_code: str | None = None,
     candidate_state: str = "resolved",
     candidate_action: str = "recommend-close",
@@ -233,6 +234,11 @@ def _compact_issue(
         "identity": {
             "tier1CauseId": tier1_cause_id,
             "tier2TestName": tier2_test_name,
+            **(
+                {"tier2TestNameRaw": tier2_test_name_raw}
+                if tier2_test_name_raw is not None
+                else {}
+            ),
             "tier2ExceptionType": tier2_exception_type,
             "tier3ErrorCode": tier3_error_code,
             "tier3Job": None,
@@ -489,6 +495,7 @@ class PocValidationTests(unittest.TestCase):
                     autoclose=False,
                     parsed_row_count=3,
                     tier2_test_name="Namespace.Type.Test",
+                    tier2_test_name_raw="Namespace.Type.Test",
                     candidate_state="resolved",
                     candidate_action="recommend-close",
                     blockers=["autoclose-policy-does-not-permit-shepherd"],
@@ -677,6 +684,35 @@ class PocValidationTests(unittest.TestCase):
         self.assertTrue(set(evidence_ids).issubset(set(allowed_ids)))
         self.assertNotIn("payload", issue["resolutionEvidence"])
 
+    def test_recurrent_flaky_test_without_exact_name_is_investigated(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    301,
+                    title="Flaky test timeout",
+                    parsed_row_count=2,
+                    ledger_rows=[
+                        {"date": "2026-08-10", "sourceRun": 1001, "job": "Tests"},
+                        {"date": "2026-08-17", "sourceRun": 1002, "job": "Tests"},
+                    ],
+                    tier1_cause_id="test-timeout",
+                    tier2_test_name="namespace.type.flakytest",
+                    tier2_test_name_raw=None,
+                    candidate_state="actionable",
+                    candidate_action="investigate",
+                )
+            ]
+        )
+
+        issue = build_compact_poc_input(prepared)["issues"][0]
+        recommendation = issue["defaultJudgment"]["recommendations"][0]
+
+        self.assertEqual("investigate", recommendation["disposition"])
+        self.assertEqual(
+            {"kind": "issue", "value": 301},
+            recommendation["target"],
+        )
+
     def test_build_compact_poc_input_applies_safe_deterministic_rules(self) -> None:
         recurring_rows = [
             {"date": "2026-08-10", "sourceRun": 1001, "job": "Tests"},
@@ -693,6 +729,8 @@ class PocValidationTests(unittest.TestCase):
                     parsed_row_count=2,
                     ledger_rows=recurring_rows,
                     tier1_cause_id="test-timeout",
+                    tier2_test_name="namespace.type.flakytest",
+                    tier2_test_name_raw="Namespace.Type.FlakyTest",
                     candidate_state="actionable",
                     candidate_action="investigate",
                 ),
@@ -831,6 +869,10 @@ class PocValidationTests(unittest.TestCase):
         }
 
         self.assertEqual(("flaky-test", "review-quarantine"), _category_and_disposition(defaults[301]))
+        self.assertEqual(
+            {"kind": "test", "value": "Namespace.Type.FlakyTest"},
+            defaults[301]["recommendations"][0]["target"],
+        )
         self.assertEqual(("product-or-tooling", "investigate"), _category_and_disposition(defaults[302]))
         self.assertEqual(("transient-infrastructure", "watch"), _category_and_disposition(defaults[303]))
         self.assertEqual(("transient-infrastructure", "review-retry"), _category_and_disposition(defaults[304]))
@@ -1825,6 +1867,7 @@ class PocValidationTests(unittest.TestCase):
                     title="Duplicate test timed out",
                     tier1_cause_id="duplicate-test-timeout",
                     tier2_test_name=test_name,
+                    tier2_test_name_raw=test_name,
                     ledger_rows=[
                         {"date": "2026-08-10", "sourceRun": 1001, "job": "Tests A"}
                     ],
@@ -1842,6 +1885,7 @@ class PocValidationTests(unittest.TestCase):
                     title="Duplicate test timed out again",
                     tier1_cause_id="duplicate-test-rpc-timeout",
                     tier2_test_name=test_name,
+                    tier2_test_name_raw=test_name,
                     ledger_rows=[
                         {"date": "2026-08-17", "sourceRun": 1002, "job": "Tests B"}
                     ],
@@ -2064,6 +2108,7 @@ class PocValidationTests(unittest.TestCase):
         issue = _compact_issue(
             402,
             tier2_test_name=test_name,
+            tier2_test_name_raw=test_name,
             candidate_state="observing",
             candidate_action="wait",
             ledger_rows=[{"date": "2026-08-17", "sourceRun": 4020, "job": "Tests"}],

@@ -804,6 +804,7 @@ def summarize_identity_facts(payload: Mapping[str, Any]) -> dict[str, Any]:
         facts = []
 
     values: dict[str, list[str]] = {}
+    raw_test_names: list[str] = []
     for fact in facts:
         if not isinstance(fact, dict):
             continue
@@ -811,10 +812,18 @@ def summarize_identity_facts(payload: Mapping[str, Any]) -> dict[str, Any]:
         normalized = fact.get("normalized")
         if isinstance(field, str) and isinstance(normalized, str) and normalized:
             values.setdefault(field, []).append(normalized)
+            raw = fact.get("raw")
+            if field == "testName" and isinstance(raw, str) and raw:
+                raw_test_names.append(raw)
 
     return {
         "tier1CauseId": _one(values, "causeId"),
         "tier2TestName": _one(values, "testName"),
+        "tier2TestNameRaw": (
+            sorted(set(raw_test_names))[0]
+            if len(set(raw_test_names)) == 1
+            else None
+        ),
         "tier2ExceptionType": _one(values, "exceptionType"),
         "tier3ErrorCode": _one(values, "errorCode"),
         "tier3Job": _one(values, "job"),

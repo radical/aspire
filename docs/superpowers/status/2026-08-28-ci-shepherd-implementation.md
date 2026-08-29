@@ -4,7 +4,8 @@
 
 **Branch:** `radical-design-ci-shepherd`
 
-**Implementation commit:** `443e989126ca01315319f5bc633dfcf655b20266`
+**Committed baseline:** `7905bc4804` plus the bounded-action lifecycle on this
+branch
 
 This checkpoint records the current repository state, the validation evidence,
 and the remaining operational constraints. The continuation plan is
@@ -51,6 +52,29 @@ The governing behavior and safety contract remains
 - When an issue transitions from a visible watch or human request to report-only
   investigation, the shepherd proposes retiring the existing owned status
   comment in place rather than leaving stale guidance visible.
+- Deterministic `investigation-plan.json` requests for report-only investigation
+  recommendations, capped at five new sessions per cycle with the remaining
+  work recorded as explicitly deferred.
+- Append-only investigation results keyed by issue, target, and source-evidence
+  fingerprint. Unchanged evidence reuses a completed result; changed evidence
+  produces a fresh request and never exposes the stale result to assessment.
+  Multiple target-specific results attach without overwriting one another.
+- Structured fix handoffs for `fixable` investigations, without authorizing code
+  changes or GitHub writes.
+- Deterministic `quarantine-session.json` proposals that combine every current
+  test-target candidate, merge duplicate source issues for one test, and
+  preserve every original issue URL.
+- A serialized one-active-session quarantine ledger with crash-safe appends,
+  repository isolation, abandoned-session recovery, and precise partial-success
+  tracking.
+- Separate `pull-request-open` and merge-confirmed `completed` states. An
+  unmerged or closed draft cannot permanently suppress a test; a failed event
+  makes its targets eligible again.
+- A bounded local quarantine worker contract requiring QuarantineTools, one
+  restore, every affected test-project build, quarantine exclusion checks, and
+  review of the exact draft PR title/body before push or creation.
+- Existing comment and close execution remains comment-first, live-reconciled,
+  and individually approval-gated.
 - Collection completeness, warnings, error details, pull-request handoff
   exclusions, progress, and GET audit data in recorded artifacts.
 
@@ -59,16 +83,18 @@ The governing behavior and safety contract remains
 The final repository validation passed:
 
 ```text
-880 tests passed
+917 tests passed
 python3 -m compileall passed
 git diff --check passed
 ```
 
-Two Opus 5 reviewers independently rechecked the implementation. The latest
-pass additionally reproduced legacy-state migration, missing prior
-pull-request evidence, seven-day reassessment, and cross-version cycle finish
-behavior. The actionable migration and evidence-provenance findings were fixed;
-the synchronized first weekly cohort remains a documented rollout measurement.
+Two Opus 5 reviewers independently reviewed the bounded-action implementation.
+They reproduced duplicate-test cycle failure, premature quarantine completion,
+truncated-ledger loss, stale and overwritten investigation results, repository
+scope errors, abandoned-session deadlock, unbounded investigation fan-out, and
+ambiguous test identity. Those findings were fixed. The architecture re-review
+verified each correction against the working tree and reported no remaining
+design problem; the complete suite then passed again.
 
 ### Live read-only cycle
 
@@ -124,6 +150,24 @@ handling:
   watches, and 1 is an evidence-backed duplicate closure candidate.
 - No GitHub effect was executed.
 
+### Bounded-action replay
+
+Artifact directory:
+
+```text
+/Users/ankj/.copilot/session-state/2d2c6a43-652d-4695-8b36-aa23a7bc689b/files/ci-shepherd-bounded-actions-replay-2
+```
+
+The corrected frozen replay is stored under
+`ci-shepherd-bounded-actions-replay-3`. The same complete live inventory now
+produces 5 bounded investigation requests and records 23 additional requests as
+deferred. It produces one quarantine session proposal containing 11 exact-case
+targets. Seven targets resolve to current C# test methods; one names a test
+class, one names a removed or renamed method, and two name VS Code extension E2E
+lanes. The worker contract leaves those unresolved targets unchanged, reports
+them as blocked, and can open a draft PR only for the validated subset. No
+GitHub effect was executed.
+
 ## Persisted State
 
 The live trial used private state under the Copilot session artifact root:
@@ -147,6 +191,8 @@ state/
   ledgers/fingerprints.jsonl
   ledgers/case-events.jsonl
   ledgers/review-events.jsonl
+  ledgers/investigation-results.jsonl
+  ledgers/quarantine-sessions.jsonl
   action-results.json
 ```
 
@@ -181,6 +227,18 @@ implementation is present in the workflow checkout.
 
 - Every GitHub-visible effect still requires separate approval for one exact
   action ID. There is no bulk approval or autonomous mutation.
+- Read-only investigations may run without approval, but their results only
+  affect a later assessment cycle. A `fixable` result is not permission to
+  assign Copilot or start implementation.
+- Quarantine preparation requires separate approval for one exact batch. Only
+  one local quarantine session may be active, and its worker cannot push or open
+  the draft pull request until the title and full `[automated]` body are shown
+  and approved.
+- The session ledger is the authoritative quarantine reconciliation path. The
+  operator records an opened draft, then records completion only after GET-only
+  reconciliation proves merge. A closed-unmerged or abandoned draft is recorded
+  as failed. Automatic discovery of an unrecorded quarantine pull request is
+  not implemented.
 - Older disposition-scoped status comments may leave one stale legacy comment
   after the newest comment is migrated to the canonical status slot.
 - Unreadable prior state fails closed instead of silently starting a new
@@ -201,10 +259,13 @@ implementation is present in the workflow checkout.
 
 ## Implementation Baseline
 
-The main lifecycle implementation was committed as `443e989126`. Earlier
-implementation commits on the branch are:
+The committed lifecycle baseline is:
 
 ```text
+7905bc4804 fix(ci-shepherd): investigate failures missing diagnostics
+c25d919f27 feat(ci-shepherd): reassess changed and aging cases
+aa5778a62f docs(ci-shepherd): record implementation status
+443e989126 feat(ci-shepherd): complete incremental issue and PR lifecycle
 66ff7e83cd feat(ci-shepherd): persist lifecycle replay state
 97bc8f750f fix(ci-shepherd): render duplicate closure proposals
 2a2a165d95 feat(ci): add artifact-driven CI issue shepherd

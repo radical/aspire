@@ -739,6 +739,15 @@ def _build_compact_issue(
     }
     if action_context is not None:
         compact_issue["actionCluster"] = action_context
+    investigation_results = issue.get("investigationResults")
+    if isinstance(investigation_results, list):
+        compact_issue["investigationResults"] = copy.deepcopy(
+            [
+                dict(result)
+                for result in investigation_results
+                if isinstance(result, Mapping)
+            ]
+        )
     return compact_issue
 
 
@@ -1947,6 +1956,10 @@ def _build_default_judgment(
         recovered_run_evidence_id=recovered_run_evidence_id,
         diagnostics_unavailable=diagnostics_unavailable,
         has_blockers=bool(blockers),
+        has_exact_test_name=(
+            isinstance(identity.get("tier2TestNameRaw"), str)
+            and bool(identity["tier2TestNameRaw"].strip())
+        ),
     )
     target = _default_target(issue_number, category, identity)
     confidence = (
@@ -2177,6 +2190,7 @@ def _default_disposition(
     recovered_run_evidence_id: str | None = None,
     diagnostics_unavailable: bool = False,
     has_blockers: bool = False,
+    has_exact_test_name: bool = False,
 ) -> str:
     if (
         candidate_state == "resolved"
@@ -2212,7 +2226,7 @@ def _default_disposition(
         return "investigate"
     if category == "flaky-test":
         if independent_runs >= 2 and distinct_days >= 2:
-            return "review-quarantine"
+            return "review-quarantine" if has_exact_test_name else "investigate"
         return "watch"
     if category == "transient-infrastructure":
         if independent_runs >= 3 and distinct_days >= 2:
@@ -2243,9 +2257,16 @@ def _default_target(
     category: str,
     identity: Mapping[str, Any],
 ) -> dict[str, Any]:
-    tier2_test_name = identity.get("tier2TestName")
-    if category == "flaky-test" and isinstance(tier2_test_name, str) and tier2_test_name.strip():
-        return {"kind": "test", "value": tier2_test_name}
+    exact_test_name = identity.get("tier2TestNameRaw")
+    if (
+        category == "flaky-test"
+        and isinstance(exact_test_name, str)
+        and exact_test_name.strip()
+    ):
+        return {
+            "kind": "test",
+            "value": exact_test_name,
+        }
     tier1_cause_id = identity.get("tier1CauseId")
     if (
         category == "transient-infrastructure"

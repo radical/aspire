@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import cycle as cycle_script
+from ci_shepherd.investigations import record_investigation_result
 
 
 def snapshot(
@@ -115,6 +116,219 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_next_cycle_receives_completed_investigation_result(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_input = root / "input-1.json"
+            first_input.write_text(
+                json.dumps(snapshot("2026-08-28T20:00:00Z")),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+            investigation_plan = json.loads(
+                (first_work / "investigation-plan.json").read_text(encoding="utf-8")
+            )
+            request = investigation_plan["requests"][0]
+            record_investigation_result(
+                state,
+                request,
+                {
+                    "outcome": "fixable",
+                    "summary": "The failure is actionable.",
+                    "evidenceIds": ["issue:1"],
+                    "reassessWhen": "When a fix pull request changes state.",
+                    "fixHandoff": {
+                        "problem": "A deterministic parser failure.",
+                        "likelyPaths": ["src/Product/Parser.cs"],
+                        "validation": ["Run the parser regression test."],
+                    },
+                },
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+            )
+
+            second_input = root / "input-2.json"
+            second_input.write_text(
+                json.dumps(snapshot("2026-08-29T20:00:00Z")),
+                encoding="utf-8",
+            )
+            second_work = root / "work-2"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            prepared = json.loads(
+                (second_work / "assessment-input.json").read_text(encoding="utf-8")
+            )
+            compact = json.loads(
+                (second_work / "agent-input.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                "fixable",
+                prepared["issues"][0]["investigationResults"][0]["outcome"],
+            )
+            self.assertEqual(
+                "fixable",
+                compact["issues"][0]["investigationResults"][0]["outcome"],
+            )
+            cycle_script.finish_cycle(
+                work_dir=second_work,
+                agent_judgments_path=second_work / "agent-judgments.json",
+            )
+            second_plan = json.loads(
+                (second_work / "investigation-plan.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual([], second_plan["requests"])
+            self.assertEqual(
+                [request["investigationId"]],
+                second_plan["reusedInvestigationIds"],
+            )
+
+            third_input = root / "input-3.json"
+            third_input.write_text(
+                json.dumps(
+                    snapshot(
+                        "2026-08-30T20:00:00Z",
+                        title="Changed unknown CI failure",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            third_work = root / "work-3"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=third_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=third_input,
+            )
+            changed_prepared = json.loads(
+                (third_work / "assessment-input.json").read_text(encoding="utf-8")
+            )
+            changed_compact = json.loads(
+                (third_work / "agent-input.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn(
+                "investigationResults",
+                changed_prepared["issues"][0],
+            )
+            self.assertNotIn(
+                "investigationResults",
+                changed_compact["issues"][0],
+            )
+            cycle_script.finish_cycle(
+                work_dir=third_work,
+                agent_judgments_path=third_work / "agent-judgments.json",
+            )
+            third_plan = json.loads(
+                (third_work / "investigation-plan.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(1, len(third_plan["requests"]))
+            self.assertNotEqual(
+                request["investigationId"],
+                third_plan["requests"][0]["investigationId"],
+            )
+
+    def test_finishes_with_one_quarantine_session_plan(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            input_path = root / "input.json"
+            input_path.write_text(
+                json.dumps(snapshot("2026-08-28T20:00:00Z")),
+                encoding="utf-8",
+            )
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            agent_judgments = {
+                "schemaVersion": 1,
+                "snapshotId": "snapshot:owner/repo:2026-08-28T20:00:00Z",
+                "issues": [
+                    {
+                        "issueNumber": 1,
+                        "category": "flaky-test",
+                        "recommendations": [
+                            {
+                                "disposition": "review-quarantine",
+                                "target": {
+                                    "kind": "test",
+                                    "value": "Namespace.Type.FlakyTest",
+                                },
+                                "confidence": "high",
+                                "summary": "The test failed in independent runs.",
+                                "evidenceIds": ["issue:1"],
+                                "missingEvidence": [],
+                                "reassessWhen": "After the quarantine PR merges.",
+                            }
+                        ],
+                    }
+                ],
+            }
+            agent_path = work / "agent-judgments.json"
+            agent_path.write_text(json.dumps(agent_judgments), encoding="utf-8")
+
+            completed = cycle_script.finish_cycle(
+                work_dir=work,
+                agent_judgments_path=agent_path,
+            )
+
+            plan = json.loads(
+                (work / "quarantine-session.json").read_text(encoding="utf-8")
+            )
+            self.assertIsNotNone(plan["proposal"])
+            self.assertEqual(
+                ["Namespace.Type.FlakyTest"],
+                [
+                    test["testName"]
+                    for test in plan["proposal"]["tests"]
+                ],
+            )
+            self.assertEqual(0, completed["proposalCount"])
+            report = (work / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Quarantine session", report)
+            self.assertIn("One local quarantine session is ready for approval.", report)
+            self.assertIn(
+                "The worker must resolve each target to an exact test method.",
+                report,
+            )
+            self.assertIn("`Namespace.Type.FlakyTest`", report)
+            self.assertIn("#1", report)
+            self.assertTrue(
+                (
+                    Path(completed["runDirectory"]) / "quarantine-session.json"
+                ).is_file()
+            )
+
     def test_bootstraps_review_events_for_state_created_before_scheduling(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)

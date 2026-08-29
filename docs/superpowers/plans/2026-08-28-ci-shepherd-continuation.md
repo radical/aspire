@@ -28,6 +28,21 @@ Current implementation and evidence are recorded in
   comments.
 - [x] Keep generic unknown failures with unavailable diagnostics in a
   report-only investigation queue instead of posting passive watch comments.
+- [x] Persist bounded read-only investigation results by issue, target, and
+  source-evidence fingerprint; reuse unchanged results and discard stale ones
+  from later assessment input.
+- [x] Limit each cycle to five new investigation sessions, defer the remaining
+  requests deterministically, and attach all matching target-specific results
+  without allowing one result to overwrite another.
+- [x] Build one deterministic local quarantine proposal containing every current
+  test candidate and its original issue URL.
+- [x] Enforce one active quarantine session with a serialized ledger update,
+  require restore plus affected-test project builds, record partial success
+  precisely, and distinguish an open quarantine PR from merge-confirmed
+  completion.
+- [x] Aggregate duplicate issue owners for the same test, preserve every source
+  issue in the PR handoff, and recover or fail an abandoned session from a later
+  cycle.
 - [x] Recognize complete one-off incidents with a directly cited later
   successful `main` run from the same workflow as closure candidates when no
   contradictory blocker remains; never use age or silence alone as recovery.
@@ -114,10 +129,17 @@ Recommended order:
   provides clear new value.
 - [ ] Execute one evidence-backed comment-plus-close sequence for a resolved or
   superseded issue.
-- [ ] Launch one bounded investigation session for a concrete unresolved case;
-  do not select an item merely because Copilot is assigned.
-- [ ] Exercise one repository-native quarantine or rerun path only after its
-  exact command and resulting pull request or run are understood.
+- [ ] Launch and record one bounded read-only investigation for a concrete
+  unresolved case. Recollect afterward and confirm unchanged evidence reuses the
+  result while changed evidence creates a new request.
+- [ ] Approve one exact `quarantine-session.json` batch, create one local
+  worktree session, run QuarantineTools for every listed test, build each
+  affected test project, review the draft PR title/body, and only then push and
+  open the draft PR.
+- [ ] Recollect after the quarantine PR is opened and confirm its tests are
+  suppressed only as in-flight work. Reconcile merge or close state, record
+  `completed` only after merge, and confirm closed-unmerged work becomes
+  eligible again. Keep the original failure issues open.
 - [ ] Exercise a pull-request `ping-human` comment and later confirm that the
   terminal retirement edit is stable.
 
@@ -173,6 +195,12 @@ Disable the workflow and investigate if:
 - the same unchanged status body is proposed repeatedly after execution;
 - an item assigned to Copilot is selected for work;
 - a pull request is proposed for closure or merge;
+- a stale investigation result appears after its source evidence changes;
+- a second quarantine session starts while another is active;
+- a quarantine worker skips restore, an affected-project build, or exclusion
+  verification;
+- a merge-confirmed quarantine test is proposed again;
+- an open or closed-unmerged quarantine PR is treated as permanently completed;
 - one issue's malformed evidence aborts unrelated approved work;
 - state is advanced after an interrupted or failed cycle;
 - two writers use the same state directory.
@@ -189,6 +217,7 @@ Do not implement these as part of the next operational trial:
 - labels used only to mirror local state;
 - a separate service or queue.
 
-The next concrete action is Phase 1: make the committed implementation
-available to the stable workflow checkout, run the disabled workflow manually,
-and compare it with the recorded live cycle before enabling the schedule.
+The next concrete action is to finish repository validation and review, commit
+the bounded investigation and quarantine lifecycle, then run one fresh
+read-only cycle from a checkout containing that commit. The scheduled workflow
+stays disabled until that manual run matches the recorded safety contract.
