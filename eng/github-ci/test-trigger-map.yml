@@ -32,6 +32,7 @@ version: 1
 groups:
   CLI_BUNDLE:
     - test:Aspire.Cli.EndToEnd.Tests
+    - job:cli-starter-validation
     - job:extension-e2e
     # The WinGet/Homebrew installer artifacts package and ship this CLI bundle, so a change to the
     # bundle (eng/Bundle.proj) must regenerate/validate them too.
@@ -375,6 +376,9 @@ path_rules:
 # triggers.
 # Project Name == the .csproj base name (what Layer 1 emits).
 affected_project_rules:
+  - projects: [CreateLayout]
+    targets: [CLI_BUNDLE]
+    reason: CreateLayout assembles the CLI bundle consumed by these tests and jobs
   - projects:
       - Aspire.TypeSystem
       - Aspire.Hosting.RemoteHost
@@ -412,9 +416,14 @@ affected_project_rules:
 # Layer 2 selected tests, to a fixpoint (a derived test is itself expanded; cycle-safe). This is how
 # a job fires based on WHICH tests run, regardless of which file triggered them.
 derived_targets:
-  - tests: [test:Aspire.Cli.Tests, test:Aspire.Cli.EndToEnd.Tests]
+  - tests:
+      - test:Aspire.Cli.Tests
+      - test:Aspire.Cli.EndToEnd.Tests
+      - test:Aspire.Templates.Tests
+      - test:Aspire.Hosting.PostgreSQL.Tests
+      - test:Aspire.Hosting.Sdk.Tests
     targets: [job:cli-starter-validation]
-    reason: starter validation follows the same trigger set as the CLI and CLI end-to-end tests
+    reason: starter validation exercises the CLI, starter templates, AppHost/PostgreSQL runtime, and packaged DCP/dashboard SDK
   - tests: [test:Aspire.Acquisition.Tests]
     targets: [job:winget-installer, job:homebrew-installer]
     reason: acquisition covers the installers; prepare the WinGet/Homebrew installer artifacts too

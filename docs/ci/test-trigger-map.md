@@ -99,7 +99,7 @@ set instead of repeating it. Example:
 
 ```yaml
 groups:
-  CLI_BUNDLE: [test:Aspire.Cli.EndToEnd.Tests, job:extension-e2e, job:winget-installer, job:homebrew-installer]
+  CLI_BUNDLE: [test:Aspire.Cli.EndToEnd.Tests, job:cli-starter-validation, job:extension-e2e, job:winget-installer, job:homebrew-installer]
 ```
 
 Group members may themselves be group names; expansion is recursive and
@@ -140,7 +140,8 @@ changes run `ALL`.
 
 Note `eng/OuterPreBuild.proj` (build-wide project-name validation) is here, but
 `eng/Bundle.proj` is **not** — it assembles only the CLI bundle, so it maps to
-`CLI_BUNDLE`, not `ALL`.
+`CLI_BUNDLE`, not `ALL`. The `CreateLayout` project maps to the same group
+through `affected_project_rules` because it performs that bundle assembly.
 
 ### Ignore (`ignore`)
 
@@ -212,9 +213,23 @@ This is how a job fires based on *which tests run*, not on which file changed:
   targets: [job:winget-installer, job:homebrew-installer]
 ```
 
-The CLI starter validation jobs use this relationship too: whenever
-`Aspire.Cli.Tests` or `Aspire.Cli.EndToEnd.Tests` is selected, the selector also
-sets `job:cli-starter-validation`.
+The CLI starter validation jobs use this relationship too. The selector sets
+`job:cli-starter-validation` whenever it selects a consumer test for the CLI,
+starter templates, AppHost/PostgreSQL runtime, or packaged DCP/dashboard SDK:
+
+```yaml
+- tests:
+    - test:Aspire.Cli.Tests
+    - test:Aspire.Cli.EndToEnd.Tests
+    - test:Aspire.Templates.Tests
+    - test:Aspire.Hosting.PostgreSQL.Tests
+    - test:Aspire.Hosting.Sdk.Tests
+  targets: [job:cli-starter-validation]
+```
+
+Layer 1 supplies the transitive production-project relationships, so this rule
+tracks those stable consumers without enumerating every production project the
+starter happens to exercise.
 
 ## Maintenance
 

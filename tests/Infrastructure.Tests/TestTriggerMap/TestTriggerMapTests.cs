@@ -385,6 +385,10 @@ public sealed class TestTriggerMapTests
             "eng/scripts/cli-starter-validation.ps1",
             ["job:cli-starter-validation"]
         },
+        {
+            ".github/workflows/cli-starter-validation.yml",
+            ["test:Infrastructure.Tests", "job:cli-starter-validation"]
+        },
     };
 
     [Theory]
@@ -435,13 +439,54 @@ public sealed class TestTriggerMapTests
     [Theory]
     [InlineData("Aspire.Cli.Tests")]
     [InlineData("Aspire.Cli.EndToEnd.Tests")]
-    public void CliStarterValidationRunsWhenCliTestsAreSelected(string selectedTest)
+    [InlineData("Aspire.Templates.Tests")]
+    [InlineData("Aspire.Hosting.PostgreSQL.Tests")]
+    [InlineData("Aspire.Hosting.Sdk.Tests")]
+    public void CliStarterValidationRunsWhenConsumerTestIsSelected(string selectedTest)
     {
         var result = SelectWithRealMap("src/Aspire.Cli/Commands/RunCommand.cs", selectedTest);
 
         Assert.False(result.SelectsAll);
         Assert.Contains(selectedTest, result.TestProjects);
         Assert.Contains("job:cli-starter-validation", result.Jobs);
+    }
+
+    [Theory]
+    [InlineData("src/Aspire.ProjectTemplates/templates/aspire-starter/Aspire-StarterApplication.1.AppHost/AppHost.cs")]
+    [InlineData("eng/dcppack/Aspire.Hosting.Orchestration.targets")]
+    [InlineData("eng/dashboardpack/Sdk.targets")]
+    [InlineData("eng/Bundle.proj")]
+    public void CliStarterValidationRunsForLooseStarterConsumerChange(string path)
+    {
+        var result = SelectWithRealMap(path);
+
+        Assert.False(result.SelectsAll);
+        Assert.Contains("job:cli-starter-validation", result.Jobs);
+    }
+
+    [Fact]
+    public void CliBundleConsumersRunWhenCreateLayoutIsAffected()
+    {
+        var result = SelectWithRealMap("tools/CreateLayout/Program.cs", "CreateLayout");
+
+        Assert.False(result.SelectsAll);
+        Assert.Contains("Aspire.Cli.EndToEnd.Tests", result.TestProjects);
+        Assert.Equal(
+            ["job:cli-starter-validation", "job:extension-e2e", "job:homebrew-installer", "job:winget-installer"],
+            result.Jobs.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void CliStarterValidationDoesNotRunForUnrelatedHostingIntegrationChange()
+    {
+        var result = SelectWithRealMap(
+            "src/Aspire.Hosting.Redis/RedisBuilderExtensions.cs",
+            "Aspire.Hosting.Redis",
+            "Aspire.Hosting.Redis.Tests",
+            "Aspire.Hosting.Tests");
+
+        Assert.False(result.SelectsAll);
+        Assert.Equal(["job:extension-e2e", "job:typescript-api-compat"], result.Jobs.Order(StringComparer.Ordinal));
     }
 
     [Fact]
