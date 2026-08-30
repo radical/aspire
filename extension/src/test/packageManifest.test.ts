@@ -95,10 +95,12 @@ suite('extension/package.json', () => {
         const runAppHost = contextMenus.find(item => item.command === 'aspire-vscode.runAppHost');
         const debugAppHost = contextMenus.find(item => item.command === 'aspire-vscode.debugAppHost');
 
+        // The idle workspace AppHost context value carries the actions its CLI supports as
+        // `:can*` suffixes, so run and debug match the shape rather than the bare string.
         assertContains(runAppHost?.when, "view == aspire-vscode.appHosts");
-        assertContains(runAppHost?.when, 'viewItem == workspaceAppHost');
+        assertContains(runAppHost?.when, 'viewItem =~ /^workspaceAppHost(:[A-Za-z]+)*$/');
         assertContains(debugAppHost?.when, "view == aspire-vscode.appHosts");
-        assertContains(debugAppHost?.when, 'viewItem == workspaceAppHost');
+        assertContains(debugAppHost?.when, 'viewItem =~ /^workspaceAppHost(:[A-Za-z]+)*$/');
     });
 
     test('resource command context action targets apphosts view', () => {
@@ -155,6 +157,17 @@ suite('extension/package.json', () => {
         assert.strictEqual(openDashboardToSide?.when, '!aspire.noRunningAppHosts');
     });
 
+    test('Create with Aspire is pane-only while new and init remain in the command palette', () => {
+        const manifest = readManifest();
+        const hiddenFromPalette = new Set((manifest.contributes.menus?.commandPalette ?? [])
+            .filter(item => item.when === 'false')
+            .map(item => item.command));
+
+        assert.ok(hiddenFromPalette.has('aspire-vscode.createWithAspire'));
+        assert.ok(!hiddenFromPalette.has('aspire-vscode.new'));
+        assert.ok(!hiddenFromPalette.has('aspire-vscode.init'));
+    });
+
     test('active AppHost Run action does not require a language debugger', () => {
         const manifest = readManifest();
         const editorRunMenus = manifest.contributes.menus?.['editor/title/run'] ?? [];
@@ -183,6 +196,22 @@ suite('extension/package.json', () => {
         const activationEvents = manifest.activationEvents ?? [];
 
         assert.ok(activationEvents.includes('workspaceContains:**/apphost.rs'));
+    });
+
+    // A Java-only workspace contains no project file the other activation events match: no .csproj,
+    // and `.aspire/` only exists once a restore has already run. Without an explicit Java event the
+    // extension never activates on a fresh clone, so the AppHost never appears in the Aspire view
+    // and none of the editor features register. Both casings are listed because `workspaceContains`
+    // globs are case-sensitive on Linux and macOS, and Java ties the file name to the class name:
+    // `aspire init` writes `AppHost.java` while the lowercase spelling matches the other languages.
+    test('Java AppHost files activate the extension', () => {
+        const manifest = readManifest();
+        const activationEvents = manifest.activationEvents ?? [];
+
+        assert.ok(activationEvents.includes('workspaceContains:**/AppHost.java'), 'aspire init writes AppHost.java');
+        assert.ok(activationEvents.includes('workspaceContains:**/apphost.java'), 'lowercase matches the other languages');
+        // Maven and Gradle AppHosts nest the source under the standard layout rather than the root.
+        assert.ok(activationEvents.includes('workspaceContains:**/src/main/java/AppHost.java'));
     });
 
     test('FSharp and Visual Basic AppHost projects activate the extension', () => {
@@ -238,16 +267,18 @@ suite('extension/package.json', () => {
         assert.strictEqual(argsProperty.description, '%extension.debug.args%');
     });
 
-    test('CodeLens commands are contributed and hidden from the command palette', () => {
-        // CodeLens commands are invoked from lenses, never typed by the user, so each registration
-        // needs a contributes.commands entry (otherwise the title is unlocalized/undeclared) plus a
-        // commandPalette "when": "false" entry so it does not leak into the palette.
+    test('CodeLens command handlers are contributed and hidden from the command palette', () => {
+        // Commands registered by the CodeLens module are invoked from lenses, never typed by the user,
+        // so each registration needs a contributes.commands entry (otherwise the title is
+        // unlocalized/undeclared) plus a commandPalette "when": "false" entry.
         const manifest = readManifest();
         const registrationSource = fs.readFileSync(path.resolve(__dirname, '../../src/activation/registerCodeLensCommands.ts'), 'utf8');
-        const registeredCodeLensCommands = [...registrationSource.matchAll(/registerInstrumentedCommand\('(aspire-vscode\.codeLens[A-Za-z0-9]*)'/g)]
-            .map(match => match[1]);
+        const registeredCodeLensCommands = [...registrationSource.matchAll(
+            /registerInstrumentedCommand\(\s*(['"])(aspire-vscode\.[A-Za-z0-9]+)\1/g)]
+            .map(match => match[2]);
 
         assert.ok(registeredCodeLensCommands.includes('aspire-vscode.codeLensRevealAppHost'), 'Expected codeLensRevealAppHost to be registered.');
+        assert.ok(registeredCodeLensCommands.includes('aspire-vscode.installDebuggerExtension'), 'Expected installDebuggerExtension to be registered.');
 
         const contributedCommands = new Set((manifest.contributes.commands ?? []).map(item => item.command));
         const hiddenFromPalette = new Set((manifest.contributes.menus?.commandPalette ?? [])
