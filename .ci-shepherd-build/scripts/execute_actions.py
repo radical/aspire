@@ -28,6 +28,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--action-id")
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--production-comment-pilot",
+        action="store_true",
+        help=(
+            "Permit an authorized one-action comment pilot on microsoft/aspire."
+        ),
+    )
     return parser
 
 
@@ -79,6 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.authorization,
         state_dir=args.state_dir,
         action_id=args.action_id,
+        allow_production_comment_pilot=args.production_comment_pilot,
     )
     proposals = authorized.proposal_document
     proposal = authorized.proposal
@@ -127,8 +135,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(result)
             return 0
 
+        production_overrides = (
+            {authorized.grant.repository}
+            if authorized.grant.production_comment_pilot
+            else set()
+        )
         client = GitHubActorClient(
-            allowed_repositories={authorized.grant.repository}
+            allowed_repositories={authorized.grant.repository},
+            protected_comment_repositories=production_overrides,
         )
         if reservation.mode == "reconcile":
             result = reconcile_action(

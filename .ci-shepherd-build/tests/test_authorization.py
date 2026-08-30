@@ -84,7 +84,7 @@ class AuthorizationTests(unittest.TestCase):
         ).encode()
         self.proposals_path.write_bytes(proposal_bytes)
         grant = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "grantId": "grant:test",
             "repository": "radical/aspire",
             "stateDirectory": str(self.state_dir),
@@ -103,6 +103,7 @@ class AuthorizationTests(unittest.TestCase):
                 "maxMutationAttempts": 1,
                 "maxChains": 1,
             },
+            "productionCommentPilot": False,
         }
         grant.update(grant_updates or {})
         self.authorization_path.write_text(
@@ -372,13 +373,22 @@ class AuthorizationTests(unittest.TestCase):
         grant_text = self.authorization_path.read_text(encoding="utf-8")
         self.authorization_path.write_text(
             grant_text.replace(
-                '{"schemaVersion": 1,',
-                '{"schemaVersion": 1, "schemaVersion": 1,',
+                '{"schemaVersion": 2,',
+                '{"schemaVersion": 2, "schemaVersion": 2,',
             ),
             encoding="utf-8",
         )
 
         with self.assertRaisesRegex(AuthorizationError, "duplicate key"):
+            self._authorize()
+
+    def test_legacy_authorization_grant_schema_is_rejected(self) -> None:
+        self._write_inputs(grant_updates={"schemaVersion": 1})
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "schemaVersion must equal 2",
+        ):
             self._authorize()
 
     def test_symlinked_grant_is_rejected(self) -> None:
@@ -499,6 +509,21 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             **kwargs,
         )
 
+    def _use_production_repository(self) -> None:
+        serialized = json.dumps(self.proposals).replace(
+            "radical/aspire",
+            "microsoft/aspire",
+        )
+        self.proposals = json.loads(serialized)
+        self.comment_action_id = self.comment_action_id.replace(
+            "radical/aspire",
+            "microsoft/aspire",
+        )
+        self.close_action_id = self.close_action_id.replace(
+            "radical/aspire",
+            "microsoft/aspire",
+        )
+
     def test_two_action_chain_round_trips_through_the_loader(self) -> None:
         proposal_bytes = self._write_proposals()
 
@@ -506,7 +531,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             action_ids=[self.comment_action_id, self.close_action_id]
         )
 
-        self.assertEqual(1, grant["schemaVersion"])
+        self.assertEqual(2, grant["schemaVersion"])
         self.assertEqual("grant:fixed-for-test", grant["grantId"])
         self.assertEqual("radical/aspire", grant["repository"])
         self.assertEqual("2026-08-29T20:00:00Z", grant["issuedAtUtc"])
@@ -526,6 +551,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertEqual(
             {"maxMutationAttempts": 2, "maxChains": 1}, grant["budget"]
         )
+        self.assertFalse(grant["productionCommentPilot"])
         self.assertEqual(
             f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}",
             grant["proposalsDigest"],
@@ -769,6 +795,205 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorizationError, "protected"):
             self._generate(action_ids=[self.comment_action_id])
         self.assertFalse(self.output_path.exists())
+
+    def test_production_comment_pilot_round_trips_with_two_explicit_opt_ins(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+        self.assertTrue(grant["productionCommentPilot"])
+        self.assertEqual(
+            {"maxMutationAttempts": 1, "maxChains": 1},
+            grant["budget"],
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        authorized = load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=self.comment_action_id,
+            allow_production_comment_pilot=True,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertTrue(authorized.grant.production_comment_pilot)
+        self.assertEqual(self.comment_action_id, authorized.proposal["actionId"])
+
+    def test_production_pilot_grant_requires_execution_confirmation(self) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        with self.assertRaisesRegex(AuthorizationError, "protected"):
+            load_authorized_execution(
+                self.proposals_path,
+                self.output_path,
+                state_dir=self.state_dir,
+                action_id=self.comment_action_id,
+                now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+            )
+
+    def test_production_comment_pilot_rejects_broader_generation(self) -> None:
+        self._use_production_repository()
+        original = json.loads(json.dumps(self.proposals))
+
+        cases = [
+            (
+                "multiple actions",
+                [self.comment_action_id, self.close_action_id],
+                {},
+                "exactly one action",
+            ),
+            (
+                "closure",
+                [self.comment_action_id],
+                {"operation": "close-issue"},
+                "comment operations only",
+            ),
+            (
+                "long lifetime",
+                [self.comment_action_id],
+                {"ttl_minutes": 16},
+                "at most 15 minutes",
+            ),
+            (
+                "suppression override",
+                [self.comment_action_id],
+                {
+                    "override_suppression_for_action_ids": [
+                        self.comment_action_id
+                    ]
+                },
+                "cannot override suppression",
+            ),
+        ]
+        for name, action_ids, changes, message in cases:
+            with self.subTest(name=name):
+                self.proposals = json.loads(json.dumps(original))
+                generation_options = dict(changes)
+                operation = generation_options.pop("operation", None)
+                if operation is not None:
+                    proposals = self.proposals["proposals"]
+                    assert isinstance(proposals, list)
+                    proposal = proposals[0]
+                    assert isinstance(proposal, dict)
+                    proposal["operation"] = operation
+                    proposal.pop("body")
+                    proposal["closeReason"] = "not_planned"
+                self._write_proposals()
+                with self.assertRaisesRegex(AuthorizationError, message):
+                    self._generate(
+                        action_ids=action_ids,
+                        allow_production_comment_pilot=True,
+                        **generation_options,
+                    )
+
+    def test_production_comment_pilot_rejects_broadened_grant(self) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+        valid_grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+        cases = [
+            (
+                "action",
+                "allowedActionIds",
+                [self.comment_action_id, self.close_action_id],
+                "exactly the selected action",
+            ),
+            (
+                "operation",
+                "allowedOperations",
+                ["create-comment", "close-issue"],
+                "exactly one comment operation",
+            ),
+            (
+                "target",
+                "allowedTargets",
+                [
+                    {"kind": "issue", "number": 1},
+                    {"kind": "issue", "number": 2},
+                ],
+                "exactly one issue target",
+            ),
+            (
+                "suppression",
+                "overrideSuppressionForActionIds",
+                [self.comment_action_id],
+                "cannot override suppression",
+            ),
+            (
+                "budget",
+                "budget",
+                {"maxMutationAttempts": 2, "maxChains": 1},
+                "one mutation and one chain",
+            ),
+            (
+                "lifetime",
+                "expiresAtUtc",
+                "2026-08-29T20:16:00Z",
+                "must not exceed 15 minutes",
+            ),
+        ]
+        for name, key, value, message in cases:
+            with self.subTest(name=name):
+                grant = json.loads(json.dumps(valid_grant))
+                grant[key] = value
+                self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    AuthorizationError,
+                    message,
+                ):
+                    load_authorized_execution(
+                        self.proposals_path,
+                        self.output_path,
+                        state_dir=self.state_dir,
+                        action_id=self.comment_action_id,
+                        allow_production_comment_pilot=True,
+                        now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+                    )
+
+    def test_production_comment_pilot_allows_one_edit(self) -> None:
+        self._use_production_repository()
+        proposals = self.proposals["proposals"]
+        assert isinstance(proposals, list)
+        proposal = proposals[0]
+        assert isinstance(proposal, dict)
+        proposal["operation"] = "edit-comment"
+        proposal["commentId"] = 123
+        proposal["sourceCommentFingerprint"] = {"bodySha256": "0" * 64}
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+
+        self.assertEqual(["edit-comment"], grant["allowedOperations"])
+
+    def test_production_comment_pilot_flag_is_rejected_for_forks(self) -> None:
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "only valid for microsoft/aspire",
+        ):
+            self._generate(
+                action_ids=[self.comment_action_id],
+                allow_production_comment_pilot=True,
+            )
 
     def test_selecting_one_action_does_not_authorize_a_sibling_action(self) -> None:
         self._write_proposals()

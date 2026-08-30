@@ -419,9 +419,12 @@ persisted grant budget does.
 The authorization file is an exact grant, not an operator note. It must bind
 the repository, absolute state directory, snapshot ID, SHA-256 digest of the
 raw proposal bytes, explicit action IDs, operations, issue targets, chain
-roots, expiry, and mutation/chain budgets. Unknown or duplicate fields are
+roots, expiry, mutation/chain budgets, and whether the bounded production
+comment pilot was explicitly authorized. Unknown or duplicate fields are
 rejected. Copying the grant does not reset its budget because consumption is
-derived from the grant ID in the grant-bound append-only event log.
+derived from the grant ID in the grant-bound append-only event log. Execution
+also records terminal state by action identity, so replaying the same action
+under a newly minted grant cannot mutate it again.
 
 `scripts/create_authorization.py` generates that grant. It infers nothing: it
 accepts a validated proposal document, one or more explicit `--action-id`
@@ -438,6 +441,32 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
   --action-id "snapshot:...:issue:19149:review-close" \
   --state-dir "$STATE" \
   --output "$SCRATCH/authorization-grant.json"
+```
+
+`microsoft/aspire` remains denied by default. The production comment pilot is
+the sole exception: it requires `--production-comment-pilot` at both grant
+creation and execution, and the generated grant records
+`productionCommentPilot: true`. Such a grant must name exactly one
+`create-comment` or `edit-comment` action, have no dependency or suppression
+override, and expire within 15 minutes. The final actor boundary allows only
+the corresponding comment POST or PATCH; issue closure remains denied there
+even if an invalid caller bypasses authorization validation.
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
+  --proposals "$SCRATCH/action-proposals.json" \
+  --action-id "snapshot:...:issue:17840:watch-comment" \
+  --state-dir "$STATE" \
+  --output "$SCRATCH/authorization-grant.json" \
+  --production-comment-pilot
+
+python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
+  --proposals "$SCRATCH/action-proposals.json" \
+  --authorization "$SCRATCH/authorization-grant.json" \
+  --state-dir "$STATE" \
+  --action-id "snapshot:...:issue:17840:watch-comment" \
+  --execute \
+  --production-comment-pilot
 ```
 
 ```bash
@@ -464,8 +493,9 @@ operation, refetches the target, and appends a terminal event to owner-only
 permits reconciliation only; it never permits another mutation. Reconciliation
 requires the exact idempotency key, body, and authenticated author. The
 executor never treats `--execute` as approval for the whole proposal document,
-never accepts `--results` in execute mode, and hard-denies mutations to
-`microsoft/aspire` while remediation remains active.
+never accepts `--results` in execute mode, and denies all
+`microsoft/aspire` mutations except an explicitly grant-bound, separately
+confirmed, one-action comment pilot.
 
 ## Artifacts
 

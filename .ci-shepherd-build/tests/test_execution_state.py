@@ -101,6 +101,7 @@ class ActionEventStoreTests(unittest.TestCase):
             allowed_chain_roots=("action:1", "action:2"),
             override_suppression_for_action_ids=frozenset(),
             budget=AuthorizationBudget(max_mutation_attempts=1, max_chains=1),
+            production_comment_pilot=False,
         )
         self.store = ActionEventStore(self.state_dir)
 

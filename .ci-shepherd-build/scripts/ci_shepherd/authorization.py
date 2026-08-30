@@ -24,6 +24,9 @@ class AuthorizationError(ValueError):
 #: never mint something the loader would reject anyway.
 DEFAULT_GRANT_TTL_MINUTES = 15
 MAX_GRANT_TTL_MINUTES = 60
+AUTHORIZATION_SCHEMA_VERSION = 2
+PRODUCTION_REPOSITORY = "microsoft/aspire"
+PRODUCTION_COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +50,7 @@ class AuthorizationGrant:
     allowed_chain_roots: tuple[str, ...]
     override_suppression_for_action_ids: frozenset[str]
     budget: AuthorizationBudget
+    production_comment_pilot: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +78,7 @@ _GRANT_KEYS = frozenset(
         "allowedChainRoots",
         "overrideSuppressionForActionIds",
         "budget",
+        "productionCommentPilot",
     }
 )
 _BUDGET_KEYS = frozenset({"maxMutationAttempts", "maxChains"})
@@ -86,10 +91,15 @@ def load_authorized_execution(
     *,
     state_dir: Path,
     action_id: str,
+    allow_production_comment_pilot: bool = False,
     now: datetime | None = None,
 ) -> AuthorizedExecution:
     """Read once and validate the exact proposal document and authorization grant."""
 
+    if not isinstance(allow_production_comment_pilot, bool):
+        raise AuthorizationError(
+            "allow_production_comment_pilot must be a boolean."
+        )
     proposal_bytes, proposal_document = _read_and_validate_proposal_document(
         proposals_path
     )
@@ -130,10 +140,20 @@ def load_authorized_execution(
 
     repository = _require_string(proposal_document, "repository")
     snapshot_id = _require_string(proposal_document, "snapshotId")
-    if repository.casefold() == "microsoft/aspire":
+    is_production = repository.casefold() == PRODUCTION_REPOSITORY
+    if is_production and not allow_production_comment_pilot:
         raise AuthorizationError(
             "Mutation repository is protected during remediation: "
             "microsoft/aspire"
+        )
+    if allow_production_comment_pilot and not is_production:
+        raise AuthorizationError(
+            "Production comment pilot authorization is only valid for "
+            "microsoft/aspire."
+        )
+    if grant.production_comment_pilot != allow_production_comment_pilot:
+        raise AuthorizationError(
+            "Production comment pilot confirmation does not match the grant."
         )
     if repository != grant.repository:
         raise AuthorizationError(
@@ -192,6 +212,12 @@ def load_authorized_execution(
         raise AuthorizationError(
             "Authorization grant chain roots must also be allowedActionIds."
         )
+    if is_production:
+        _validate_production_comment_grant(
+            grant,
+            action_id=action_id,
+            operation=operation,
+        )
 
     return AuthorizedExecution(
         proposal_document=proposal_document,
@@ -234,10 +260,11 @@ def generate_authorization_grant(
     state_dir: Path,
     ttl_minutes: int = DEFAULT_GRANT_TTL_MINUTES,
     override_suppression_for_action_ids: Sequence[str] = (),
+    allow_production_comment_pilot: bool = False,
     now: datetime | None = None,
     grant_id: str | None = None,
 ) -> dict[str, Any]:
-    """Derive an exact, schema-v1 authorization grant for explicitly selected actions.
+    """Derive an exact authorization grant for explicitly selected actions.
 
     Every allowed action id, operation, issue target, and chain root is
     derived only from proposals the caller names in ``action_ids``. Nothing
@@ -252,6 +279,10 @@ def generate_authorization_grant(
     freshly generated identifier.
     """
 
+    if not isinstance(allow_production_comment_pilot, bool):
+        raise AuthorizationError(
+            "allow_production_comment_pilot must be a boolean."
+        )
     if not isinstance(ttl_minutes, int) or isinstance(ttl_minutes, bool):
         raise AuthorizationError("Grant TTL must be an integer number of minutes.")
     if not (1 <= ttl_minutes <= MAX_GRANT_TTL_MINUTES):
@@ -264,10 +295,16 @@ def generate_authorization_grant(
     )
 
     repository = _require_repository(proposal_document, "repository")
-    if repository.casefold() == "microsoft/aspire":
+    is_production = repository.casefold() == PRODUCTION_REPOSITORY
+    if is_production and not allow_production_comment_pilot:
         raise AuthorizationError(
             "Mutation repository is protected during remediation: "
             "microsoft/aspire"
+        )
+    if allow_production_comment_pilot and not is_production:
+        raise AuthorizationError(
+            "Production comment pilot authorization is only valid for "
+            "microsoft/aspire."
         )
     snapshot_id = _require_string(proposal_document, "snapshotId")
 
@@ -357,6 +394,12 @@ def generate_authorization_grant(
                 "Suppression overrides must reference a selected actionId: "
                 f"{override_id}"
             )
+    if is_production:
+        _validate_production_comment_selection(
+            selected_proposals,
+            ttl_minutes=ttl_minutes,
+            override_ids=override_ids,
+        )
 
     expanded_state_dir = state_dir.expanduser()
     _reject_symlink_path(expanded_state_dir, "State directory")
@@ -372,7 +415,7 @@ def generate_authorization_grant(
         raise AuthorizationError("grantId must be a non-empty string.")
 
     return {
-        "schemaVersion": 1,
+        "schemaVersion": AUTHORIZATION_SCHEMA_VERSION,
         "grantId": grant_id if grant_id is not None else _generate_grant_id(),
         "repository": repository,
         "stateDirectory": str(canonical_state_dir),
@@ -391,11 +434,93 @@ def generate_authorization_grant(
             "maxMutationAttempts": len(selected_ids),
             "maxChains": len(chain_roots),
         },
+        "productionCommentPilot": is_production,
     }
 
 
 def _generate_grant_id() -> str:
     return f"grant:{secrets.token_hex(16)}"
+
+
+def _validate_production_comment_selection(
+    proposals: Sequence[Mapping[str, Any]],
+    *,
+    ttl_minutes: int,
+    override_ids: set[str],
+) -> None:
+    if len(proposals) != 1:
+        raise AuthorizationError(
+            "Production comment pilot grants must authorize exactly one action."
+        )
+    operation = _require_string(proposals[0], "operation")
+    if operation not in PRODUCTION_COMMENT_OPERATIONS:
+        raise AuthorizationError(
+            "Production comment pilot grants allow comment operations only."
+        )
+    if ttl_minutes > DEFAULT_GRANT_TTL_MINUTES:
+        raise AuthorizationError(
+            "Production comment pilot grants may live for at most 15 minutes."
+        )
+    if override_ids:
+        raise AuthorizationError(
+            "Production comment pilot grants cannot override suppression."
+        )
+
+
+def _validate_production_comment_grant(
+    grant: AuthorizationGrant,
+    *,
+    action_id: str,
+    operation: str,
+) -> None:
+    if grant.repository.casefold() != PRODUCTION_REPOSITORY:
+        raise AuthorizationError(
+            "Production comment pilot grant repository must be microsoft/aspire."
+        )
+    if not grant.production_comment_pilot:
+        raise AuthorizationError(
+            "Authorization grant does not carry the production comment capability."
+        )
+    if grant.allowed_action_ids != (action_id,):
+        raise AuthorizationError(
+            "Production comment pilot grant must allow exactly the selected action."
+        )
+    if (
+        operation not in PRODUCTION_COMMENT_OPERATIONS
+        or grant.allowed_operations != frozenset({operation})
+    ):
+        raise AuthorizationError(
+            "Production comment pilot grant must allow exactly one comment operation."
+        )
+    if len(grant.allowed_targets) != 1:
+        raise AuthorizationError(
+            "Production comment pilot grant must allow exactly one issue target."
+        )
+    # The parser's nonempty-subset invariant and the one-action check above
+    # already force this value. Keep the explicit check as a fail-closed guard
+    # if the generic grant invariants change later.
+    if grant.allowed_chain_roots != (action_id,):
+        raise AuthorizationError(
+            "Production comment pilot grant must bind the selected action as its root."
+        )
+    if grant.override_suppression_for_action_ids:
+        raise AuthorizationError(
+            "Production comment pilot grant cannot override suppression."
+        )
+    if grant.budget != AuthorizationBudget(
+        max_mutation_attempts=1,
+        max_chains=1,
+    ):
+        raise AuthorizationError(
+            "Production comment pilot grant budget must allow one mutation and one chain."
+        )
+    if (
+        grant.expires_at - grant.issued_at
+        > timedelta(minutes=DEFAULT_GRANT_TTL_MINUTES)
+    ):
+        raise AuthorizationError(
+            "Production comment pilot grant lifetime must not exceed 15 minutes."
+        )
 
 
 def write_authorization_grant(grant: Mapping[str, Any], output_path: Path) -> Path:
@@ -488,8 +613,11 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
         raise AuthorizationError(
             "Authorization grant must contain exactly the supported fields."
         )
-    if document.get("schemaVersion") != 1:
-        raise AuthorizationError("Authorization grant schemaVersion must equal 1.")
+    if document.get("schemaVersion") != AUTHORIZATION_SCHEMA_VERSION:
+        raise AuthorizationError(
+            f"Authorization grant schemaVersion must equal "
+            f"{AUTHORIZATION_SCHEMA_VERSION}."
+        )
 
     grant_id = _require_string(document, "grantId")
     repository = _require_repository(document, "repository")
@@ -604,6 +732,10 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
         allowed_chain_roots=allowed_chain_roots,
         override_suppression_for_action_ids=override_ids,
         budget=budget,
+        production_comment_pilot=_require_bool(
+            document,
+            "productionCommentPilot",
+        ),
     )
 
 
@@ -611,6 +743,13 @@ def _require_string(document: Mapping[str, Any], key: str) -> str:
     value = document.get(key)
     if not isinstance(value, str) or not value:
         raise AuthorizationError(f"{key} must be a non-empty string.")
+    return value
+
+
+def _require_bool(document: Mapping[str, Any], key: str) -> bool:
+    value = document.get(key)
+    if not isinstance(value, bool):
+        raise AuthorizationError(f"{key} must be a boolean.")
     return value
 
 

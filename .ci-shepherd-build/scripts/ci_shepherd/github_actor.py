@@ -13,6 +13,12 @@ _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _REPOSITORY_ENDPOINT_RE = re.compile(
     r"^repos/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/|$)"
 )
+_CREATE_COMMENT_ENDPOINT_RE = re.compile(
+    r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/comments$"
+)
+_EDIT_COMMENT_ENDPOINT_RE = re.compile(
+    r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*$"
+)
 _PROTECTED_REPOSITORIES = frozenset({"microsoft/aspire"})
 
 
@@ -25,6 +31,7 @@ class GitHubActorClient:
         self,
         *,
         allowed_repositories: Collection[str] = (),
+        protected_comment_repositories: Collection[str] = (),
         runner: Any = subprocess.run,
         request_timeout_seconds: float = 60,
     ) -> None:
@@ -34,6 +41,17 @@ class GitHubActorClient:
             self._repository(repository).casefold()
             for repository in allowed_repositories
         )
+        self._protected_comment_repositories = frozenset(
+            self._repository(repository).casefold()
+            for repository in protected_comment_repositories
+        )
+        if not self._protected_comment_repositories.issubset(
+            _PROTECTED_REPOSITORIES & self._allowed_repositories
+        ):
+            raise ValueError(
+                "Protected comment repositories must be protected repositories "
+                "that are also explicitly allowed."
+            )
         self._runner = runner
         self._request_timeout_seconds = request_timeout_seconds
 
@@ -162,9 +180,23 @@ class GitHubActorClient:
                 )
             normalized_repository = repository.casefold()
             if normalized_repository in _PROTECTED_REPOSITORIES:
-                raise MutationRepositoryError(
-                    f"Mutation repository is protected: {repository}"
-                )
+                if normalized_repository not in self._protected_comment_repositories:
+                    raise MutationRepositoryError(
+                        f"Mutation repository is protected: {repository}"
+                    )
+                if not (
+                    (
+                        method == "POST"
+                        and _CREATE_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
+                    )
+                    or (
+                        method == "PATCH"
+                        and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
+                    )
+                ):
+                    raise MutationRepositoryError(
+                        "Protected repository pilot permits comment mutations only."
+                    )
             if normalized_repository not in self._allowed_repositories:
                 raise MutationRepositoryError(
                     f"Mutation repository is not explicitly allowed: {repository}"

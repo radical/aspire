@@ -1525,6 +1525,33 @@ class GitHubActorClientTests(unittest.TestCase):
 
                 self.assertEqual([], runner.calls)
 
+    def test_production_comment_repository_allows_comments_only(self) -> None:
+        runner = RecordingRunner({"id": 900, "body": COMMENT_BODY})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_comment_repositories={"Microsoft/Aspire"},
+        )
+
+        client.create_comment("microsoft/aspire", 21, COMMENT_BODY)
+        client.edit_comment("microsoft/aspire", 900, COMMENT_BODY)
+        with self.assertRaisesRegex(
+            MutationRepositoryError,
+            "comment mutations only",
+        ):
+            client.close_issue("microsoft/aspire", 21, "completed")
+
+        self.assertEqual(2, len(runner.calls))
+        self.assertIn("POST", runner.calls[0][0])
+        self.assertIn("PATCH", runner.calls[1][0])
+
+    def test_production_comment_repository_must_also_be_allowed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "explicitly allowed"):
+            GitHubActorClient(
+                allowed_repositories={"radical/aspire"},
+                protected_comment_repositories={"microsoft/aspire"},
+            )
+
     def test_uses_fixed_get_issue_endpoint(self) -> None:
         runner = RecordingRunner({"number": 21, "state": "open"})
         client = GitHubActorClient(runner=runner)

@@ -35,11 +35,18 @@ executor supports exactly three operations: issue `create-comment`,
 Every mutation requires a machine-readable grant that binds the repository, the
 absolute state directory, the snapshot ID, a SHA-256 digest of the raw proposal
 bytes, explicit action IDs, operations, issue targets, chain roots, an expiry,
-and mutation and chain budgets.
+mutation and chain budgets, and the production-comment-pilot capability.
 
-Three independent code paths hard-deny `microsoft/aspire`:
-`authorization.py` for action grants, `quarantine_authorization.py` for
-quarantine grants, and a protected-repository set in `github_actor.py`.
+Production remains denied by default at three independent boundaries. The
+action grant generator and loader accept `microsoft/aspire` only when their
+callers explicitly enable the production comment pilot. The exact grant then
+records that capability and is constrained to one dependency-free
+`create-comment` or `edit-comment` action, no suppression override, and a
+maximum 15-minute lifetime. Execution requires the same explicit confirmation.
+Finally, `github_actor.py` permits only the fixed issue-comment POST and PATCH
+endpoints for a separately configured protected comment repository; closure
+and every other mutation remain denied. `quarantine_authorization.py` still
+hard-denies `microsoft/aspire` without exception.
 
 Two facts from the recorded production dry run shaped the initial design.
 

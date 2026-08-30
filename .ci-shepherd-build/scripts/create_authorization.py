@@ -55,6 +55,14 @@ def _parser() -> argparse.ArgumentParser:
             "named explicitly here."
         ),
     )
+    parser.add_argument(
+        "--production-comment-pilot",
+        action="store_true",
+        help=(
+            "Permit one comment action on microsoft/aspire under the bounded "
+            "production pilot limits."
+        ),
+    )
     return parser
 
 
@@ -78,6 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         override_suppression_for_action_ids=(
             args.override_suppression_for_action_ids
         ),
+        allow_production_comment_pilot=args.production_comment_pilot,
     )
     written_path = write_authorization_grant(grant, output_path)
     print(written_path)

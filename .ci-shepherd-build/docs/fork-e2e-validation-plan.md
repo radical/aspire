@@ -110,7 +110,7 @@ files, or a live read-only GET. None require reading private helpers.
 | I12 | `quarantine-session.json` contains no already-quarantined, nonexistent, or non-method-shaped target | proposal document |
 | I13 | Shepherd-authored comments never appear in `allowedEvidence` or any `evidenceIds` | `assessment-input.json`, proposals |
 | I14 | `investigation-plan.json` holds at most five requests, overflow in `deferredRequests` | plan document |
-| I15 | Action grants and quarantine grants both hard-deny `microsoft/aspire` | non-zero exit, stderr |
+| I15 | Action grants deny `microsoft/aspire` by default and quarantine grants always deny it; the comment pilot requires matching grant-creation and execution confirmations | non-zero exit or exact bounded grant |
 | I16 | Every posted body begins with `[automated] ` | rendered body, live comment |
 | I17 | A surviving `intent` or `indeterminate` event permits reconciliation only | ledger plus rerun |
 | I18 | Every artifact produced by a staging cycle names `radical/aspire` | all artifacts |
@@ -139,18 +139,18 @@ regression it catches.
 
 ### 4.0 Initial go-live gate
 
-These 28 scenarios are the mandatory gate before a bounded production
+These 29 scenarios are the mandatory gate before a bounded production
 **comment-only pilot**. All other rows remain future hardening or gates for later
 capabilities and unattended operation.
 
-**Status on 2026-08-30:** 28 of 28 pass. Deterministic coverage passes from an
+**Status on 2026-08-30:** 29 of 29 pass. Deterministic coverage passes from an
 index-only export, and the live subset passed on `radical/aspire` with complete
 fixture cleanup and no production write.
 
 | Capability | Required scenarios |
 | --- | --- |
 | Read-only cycle and state continuity | D1, D4, D5, D6, D7, D9, G1, J1, J1a, J2, J3, K1, K2, K4 |
-| One-action comment pilot | A1, B1, B2, B3, B5, B7, C1, C4, C5, C6, C7, C10, C13, L6 |
+| One-action comment pilot | A1, B1, B2, B3, B5, B7, C1, C4, C5, C6, C7, C10, C13, C14, L6 |
 
 Closure additionally requires A4, A5, A6, and A8. Class A quarantine
 additionally requires H1 through H17 where applicable, H22 through H29, I4, and
@@ -197,10 +197,11 @@ passes.
 | C7 | Grant for action X | Pass `--action-id` for action Y | Reject | Non-zero exit, no mutation (I3) | none | Action substitution (T2) | L |
 | C8 | Grant with budget 1 covering two actions | Approve both | Second stops on budget | Exactly one terminal event (I2) | Delete comment | Budget bypass across invocations | L+E |
 | C9 | Grant copied to a second path | Run with the copy | Budget already exhausted | No second mutation | none | Budget reset by copying the grant (T8) | L |
-| C10 | `--repository microsoft/aspire` | none | Both `create_authorization.py` and `authorize_quarantine.py` hard-deny | Non-zero exit, no grant file written (I15) | none | Production write (T1) | L |
+| C10 | `--repository microsoft/aspire` without a pilot flag | none | Both `create_authorization.py` and `authorize_quarantine.py` hard-deny | Non-zero exit, no grant file written (I15) | none | Production write (T1) | L |
 | C11 | Shared executable-label policy | none | Proposer and executor use one constant and one normalizer | A mixed-case executable label is accepted and canonicalized in both paths | none | Label-set or case-handling drift between proposal and execution | L |
 | C12 | Token downgraded to read-only mid-run | Swap credentials | Execute fails cleanly | Failure is a clean refusal with a terminal failure event, not a partial write or a hang | Restore token | Permission change during execution | E |
 | C13 | Grant issued for snapshot S1, proposals from snapshot S2 | none | Reject | Non-zero exit, no mutation | none | Cross-snapshot grant replay (T8) | L |
+| C14 | Exact `microsoft/aspire` comment proposal | Request the production pilot | Grant creation and execution each require their own flag; the grant records the capability | Any multiple-action, closure, dependency, suppression override, lifetime above 15 minutes, flag mismatch, or broadened grant is rejected; the actor independently rejects non-comment endpoints | none | A nominal pilot switch lifting unrelated production guards (T1, T2) | L |
 
 ### 4.4 Suite D — Evidence freshness and transitions (P1)
 
@@ -342,7 +343,7 @@ defect reproductions.
 | L3 | Grant requested with a TTL above the cap | Reject | Non-zero exit | none | Long-lived grants | L |
 | L4 | Grant enumerating an action whose `dependsOn` is not itself named | Reject at grant creation | Non-zero exit | none | Implicit chain authorization (T2) | L |
 | L5 | Configured `shepherd-author` differing from the authenticated login | Reject before any mutation | Non-zero exit naming the identity mismatch | none | Adopting comments the shepherd did not author (T9) | L+E |
-| L6 | Proposal targeting `microsoft/aspire` with a fork-scoped token | Denied twice, independently | Both the protected-repository check and the client allowlist refuse (I1, I15) | none | Single-point-of-failure production protection | L |
+| L6 | Proposal targeting `microsoft/aspire` without the complete pilot contract | Denied independently | Authorization rejects absent or mismatched confirmation; the actor denies production by default and permits only comment endpoints under its distinct protected-comment configuration (I1, I15) | none | Single-point-of-failure production protection | L |
 | L7 | `--results` supplied in execute mode | Reject | Non-zero exit | none | Result injection | L |
 | L8 | Legacy schema v1 proposal document | Never executable | `wouldExecute: false` for every action | none | Legacy document execution | L |
 | L9 | Dry run with a state directory present | No ledger side effects | `action-events.jsonl` is neither created nor modified | none | Dry run mutating state | L |

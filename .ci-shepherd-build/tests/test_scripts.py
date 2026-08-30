@@ -1081,6 +1081,162 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def test_create_authorization_forwards_production_comment_confirmation(
+        self,
+    ) -> None:
+        create_authorization_script = load_script("create_authorization")
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "create_authorization.py",
+                    "--proposals",
+                    "action-proposals.json",
+                    "--action-id",
+                    "action:comment",
+                    "--state-dir",
+                    "action-state",
+                    "--output",
+                    "authorization-grant.json",
+                    "--production-comment-pilot",
+                ],
+            ),
+            patch.object(
+                create_authorization_script,
+                "generate_authorization_grant",
+                side_effect=RuntimeError("stop after argument capture"),
+            ) as generate,
+            self.assertRaisesRegex(RuntimeError, "argument capture"),
+        ):
+            create_authorization_script.main()
+
+        self.assertTrue(
+            generate.call_args.kwargs["allow_production_comment_pilot"]
+        )
+
+    def test_execute_actions_forwards_production_comment_confirmation(
+        self,
+    ) -> None:
+        execute_script = load_script("execute_actions")
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "execute_actions.py",
+                    "--proposals",
+                    "action-proposals.json",
+                    "--authorization",
+                    "authorization-grant.json",
+                    "--state-dir",
+                    "action-state",
+                    "--action-id",
+                    "action:comment",
+                    "--execute",
+                    "--production-comment-pilot",
+                ],
+            ),
+            patch.object(
+                execute_script,
+                "load_authorized_execution",
+                side_effect=RuntimeError("stop after argument capture"),
+            ) as load,
+            self.assertRaisesRegex(RuntimeError, "argument capture"),
+        ):
+            execute_script.main()
+
+        self.assertTrue(load.call_args.kwargs["allow_production_comment_pilot"])
+
+    def test_execute_actions_binds_actor_override_to_production_grant(
+        self,
+    ) -> None:
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        state_path = scratch / "state"
+        action_id = "snapshot:microsoft/aspire:test:issue:1:watch-comment"
+        proposal = {
+            "actionId": action_id,
+            "issueNumber": 1,
+            "operation": "create-comment",
+            "idempotencyKey": "issue:1:watch",
+            "body": "[automated] Watching.",
+        }
+        proposal_document = {
+            "repository": "microsoft/aspire",
+            "snapshotId": "snapshot:microsoft/aspire:test",
+            "shepherdAuthor": "radical",
+            "proposals": [proposal],
+        }
+        grant = AuthorizationGrant(
+            grant_id="grant:production-comment",
+            repository="microsoft/aspire",
+            state_directory=state_path.resolve(),
+            issued_at=datetime(2026, 8, 21, 19, tzinfo=UTC),
+            expires_at=datetime(2026, 8, 21, 19, 15, tzinfo=UTC),
+            snapshot_id="snapshot:microsoft/aspire:test",
+            proposals_digest="sha256:" + ("0" * 64),
+            allowed_action_ids=(action_id,),
+            allowed_operations=frozenset({"create-comment"}),
+            allowed_targets=frozenset({("issue", 1)}),
+            allowed_chain_roots=(action_id,),
+            override_suppression_for_action_ids=frozenset(),
+            budget=AuthorizationBudget(max_mutation_attempts=1, max_chains=1),
+            production_comment_pilot=True,
+        )
+        terminal_result = {
+            "actionId": action_id,
+            "attemptedAt": "2026-08-21T19:01:00Z",
+            "outcome": "executed",
+        }
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "execute_actions.py",
+                        "--proposals",
+                        str(scratch / "action-proposals.json"),
+                        "--authorization",
+                        str(scratch / "authorization-grant.json"),
+                        "--state-dir",
+                        str(state_path),
+                        "--action-id",
+                        action_id,
+                        "--execute",
+                        "--production-comment-pilot",
+                    ],
+                ),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    return_value=SimpleNamespace(
+                        proposal_document=proposal_document,
+                        proposal=proposal,
+                        chain_root=action_id,
+                        grant=grant,
+                    ),
+                ),
+                patch.object(execute_script, "GitHubActorClient") as client_factory,
+                patch.object(
+                    execute_script,
+                    "execute_action",
+                    return_value=terminal_result,
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(0, execute_script.main())
+
+            client_factory.assert_called_once_with(
+                allowed_repositories={"microsoft/aspire"},
+                protected_comment_repositories={"microsoft/aspire"},
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     def test_create_authorization_cli_rejects_symlinked_output(self) -> None:
         create_authorization_script = load_script("create_authorization")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
@@ -1333,6 +1489,7 @@ class PrototypeScriptTests(unittest.TestCase):
                 max_mutation_attempts=1,
                 max_chains=1,
             ),
+            production_comment_pilot=False,
         )
         terminal_result = {
             "actionId": action_id,
@@ -1637,7 +1794,7 @@ class PrototypeScriptTests(unittest.TestCase):
         authorization_path.write_text(
             json.dumps(
                 {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "grantId": "grant:budget-test",
                     "repository": "radical/aspire",
                     "stateDirectory": str(state_path),
@@ -1661,6 +1818,7 @@ class PrototypeScriptTests(unittest.TestCase):
                         "maxMutationAttempts": 2,
                         "maxChains": 1,
                     },
+                    "productionCommentPilot": False,
                 }
             ),
             encoding="utf-8",
@@ -1728,14 +1886,14 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
-    def test_execute_actions_recovers_interrupted_intent_without_remutating(self) -> None:
+    def test_production_comment_pilot_recovers_intent_without_remutating(self) -> None:
         execute_script = load_script("execute_actions")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
         shutil.rmtree(scratch, ignore_errors=True)
         scratch.mkdir(parents=True)
         proposals_path = scratch / "action-proposals.json"
         state_path = scratch / "state"
-        action_id = "action:1"
+        action_id = "snapshot:microsoft/aspire:test:issue:1:watch-comment"
         proposal = {
             "actionId": action_id,
             "issueNumber": 1,
@@ -1745,19 +1903,19 @@ class PrototypeScriptTests(unittest.TestCase):
         }
         proposals = {
             "schemaVersion": 1,
-            "repository": "owner/repo",
-            "snapshotId": "snapshot:owner/repo:1",
-            "shepherdAuthor": "ankj",
+            "repository": "microsoft/aspire",
+            "snapshotId": "snapshot:microsoft/aspire:test",
+            "shepherdAuthor": "radical",
             "proposals": [proposal],
         }
         proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
         grant = AuthorizationGrant(
             grant_id="grant:interrupted",
-            repository="owner/repo",
+            repository="microsoft/aspire",
             state_directory=state_path.resolve(),
             issued_at=datetime(2026, 8, 21, 19, tzinfo=UTC),
-            expires_at=datetime(2026, 8, 21, 21, tzinfo=UTC),
-            snapshot_id="snapshot:owner/repo:1",
+            expires_at=datetime(2026, 8, 21, 19, 15, tzinfo=UTC),
+            snapshot_id="snapshot:microsoft/aspire:test",
             proposals_digest="sha256:" + ("0" * 64),
             allowed_action_ids=(action_id,),
             allowed_operations=frozenset({"create-comment"}),
@@ -1768,6 +1926,7 @@ class PrototypeScriptTests(unittest.TestCase):
                 max_mutation_attempts=1,
                 max_chains=1,
             ),
+            production_comment_pilot=True,
         )
         authorized = SimpleNamespace(
             proposal_document=proposals,
@@ -1786,6 +1945,7 @@ class PrototypeScriptTests(unittest.TestCase):
             "--action-id",
             action_id,
             "--execute",
+            "--production-comment-pilot",
         ]
         try:
             with (
