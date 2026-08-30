@@ -379,11 +379,32 @@ public sealed class TestTriggerMapTests
         },
         {
             "eng/scripts/load-cli-e2e-images.sh",
-            ["test:Aspire.Cli.EndToEnd.Tests", "job:cli-starter-validation"]
+            ["test:Aspire.Cli.EndToEnd.Tests"]
         },
         {
             "eng/scripts/cli-starter-validation.ps1",
             ["job:cli-starter-validation"]
+        },
+        {
+            "eng/scripts/get-aspire-cli-pr.ps1",
+            [
+                "test:Aspire.Acquisition.Tests",
+                "test:Aspire.Cli.EndToEnd.Tests",
+                "job:cli-starter-validation",
+                "job:extension-e2e",
+                "job:homebrew-installer",
+                "job:winget-installer"
+            ]
+        },
+        {
+            "eng/scripts/get-aspire-cli-pr.sh",
+            [
+                "test:Aspire.Acquisition.Tests",
+                "test:Aspire.Cli.EndToEnd.Tests",
+                "job:extension-e2e",
+                "job:homebrew-installer",
+                "job:winget-installer"
+            ]
         },
         {
             ".github/workflows/cli-starter-validation.yml",
@@ -437,21 +458,23 @@ public sealed class TestTriggerMapTests
     }
 
     [Theory]
-    [InlineData("Aspire.Cli.Tests")]
-    [InlineData("Aspire.Cli.EndToEnd.Tests")]
-    [InlineData("Aspire.Templates.Tests")]
-    [InlineData("Aspire.Hosting.PostgreSQL.Tests")]
-    [InlineData("Aspire.Hosting.Sdk.Tests")]
-    public void CliStarterValidationRunsWhenConsumerTestIsSelected(string selectedTest)
+    [InlineData("src/Aspire.Cli/Commands/RunCommand.cs", "Aspire.Cli")]
+    [InlineData("src/Aspire.Managed/Program.cs", "Aspire.Managed")]
+    [InlineData("src/Aspire.AppHost.Sdk/Aspire.AppHost.Sdk.csproj", "Aspire.AppHost.Sdk")]
+    [InlineData("src/Aspire.Hosting.JavaScript/JavaScriptAppResource.cs", "Aspire.Hosting.JavaScript")]
+    [InlineData("src/Aspire.Hosting.CodeGeneration.TypeScript/TypeScriptApiProjector.cs", "Aspire.Hosting.CodeGeneration.TypeScript")]
+    [InlineData("src/Aspire.Hosting.AppHost/Aspire.Hosting.AppHost.csproj", "Aspire.Hosting.AppHost")]
+    [InlineData("src/Aspire.Hosting.PostgreSQL/PostgresBuilderExtensions.cs", "Aspire.Hosting.PostgreSQL")]
+    public void CliStarterValidationRunsWhenStarterRuntimeDependencyIsAffected(string path, string affectedProject)
     {
-        var result = SelectWithRealMap("src/Aspire.Cli/Commands/RunCommand.cs", selectedTest);
+        var result = SelectWithRealMap(path, affectedProject);
 
         Assert.False(result.SelectsAll);
-        Assert.Contains(selectedTest, result.TestProjects);
         Assert.Contains("job:cli-starter-validation", result.Jobs);
     }
 
     [Theory]
+    [InlineData("src/Aspire.ProjectTemplates/Aspire.ProjectTemplates.csproj")]
     [InlineData("src/Aspire.ProjectTemplates/templates/aspire-starter/Aspire-StarterApplication.1.AppHost/AppHost.cs")]
     [InlineData("eng/dcppack/Aspire.Hosting.Orchestration.targets")]
     [InlineData("eng/dashboardpack/Sdk.targets")]
@@ -487,6 +510,56 @@ public sealed class TestTriggerMapTests
 
         Assert.False(result.SelectsAll);
         Assert.Equal(["job:extension-e2e", "job:typescript-api-compat"], result.Jobs.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void CliStarterValidationDoesNotRunForNpgsqlClientChange()
+    {
+        var result = SelectWithRealMap(
+            "src/Components/Aspire.Npgsql/NpgsqlCommon.cs",
+            "Aspire.Npgsql",
+            "Aspire.Npgsql.Tests",
+            "Aspire.Hosting.PostgreSQL.Tests");
+
+        Assert.False(result.SelectsAll);
+        Assert.Empty(result.Jobs);
+    }
+
+    [Fact]
+    public void CliStarterValidationDoesNotRunForUnrelatedProjectTemplateChange()
+    {
+        var result = SelectWithRealMap(
+            "src/Aspire.ProjectTemplates/templates/aspire-xunit/.template.config/template.json");
+
+        Assert.False(result.SelectsAll);
+        Assert.Equal(["job:deployment-e2e"], result.Jobs);
+    }
+
+    [Fact]
+    public void CliStarterValidationDoesNotRunForSharedTestUtilityChange()
+    {
+        var result = SelectWithRealMap(
+            "tests/Aspire.TestUtilities/FileUtil.cs",
+            "Aspire.TestUtilities",
+            "Aspire.Cli.Tests",
+            "Aspire.Cli.EndToEnd.Tests");
+
+        Assert.False(result.SelectsAll);
+        Assert.Empty(result.Jobs);
+    }
+
+    [Fact]
+    public void CliStarterValidationDoesNotRunForHostingSdkTestFakeChange()
+    {
+        var result = SelectWithRealMap(
+            "tests/Aspire.Hosting.Sdk.Tests.FakeCommand/Program.cs",
+            "Aspire.Hosting.Sdk.Tests.FakeCommand",
+            "Aspire.Hosting.Sdk.Tests");
+
+        Assert.False(result.SelectsAll);
+        Assert.Equal(
+            ["job:extension-e2e", "job:typescript-api-compat"],
+            result.Jobs.Order(StringComparer.Ordinal));
     }
 
     [Fact]

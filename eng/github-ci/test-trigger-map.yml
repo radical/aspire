@@ -247,8 +247,9 @@ path_rules:
   - paths:
       - .github/workflows/cli-starter-validation.yml
       - eng/scripts/cli-starter-validation.ps1
+      - eng/scripts/get-aspire-cli-pr.ps1
     targets: [job:cli-starter-validation]
-    reason: the reusable workflow and the script it runs ARE the starter validation
+    reason: the reusable workflow, PR installer, and scenario script implement starter validation
 
   # --- outerloop / e2e test targets: loose paths (production projects in affected_project_rules) --------
   - paths:
@@ -328,23 +329,28 @@ path_rules:
     reason: the Homebrew installer artifact job invokes this installed-CLI smoke test
   - paths:
       - eng/dashboardpack/**
-    targets: [test:Aspire.Hosting.Sdk.Tests]
-    reason: AppHostSdkTargetsTests asserts Aspire.Dashboard.Sdk.* package ref
+    targets: [test:Aspire.Hosting.Sdk.Tests, job:cli-starter-validation]
+    reason: AppHostSdkTargetsTests asserts the package ref; starter AppHosts consume the packaged dashboard SDK
   - paths:
       - eng/dcppack/**
-    targets: [test:Aspire.Hosting.Sdk.Tests, test:Aspire.TerminalHost.Tests]
-    reason: AppHostSdkTargetsTests asserts Aspire.Hosting.Orchestration.*; TerminalHost exercises DCP
+    targets: [test:Aspire.Hosting.Sdk.Tests, test:Aspire.TerminalHost.Tests, job:cli-starter-validation]
+    reason: AppHostSdkTargetsTests asserts the package ref; TerminalHost and starter AppHosts exercise packaged DCP
   - paths:
       - src/Aspire.ProjectTemplates/**
     targets: [test:Aspire.Templates.Tests]
     reason: Templates.Tests installs the template hive from src/Aspire.ProjectTemplates
+  - paths:
+      - src/Aspire.ProjectTemplates/Aspire.ProjectTemplates.csproj
+      - src/Aspire.ProjectTemplates/templates/aspire-starter/**
+    targets: [job:cli-starter-validation]
+    reason: package construction and template content consumed by the C# starter validation scenario
   - paths:
       - playground/**
     targets: [test:Aspire.Playground.Tests]
     reason: Aspire.Playground.Tests builds/runs apps under playground/
   - paths:
       - src/Aspire.AppHost.Sdk/**
-    targets: [test:Aspire.Hosting.Sdk.Tests, test:Aspire.Hosting.DotnetTool.Tests, job:polyglot]
+    targets: [test:Aspire.Hosting.Sdk.Tests, test:Aspire.Hosting.DotnetTool.Tests, job:cli-starter-validation, job:polyglot]
     reason: AppHost SDK targets + RuntimeIdentifier tool; SDK ships to every generated apphost
   - paths:
       - tools/QuarantineTools/**
@@ -379,6 +385,15 @@ affected_project_rules:
   - projects: [CreateLayout]
     targets: [CLI_BUNDLE]
     reason: CreateLayout assembles the CLI bundle consumed by these tests and jobs
+  - projects: [Aspire.Hosting.CodeGeneration.TypeScript, Aspire.Hosting.JavaScript]
+    targets: [job:cli-starter-validation]
+    reason: direct package inputs used when the TypeScript starter generates and runs its AppHost
+  - projects: [Aspire.Hosting.AppHost, Aspire.Hosting.PostgreSQL]
+    targets: [job:cli-starter-validation]
+    reason: direct package inputs used when the C# starter generates and runs its AppHost with PostgreSQL
+  - projects: [Aspire.Cli, Aspire.Managed, Aspire.AppHost.Sdk]
+    targets: [job:cli-starter-validation]
+    reason: direct executables and SDK inputs assembled into or used by the starter validation scenarios
   - projects:
       - Aspire.TypeSystem
       - Aspire.Hosting.RemoteHost
@@ -416,14 +431,6 @@ affected_project_rules:
 # Layer 2 selected tests, to a fixpoint (a derived test is itself expanded; cycle-safe). This is how
 # a job fires based on WHICH tests run, regardless of which file triggered them.
 derived_targets:
-  - tests:
-      - test:Aspire.Cli.Tests
-      - test:Aspire.Cli.EndToEnd.Tests
-      - test:Aspire.Templates.Tests
-      - test:Aspire.Hosting.PostgreSQL.Tests
-      - test:Aspire.Hosting.Sdk.Tests
-    targets: [job:cli-starter-validation]
-    reason: starter validation exercises the CLI, starter templates, AppHost/PostgreSQL runtime, and packaged DCP/dashboard SDK
   - tests: [test:Aspire.Acquisition.Tests]
     targets: [job:winget-installer, job:homebrew-installer]
     reason: acquisition covers the installers; prepare the WinGet/Homebrew installer artifacts too

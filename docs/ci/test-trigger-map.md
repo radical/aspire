@@ -213,23 +213,29 @@ This is how a job fires based on *which tests run*, not on which file changed:
   targets: [job:winget-installer, job:homebrew-installer]
 ```
 
-The CLI starter validation jobs use this relationship too. The selector sets
-`job:cli-starter-validation` whenever it selects a consumer test for the CLI,
-starter templates, AppHost/PostgreSQL runtime, or packaged DCP/dashboard SDK:
+The CLI starter validation jobs deliberately do not derive from selected test
+projects. Test projects often aggregate dependencies that the starter scenarios
+do not exercise, so a test-derived rule can fan unrelated changes into all six
+platform jobs.
 
 ```yaml
-- tests:
-    - test:Aspire.Cli.Tests
-    - test:Aspire.Cli.EndToEnd.Tests
-    - test:Aspire.Templates.Tests
-    - test:Aspire.Hosting.PostgreSQL.Tests
-    - test:Aspire.Hosting.Sdk.Tests
+- projects: [Aspire.Cli, Aspire.Managed, Aspire.AppHost.Sdk]
   targets: [job:cli-starter-validation]
 ```
 
-Layer 1 supplies the transitive production-project relationships, so this rule
-tracks those stable consumers without enumerating every production project the
-starter happens to exercise.
+Instead, starter validation tracks the stable direct artifact boundaries:
+
+- Affected-project rules cover the CLI and managed executables, AppHost SDK,
+  TypeScript code generation and JavaScript hosting, and AppHost and PostgreSQL
+  hosting packages.
+- Exact path rules cover the C# starter template and template package project,
+  DCP/dashboard package inputs, bundle construction, and the PR installer used
+  by the validation workflow.
+
+Their closest aggregate test projects also reference Azure, browser, or Npgsql
+client projects, unrelated templates, or test-only utilities and fakes.
+Layer 1 still supplies transitive closure behind each direct production
+boundary, without enumerating every implementation dependency.
 
 ## Maintenance
 
