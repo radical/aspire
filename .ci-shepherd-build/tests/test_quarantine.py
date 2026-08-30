@@ -28,11 +28,25 @@ def _prepared() -> dict[str, object]:
                 "issueNumber": 21,
                 "issueUrl": "https://github.com/owner/repo/issues/21",
                 "title": "First flaky test",
+                "evidenceBundle": [
+                    {
+                        "id": "issue:21",
+                        "kind": "issue-event",
+                        "payload": {"labels": []},
+                    }
+                ],
             },
             {
                 "issueNumber": 22,
                 "issueUrl": "https://github.com/owner/repo/issues/22",
                 "title": "Second flaky test",
+                "evidenceBundle": [
+                    {
+                        "id": "issue:22",
+                        "kind": "issue-event",
+                        "payload": {"labels": []},
+                    }
+                ],
             },
         ],
     }
@@ -131,6 +145,87 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertIn(
             "Identify the merged pull request",
             request["workerPrompt"],
+        )
+
+    def test_rejects_a_job_or_shard_label_as_a_test_method(self) -> None:
+        judgments = _judgments()
+        for issue in judgments["issues"]:
+            issue["recommendations"][0]["target"]["value"] = (
+                "Tests (Ubuntu shard 3)"
+            )
+
+        request = build_quarantine_session_request(_prepared(), judgments)
+
+        self.assertEqual([], request["tests"])
+        self.assertIsNone(request["batchId"])
+        self.assertIsNone(request["workerPrompt"])
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests (Ubuntu shard 3)",
+                    "reason": "not-a-test-method",
+                }
+            ],
+            request["blockedTargets"],
+        )
+
+    def test_reads_quarantine_label_from_the_source_issue_evidence(self) -> None:
+        prepared = _prepared()
+        source_issue = prepared["issues"][1]
+        source_issue["evidenceBundle"] = [
+            {
+                "id": "issue:1",
+                "kind": "issue-event",
+                "payload": {"labels": ["area-engineering"]},
+            },
+            {
+                "id": "issue:22",
+                "kind": "issue-event",
+                "payload": {"labels": ["quarantined-test"]},
+            },
+        ]
+
+        request = build_quarantine_session_request(prepared, _judgments())
+
+        self.assertEqual(
+            ["Tests.FirstTest"],
+            [test["testName"] for test in request["tests"]],
+        )
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests.SecondTest",
+                    "reason": "already-quarantined-by-label",
+                }
+            ],
+            request["blockedTargets"],
+        )
+
+    def test_missing_source_issue_evidence_blocks_quarantine(self) -> None:
+        prepared = _prepared()
+        source_issue = prepared["issues"][1]
+        source_issue["evidenceBundle"] = [
+            {
+                "id": "issue:1",
+                "kind": "issue-event",
+                "payload": {"labels": ["area-engineering"]},
+            }
+        ]
+
+        request = build_quarantine_session_request(prepared, _judgments())
+
+        self.assertEqual(
+            ["Tests.FirstTest"],
+            [test["testName"] for test in request["tests"]],
+        )
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests.SecondTest",
+                    "reason": "source-labels-unavailable",
+                }
+            ],
+            request["blockedTargets"],
         )
 
     def test_combines_duplicate_issue_owners_for_the_same_test(self) -> None:

@@ -492,6 +492,8 @@ def build_pull_request_handoff(
     snapshot: object,
     *,
     previous_snapshot: object | None = None,
+    previous_handoff: object | None = None,
+    previous_judgments: object | None = None,
     initial_review_pull_request_numbers: Sequence[int] = (),
     due_pull_request_numbers: Sequence[int] = (),
     reassessment_context_by_pull_request: Mapping[
@@ -508,6 +510,10 @@ def build_pull_request_handoff(
 
     previous_by_number: dict[int, Mapping[str, Any]] = {}
     previous_evidence: Mapping[str, Any] = {}
+    previous_overrides = _previous_pull_request_overrides(
+        previous_handoff,
+        previous_judgments,
+    )
     if previous_snapshot is not None:
         validate_snapshot(previous_snapshot)
         if not isinstance(previous_snapshot, Mapping):
@@ -575,9 +581,7 @@ def build_pull_request_handoff(
                 evidence.get(f"pr:{number}"),
             )
         )
-        if unchanged and number not in due and number not in initial_review:
-            excluded.append({"number": number, "reason": "unchanged-stable"})
-            continue
+        retained = unchanged and number not in due and number not in initial_review
 
         evidence_id = f"pr:{number}"
         record = evidence.get(evidence_id)
@@ -609,6 +613,8 @@ def build_pull_request_handoff(
                 if unchanged and number in initial_review
                 else "due"
                 if unchanged and number in due
+                else "retained"
+                if retained
                 else "changed"
             ),
             "evidenceIds": [evidence_id],
@@ -646,6 +652,8 @@ def build_pull_request_handoff(
             task["changeReasons"] = ["initial-assessment"]
         elif unchanged and number in due:
             task["changeReasons"] = ["scheduled-reassessment"]
+        elif retained:
+            task["changeReasons"] = ["carried-forward-agent-override"]
         else:
             task["changeReasons"] = _pull_request_change_reasons(
                 previous,
@@ -674,6 +682,17 @@ def build_pull_request_handoff(
             evidence_id,
             allowed,
         )
+        if retained:
+            exclusion: dict[str, object] = {
+                "number": number,
+                "reason": "unchanged-stable",
+            }
+            previous_override = previous_overrides.get(number)
+            if previous_override is not None:
+                exclusion["retainedTask"] = task
+                exclusion["retainedJudgment"] = previous_override
+            excluded.append(exclusion)
+            continue
         tasks.append(task)
 
     return {
@@ -900,10 +919,9 @@ def validate_pull_request_judgments(
 ) -> dict[str, Any]:
     """Validate sparse pull-request judgments against their handoff.
 
-    Only pull requests that appear as handoff tasks may be judged. A stable
-    unchanged pull request has no task, so it needs no judgment; a judgment for
-    one is an error rather than something to silently drop, because a discarded
-    override is indistinguishable from agreement.
+    Only pull requests that appear as handoff tasks may receive new judgments.
+    A stable unchanged pull request may repeat its frozen retained judgment, but
+    cannot change it without being selected for review.
     """
     validated_handoff = _validate_handoff(handoff)
     document = _require_mapping(judgments, "pull request judgments")
@@ -921,6 +939,11 @@ def validate_pull_request_judgments(
 
     tasks_by_number = {
         int(task["target"]["number"]): task for task in validated_handoff["tasks"]
+    }
+    retained_by_number = {
+        int(entry["number"]): entry
+        for entry in validated_handoff["excluded"]
+        if "retainedJudgment" in entry
     }
     raw_judgments = document.get("pullRequests")
     if not isinstance(raw_judgments, list):
@@ -945,9 +968,27 @@ def validate_pull_request_judgments(
         seen.add(number)
         task = tasks_by_number.get(number)
         if task is None:
-            raise ValidationError(
-                f"Pull request {number} was not handed off for review."
+            retained = retained_by_number.get(number)
+            if retained is None:
+                raise ValidationError(
+                    f"Pull request {number} was not handed off for review."
+                )
+            retained_task = _require_mapping(
+                retained["retainedTask"],
+                "retained pull request task",
             )
+            validated_judgment = _validate_pull_request_judgment(
+                judgment,
+                retained_task,
+                number,
+            )
+            if validated_judgment != retained["retainedJudgment"]:
+                raise ValidationError(
+                    f"Pull request {number} retained judgment cannot be changed "
+                    "without review."
+                )
+            validated[number] = validated_judgment
+            continue
         validated[number] = _validate_pull_request_judgment(judgment, task, number)
     return {
         "schemaVersion": PULL_REQUEST_SCHEMA_VERSION,
@@ -1087,7 +1128,8 @@ def merge_pull_request_judgments(
 
     Silence means "the deterministic default stands", so a cycle that reviews
     two of twelve handed-off pull requests still produces a complete, validated
-    judgment for every task.
+    judgment for every task. Agent overrides on unchanged omitted pull requests
+    are carried forward from the prior validated handoff.
     """
     validated_handoff = _validate_handoff(handoff)
     validated = validate_pull_request_judgments(handoff, judgments)
@@ -1108,11 +1150,84 @@ def merge_pull_request_judgments(
                 f"Pull request {number} task is missing its default judgment."
             )
         merged.append(copy.deepcopy(dict(default)))
+    for entry in validated_handoff["excluded"]:
+        retained = entry.get("retainedJudgment")
+        if isinstance(retained, Mapping):
+            number = int(entry["number"])
+            merged.append(
+                copy.deepcopy(dict(overrides.get(number, retained)))
+            )
+    merged.sort(key=lambda judgment: int(judgment["pullRequestNumber"]))
     return {
         "schemaVersion": PULL_REQUEST_SCHEMA_VERSION,
         "snapshotId": validated_handoff["snapshotId"],
         "pullRequests": merged,
     }
+
+
+def _previous_pull_request_overrides(
+    previous_handoff: object | None,
+    previous_judgments: object | None,
+) -> dict[int, dict[str, Any]]:
+    if previous_handoff is None and previous_judgments is None:
+        return {}
+    if previous_handoff is None or previous_judgments is None:
+        raise ValidationError(
+            "Previous pull request handoff and judgments must be supplied together."
+        )
+    validated_handoff = _validate_handoff(previous_handoff)
+    document = _require_mapping(
+        previous_judgments,
+        "previous pull request judgments",
+    )
+    if document.get("schemaVersion") != PULL_REQUEST_SCHEMA_VERSION:
+        raise ValidationError(
+            "Previous pull request judgment schemaVersion must be 1."
+        )
+    if document.get("snapshotId") != validated_handoff["snapshotId"]:
+        raise ValidationError(
+            "Previous pull request judgment snapshotId must match the handoff."
+        )
+    tasks_by_number = _all_handoff_tasks(validated_handoff)
+    raw_judgments = document.get("pullRequests")
+    if not isinstance(raw_judgments, list):
+        raise ValidationError("Previous pull request judgments must be a list.")
+
+    overrides: dict[int, dict[str, Any]] = {}
+    seen: set[int] = set()
+    for raw_judgment in raw_judgments:
+        judgment = _require_mapping(
+            raw_judgment,
+            "previous pull request judgment",
+        )
+        number = judgment.get("pullRequestNumber")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise ValidationError(
+                "Previous pull request judgment number must be a positive integer."
+            )
+        if number in seen:
+            raise ValidationError(
+                f"Duplicate previous judgment for pull request {number}."
+            )
+        seen.add(number)
+        task = tasks_by_number.get(number)
+        if task is None:
+            raise ValidationError(
+                f"Previous pull request {number} has no retained review context."
+            )
+        validated_judgment = _validate_pull_request_judgment(
+            judgment,
+            task,
+            number,
+        )
+        default = task.get("defaultJudgment")
+        if not isinstance(default, Mapping):
+            raise ValidationError(
+                f"Previous pull request {number} task is missing its default judgment."
+            )
+        if validated_judgment != default:
+            overrides[number] = validated_judgment
+    return overrides
 
 
 def _validate_handoff(handoff: object) -> dict[str, Any]:
@@ -1197,6 +1312,44 @@ def _validate_handoff(handoff: object) -> dict[str, Any]:
             raise ValidationError(
                 "Pull request exclusion must contain a positive number and reason."
             )
+        retained_task = entry.get("retainedTask")
+        retained_judgment = entry.get("retainedJudgment")
+        if (retained_task is None) != (retained_judgment is None):
+            raise ValidationError(
+                f"Pull request exclusion {number} must retain task and judgment together."
+            )
+        if retained_task is not None:
+            if reason != "unchanged-stable":
+                raise ValidationError(
+                    f"Pull request exclusion {number} may only retain an unchanged judgment."
+                )
+            retained_task = _require_mapping(
+                retained_task,
+                "retained pull request task",
+            )
+            target = retained_task.get("target")
+            if (
+                not isinstance(target, Mapping)
+                or target.get("kind") != "pull-request"
+                or target.get("number") != number
+                or retained_task.get("changeClass") != "retained"
+            ):
+                raise ValidationError(
+                    f"Pull request exclusion {number} has invalid retained task context."
+                )
+            default = retained_task.get("defaultJudgment")
+            if not isinstance(default, Mapping):
+                raise ValidationError(
+                    f"Retained pull request {number} task is missing its default judgment."
+                )
+            _validate_pull_request_judgment(
+                _require_mapping(
+                    retained_judgment,
+                    "retained pull request judgment",
+                ),
+                retained_task,
+                number,
+            )
         excluded.append(entry)
     return {
         "schemaVersion": PULL_REQUEST_SCHEMA_VERSION,
@@ -1205,6 +1358,20 @@ def _validate_handoff(handoff: object) -> dict[str, Any]:
         "tasks": tasks,
         "excluded": excluded,
     }
+
+
+def _all_handoff_tasks(
+    validated_handoff: Mapping[str, Any],
+) -> dict[int, Mapping[str, Any]]:
+    tasks = {
+        int(task["target"]["number"]): task
+        for task in validated_handoff["tasks"]
+    }
+    for entry in validated_handoff["excluded"]:
+        retained_task = entry.get("retainedTask")
+        if isinstance(retained_task, Mapping):
+            tasks[int(entry["number"])] = retained_task
+    return tasks
 
 
 def _validate_handoff_timestamp(value: object, *, number: int, field: str) -> None:
@@ -1254,10 +1421,11 @@ def render_pull_request_section(
     """Render the deterministic pull-request section of the cycle report."""
     validated_handoff = _validate_handoff(handoff)
     merged = merge_pull_request_judgments(handoff, judgments)
-    tasks_by_number = {
-        int(task["target"]["number"]): task for task in validated_handoff["tasks"]
-    }
+    tasks_by_number = _all_handoff_tasks(validated_handoff)
     excluded = validated_handoff["excluded"]
+    retained_count = sum(
+        1 for entry in excluded if "retainedJudgment" in entry
+    )
     exclusion_counts: dict[str, int] = {}
     for entry in excluded:
         reason = str(entry["reason"])
@@ -1277,8 +1445,13 @@ def render_pull_request_section(
         "## Pull requests",
         "",
         (
-            f"**Handoff:** {len(merged['pullRequests'])} selected; "
-            f"{len(excluded)} excluded{excluded_summary}."
+            f"**Handoff:** {len(validated_handoff['tasks'])} selected; "
+            + (
+                f"{retained_count} retained; "
+                if retained_count
+                else ""
+            )
+            + f"{len(excluded)} excluded{excluded_summary}."
         ),
         "",
     ]
@@ -1529,9 +1702,7 @@ def build_pull_request_comment_proposals(
 
     validated_handoff = _validate_handoff(handoff)
     merged = merge_pull_request_judgments(handoff, judgments)
-    tasks_by_number = {
-        int(task["target"]["number"]): task for task in validated_handoff["tasks"]
-    }
+    tasks_by_number = _all_handoff_tasks(validated_handoff)
     snapshot_pull_requests = _pull_requests_by_number(snapshot)
 
     proposals: list[dict[str, object]] = []

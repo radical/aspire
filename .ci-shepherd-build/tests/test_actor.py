@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from datetime import UTC, datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -229,7 +230,7 @@ class ActorTests(unittest.TestCase):
 
         self.assertEqual([], client.calls)
 
-    def test_v2_execution_allows_eligible_action_in_partially_eligible_document(
+    def test_v2_execution_allows_eligible_action_with_mixed_case_live_ci_label(
         self,
     ) -> None:
         proposals = _proposals()
@@ -258,7 +259,7 @@ class ActorTests(unittest.TestCase):
             }
             action["executionEligibility"] = {
                 "eligible": True,
-                "ciLabels": ["ci-failure-cause"],
+                "ciLabels": ["test-failure"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
                 "unavailableEvidenceIds": [],
@@ -267,7 +268,7 @@ class ActorTests(unittest.TestCase):
             }
         actions[1]["executionEligibility"] = {
             "eligible": False,
-            "ciLabels": ["ci-failure-cause"],
+            "ciLabels": ["test-failure"],
             "occurrenceCount": 1,
             "collectionComplete": True,
             "unavailableEvidenceIds": ["run:777"],
@@ -280,6 +281,7 @@ class ActorTests(unittest.TestCase):
                     "number": 21,
                     "state": "open",
                     "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "Test-Failure"}],
                 },
                 {
                     "number": 21,
@@ -395,6 +397,7 @@ class ActorTests(unittest.TestCase):
                     "number": 21,
                     "state": "open",
                     "updated_at": "2026-08-21T19:56:00Z",
+                    "labels": [{"name": "ci-failure-cause"}],
                 }
             ]
         )
@@ -410,6 +413,119 @@ class ActorTests(unittest.TestCase):
         self.assertEqual("stale", result["outcome"])
         self.assertEqual("source-evidence-changed", result["reason"])
         self.assertEqual([("get_issue", 21)], client.calls)
+
+    def test_v2_execution_rejects_issue_that_lost_its_ci_label(self) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {"status": "eligible", "violations": []},
+            }
+        )
+        proposal = proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.pop("requiresSeparateApproval")
+        proposal["executionEligibility"] = {
+            "eligible": True,
+            "ciLabels": ["ci-failure-cause"],
+            "occurrenceCount": 1,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": [],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": [],
+        }
+        proposal["sourceEvidenceFingerprint"] = {
+            "issueUpdatedAt": "2026-08-21T19:54:00Z"
+        }
+        proposals["proposals"] = [proposal]
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [],
+                }
+            ]
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("missing-ci-label", result["reason"])
+        self.assertEqual([("get_issue", 21)], client.calls)
+
+    def test_v2_execution_rejects_comment_body_changed_after_proposal(self) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {"status": "eligible", "violations": []},
+            }
+        )
+        proposal = proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.pop("requiresSeparateApproval")
+        proposal["operation"] = "edit-comment"
+        proposal["commentId"] = 900
+        proposal["executionEligibility"] = {
+            "eligible": True,
+            "ciLabels": ["ci-failure-cause"],
+            "occurrenceCount": 1,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": [],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": [],
+        }
+        proposal["sourceEvidenceFingerprint"] = {
+            "issueUpdatedAt": "2026-08-21T19:54:00Z"
+        }
+        original_body = f"[automated] Original.\n\n<!-- {MARKER} -->"
+        proposal["sourceCommentFingerprint"] = {
+            "bodySha256": hashlib.sha256(original_body.encode("utf-8")).hexdigest()
+        }
+        proposals["proposals"] = [proposal]
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "ci-failure-cause"}],
+                }
+            ],
+            single_comments=[
+                {
+                    "id": 900,
+                    "body": f"[automated] Human edit.\n\n<!-- {MARKER} -->",
+                    "user": {"login": "ankj"},
+                }
+            ],
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("comment-body-changed", result["reason"])
+        self.assertNotIn("edit_comment", [call[0] for call in client.calls])
 
     def test_v2_close_accepts_the_issue_version_created_by_its_dependency(self) -> None:
         proposals = _proposals()
@@ -439,9 +555,19 @@ class ActorTests(unittest.TestCase):
             }
         client = ScriptedActorClient(
             issues=[
-                {"number": 21, "state": "open", "updated_at": "2026-08-21T19:54:00Z"},
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "ci-failure-cause"}],
+                },
                 {"number": 21, "state": "open", "updated_at": "2026-08-21T19:56:00Z"},
-                {"number": 21, "state": "open", "updated_at": "2026-08-21T19:56:00Z"},
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:56:00Z",
+                    "labels": [{"name": "ci-failure-cause"}],
+                },
                 {
                     "number": 21,
                     "state": "closed",
@@ -481,6 +607,62 @@ class ActorTests(unittest.TestCase):
             comment_result["result"]["sourceIssueUpdatedAt"],
         )
         self.assertEqual("executed", close_result["outcome"])
+
+    def test_v2_close_refuses_issue_activity_after_its_dependency_comment(
+        self,
+    ) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {"status": "eligible", "violations": []},
+            }
+        )
+        for proposal in proposals["proposals"]:
+            assert isinstance(proposal, dict)
+            proposal.pop("requiresSeparateApproval")
+            proposal["executionEligibility"] = {
+                "eligible": True,
+                "ciLabels": ["ci-failure-cause"],
+                "occurrenceCount": 1,
+                "collectionComplete": True,
+                "unavailableEvidenceIds": [],
+                "untrustedReferenceEvidenceIds": [],
+                "blockingReasons": [],
+            }
+            proposal["sourceEvidenceFingerprint"] = {
+                "issueUpdatedAt": "2026-08-21T19:54:00Z"
+            }
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:57:00Z",
+                    "labels": [{"name": "ci-failure-cause"}],
+                }
+            ]
+        )
+        dependency_result = {
+            "actionId": COMMENT_ACTION_ID,
+            "outcome": "executed",
+            "result": {"sourceIssueUpdatedAt": "2026-08-21T19:56:00Z"},
+        }
+
+        result = execute_action(
+            proposals,
+            action_id=CLOSE_ACTION_ID,
+            prior_results=_results(dependency_result),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("source-evidence-changed", result["reason"])
+        self.assertNotIn("close_issue", [call[0] for call in client.calls])
 
     def test_executed_stable_identity_suppresses_a_new_snapshot_without_live_marker(
         self,
@@ -645,6 +827,53 @@ class ActorTests(unittest.TestCase):
             [("list_comments", 21), ("get_authenticated_login",)],
             client.calls,
         )
+
+    def test_reconcile_close_does_not_credit_a_different_closing_actor(self) -> None:
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "closed",
+                    "state_reason": "completed",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "closed_by": {"login": "maintainer"},
+                }
+            ]
+        )
+
+        result = reconcile_action(
+            _proposals(),
+            action_id=CLOSE_ACTION_ID,
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("indeterminate", result["outcome"])
+        self.assertEqual("close-not-attributed-to-shepherd", result["reason"])
+
+    def test_reconcile_close_accepts_matching_shepherd_actor(self) -> None:
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "closed",
+                    "state_reason": "completed",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "closed_by": {"login": "ankj"},
+                }
+            ]
+        )
+
+        result = reconcile_action(
+            _proposals(),
+            action_id=CLOSE_ACTION_ID,
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"])
+        self.assertTrue(result["result"]["reconciledAfterInterruption"])
+        self.assertNotIn("close_issue", [call[0] for call in client.calls])
 
     def test_pull_request_comment_aborts_when_assigned_to_copilot(self) -> None:
         client = ScriptedActorClient(

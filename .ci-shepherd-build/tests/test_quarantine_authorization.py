@@ -124,6 +124,7 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
+        self.assertFalse(self.authorization_path.exists())
 
     def test_grant_output_must_not_be_a_symlink(self) -> None:
         target = self.root / "target.json"

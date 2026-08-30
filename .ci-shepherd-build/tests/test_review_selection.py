@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import unittest
 
 from ci_shepherd.models import EVIDENCE_REQUEST_DECISION_GATES, ValidationError
@@ -79,6 +80,91 @@ class ReviewSelectionTests(unittest.TestCase):
 
         self.assertEqual(set(), selected_issue_numbers(selection))
         self.assertEqual("unchanged-stable", _omitted(selection, 101)["reason"])
+
+    def test_retains_override_when_unchanged_default_no_longer_requires_review(
+        self,
+    ) -> None:
+        compact = _compact([_stable_issue(101)])
+        compact["issues"][0]["defaultJudgment"]["category"] = "flaky-test"
+        previous = copy.deepcopy({
+            **compact["issues"][0]["defaultJudgment"],
+            "category": "unknown",
+        })
+        previous["recommendations"][0]["disposition"] = "investigate"
+
+        selection = build_review_selection(
+            compact,
+            known_issue_numbers=[101],
+            previous_judgments=[previous],
+        )
+
+        omitted = _omitted(selection, 101)
+        self.assertEqual("not-review-required", omitted["reason"])
+        self.assertEqual(previous, omitted["retainedJudgment"])
+        merged = merge_selected_poc_judgments(
+            compact,
+            selection,
+            {
+                "schemaVersion": 1,
+                "snapshotId": compact["snapshotId"],
+                "issues": [],
+            },
+        )
+        self.assertEqual(previous, merged["issues"][0])
+
+    def test_does_not_retain_unchanged_deterministic_default(self) -> None:
+        compact = _compact([_stable_issue(101)])
+        default = copy.deepcopy(compact["issues"][0]["defaultJudgment"])
+
+        selection = build_review_selection(
+            compact,
+            known_issue_numbers=[101],
+            previous_judgments=[default],
+        )
+
+        omitted = _omitted(selection, 101)
+        self.assertNotIn("retainedJudgment", omitted)
+        merged = merge_selected_poc_judgments(
+            compact,
+            selection,
+            {
+                "schemaVersion": 1,
+                "snapshotId": compact["snapshotId"],
+                "issues": [],
+            },
+        )
+        self.assertEqual(default, merged["issues"][0])
+
+    def test_discards_unchanged_override_that_is_no_longer_projectable(
+        self,
+    ) -> None:
+        compact = _compact([_stable_issue(101)])
+        default = compact["issues"][0]["defaultJudgment"]
+        previous = copy.deepcopy(default)
+        previous["recommendations"][0]["disposition"] = "review-close"
+
+        selection = build_review_selection(
+            compact,
+            known_issue_numbers=[101],
+            previous_judgments=[previous],
+        )
+
+        omitted = _omitted(selection, 101)
+        self.assertNotIn("retainedJudgment", omitted)
+        self.assertEqual(
+            "no-longer-projectable",
+            omitted["retainedJudgmentDiscardedReason"],
+        )
+        merged = merge_selected_poc_judgments(
+            compact,
+            selection,
+            {
+                "schemaVersion": 1,
+                "snapshotId": compact["snapshotId"],
+                "issues": [],
+            },
+        )
+        self.assertEqual(default, merged["issues"][0])
 
     def test_selects_changed_cases_even_when_the_default_is_unambiguous(self) -> None:
         compact = _compact([_stable_issue(101)])

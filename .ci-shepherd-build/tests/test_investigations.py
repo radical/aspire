@@ -272,6 +272,24 @@ class InvestigationLifecycleTests(unittest.TestCase):
         self.assertEqual(1, len(plan["requests"]))
         self.assertEqual(1, len(plan["deferredRequests"]))
 
+    def test_default_investigation_budget_limits_twelve_requests_to_five(
+        self,
+    ) -> None:
+        judgments = _judgments()
+        recommendation = judgments["issues"][0]["recommendations"][0]
+        judgments["issues"][0]["recommendations"] = [
+            {
+                **recommendation,
+                "target": {"kind": "workflow", "value": f"workflow-{index}.yml"},
+            }
+            for index in range(12)
+        ]
+
+        plan = build_investigation_plan(_prepared(), judgments, [])
+
+        self.assertEqual(5, len(plan["requests"]))
+        self.assertEqual(7, len(plan["deferredRequests"]))
+
     def test_repository_case_does_not_change_investigation_identity(self) -> None:
         prepared = _prepared()
         first = build_investigation_plan(prepared, _judgments(), [])["requests"][0]

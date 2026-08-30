@@ -891,6 +891,11 @@ class PrototypeScriptTests(unittest.TestCase):
         create_authorization_script = load_script("create_authorization")
         from ci_shepherd.authorization import load_authorized_execution
 
+        generated_at = datetime.now(UTC).replace(microsecond=0)
+        generated_at_text = generated_at.isoformat().replace("+00:00", "Z")
+        issue_updated_at_text = (
+            generated_at - timedelta(minutes=1)
+        ).isoformat().replace("+00:00", "Z")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
         shutil.rmtree(scratch, ignore_errors=True)
         scratch.mkdir(parents=True)
@@ -902,9 +907,9 @@ class PrototypeScriptTests(unittest.TestCase):
         proposals = {
             "schemaVersion": 2,
             "repository": "owner/repo",
-            "snapshotId": "snapshot:owner/repo:2026-08-29T20:00:00Z",
+            "snapshotId": f"snapshot:owner/repo:{generated_at_text}",
             "shepherdAuthor": "ankj",
-            "generatedAtUtc": "2026-08-29T20:00:00Z",
+            "generatedAtUtc": generated_at_text,
             "proposalTtlHours": 24,
             "maxProposalsPerIssue": 2,
             "executionEligibility": {"status": "eligible", "violations": []},
@@ -931,7 +936,7 @@ class PrototypeScriptTests(unittest.TestCase):
                         "blockingReasons": [],
                     },
                     "sourceEvidenceFingerprint": {
-                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                        "issueUpdatedAt": issue_updated_at_text,
                     },
                 },
                 {
@@ -954,7 +959,7 @@ class PrototypeScriptTests(unittest.TestCase):
                         "blockingReasons": [],
                     },
                     "sourceEvidenceFingerprint": {
-                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                        "issueUpdatedAt": issue_updated_at_text,
                     },
                 },
             ],
@@ -996,6 +1001,83 @@ class PrototypeScriptTests(unittest.TestCase):
                     action_id=action_id,
                 )
                 self.assertEqual(action_id, authorized.proposal["actionId"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_authorization_clis_write_nothing_when_repository_guard_rejects(
+        self,
+    ) -> None:
+        create_authorization_script = load_script("create_authorization")
+        authorize_quarantine_script = load_script("authorize_quarantine")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        try:
+            action_output = scratch / "action-grant.json"
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "create_authorization.py",
+                        "--proposals",
+                        str(scratch / "action-proposals.json"),
+                        "--action-id",
+                        "action:comment",
+                        "--state-dir",
+                        str(scratch / "action-state"),
+                        "--output",
+                        str(action_output),
+                    ],
+                ),
+                patch.object(
+                    create_authorization_script,
+                    "generate_authorization_grant",
+                    side_effect=ValueError("microsoft/aspire is protected"),
+                ),
+                patch.object(
+                    create_authorization_script,
+                    "write_authorization_grant",
+                ) as write_action_grant,
+            ):
+                with self.assertRaisesRegex(ValueError, "protected"):
+                    create_authorization_script.main()
+
+            self.assertFalse(action_output.exists())
+            write_action_grant.assert_not_called()
+
+            quarantine_output = scratch / "quarantine-grant.json"
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "authorize_quarantine.py",
+                        "--request",
+                        str(scratch / "quarantine-request.json"),
+                        "--state-dir",
+                        str(scratch / "quarantine-state"),
+                        "--batch-id",
+                        "quarantine:1",
+                        "--output",
+                        str(quarantine_output),
+                    ],
+                ),
+                patch.object(
+                    authorize_quarantine_script,
+                    "create_quarantine_grant",
+                    side_effect=ValueError("microsoft/aspire is forbidden"),
+                ),
+                patch.object(
+                    authorize_quarantine_script,
+                    "write_quarantine_grant",
+                ) as write_quarantine_grant,
+            ):
+                with self.assertRaisesRegex(ValueError, "forbidden"):
+                    authorize_quarantine_script.main()
+
+            self.assertFalse(quarantine_output.exists())
+            write_quarantine_grant.assert_not_called()
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -1307,6 +1389,192 @@ class PrototypeScriptTests(unittest.TestCase):
             self.assertEqual(0o600, events_path.stat().st_mode & 0o777)
             self.assertEqual(terminal_result, json.loads(stdout.getvalue()))
             self.assertTrue(execute.call_args.kwargs["override_suppression"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_execute_actions_comment_tracer_mutates_once_and_replays_terminal_result(
+        self,
+    ) -> None:
+        create_authorization_script = load_script("create_authorization")
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        authorization_path = scratch / "authorization-grant.json"
+        state_path = scratch / "state"
+        generated_at = datetime.now(UTC)
+        source_updated_at = generated_at.isoformat().replace("+00:00", "Z")
+        changed_updated_at = (generated_at + timedelta(seconds=1)).isoformat().replace(
+            "+00:00",
+            "Z",
+        )
+        action_id = "issue:1:create-comment:tracer"
+        idempotency_key = "issue:1:watch"
+        body = (
+            "[automated] Watching this fork tracer.\n\n"
+            f"<!-- ci-shepherd:idempotency-key={idempotency_key} -->"
+        )
+        proposal = {
+            "actionId": action_id,
+            "issueNumber": 1,
+            "issueUrl": "https://github.com/radical/aspire/issues/1",
+            "operation": "create-comment",
+            "idempotencyKey": idempotency_key,
+            "body": body,
+            "evidenceIds": ["issue:1", "run:1"],
+            "expectedIssueState": "open",
+            "executionEligibility": {
+                "eligible": True,
+                "ciLabels": ["ci-failure-cause"],
+                "occurrenceCount": 1,
+                "collectionComplete": True,
+                "unavailableEvidenceIds": [],
+                "untrustedReferenceEvidenceIds": [],
+                "blockingReasons": [],
+            },
+            "sourceEvidenceFingerprint": {
+                "issueUpdatedAt": source_updated_at,
+            },
+        }
+        proposals = {
+            "schemaVersion": 2,
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:radical/aspire:comment-tracer",
+            "shepherdAuthor": "radical",
+            "generatedAtUtc": source_updated_at,
+            "proposalTtlHours": 1,
+            "maxProposalsPerIssue": 2,
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [proposal],
+            "unchangedIssueNumbers": [],
+        }
+        proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
+
+        class CommentTracerClient:
+            def __init__(self) -> None:
+                self.created_bodies: list[str] = []
+                self.issue_reads = 0
+
+            def get_issue(
+                self,
+                repository: str,
+                issue_number: int,
+            ) -> dict[str, object]:
+                self.issue_reads += 1
+                return {
+                    "state": "open",
+                    "updated_at": (
+                        source_updated_at
+                        if self.issue_reads == 1
+                        else changed_updated_at
+                    ),
+                    "html_url": (
+                        f"https://github.com/{repository}/issues/{issue_number}"
+                    ),
+                    "labels": [{"name": "ci-failure-cause"}],
+                }
+
+            def get_authenticated_login(self) -> str:
+                return "radical"
+
+            def list_comments(
+                self,
+                _repository: str,
+                _issue_number: int,
+            ) -> list[dict[str, object]]:
+                return []
+
+            def create_comment(
+                self,
+                _repository: str,
+                _issue_number: int,
+                comment_body: str,
+            ) -> dict[str, object]:
+                self.created_bodies.append(comment_body)
+                return {"id": 101}
+
+            def get_comment(
+                self,
+                _repository: str,
+                _comment_id: int,
+            ) -> dict[str, object]:
+                return {
+                    "body": body,
+                    "html_url": (
+                        "https://github.com/radical/aspire/issues/1#issuecomment-101"
+                    ),
+                    "user": {"login": "radical"},
+                }
+
+        client = CommentTracerClient()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    0,
+                    create_authorization_script.main(
+                        [
+                            "--proposals",
+                            str(proposals_path),
+                            "--action-id",
+                            action_id,
+                            "--state-dir",
+                            str(state_path),
+                            "--output",
+                            str(authorization_path),
+                        ]
+                    ),
+                )
+
+            argv = [
+                "--proposals",
+                str(proposals_path),
+                "--state-dir",
+                str(state_path),
+                "--authorization",
+                str(authorization_path),
+                "--action-id",
+                action_id,
+                "--execute",
+            ]
+            first_stdout = io.StringIO()
+            with (
+                patch.object(
+                    execute_script,
+                    "GitHubActorClient",
+                    return_value=client,
+                ) as client_factory,
+                contextlib.redirect_stdout(first_stdout),
+            ):
+                self.assertEqual(0, execute_script.main(argv))
+
+            first_result = json.loads(first_stdout.getvalue())
+            self.assertEqual("executed", first_result["outcome"])
+            self.assertEqual([body], client.created_bodies)
+            self.assertEqual(1, client_factory.call_count)
+
+            replay_stdout = io.StringIO()
+            with (
+                patch.object(
+                    execute_script,
+                    "GitHubActorClient",
+                    side_effect=AssertionError("replay must not create a client"),
+                ),
+                contextlib.redirect_stdout(replay_stdout),
+            ):
+                self.assertEqual(0, execute_script.main(argv))
+
+            self.assertEqual(first_result, json.loads(replay_stdout.getvalue()))
+            events = [
+                json.loads(line)
+                for line in (
+                    state_path / "action-events.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                ["intent", "terminal"],
+                [event["eventType"] for event in events],
+            )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 

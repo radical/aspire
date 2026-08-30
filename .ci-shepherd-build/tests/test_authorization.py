@@ -182,6 +182,19 @@ class AuthorizationTests(unittest.TestCase):
         ):
             self._authorize()
 
+    def test_grant_snapshot_must_match_even_when_proposal_digest_matches(self) -> None:
+        granted_snapshot_id = self.proposals["snapshotId"]
+        self.proposals["snapshotId"] = (
+            "snapshot:radical/aspire:2026-08-29T20:01:00Z"
+        )
+        self._write_inputs(grant_updates={"snapshotId": granted_snapshot_id})
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "snapshotId does not match",
+        ):
+            self._authorize()
+
     def test_mismatched_state_directory_is_rejected(self) -> None:
         self._write_inputs(
             grant_updates={
@@ -755,6 +768,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AuthorizationError, "protected"):
             self._generate(action_ids=[self.comment_action_id])
+        self.assertFalse(self.output_path.exists())
 
     def test_selecting_one_action_does_not_authorize_a_sibling_action(self) -> None:
         self._write_proposals()

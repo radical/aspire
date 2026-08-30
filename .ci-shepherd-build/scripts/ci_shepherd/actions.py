@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
+from ci_shepherd.eligibility import executable_ci_labels
 from ci_shepherd.poc import validate_poc_judgments
 
 
@@ -464,9 +466,6 @@ def _render_duplicate_close_body(
     )
 
 
-EXECUTABLE_CI_LABELS = frozenset(
-    {"automation-broken", "ci-failure-cause", "test-failure"}
-)
 DEFAULT_PROPOSAL_TTL_HOURS = 24
 MAX_PROPOSALS_PER_ISSUE = 2
 TRUSTED_ACTION_REFERENCE_METHODS = frozenset(
@@ -497,18 +496,7 @@ def _execution_eligibility(
     if not isinstance(issue_payload, dict):
         raise ValueError(f"Issue {issue_number} has no factual issue evidence.")
 
-    labels: set[str] = set()
     raw_labels = issue_payload.get("labels")
-    if isinstance(raw_labels, list):
-        for raw_label in raw_labels:
-            if isinstance(raw_label, str) and raw_label:
-                labels.add(raw_label)
-            elif (
-                isinstance(raw_label, dict)
-                and isinstance(raw_label.get("name"), str)
-                and raw_label["name"]
-            ):
-                labels.add(str(raw_label["name"]))
 
     occurrences = issue_payload.get("occurrences")
     occurrence_count = len(occurrences) if isinstance(occurrences, list) else 0
@@ -561,7 +549,7 @@ def _execution_eligibility(
             untrusted_reference_evidence_ids.append(evidence_id)
 
     blocking_reasons: list[str] = []
-    ci_labels = sorted(labels.intersection(EXECUTABLE_CI_LABELS))
+    ci_labels = sorted(executable_ci_labels(raw_labels))
     if not ci_labels:
         blocking_reasons.append("missing-ci-label")
     if occurrence_count <= 0:
@@ -635,6 +623,28 @@ def _finalize_execution_metadata(
         proposal["sourceEvidenceFingerprint"] = {
             "issueUpdatedAt": issue_updated_at,
         }
+        if proposal.get("operation") == "edit-comment":
+            comment_id = proposal.get("commentId")
+            if not isinstance(comment_id, int) or isinstance(comment_id, bool):
+                raise ValueError(
+                    f"Edit action {proposal['actionId']} must have a commentId."
+                )
+            comment_body = _source_comment_body(
+                snapshot,
+                issue_number=issue_number,
+                comment_id=comment_id,
+            )
+            if comment_body is None:
+                eligibility["blockingReasons"].append(
+                    "source-comment-unavailable"
+                )
+                eligibility["eligible"] = False
+            else:
+                proposal["sourceCommentFingerprint"] = {
+                    "bodySha256": hashlib.sha256(
+                        comment_body.encode("utf-8")
+                    ).hexdigest(),
+                }
         if eligibility["eligible"] is not True:
             document_violations.append(
                 {
@@ -742,6 +752,32 @@ def _compact_issues(
             raise ValueError("Compact agent input issueNumber must be positive.")
         result[issue_number] = issue
     return result
+
+
+def _source_comment_body(
+    snapshot: dict[str, object],
+    *,
+    issue_number: int,
+    comment_id: int,
+) -> str | None:
+    evidence = snapshot.get("evidence")
+    if not isinstance(evidence, dict):
+        raise TypeError("Validated snapshot evidence must be an object.")
+    matches = [
+        payload
+        for record in evidence.values()
+        if isinstance(record, dict) and record.get("kind") == "issue-comment"
+        for payload in [record.get("payload")]
+        if isinstance(payload, dict)
+        and payload.get("sourceIssueNumber") == issue_number
+        and payload.get("id") == comment_id
+    ]
+    if len(matches) != 1:
+        return None
+    body = matches[0].get("body")
+    if not isinstance(body, str):
+        return None
+    return body
 
 
 def _owned_status_comments(

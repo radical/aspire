@@ -99,10 +99,12 @@ def _previous_context(
     dict[str, Any] | None,
     dict[str, Any] | None,
     list[dict[str, Any]] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
 ]:
     current = load_current(state_dir, repository)
     if current is None:
-        return None, None, None, None
+        return None, None, None, None, None, None
     known = {
         issue["issueNumber"]
         for issue in current.previous_decisions
@@ -118,7 +120,45 @@ def _previous_context(
         if previous_prepared_path.is_file()
         else None
     )
-    return known, previous_snapshot, previous_prepared, current.previous_decisions
+    previous_pull_request_handoff_path = (
+        current.run_directory / "pull-request-review.json"
+    )
+    previous_pull_request_handoff = (
+        _load_json(
+            previous_pull_request_handoff_path,
+            "previous pull request handoff",
+        )
+        if previous_pull_request_handoff_path.is_file()
+        else None
+    )
+    previous_pull_request_judgments_path = (
+        current.run_directory / "pull-request-judgments.json"
+    )
+    previous_pull_request_judgments = (
+        _load_json(
+            previous_pull_request_judgments_path,
+            "previous pull request judgments",
+        )
+        if previous_pull_request_judgments_path.is_file()
+        else None
+    )
+    if (
+        previous_pull_request_handoff is not None
+        and previous_pull_request_judgments is None
+    ):
+        # Runs recorded before pull-request judgment persistence have a handoff
+        # but no judgment document. Treat them as unreviewed once so rollout
+        # reselects their open pull requests instead of failing or retaining a
+        # judgment that was never recorded.
+        previous_pull_request_handoff = None
+    return (
+        known,
+        previous_snapshot,
+        previous_prepared,
+        current.previous_decisions,
+        previous_pull_request_handoff,
+        previous_pull_request_judgments,
+    )
 
 
 def _refresh_issue_numbers(snapshot: Mapping[str, Any], field: str) -> list[int]:
@@ -185,6 +225,8 @@ def start_cycle(
         previous_snapshot,
         previous_prepared,
         previous_judgments,
+        previous_pull_request_handoff,
+        previous_pull_request_judgments,
     ) = _previous_context(state_dir, repository)
     target_input = work_dir / "input.json"
     if input_path is None:
@@ -246,10 +288,13 @@ def start_cycle(
             for number in previous_snapshot.get("openPullRequests", [])
             if isinstance(number, int) and not isinstance(number, bool)
         }
+        previous_open_pull_requests = (
+            set(open_pull_request_numbers) & previous_pull_request_numbers
+        )
         initial_review_pull_request_numbers = (
-            set(open_pull_request_numbers)
-            & previous_pull_request_numbers
-            - set(pull_request_reassessment_context)
+            previous_open_pull_requests
+            if previous_pull_request_handoff is None
+            else previous_open_pull_requests - set(pull_request_reassessment_context)
         )
 
     prepared = attach_latest_investigation_results(
@@ -298,6 +343,8 @@ def start_cycle(
         initial_review_pull_request_numbers=initial_review_pull_request_numbers,
         due_pull_request_numbers=due_pull_request_numbers,
         reassessment_context_by_pull_request=pull_request_reassessment_context,
+        previous_handoff=previous_pull_request_handoff,
+        previous_judgments=previous_pull_request_judgments,
     )
     selected_issue_numbers = {
         int(item["issueNumber"])

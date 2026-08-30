@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 import re
 from typing import Callable, Protocol
 
 from .collector import COPILOT_ASSIGNEES
+from .eligibility import EXECUTABLE_CI_LABELS, label_names
 
 
 KNOWN_OPERATIONS = frozenset({"create-comment", "edit-comment", "close-issue"})
@@ -31,7 +33,11 @@ LEGACY_COMMON_PROPOSAL_FIELDS = frozenset(
 EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
     LEGACY_COMMON_PROPOSAL_FIELDS
     - {"requiresSeparateApproval"}
-    | {"executionEligibility", "sourceEvidenceFingerprint"}
+    | {
+        "executionEligibility",
+        "sourceCommentFingerprint",
+        "sourceEvidenceFingerprint",
+    }
 )
 EXECUTION_ELIGIBILITY_FIELDS = frozenset(
     {
@@ -44,14 +50,12 @@ EXECUTION_ELIGIBILITY_FIELDS = frozenset(
         "blockingReasons",
     }
 )
-EXECUTABLE_CI_LABELS = frozenset(
-    {"automation-broken", "ci-failure-cause", "test-failure"}
-)
 ELIGIBILITY_REASONS = frozenset(
     {
         "missing-ci-label",
         "no-parsed-occurrences",
         "incomplete-collection",
+        "source-comment-unavailable",
         "unavailable-evidence",
         "untrusted-reference-provenance",
     }
@@ -128,6 +132,27 @@ def _required_int(
     return value
 
 
+def _validate_source_comment_fingerprint(
+    value: object,
+    *,
+    action_id: str,
+) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) != {"bodySha256"}:
+        raise ValueError(
+            f"{action_id}.sourceCommentFingerprint must contain only bodySha256."
+        )
+    body_sha256 = value.get("bodySha256")
+    if (
+        not isinstance(body_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", body_sha256) is None
+    ):
+        raise ValueError(
+            f"{action_id}.sourceCommentFingerprint.bodySha256 must be a "
+            "lowercase SHA-256 digest."
+        )
+    return {"bodySha256": body_sha256}
+
+
 def _validate_proposal(
     proposal: object,
     *,
@@ -185,10 +210,18 @@ def _validate_proposal(
         if proposal.get("requiresSeparateApproval") is not True:
             raise ValueError(f"{action_id} must require separate approval.")
     else:
-        _validate_execution_eligibility(
+        eligibility = _validate_execution_eligibility(
             proposal.get("executionEligibility"),
             action_id=action_id,
         )
+        if (
+            "source-comment-unavailable" in eligibility["blockingReasons"]
+            and operation != "edit-comment"
+        ):
+            raise ValueError(
+                f"{action_id}.executionEligibility cannot report an unavailable "
+                "source comment for this operation."
+            )
         _validate_source_evidence_fingerprint(
             proposal.get("sourceEvidenceFingerprint"),
             action_id=action_id,
@@ -208,6 +241,25 @@ def _validate_proposal(
             _required_int(
                 proposal.get("commentId"),
                 field=f"{action_id}.commentId",
+            )
+            if schema_version == 2:
+                if (
+                    "source-comment-unavailable"
+                    in eligibility["blockingReasons"]
+                ):
+                    if "sourceCommentFingerprint" in proposal:
+                        raise ValueError(
+                            f"{action_id}.sourceCommentFingerprint cannot be "
+                            "present when its source comment is unavailable."
+                        )
+                else:
+                    _validate_source_comment_fingerprint(
+                        proposal.get("sourceCommentFingerprint"),
+                        action_id=action_id,
+                    )
+        elif "sourceCommentFingerprint" in proposal:
+            raise ValueError(
+                f"{action_id}.sourceCommentFingerprint is valid only for edit-comment."
             )
     else:
         close_reason = _required_string(
@@ -330,6 +382,8 @@ def _validate_execution_eligibility(
         derived_reasons.append("unavailable-evidence")
     if untrusted_reference_evidence_ids:
         derived_reasons.append("untrusted-reference-provenance")
+    if "source-comment-unavailable" in blocking_reasons:
+        derived_reasons.append("source-comment-unavailable")
     if blocking_reasons != derived_reasons or eligible != (not derived_reasons):
         raise ValueError(
             f"{action_id}.executionEligibility is internally inconsistent."
@@ -867,6 +921,7 @@ def execute_action(
     try:
         issue = client.get_issue(repository, target_number)
         issue_state = issue.get("state")
+        live_labels = label_names(issue.get("labels"))
         preflight = {
             (
                 "pullRequestState"
@@ -878,6 +933,7 @@ def execute_action(
                 if target_kind == "pull-request"
                 else "issueUpdatedAt"
             ): issue.get("updated_at"),
+            "ciLabels": sorted(live_labels),
         }
         is_pull_request = isinstance(issue.get("pull_request"), dict)
         if is_pull_request != (target_kind == "pull-request"):
@@ -902,6 +958,17 @@ def execute_action(
                 attempted_at=attempted_at,
                 outcome="stale",
                 reason="target-assigned-to-copilot",
+                preflight=preflight,
+            )
+        if (
+            validated["schemaVersion"] == 2
+            and not live_labels & EXECUTABLE_CI_LABELS
+        ):
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="stale",
+                reason="missing-ci-label",
                 preflight=preflight,
             )
         if issue_state != expected_state:
@@ -1050,6 +1117,20 @@ def execute_action(
                     reason="comment-ownership-changed",
                     preflight=preflight,
                 )
+            if validated["schemaVersion"] == 2:
+                fingerprint = _validate_source_comment_fingerprint(
+                    proposal.get("sourceCommentFingerprint"),
+                    action_id=action_id,
+                )
+                live_body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                if live_body_sha256 != fingerprint["bodySha256"]:
+                    return _terminal_result(
+                        action_id=action_id,
+                        attempted_at=attempted_at,
+                        outcome="stale",
+                        reason="comment-body-changed",
+                        preflight=preflight,
+                    )
             mutation_attempted = True
             client.edit_comment(
                 repository,
@@ -1238,6 +1319,28 @@ def reconcile_action(
                 and issue.get("state") == "closed"
                 and issue.get("state_reason") == proposal["closeReason"]
             ):
+                login = client.get_authenticated_login()
+                expected_login = str(validated["shepherdAuthor"])
+                closed_by = issue.get("closed_by")
+                closed_by_login = (
+                    closed_by.get("login")
+                    if isinstance(closed_by, dict)
+                    else None
+                )
+                if login != expected_login:
+                    return _terminal_result(
+                        action_id=action_id,
+                        attempted_at=attempted_at,
+                        outcome="indeterminate",
+                        reason="actor-identity-changed",
+                    )
+                if closed_by_login != expected_login:
+                    return _terminal_result(
+                        action_id=action_id,
+                        attempted_at=attempted_at,
+                        outcome="indeterminate",
+                        reason="close-not-attributed-to-shepherd",
+                    )
                 return _terminal_result(
                     action_id=action_id,
                     attempted_at=attempted_at,

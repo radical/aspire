@@ -17,6 +17,9 @@ _PULL_REQUEST_URL_RE = re.compile(
     r"/pull/(?P<number>[1-9][0-9]*)$",
     re.IGNORECASE,
 )
+_TEST_METHOD_NAME_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*[.+])+[A-Za-z_][A-Za-z0-9_]*$"
+)
 
 
 def _fingerprint(value: object) -> str:
@@ -84,6 +87,38 @@ def _request_for_tests(
         "tests": tests,
         "workerPrompt": _worker_prompt(repository, tests) if tests else None,
     }
+
+
+def _issue_labels(issue: Mapping[str, Any]) -> frozenset[str] | None:
+    evidence_bundle = issue.get("evidenceBundle")
+    if not isinstance(evidence_bundle, list):
+        return None
+    issue_number = issue.get("issueNumber")
+    source_evidence_id = (
+        f"issue:{issue_number}"
+        if isinstance(issue_number, int) and not isinstance(issue_number, bool)
+        else None
+    )
+    for evidence in evidence_bundle:
+        if (
+            not isinstance(evidence, Mapping)
+            or evidence.get("kind") != "issue-event"
+            or evidence.get("id") != source_evidence_id
+        ):
+            continue
+        payload = evidence.get("payload")
+        if not isinstance(payload, Mapping):
+            return None
+        labels = payload.get("labels")
+        if not isinstance(labels, list):
+            return None
+        if not all(isinstance(label, str) and label for label in labels):
+            return None
+        return frozenset(
+            label.casefold()
+            for label in labels
+        )
+    return None
 
 
 def select_quarantine_session_request(
@@ -161,17 +196,47 @@ def build_quarantine_session_request(
             candidate = {
                 "issueNumber": issue_number,
                 "issueUrl": issue_url,
+                "issueLabels": _issue_labels(prepared_issue),
                 "evidenceIds": sorted(set(evidence_ids)),
                 "summary": str(recommendation.get("summary") or ""),
             }
             candidates_by_name.setdefault(test_name, []).append(candidate)
 
     tests: list[dict[str, object]] = []
+    blocked_targets: list[dict[str, str]] = []
     for test_name, candidates in sorted(candidates_by_name.items()):
         source_issues = sorted(
             candidates,
             key=lambda item: int(item["issueNumber"]),
         )
+        if _TEST_METHOD_NAME_RE.fullmatch(test_name) is None:
+            blocked_targets.append(
+                {
+                    "testName": test_name,
+                    "reason": "not-a-test-method",
+                }
+            )
+            continue
+        if any(
+            isinstance(candidate["issueLabels"], frozenset)
+            and "quarantined-test" in candidate["issueLabels"]
+            for candidate in source_issues
+        ):
+            blocked_targets.append(
+                {
+                    "testName": test_name,
+                    "reason": "already-quarantined-by-label",
+                }
+            )
+            continue
+        if any(candidate["issueLabels"] is None for candidate in source_issues):
+            blocked_targets.append(
+                {
+                    "testName": test_name,
+                    "reason": "source-labels-unavailable",
+                }
+            )
+            continue
         canonical = source_issues[0]
         tests.append(
             {
@@ -210,6 +275,7 @@ def build_quarantine_session_request(
         "requiresSeparateApproval": True,
         "tests": tests,
         "workerPrompt": _worker_prompt(repository, tests) if tests else None,
+        "blockedTargets": blocked_targets,
     }
 
 
@@ -253,7 +319,16 @@ def build_quarantine_session_plan(
     tests = request.get("tests")
     proposal: Mapping[str, Any] | None = request
     suppression_reason: str | None = None
-    blocked_targets: list[dict[str, object]] = []
+    request_blocked_targets = request.get("blockedTargets", [])
+    blocked_targets = (
+        [
+            dict(target)
+            for target in request_blocked_targets
+            if isinstance(target, Mapping)
+        ]
+        if isinstance(request_blocked_targets, list)
+        else []
+    )
     active_batch_id = str(active["batchId"]) if active is not None else None
     if active is not None:
         proposal = None
@@ -267,6 +342,8 @@ def build_quarantine_session_plan(
         suppression_reason = (
             "awaiting-pull-request"
             if open_pull_requests
+            else "blocked-targets"
+            if blocked_targets
             else "no-candidates"
         )
     else:
@@ -289,12 +366,14 @@ def build_quarantine_session_plan(
             and test["testName"]
         }
         blocked_by_test = {
-            json.dumps(target["test"], sort_keys=True): target
+            target["test"]["testName"]: target
             for event in latest_by_batch.values()
             if event.get("status") in {"pull-request-open", "completed", "failed"}
             for target in event.get("blockedTargets", [])
             if isinstance(target, Mapping)
             and isinstance(target.get("test"), Mapping)
+            and isinstance(target["test"].get("testName"), str)
+            and target["test"]["testName"]
             and isinstance(target.get("reason"), str)
         }
         pending_tests = [
@@ -303,19 +382,17 @@ def build_quarantine_session_plan(
             if isinstance(test, Mapping)
             and test.get("testName") not in completed_test_names
             and test.get("testName") not in in_flight_test_names
-            and json.dumps(dict(test), sort_keys=True) not in blocked_by_test
+            and test.get("testName") not in blocked_by_test
         ]
-        blocked_targets = [
+        blocked_targets.extend(
             {
                 "testName": test.get("testName"),
-                "reason": blocked_by_test[
-                    json.dumps(dict(test), sort_keys=True)
-                ]["reason"],
+                "reason": blocked_by_test[str(test.get("testName"))]["reason"],
             }
             for test in tests
             if isinstance(test, Mapping)
-            and json.dumps(dict(test), sort_keys=True) in blocked_by_test
-        ]
+            and test.get("testName") in blocked_by_test
+        )
         if not pending_tests:
             proposal = None
             suppression_reason = (

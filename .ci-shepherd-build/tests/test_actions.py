@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import unittest
 
 from ci_shepherd.actions import build_action_proposals, build_watch_proposals
@@ -374,6 +375,43 @@ class WatchActionTests(unittest.TestCase):
             proposals["proposals"][0]["executionEligibility"]["blockingReasons"],
         )
 
+    def test_unavailable_evidence_blocks_the_produced_action(self) -> None:
+        snapshot = _snapshot()
+        snapshot["evidence"]["run:777"]["availability"] = "unavailable"
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        eligibility = proposals["proposals"][0]["executionEligibility"]
+        self.assertFalse(eligibility["eligible"])
+        self.assertTrue(eligibility["collectionComplete"])
+        self.assertEqual(["run:777"], eligibility["unavailableEvidenceIds"])
+        self.assertEqual(
+            ["unavailable-evidence"],
+            eligibility["blockingReasons"],
+        )
+
+    def test_ci_label_matching_is_case_insensitive(self) -> None:
+        snapshot = _snapshot()
+        issue = snapshot["evidence"]["issue:21"]["payload"]
+        assert isinstance(issue, dict)
+        issue["labels"] = [{"name": "Test-Failure"}]
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        eligibility = proposals["proposals"][0]["executionEligibility"]
+        self.assertTrue(eligibility["eligible"])
+        self.assertEqual(["test-failure"], eligibility["ciLabels"])
+
     def test_any_collection_error_blocks_the_entire_proposal_document(self) -> None:
         snapshot = _snapshot()
         snapshot["collectionErrors"] = [
@@ -471,6 +509,74 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual("edit-comment", proposal["operation"])
         self.assertEqual(900, proposal["commentId"])
         self.assertEqual("issue:21:status", proposal["idempotencyKey"])
+        self.assertEqual(
+            {
+                "bodySha256": hashlib.sha256(
+                    b"[automated] Old watch status"
+                ).hexdigest()
+            },
+            proposal["sourceCommentFingerprint"],
+        )
+
+    def test_missing_source_comment_body_blocks_only_its_edit(self) -> None:
+        snapshot = _with_owned_comment(
+            _snapshot(),
+            "[automated] Existing status",
+        )
+        del snapshot["evidence"]["issue:21:comment:900"]["payload"]["body"]
+        snapshot["openIssues"].append(22)
+        snapshot["issues"].append({"number": 22, "state": "open"})
+        issue_evidence = copy.deepcopy(snapshot["evidence"]["issue:21"])
+        issue_evidence["url"] = "https://github.com/owner/repo/issues/22"
+        issue_evidence["payload"]["number"] = 22
+        snapshot["evidence"]["issue:22"] = issue_evidence
+
+        prepared = _prepared()
+        prepared_issue = copy.deepcopy(prepared["issues"][0])
+        prepared_issue["issueNumber"] = 22
+        prepared_issue["issueUrl"] = "https://github.com/owner/repo/issues/22"
+        prepared_issue["evidenceBundle"][0]["id"] = "issue:22"
+        prepared["issues"].append(prepared_issue)
+
+        judgments = _judgments()
+        second_issue = copy.deepcopy(judgments["issues"][0])
+        second_issue["issueNumber"] = 22
+        second_issue["recommendations"][0]["evidenceIds"][0] = "issue:22"
+        judgments["issues"].append(second_issue)
+
+        result = build_action_proposals(snapshot, prepared, judgments, "ankj")
+
+        by_issue = {
+            proposal["issueNumber"]: proposal for proposal in result["proposals"]
+        }
+        self.assertFalse(by_issue[21]["executionEligibility"]["eligible"])
+        self.assertEqual(
+            ["source-comment-unavailable"],
+            by_issue[21]["executionEligibility"]["blockingReasons"],
+        )
+        self.assertNotIn("sourceCommentFingerprint", by_issue[21])
+        self.assertTrue(by_issue[22]["executionEligibility"]["eligible"])
+        build_dry_run(result, action_id=None)
+
+    def test_deleted_owned_comment_is_replaced_with_a_create_proposal(self) -> None:
+        snapshot = _with_owned_comment(
+            _snapshot(),
+            "[automated] Existing status",
+        )
+        del snapshot["evidence"]["issue:21:comment:900"]
+
+        result = build_watch_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(1, len(result["proposals"]))
+        proposal = result["proposals"][0]
+        self.assertEqual("create-comment", proposal["operation"])
+        self.assertNotIn("commentId", proposal)
+        self.assertNotIn("sourceCommentFingerprint", proposal)
 
     def test_newest_legacy_status_comment_is_migrated_when_multiple_exist(self) -> None:
         snapshot = _with_owned_comment(

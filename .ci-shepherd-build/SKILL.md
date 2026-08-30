@@ -46,8 +46,10 @@ $SCRATCH/pull-request-review.json
 The assessment agent writes sparse issue overrides to
 `$SCRATCH/agent-judgments.json` and sparse pull-request overrides to
 `$SCRATCH/agent-pull-request-judgments.json`. Silence for a selected case means
-"keep the deterministic default"; omitted cases must not be returned. Finish
-the exact cycle with:
+"keep the deterministic default"; omitted cases must not be returned. The
+coordinator carries the last validated override for an unchanged omitted case
+until evidence changes or scheduled reassessment selects it again. Finish the
+exact cycle with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
@@ -447,11 +449,15 @@ python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --execute
 ```
 
-Execute mode accepts only proposal schema v2 and re-derives the selected
-action's CI-label, occurrence, scoped collection-completeness, and
-evidence-availability eligibility checks. An unscoped collection error blocks
-every action; an issue-scoped error blocks only proposals for the named issues.
-Before any mutation it fsyncs an `intent` event under a bounded lock.
+Execute mode accepts only proposal schema v2. It validates the selected
+action's frozen occurrence, scoped collection-completeness, and
+evidence-availability eligibility, then refetches the issue and requires a live
+CI label before mutation. An unscoped collection error blocks every action; an
+issue-scoped error blocks only proposals for the named issues. An
+`edit-comment` proposal also binds the source comment body digest, so a
+concurrent edit is never overwritten.
+
+Before any mutation the executor fsyncs an `intent` event under a bounded lock.
 It then checks dependencies and current GitHub state, performs one fixed
 operation, refetches the target, and appends a terminal event to owner-only
 `$STATE/action-events.jsonl`. A surviving `intent` or `indeterminate` event
@@ -535,14 +541,19 @@ fresh compact verifier input, and fresh verifier judgments.
 `review-selection.json` sends every first-seen issue, every materially changed
 issue, and every issue whose seven-day reassessment is due to the model.
 `agent-input.json` is filtered to that same set. Stable reviewed cases are
-omitted from both until they change or become due.
+omitted from both until they change or become due, while their last validated
+agent overrides remain effective.
 `agent-judgments.json` is the only issue assessment-agent output. `finalize.py`
-accepts sparse agent changes only for selected cases and restores every safe
-deterministic default into `judgments.json`. `report.md` is rendered
-deterministically after validation. The report includes collection completeness
-and warnings. `progress.json` records stage status, and `api-calls.jsonl` is the
-coordinator-owned GET audit for collection or expansion. Both are copied into
-the immutable recorded run when present.
+accepts sparse agent changes only for selected cases, carries forward validated
+overrides for unchanged omitted cases, and restores safe deterministic defaults
+for the remainder into `judgments.json`. Pull-request handoffs similarly retain
+only judgments that differed from the prior deterministic default. A legacy run
+that has a pull-request handoff but predates pull-request judgment persistence
+is re-reviewed once during rollout. `report.md` is rendered deterministically
+after validation. The report includes collection completeness and warnings.
+`progress.json` records stage status, and
+`api-calls.jsonl` is the coordinator-owned GET audit for collection or
+expansion. Both are copied into the immutable recorded run when present.
 
 For prompt and rule iteration, freeze one `assessment-input.json` and reuse it.
 Offline prompt iterations must start from a frozen `assessment-input.json` and

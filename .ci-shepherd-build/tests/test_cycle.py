@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import cycle as cycle_script
 from ci_shepherd.investigations import (
@@ -260,15 +262,19 @@ class CycleTests(unittest.TestCase):
                 third_plan["requests"][0]["investigationId"],
             )
 
-    def test_finishes_with_one_quarantine_session_plan(self) -> None:
+    def test_excludes_quarantine_candidate_for_already_quarantined_issue(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
         with TemporaryDirectory(dir=artifacts) as scratch:
             root = Path(scratch)
             state = root / "state"
             input_path = root / "input.json"
+            input_snapshot = snapshot("2026-08-28T20:00:00Z")
+            input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = [
+                "quarantined-test"
+            ]
             input_path.write_text(
-                json.dumps(snapshot("2026-08-28T20:00:00Z")),
+                json.dumps(input_snapshot),
                 encoding="utf-8",
             )
             work = root / "work"
@@ -315,24 +321,26 @@ class CycleTests(unittest.TestCase):
             plan = json.loads(
                 (work / "quarantine-session.json").read_text(encoding="utf-8")
             )
-            self.assertIsNotNone(plan["proposal"])
+            self.assertIsNone(plan["proposal"])
             self.assertEqual(
-                ["Namespace.Type.FlakyTest"],
+                "blocked-targets",
+                plan["suppressionReason"],
+            )
+            self.assertEqual(
                 [
-                    test["testName"]
-                    for test in plan["proposal"]["tests"]
+                    {
+                        "testName": "Namespace.Type.FlakyTest",
+                        "reason": "already-quarantined-by-label",
+                    }
                 ],
+                plan["blockedTargets"],
             )
             self.assertEqual(0, completed["proposalCount"])
             report = (work / "report.md").read_text(encoding="utf-8")
             self.assertIn("## Quarantine session", report)
-            self.assertIn("One local quarantine session is ready for approval.", report)
-            self.assertIn(
-                "The worker must resolve each target to an exact test method.",
-                report,
-            )
+            self.assertIn("No new session was proposed", report)
             self.assertIn("`Namespace.Type.FlakyTest`", report)
-            self.assertIn("#1", report)
+            self.assertIn("already-quarantined-by-label", report)
             self.assertTrue(
                 (
                     Path(completed["runDirectory"]) / "quarantine-session.json"
@@ -572,6 +580,409 @@ class CycleTests(unittest.TestCase):
                 changed_selection["selected"][0]["previousDisposition"],
             )
 
+    def test_unchanged_cycle_carries_forward_issue_agent_override(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_input = root / "input-1.json"
+            first_snapshot = snapshot(
+                "2026-08-27T12:00:00Z",
+                title="[13.5] Changelog feedback",
+            )
+            first_snapshot["evidence"]["issue:1"]["payload"]["updatedAt"] = (
+                "2026-08-27T11:00:00Z"
+            )
+            first_input.write_text(
+                json.dumps(first_snapshot),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            defaults = json.loads(
+                (first_work / "assessment-defaults.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                "watch",
+                defaults["issues"][0]["defaultJudgment"]["recommendations"][0][
+                    "disposition"
+                ],
+            )
+            agent_judgments = {
+                "schemaVersion": 1,
+                "snapshotId": started["snapshotId"],
+                "issues": [
+                    {
+                        "issueNumber": 1,
+                        "category": "unknown",
+                        "recommendations": [
+                            {
+                                "disposition": "investigate",
+                                "target": {"kind": "issue", "value": 1},
+                                "confidence": "low",
+                                "summary": "This is not a CI failure signature.",
+                                "evidenceIds": ["issue:1"],
+                                "missingEvidence": ["recognized-producer-ledger"],
+                                "reassessWhen": "After the next evidence update.",
+                            }
+                        ],
+                    }
+                ],
+            }
+            agent_path = first_work / "agent-judgments.json"
+            agent_path.write_text(json.dumps(agent_judgments), encoding="utf-8")
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=agent_path,
+            )
+
+            second_input = root / "input-2.json"
+            second_snapshot = snapshot(
+                "2026-08-28T12:00:00Z",
+                title="[13.5] Changelog feedback",
+            )
+            second_snapshot["evidence"]["issue:1"]["payload"]["updatedAt"] = (
+                "2026-08-27T11:00:00Z"
+            )
+            second_input.write_text(
+                json.dumps(second_snapshot),
+                encoding="utf-8",
+            )
+            second_work = root / "work-2"
+            completed = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            self.assertEqual("completed", completed["stage"])
+            self.assertEqual(0, completed["issueReviewCount"])
+            judgments = json.loads(
+                (second_work / "judgments.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                "investigate",
+                judgments["issues"][0]["recommendations"][0]["disposition"],
+            )
+
+    def test_unchanged_cycle_carries_forward_pull_request_agent_override(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_collected_at = "2026-08-27T12:00:00Z"
+            first_snapshot = pull_request_snapshot(first_collected_at)
+            current_state = first_snapshot["evidence"]["pr:23"]["payload"][
+                "currentState"
+            ]
+            current_state["review"]["decision"] = "changes-requested"
+            current_state["mergeable"] = False
+            current_state["mergeableState"] = "dirty"
+            first_input = root / "input-1.json"
+            first_input.write_text(json.dumps(first_snapshot), encoding="utf-8")
+            first_work = root / "work-1"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            pull_request_judgments = {
+                "schemaVersion": 1,
+                "snapshotId": started["snapshotId"],
+                "pullRequests": [
+                    {
+                        "pullRequestNumber": 23,
+                        "disposition": "ping-human",
+                        "summary": "The pull request needs a conflict decision.",
+                        "evidenceIds": ["pr:23"],
+                        "missingEvidence": [],
+                        "reassessWhen": "After the conflict is resolved.",
+                        "humanEscalation": {
+                            "context": "The branch no longer merges cleanly.",
+                            "whyHuman": "The author must choose the resolution.",
+                            "question": "Should this branch be rebased or superseded?",
+                            "suggestedNextSteps": ["Rebase the branch."],
+                            "routingHint": "Ask the pull request author.",
+                        },
+                    }
+                ],
+            }
+            pull_request_judgments_path = (
+                first_work / "agent-pull-request-judgments.json"
+            )
+            pull_request_judgments_path.write_text(
+                json.dumps(pull_request_judgments),
+                encoding="utf-8",
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+                pull_request_judgments_path=pull_request_judgments_path,
+            )
+
+            second_snapshot = pull_request_snapshot("2026-08-28T12:00:00Z")
+            second_snapshot["pullRequests"][0]["updatedAt"] = first_collected_at
+            second_state = second_snapshot["evidence"]["pr:23"]["payload"][
+                "currentState"
+            ]
+            second_state["review"]["decision"] = "changes-requested"
+            second_state["mergeable"] = False
+            second_state["mergeableState"] = "dirty"
+            second_input = root / "input-2.json"
+            second_input.write_text(json.dumps(second_snapshot), encoding="utf-8")
+            second_work = root / "work-2"
+            completed = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            self.assertEqual("completed", completed["stage"])
+            self.assertEqual(0, completed["pullRequestReviewCount"])
+            judgments = json.loads(
+                (second_work / "pull-request-judgments.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                [(23, "ping-human")],
+                [
+                    (entry["pullRequestNumber"], entry["disposition"])
+                    for entry in judgments["pullRequests"]
+                ],
+            )
+            self.assertIn(
+                "### Needs human",
+                (second_work / "report.md").read_text(encoding="utf-8"),
+            )
+
+    def test_legacy_pull_request_handoff_without_judgments_is_reviewed_once(
+        self,
+    ) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_collected_at = "2026-08-27T12:00:00Z"
+            first_input = root / "input-1.json"
+            first_input.write_text(
+                json.dumps(pull_request_snapshot(first_collected_at)),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+                pull_request_judgments_path=(
+                    first_work / "agent-pull-request-judgments.json"
+                ),
+            )
+            current = cycle_script.load_current(state, "owner/repo")
+            self.assertIsNotNone(current)
+            legacy_run = root / "legacy-run"
+            legacy_run.mkdir()
+            for name in ("snapshot.json", "pull-request-review.json"):
+                (legacy_run / name).write_bytes(
+                    (current.run_directory / name).read_bytes()
+                )
+            legacy_current = SimpleNamespace(
+                run_directory=legacy_run,
+                previous_decisions=current.previous_decisions,
+            )
+
+            second_snapshot = pull_request_snapshot("2026-08-28T12:00:00Z")
+            second_snapshot["pullRequests"][0]["updatedAt"] = first_collected_at
+            second_input = root / "input-2.json"
+            second_input.write_text(json.dumps(second_snapshot), encoding="utf-8")
+
+            with patch.object(
+                cycle_script,
+                "load_current",
+                return_value=legacy_current,
+            ):
+                restarted = cycle_script.start_cycle(
+                    repository="owner/repo",
+                    state_dir=state,
+                    work_dir=root / "work-2",
+                    checkout=None,
+                    shepherd_author="ankj",
+                    input_path=second_input,
+                )
+
+            self.assertEqual("awaiting-review", restarted["stage"])
+            self.assertEqual(1, restarted["pullRequestReviewCount"])
+
+    def test_unchanged_default_pull_request_is_counted_without_retained_judgment(
+        self,
+    ) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_collected_at = "2026-08-27T12:00:00Z"
+            first_input = root / "input-1.json"
+            first_input.write_text(
+                json.dumps(pull_request_snapshot(first_collected_at)),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            (first_work / "agent-judgments.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": started["snapshotId"],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            pull_request_judgments_path = (
+                first_work / "agent-pull-request-judgments.json"
+            )
+            pull_request_judgments_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": started["snapshotId"],
+                        "pullRequests": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+                pull_request_judgments_path=pull_request_judgments_path,
+            )
+
+            second_snapshot = pull_request_snapshot("2026-08-28T12:00:00Z")
+            second_snapshot["pullRequests"][0]["updatedAt"] = first_collected_at
+            second_input = root / "input-2.json"
+            second_input.write_text(
+                json.dumps(second_snapshot),
+                encoding="utf-8",
+            )
+            second_work = root / "work-2"
+
+            completed = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            self.assertEqual("completed", completed["stage"])
+            self.assertEqual(0, completed["pullRequestReviewCount"])
+            judgments = json.loads(
+                (second_work / "pull-request-judgments.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual([], judgments["pullRequests"])
+            report = (second_work / "report.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "0 selected; 1 excluded (`unchanged-stable`: 1)",
+                report,
+            )
+
+    def test_interrupted_started_cycle_does_not_advance_current_state(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_input = root / "input-1.json"
+            first_input.write_text(
+                json.dumps(snapshot("2026-08-27T12:00:00Z")),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            (first_work / "agent-judgments.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": started["snapshotId"],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+            current_path = state / "current.json"
+            prior_current = current_path.read_bytes()
+
+            second_input = root / "input-2.json"
+            second_input.write_text(
+                json.dumps(
+                    snapshot(
+                        "2026-08-28T12:00:00Z",
+                        title="Materially changed CI failure",
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            interrupted = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=root / "work-2",
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            self.assertEqual("awaiting-review", interrupted["stage"])
+            self.assertEqual(prior_current, current_path.read_bytes())
+
     def test_finishes_pull_request_review_without_executable_pr_proposals(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
@@ -684,6 +1095,57 @@ class CycleTests(unittest.TestCase):
                 report,
             )
             self.assertIn("open bot-authored inventory is incomplete", report)
+
+    def test_report_surfaces_truncated_open_bot_scan(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            document = snapshot("2026-08-27T12:00:00Z")
+            document["warnings"] = [
+                "open bot-authored inventory is incomplete because its "
+                "page budget was exhausted"
+            ]
+            document["openBotScan"] = {
+                "status": "truncated",
+                "complete": False,
+                "scannedPages": 40,
+                "pageBudget": 40,
+                "itemBudget": 250,
+                "botAuthoredFound": 100,
+                "botAuthoredAdopted": 100,
+                "detail": "page budget exhausted",
+            }
+            input_path = root / "input.json"
+            input_path.write_text(json.dumps(document), encoding="utf-8")
+            work = root / "work"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=root / "state",
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            agent_judgments = work / "agent-judgments.json"
+            agent_judgments.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": started["snapshotId"],
+                        "issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cycle_script.finish_cycle(
+                work_dir=work,
+                agent_judgments_path=agent_judgments,
+            )
+
+            report = (work / "report.md").read_text(encoding="utf-8")
+            self.assertIn("**Open bot scan:** `truncated`", report)
+            self.assertIn("page budget was exhausted", report)
 
 
 if __name__ == "__main__":

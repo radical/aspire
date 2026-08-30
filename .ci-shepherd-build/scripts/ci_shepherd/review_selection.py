@@ -8,8 +8,8 @@ surface an agent can push an unsupported conclusion through.
 
 This module narrows the handoff to cases that need a fresh judgment: every
 first-seen case, every materially changed case, and every case whose periodic
-reassessment is due. Stable previously reviewed cases keep their deterministic
-default without a model call.
+reassessment is due. Stable previously reviewed cases keep their last validated
+judgment without a model call.
 
 The selection is also the merge contract: each selected case carries the exact
 set of dispositions it can legitimately project into, so an override that
@@ -118,9 +118,31 @@ def build_review_selection(
         )
         omission_reason = _omission_reason(issue, change_class)
         if omission_reason is not None:
-            omitted.append(
-                {"issueNumber": issue_number, "reason": omission_reason}
-            )
+            omitted_case: dict[str, Any] = {
+                "issueNumber": issue_number,
+                "reason": omission_reason,
+            }
+            previous = previous_by_issue.get(issue_number)
+            if (
+                change_class == "unchanged"
+                and omission_reason != _OMISSION_SUPERSEDED
+                and previous is not None
+                and previous != issue.get("defaultJudgment")
+            ):
+                try:
+                    _require_allowed_dispositions(
+                        previous,
+                        issue_number,
+                        set(_allowed_dispositions(issue)),
+                        issue,
+                    )
+                except ValidationError:
+                    omitted_case["retainedJudgmentDiscardedReason"] = (
+                        "no-longer-projectable"
+                    )
+                else:
+                    omitted_case["retainedJudgment"] = copy.deepcopy(previous)
+            omitted.append(omitted_case)
             continue
 
         reasons = _review_reasons(issue, change_class)
@@ -132,7 +154,7 @@ def build_review_selection(
             "allowedDispositions": _allowed_dispositions(issue),
             "question": _build_question(issue, issue_number),
         }
-        previous = previous_by_issue.get(issue_number)
+        previous = _previous_judgment_summary(previous_by_issue.get(issue_number))
         if previous is not None:
             selected_case.update(previous)
         context = reassessment_context.get(issue_number)
@@ -237,7 +259,31 @@ def validate_review_selection(selection: object) -> dict[str, Any]:
                 f"Issue {issue_number} is both selected and omitted."
             )
         seen.add(issue_number)
-        _require_nonempty_string(omitted_entry, "reason")
+        reason = _require_nonempty_string(omitted_entry, "reason")
+        retained = omitted_entry.get("retainedJudgment")
+        discarded_reason = omitted_entry.get("retainedJudgmentDiscardedReason")
+        if discarded_reason is not None:
+            if discarded_reason != "no-longer-projectable":
+                raise ValidationError(
+                    f"Issue {issue_number} has an invalid retained judgment discard reason."
+                )
+            if retained is not None:
+                raise ValidationError(
+                    f"Issue {issue_number} cannot retain and discard the same judgment."
+                )
+        if retained is not None:
+            if reason not in {_OMISSION_UNCHANGED, _OMISSION_NOT_ELIGIBLE}:
+                raise ValidationError(
+                    f"Issue {issue_number} may only retain a judgment when unchanged."
+                )
+            retained_judgment = _require_mapping(
+                retained,
+                "retained judgment",
+            )
+            if _require_positive_int(retained_judgment, "issueNumber") != issue_number:
+                raise ValidationError(
+                    f"Retained judgment for issue {issue_number} has the wrong target."
+                )
     return dict(document)
 
 
@@ -271,10 +317,11 @@ def merge_selected_poc_judgments(
     """Apply sparse agent judgments to selected cases only.
 
     Unlike the full merge, the agent may return judgments for a subset of the
-    selected cases -- silence means "the deterministic default stands". A
-    judgment for an unselected case, or one whose disposition the case cannot
-    project, is an error rather than something to quietly drop, because a
-    silently discarded override looks identical to agreement.
+    selected cases -- silence means "the deterministic default stands". An
+    unchanged omitted case retains its last validated judgment. A judgment for
+    any other unselected case, or one whose disposition the case cannot project,
+    is an error rather than something to quietly drop, because a silently
+    discarded override looks identical to agreement.
     """
     compact = _require_mapping(compact_input, "compact input")
     agent = _require_mapping(agent_judgments, "agent judgments")
@@ -291,6 +338,14 @@ def merge_selected_poc_judgments(
     allowed_by_issue = {
         int(entry["issueNumber"]): set(entry["allowedDispositions"])
         for entry in validated_selection["selected"]
+    }
+    retained_by_issue = {
+        int(entry["issueNumber"]): _require_mapping(
+            entry["retainedJudgment"],
+            "retained judgment",
+        )
+        for entry in validated_selection["omitted"]
+        if "retainedJudgment" in entry
     }
 
     agent_issues: dict[int, Mapping[str, Any]] = {}
@@ -314,6 +369,12 @@ def merge_selected_poc_judgments(
         )
         agent_issue = agent_issues.get(issue_number)
         if agent_issue is None:
+            retained_issue = retained_by_issue.get(issue_number)
+            if retained_issue is not None:
+                retained_override = copy.deepcopy(dict(retained_issue))
+                merged.append(retained_override)
+                overridden.append(retained_override)
+                continue
             merged.append(copy.deepcopy(dict(default_judgment)))
             continue
 
@@ -445,12 +506,12 @@ def _change_reasons_by_issue(
 
 def _previous_judgments_by_issue(
     previous_judgments: object | None,
-) -> dict[int, dict[str, str]]:
+) -> dict[int, dict[str, Any]]:
     if previous_judgments is None:
         return {}
     if not isinstance(previous_judgments, list):
         raise ValidationError("Previous judgments must be a list.")
-    previous_by_issue: dict[int, dict[str, str]] = {}
+    previous_by_issue: dict[int, dict[str, Any]] = {}
     for raw_judgment in previous_judgments:
         judgment = _require_mapping(raw_judgment, "previous judgment")
         issue_number = _require_positive_int(judgment, "issueNumber")
@@ -458,27 +519,33 @@ def _previous_judgments_by_issue(
             raise ValidationError(
                 f"Duplicate previous judgment for issue {issue_number}."
             )
-        summary: dict[str, str] = {}
-        category = judgment.get("category")
-        if isinstance(category, str) and category.strip():
-            summary["previousCategory"] = category
-        raw_recommendations = judgment.get("recommendations")
-        if raw_recommendations is None:
-            previous_by_issue[issue_number] = summary
-            continue
-        if not isinstance(raw_recommendations, list):
-            raise ValidationError("recommendations must be an array.")
-        recommendations = raw_recommendations
-        if recommendations:
-            recommendation = _require_mapping(
-                recommendations[0],
-                "previous recommendation",
-            )
-            disposition = recommendation.get("disposition")
-            if isinstance(disposition, str) and disposition.strip():
-                summary["previousDisposition"] = disposition
-        previous_by_issue[issue_number] = summary
+        previous_by_issue[issue_number] = copy.deepcopy(dict(judgment))
     return previous_by_issue
+
+
+def _previous_judgment_summary(
+    judgment: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    if judgment is None:
+        return None
+    summary: dict[str, str] = {}
+    category = judgment.get("category")
+    if isinstance(category, str) and category.strip():
+        summary["previousCategory"] = category
+    raw_recommendations = judgment.get("recommendations")
+    if raw_recommendations is None:
+        return summary
+    if not isinstance(raw_recommendations, list):
+        raise ValidationError("recommendations must be an array.")
+    if raw_recommendations:
+        recommendation = _require_mapping(
+            raw_recommendations[0],
+            "previous recommendation",
+        )
+        disposition = recommendation.get("disposition")
+        if isinstance(disposition, str) and disposition.strip():
+            summary["previousDisposition"] = disposition
+    return summary
 
 
 def _omission_reason(issue: Mapping[str, Any], change_class: str) -> str | None:

@@ -116,6 +116,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "grantId",
                     "repository",
                     "snapshotId",
+                    "chainRoot",
+                    "operation",
+                    "target",
+                    "idempotencyKey",
+                    "bodyDigest",
+                    "expectedActorLogin",
                 }
             }
             _print_json(result)

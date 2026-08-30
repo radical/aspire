@@ -222,7 +222,7 @@ class QuarantineWorkerResultTests(unittest.TestCase):
 
         self.assertEqual("completed", event["status"])
 
-    def test_blocked_targets_survive_a_partial_pull_request(self) -> None:
+    def test_blocked_test_identity_survives_changed_evidence_metadata(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             record_quarantine_session_event(
@@ -264,7 +264,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
             event["blockedTargets"][0]["reason"],
         )
         self.assertIsNone(unchanged["proposal"])
-        self.assertEqual("Tests.Two", changed["proposal"]["tests"][0]["testName"])
+        self.assertIsNone(changed["proposal"])
+        self.assertEqual(
+            {
+                "testName": "Tests.Two",
+                "reason": "Test source was not found.",
+            },
+            changed["blockedTargets"][0],
+        )
 
     def test_get_verified_result_advances_the_head_after_a_repair_push(self) -> None:
         with TemporaryDirectory() as scratch:
