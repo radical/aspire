@@ -412,6 +412,79 @@ class PocValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "outside its evidence bundle"):
             validate_poc_judgments(prepared, judgment)
 
+    def test_rejects_owned_status_comment_as_recommendation_evidence(self) -> None:
+        issue = _compact_issue(
+            202,
+            candidate_state="observing",
+            candidate_action="wait",
+            tier2_test_name=None,
+            tier1_cause_id="status-comment-replay",
+            bundle_size=4,
+        )
+        issue["evidenceBundle"] = [
+            issue["evidenceBundle"][0],
+            issue["evidenceBundle"][2],
+            issue["evidenceBundle"][3],
+        ]
+        status_comment = issue["evidenceBundle"][2]
+        status_comment["payload"]["shepherdStatus"] = {
+            "role": "status",
+            "idempotencyKey": "issue:202:status",
+            "owned": True,
+        }
+        prepared = _compact_prepared([issue])
+        judgment = {
+            "schemaVersion": 1,
+            "snapshotId": prepared["snapshotId"],
+            "issues": [build_compact_poc_input(prepared)["issues"][0]["defaultJudgment"]],
+        }
+        judgment["issues"][0]["recommendations"][0]["evidenceIds"].append(
+            status_comment["id"]
+        )
+
+        with self.assertRaisesRegex(ValidationError, "outside its citable evidence"):
+            validate_poc_judgments(prepared, judgment)
+
+    def test_accepts_visible_resolution_evidence_evicted_by_display_cap(self) -> None:
+        issue = _compact_issue(
+            203,
+            bundle_size=3,
+            resolution_evidence={
+                "pullRequestEvidenceId": "pr:203",
+                "runEvidenceId": "run:203",
+            },
+        )
+        for index in range(7):
+            issue["evidenceBundle"].append(
+                {
+                    "id": f"run:203:{index}",
+                    "kind": "workflow-run",
+                    "availability": "available",
+                    "payload": {
+                        "runId": 2_030 + index,
+                        "conclusion": "success",
+                    },
+                }
+            )
+        prepared = _compact_prepared([issue])
+        compact_issue = build_compact_poc_input(prepared)["issues"][0]
+        judgment = {
+            "schemaVersion": 1,
+            "snapshotId": prepared["snapshotId"],
+            "issues": [copy.deepcopy(compact_issue["defaultJudgment"])],
+        }
+        judgment["issues"][0]["recommendations"][0]["evidenceIds"].append("pr:203")
+
+        self.assertNotIn(
+            "pr:203",
+            [entry["id"] for entry in compact_issue["allowedEvidence"]],
+        )
+        self.assertEqual(
+            "pr:203",
+            compact_issue["resolutionEvidence"]["pullRequestEvidenceId"],
+        )
+        validate_poc_judgments(prepared, judgment)
+
     def test_rejects_duplicate_issue_judgment(self) -> None:
         prepared = _prepared()
         judgment = _judgment()
@@ -683,6 +756,39 @@ class PocValidationTests(unittest.TestCase):
         self.assertEqual(["issue:201", "pr:201", "run:201"], evidence_ids)
         self.assertTrue(set(evidence_ids).issubset(set(allowed_ids)))
         self.assertNotIn("payload", issue["resolutionEvidence"])
+
+    def test_owned_status_comment_is_not_allowed_as_assessment_evidence(self) -> None:
+        issue = _compact_issue(
+            202,
+            candidate_state="observing",
+            candidate_action="wait",
+            tier2_test_name=None,
+            tier1_cause_id="status-comment-replay",
+            bundle_size=4,
+        )
+        issue["evidenceBundle"] = [
+            issue["evidenceBundle"][0],
+            issue["evidenceBundle"][2],
+            issue["evidenceBundle"][3],
+        ]
+        status_comment = issue["evidenceBundle"][2]
+        status_comment["payload"]["shepherdStatus"] = {
+            "role": "status",
+            "idempotencyKey": "issue:202:status",
+            "owned": True,
+        }
+
+        compact = build_compact_poc_input(_compact_prepared([issue]))
+        compact_issue = compact["issues"][0]
+
+        self.assertEqual(
+            ["issue:202", "run:202"],
+            [entry["id"] for entry in compact_issue["allowedEvidence"]],
+        )
+        self.assertEqual(
+            ["issue:202", "run:202"],
+            compact_issue["defaultJudgment"]["recommendations"][0]["evidenceIds"],
+        )
 
     def test_recurrent_flaky_test_without_exact_name_is_investigated(self) -> None:
         prepared = _compact_prepared(

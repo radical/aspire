@@ -198,9 +198,11 @@ markers:
 ```
 
 Shepherd-authored status comments must not contribute markers, facts, or
-references. Retain their owned comment identity only for idempotency. An
-unchanged watch state must not create or edit a comment. A changed comment body
-is a new reviewable proposal and requires separate approval.
+references. They are control state, not assessment evidence, and must not
+appear in `allowedEvidence` or recommendation `evidenceIds`. Retain their owned
+comment identity only for idempotency. An unchanged watch state must not create
+or edit a comment. A changed comment body is a new reviewable proposal and
+requires separate approval.
 
 ## Bounded investigation lifecycle
 

@@ -347,6 +347,7 @@ def _validate_recommendation(
     evidence_ids = _require_list(recommendation_mapping, "evidenceIds")
     seen_evidence_ids: set[str] = set()
     bundle_ids = _bundle_ids(bundle)
+    citable_evidence_ids = _citable_evidence_ids(bundle)
     for evidence_id in evidence_ids:
         if not isinstance(evidence_id, str) or not evidence_id.strip():
             raise ValidationError("Recommendation evidenceIds must be nonempty strings.")
@@ -356,6 +357,10 @@ def _validate_recommendation(
         if evidence_id not in bundle_ids:
             raise ValidationError(
                 f"Recommendation cites evidence {evidence_id} outside its evidence bundle."
+            )
+        if evidence_id not in citable_evidence_ids:
+            raise ValidationError(
+                f"Recommendation cites evidence {evidence_id} outside its citable evidence."
             )
 
     missing_evidence = _require_list(recommendation_mapping, "missingEvidence")
@@ -2348,9 +2353,27 @@ def _select_allowed_evidence(
     by kind first -- ties broken by the original bundle order -- keeps the
     cap small while making sure recovery-relevant evidence is prioritized.
     """
-    records = [
-        _require_mapping(entry, "prepared evidence bundle entry") for entry in evidence_bundle
+    records = _ranked_allowed_evidence(evidence_bundle)
+    allowed_evidence: list[dict[str, Any]] = []
+    allowed_evidence_ids: list[str] = []
+    for record in records:
+        projected = _project_allowed_evidence(record)
+        allowed_evidence.append(projected)
+        allowed_evidence_ids.append(_require_nonempty_string(projected, "id"))
+    return allowed_evidence, allowed_evidence_ids
+
+
+def _citable_evidence_ids(evidence_bundle: Sequence[Any]) -> list[str]:
+    return [
+        _require_nonempty_string(record, "id")
+        for record in _assessment_evidence_records(evidence_bundle)
     ]
+
+
+def _ranked_allowed_evidence(
+    evidence_bundle: Sequence[Any],
+) -> list[Mapping[str, Any]]:
+    records = _assessment_evidence_records(evidence_bundle)
     ranked = sorted(
         enumerate(records),
         key=lambda item: (
@@ -2360,13 +2383,30 @@ def _select_allowed_evidence(
             item[0],
         ),
     )
-    allowed_evidence: list[dict[str, Any]] = []
-    allowed_evidence_ids: list[str] = []
-    for _, record in ranked[:_MAX_ALLOWED_EVIDENCE]:
-        projected = _project_allowed_evidence(record)
-        allowed_evidence.append(projected)
-        allowed_evidence_ids.append(_require_nonempty_string(projected, "id"))
-    return allowed_evidence, allowed_evidence_ids
+    return [record for _, record in ranked[:_MAX_ALLOWED_EVIDENCE]]
+
+
+def _assessment_evidence_records(
+    evidence_bundle: Sequence[Any],
+) -> list[Mapping[str, Any]]:
+    records: list[Mapping[str, Any]] = []
+    for entry in evidence_bundle:
+        record = _require_mapping(entry, "prepared evidence bundle entry")
+        payload = record.get("payload")
+        shepherd_status = (
+            payload.get("shepherdStatus") if isinstance(payload, Mapping) else None
+        )
+        # Owned status comments are retained in the snapshot so proposal
+        # generation can update the canonical slot, but their content is the
+        # shepherd's prior conclusion rather than independent factual evidence.
+        if (
+            record.get("kind") == "issue-comment"
+            and isinstance(shepherd_status, Mapping)
+            and shepherd_status.get("owned") is True
+        ):
+            continue
+        records.append(record)
+    return records
 
 
 def _project_allowed_evidence(record: Mapping[str, Any]) -> dict[str, Any]:

@@ -725,6 +725,11 @@ class LifecycleAssessmentTests(unittest.TestCase):
                 "createdAt": "2026-08-01T00:00:00Z",
                 "body": "diagnostic " * 1_000,
                 "facts": [{"field": "exceptionType", "normalized": "TimeoutException"}],
+                "shepherdStatus": {
+                    "role": "status",
+                    "idempotencyKey": "issue:16:status",
+                    "owned": True,
+                },
             },
         )
 
@@ -736,6 +741,14 @@ class LifecycleAssessmentTests(unittest.TestCase):
         self.assertNotIn("comments", issue_bundle_payload)
         self.assertEqual("timeout", issue_bundle_payload["facts"][0]["normalized"])
         self.assertLessEqual(len(comment_bundle_payload["body"]), 2_000)
+        self.assertEqual(
+            {
+                "role": "status",
+                "idempotencyKey": "issue:16:status",
+                "owned": True,
+            },
+            comment_bundle_payload["shepherdStatus"],
+        )
 
     def test_scoped_evidence_with_a_mapping_payload_is_bundled(self) -> None:
         payload = issue_payload(

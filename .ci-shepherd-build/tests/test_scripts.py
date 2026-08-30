@@ -688,6 +688,7 @@ class PrototypeScriptTests(unittest.TestCase):
             "Every mutation requires an exact machine-readable authorization grant.",
             "All automatically posted GitHub text starts with `[automated] `.",
             "Shepherd-authored status comments must not contribute markers, facts, or references.",
+            "They are control state, not assessment evidence",
             "An unchanged watch state must not create or edit a comment.",
             "The assessment agent never executes actions.",
             "Execute only action IDs explicitly enumerated by the grant",

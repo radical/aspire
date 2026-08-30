@@ -60,6 +60,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "markers",
         "facts",
         "references",
+        "shepherdStatus",
         "sourceIssueNumber",
         "referencedBy",
         "role",
