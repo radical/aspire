@@ -15,6 +15,7 @@ from ci_shepherd.history import load_current
 from ci_shepherd.investigations import (
     attach_latest_investigation_results,
     build_investigation_plan,
+    read_investigation_session_events,
     read_investigation_results,
     render_investigation_section,
 )
@@ -432,6 +433,7 @@ def finish_cycle(
         prepared,
         final_judgments,
         read_investigation_results(state_dir),
+        read_investigation_session_events(state_dir),
     )
     _write_private_json(paths["investigationPlan"], investigation_plan)
     report_markdown = render_poc_markdown(
@@ -526,6 +528,9 @@ def finish_cycle(
         ),
         "reusedInvestigationCount": len(
             investigation_plan["reusedInvestigationIds"]
+        ),
+        "activeInvestigationCount": len(
+            investigation_plan["activeInvestigationIds"]
         ),
     }
     _write_private_json(manifest_path, completed)

@@ -218,6 +218,9 @@ def build_run_completion(
     investigation_rows = read_jsonl_rows(
         state_dir / "ledgers" / "investigation-results.jsonl"
     )
+    investigation_session_rows = read_jsonl_rows(
+        state_dir / "ledgers" / "investigation-sessions.jsonl"
+    )
     investigation_results = sorted(
         (
             row
@@ -228,6 +231,51 @@ def build_run_completion(
     )
     completed_investigation_ids = {
         row.get("investigationId") for row in investigation_results
+    }
+    investigation_session_events = [
+        row
+        for row in investigation_session_rows
+        if row.get("investigationId") in investigation_ids
+    ]
+    quarantine_plan = _load_object(
+        work_dir / "quarantine-session.json",
+        "quarantine session plan",
+    )
+    _require_matching_identity(
+        quarantine_plan,
+        repository=repository,
+        snapshot_id=snapshot_id,
+        label="Quarantine session plan",
+    )
+    quarantine_batch_ids = {
+        value
+        for value in (
+            quarantine_plan.get("activeBatchId"),
+            *quarantine_plan.get("openBatchIds", []),
+            (
+                quarantine_plan["proposal"].get("batchId")
+                if isinstance(quarantine_plan.get("proposal"), Mapping)
+                else None
+            ),
+        )
+        if isinstance(value, str) and value
+    }
+    quarantine_rows = read_jsonl_rows(
+        state_dir / "ledgers" / "quarantine-sessions.jsonl"
+    )
+    quarantine_events = [
+        row
+        for row in quarantine_rows
+        if (
+            row.get("batchId") in quarantine_batch_ids
+            or row.get("snapshotId") == snapshot_id
+        )
+        and str(row.get("repository", "")).casefold() == repository.casefold()
+    ]
+    recorded_quarantine_batch_ids = {
+        row.get("batchId")
+        for row in quarantine_events
+        if isinstance(row.get("batchId"), str)
     }
 
     return {
@@ -240,8 +288,13 @@ def build_run_completion(
         "interruptedActionIds": sorted(intent_action_ids - terminal_action_ids),
         "unrecordedActionIds": sorted(action_ids - recorded_action_ids),
         "investigationResults": investigation_results,
+        "investigationSessionEvents": investigation_session_events,
         "missingInvestigationIds": sorted(
             investigation_ids - completed_investigation_ids
+        ),
+        "quarantineSessionEvents": quarantine_events,
+        "unrecordedQuarantineBatchIds": sorted(
+            quarantine_batch_ids - recorded_quarantine_batch_ids
         ),
     }
 

@@ -214,10 +214,22 @@ Each request has a deterministic
 `investigationId`, the issue URL, evidence IDs, missing evidence, stop
 condition, and an exact `workerPrompt`.
 
-Launch each new request in a fresh read-only agent. Give the worker only the
-request and its prompt. The worker must use the issue-investigation workflow,
-must not edit code or write to GitHub, and must return the required JSON result.
-Validate and record it with:
+Create each new request in a fresh read-only agent, then record its `started`
+session before sending the exact worker prompt:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
+  --state-dir "$STATE" \
+  --plan "$SCRATCH/investigation-plan.json" \
+  --investigation-id "investigation:..." \
+  --status started \
+  --recorded-at "2026-08-28T20:20:00Z" \
+  --session-id "<worker-session-id>"
+```
+
+The worker must use the issue-investigation workflow, must not edit code or
+write to GitHub, and must return the required JSON result. Validate and record
+it with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
@@ -229,12 +241,21 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
   --session-id "<worker-session-id>"
 ```
 
+Result recording requires the exact active session, writes the completed result,
+and terminally completes the session. Replaying the same result returns the
+persisted result without another terminal event. If the worker exits without a
+valid result, record `--status failed --failure-reason "<specific reason>"` with
+`investigation_session.py`; the same request can then be proposed again. A later
+cycle's plan can complete or fail an active investigation because its complete
+request is persisted in the started-session event.
+
 The next cycle attaches every target-specific result whose source-evidence
 fingerprint still matches. An unchanged issue reuses the completed results and
 starts no duplicate investigations. Materially changed evidence creates new
 requests and the stale results are not shown to the assessment agent. A
 `fixable` result is only a structured handoff candidate; it does not authorize
-code changes, assignment, or a pull request.
+code changes, assignment, or a pull request. Record a `started` investigation
+session before launching the worker.
 
 ## Approved quarantine session
 
@@ -246,70 +267,98 @@ quarantine PR and tests in a merged PR are removed from later batches, and an
 active local session suppresses every new quarantine proposal.
 
 Before starting, show the user the batch ID, complete test list, original issue
-links, and exact worker prompt. After approval:
+links, and exact worker prompt. Approval creates a short-lived grant bound to
+the raw `quarantine-session.json` bytes, canonical state directory, repository,
+snapshot, exact batch, and exact test set. Grant creation and execution both
+hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
 
 1. Create one idle local worktree session from the repository default branch.
-2. Record `started` before sending work to that session. For a staged
-   single-test trial, add `--test-name "Namespace.Type.Method"`; this derives a
-   separately identified one-test batch from the validated proposal:
+2. Create the exact authorization grant. For a staged single-test trial, add
+   `--test-name "Namespace.Type.Method"`; this derives a separately identified
+   one-test batch. Read `allowedBatchId` from the generated grant:
 
    ```bash
-   python3 "$CI_SHEPHERD_ROOT/scripts/quarantine_session.py" \
-     --state-dir "$STATE" \
-     --request "$SCRATCH/quarantine-session.json" \
-     --status started \
-     --recorded-at "2026-08-28T20:30:00Z" \
-     --session-id "<worktree-session-id>"
+   python3 "$CI_SHEPHERD_ROOT/scripts/authorize_quarantine.py" \
+    --state-dir "$STATE" \
+    --request "$SCRATCH/quarantine-session.json" \
+    --output "$SCRATCH/quarantine-authorization.json" \
+    --test-name "Namespace.Type.Method"
    ```
 
-3. Send the proposal's exact `workerPrompt` to the session. Do not start a
-   second quarantine worker.
-4. Require the worker to run QuarantineTools once per test, restore once, build
-   every affected test project, verify every target is excluded as quarantined,
-   and return the exact diff, commands, results, and draft PR title/body.
-5. Leave an unresolved or non-method target unchanged, report it as blocked, and
-   continue validating the remaining targets. If unrelated files changed or a
-   changed target still fails validation after one quarantine-only correction,
-   record `failed` and stop.
-6. If a target is already quarantined with the original issue URL, do not create
-   an empty commit or PR. Verify the merged PR that introduced the exact
-   attribute, then record `completed` directly from the started batch with that
-   PR URL and exact test list. This reconciles stale proposals without a false
-   `pull-request-open` event.
-7. Show the draft PR title and full body. Only after approval, commit, push the
-   branch to the user's fork, and open a draft PR. The visible body begins with
-   `[automated] ` and uses `Addresses #N`; the original failure issues remain
-   open.
-8. Record `pull-request-open` with the draft PR URL and only the tests actually
-   changed and validated:
+3. Record `started` before sending work to that session. Supply the exact
+   `allowedBatchId`; a missing, expired, changed-plan, wrong-state-directory,
+   replayed, or production grant fails before the session ledger records work:
 
    ```bash
    python3 "$CI_SHEPHERD_ROOT/scripts/quarantine_session.py" \
     --state-dir "$STATE" \
     --request "$SCRATCH/quarantine-session.json" \
-    --status pull-request-open \
-    --recorded-at "2026-08-28T21:00:00Z" \
-    --session-id "<worktree-session-id>" \
-    --pull-request-url "https://github.com/microsoft/aspire/pull/..." \
-     --completed-test "Namespace.Type.Method"
+    --authorization "$SCRATCH/quarantine-authorization.json" \
+    --batch-id "<allowedBatchId>" \
+    --test-name "Namespace.Type.Method" \
+    --status started \
+    --recorded-at "2026-08-28T20:30:00Z" \
+    --session-id "<worktree-session-id>"
    ```
 
-   Repeat `--completed-test` for every test represented in the pull request.
-   Blocked targets are not recorded in the open-PR event and remain eligible
-   for later reassessment.
-9. A draft PR is not completion. Every later pass reconciles each pending PR
-   before proposing another quarantine batch:
+4. Send the proposal's exact `workerPrompt` to the session. Do not start a
+   second quarantine worker.
+5. Require the worker to run QuarantineTools once per test, restore once, build
+   every affected test project, verify every target is excluded as quarantined,
+   and return the exact diff, commands, results, and draft PR title/body.
+6. Leave an unresolved or non-method target unchanged, report it as blocked, and
+   continue validating the remaining targets. If unrelated files changed or a
+   changed target still fails validation after one quarantine-only correction,
+   record `failed` and stop.
+7. If a target is already quarantined with the original issue URL, do not create
+   an empty commit or PR. Return a typed `completed` result naming the merged PR
+   URL, exact head SHA, and exact test list. `record_quarantine_result.py` GET
+   verifies the merged state and identity before completing the started batch.
+8. Show the draft PR title and full body. Only after approval, commit, push the
+   branch to the user's fork, and open a draft PR. The visible body begins with
+   `[automated] ` and uses `Addresses #N`; the original failure issues remain
+   open.
+9. Have the worker write `agent-quarantine-result.json`. It has a closed schema:
+   repository, snapshot, batch, session, outcome, completed tests, blocked tests
+   with reasons, and the draft PR URL and 40-character head SHA. Every requested
+   test must be exactly one of completed or blocked; freeform fields are
+   rejected. Record it only after a GET verifies the same repository, URL,
+   open-draft state, and head SHA:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/record_quarantine_result.py" \
+    --state-dir "$STATE" \
+    --request "$SCRATCH/quarantine-session.json" \
+    --batch-id "<allowedBatchId>" \
+    --result "$SCRATCH/agent-quarantine-result.json" \
+    --recorded-at "2026-08-28T21:00:00Z" \
+    --audit "$SCRATCH/api-calls.jsonl"
+   ```
+
+   Blocked targets and their reasons remain in the typed result rather than
+   being silently dropped.
+10. A draft PR is not completion. Every later pass GET-reconciles each pending
+   PR before proposing another quarantine batch:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/reconcile_quarantine.py" \
+     --state-dir "$STATE" \
+     --repository "owner/fork" \
+     --recorded-at "2026-08-29T12:00:00Z" \
+     --audit "$SCRATCH/api-calls.jsonl"
+   ```
+
    - if it merged, record `completed` with the same URL and exact test list;
    - if it is open with PR-caused failing checks, resume the recorded worktree
-     session to diagnose, fix, validate, commit, and push;
+     session to diagnose, fix, validate, commit, and push, then record a fresh
+     typed result so the GET-verified ledger head advances to the pushed commit;
    - if it is open with pending or successful checks, leave it awaiting the PR;
    - if it closed unmerged or was abandoned, record `failed` so the tests can be
      proposed again.
 
-   The follow-up worker preserves complete failing-command output and reports
-   each pushed commit. A later cycle can finish either terminal transition by
-   passing `--batch-id` with its current `quarantine-session.json`; the session
-   ID is recovered from the ledger.
+    Reconciliation requires the exact recorded head SHA. Missing or changed
+    identity fails closed and leaves the test suppressed. The follow-up worker
+    preserves complete failing-command output and reports each pushed commit.
 
 This is intentionally a lightweight coordinator protocol, not a scheduler or
 general job engine.

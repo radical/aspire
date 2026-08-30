@@ -182,6 +182,20 @@ def load_script(name: str):
 
 
 class PrototypeScriptTests(unittest.TestCase):
+    def test_skill_requires_authorized_typed_quarantine_lifecycle(self) -> None:
+        skill = SKILL_PATH.read_text(encoding="utf-8")
+
+        for required in (
+            "authorize_quarantine.py",
+            "quarantine-authorization.json",
+            "record_quarantine_result.py",
+            "agent-quarantine-result.json",
+            "reconcile_quarantine.py",
+            "hard-deny `microsoft/aspire`",
+            "exact recorded head SHA",
+        ):
+            self.assertIn(required, skill)
+
     def test_default_collect_profile_enables_bounded_supporting_and_run_history(self) -> None:
         collect_script = load_script("collect")
         calls: dict[str, object] = {}
@@ -650,6 +664,7 @@ class PrototypeScriptTests(unittest.TestCase):
             "The fresh assessment agent must never access GitHub",
             "Collection, assessment, and investigation must never write to GitHub.",
             "The coordinator and a bounded issue investigator may use GET-only GitHub access.",
+            "Record a `started` investigation session before launching the worker.",
             "The coordinator collects, prepares, validates, renders, and records artifacts.",
         ):
             with self.subTest(phrase=phrase):

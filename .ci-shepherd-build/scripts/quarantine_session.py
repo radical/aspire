@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 
 from ci_shepherd.models import stable_json
+from ci_shepherd.quarantine_authorization import authorize_quarantine_start
 from ci_shepherd.quarantine import (
     read_quarantine_session_events,
     record_quarantine_session_event,
-    select_quarantine_session_request,
 )
 
 
@@ -72,7 +73,7 @@ def main() -> int:
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument(
         "--status",
-        choices=("started", "pull-request-open", "completed", "failed"),
+        choices=("started", "failed"),
         required=True,
     )
     parser.add_argument("--recorded-at", required=True)
@@ -82,17 +83,38 @@ def main() -> int:
         "--test-name",
         help="Start a bounded trial containing only this exact proposed test.",
     )
-    parser.add_argument("--pull-request-url")
-    parser.add_argument("--completed-test", action="append")
+    parser.add_argument("--failure-reason")
+    parser.add_argument("--authorization", type=Path)
     args = parser.parse_args()
     if args.test_name is not None and args.status != "started":
         parser.error("--test-name is valid only with --status started")
 
     old_umask = os.umask(0o077)
     try:
-        request = _load_request(args.request, args.state_dir, args.batch_id)
-        if args.test_name is not None:
-            request = select_quarantine_session_request(request, args.test_name)
+        authorization_grant_id: str | None = None
+        if args.status == "started":
+            if args.authorization is None:
+                raise ValueError(
+                    "A started quarantine session requires --authorization."
+                )
+            if args.batch_id is None:
+                raise ValueError("A started quarantine session requires --batch-id.")
+            authorized = authorize_quarantine_start(
+                request_path=args.request,
+                authorization_path=args.authorization,
+                state_dir=args.state_dir,
+                batch_id=args.batch_id,
+                now=datetime.now(timezone.utc),
+                test_name=args.test_name,
+            )
+            request = authorized.request
+            authorization_grant_id = authorized.grant_id
+        else:
+            if args.authorization is not None:
+                raise ValueError(
+                    "--authorization is valid only with --status started."
+                )
+            request = _load_request(args.request, args.state_dir, args.batch_id)
         session_id = args.session_id or request.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError(
@@ -104,8 +126,8 @@ def main() -> int:
             status=args.status,
             recorded_at=args.recorded_at,
             session_id=session_id,
-            pull_request_url=args.pull_request_url,
-            completed_test_names=args.completed_test,
+            failure_reason=args.failure_reason,
+            authorization_grant_id=authorization_grant_id,
         )
     finally:
         os.umask(old_umask)

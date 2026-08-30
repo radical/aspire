@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
+from .timeutils import parse_aware_iso8601
 
 
 _SESSION_STATUSES = frozenset(
     {"started", "pull-request-open", "completed", "failed"}
+)
+_PULL_REQUEST_URL_RE = re.compile(
+    r"^https://github\.com/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
+    r"/pull/(?P<number>[1-9][0-9]*)$",
+    re.IGNORECASE,
 )
 
 
@@ -246,6 +253,7 @@ def build_quarantine_session_plan(
     tests = request.get("tests")
     proposal: Mapping[str, Any] | None = request
     suppression_reason: str | None = None
+    blocked_targets: list[dict[str, object]] = []
     active_batch_id = str(active["batchId"]) if active is not None else None
     if active is not None:
         proposal = None
@@ -280,18 +288,41 @@ def build_quarantine_session_plan(
             and isinstance(test.get("testName"), str)
             and test["testName"]
         }
+        blocked_by_test = {
+            json.dumps(target["test"], sort_keys=True): target
+            for event in latest_by_batch.values()
+            if event.get("status") in {"pull-request-open", "completed", "failed"}
+            for target in event.get("blockedTargets", [])
+            if isinstance(target, Mapping)
+            and isinstance(target.get("test"), Mapping)
+            and isinstance(target.get("reason"), str)
+        }
         pending_tests = [
             dict(test)
             for test in tests
             if isinstance(test, Mapping)
             and test.get("testName") not in completed_test_names
             and test.get("testName") not in in_flight_test_names
+            and json.dumps(dict(test), sort_keys=True) not in blocked_by_test
+        ]
+        blocked_targets = [
+            {
+                "testName": test.get("testName"),
+                "reason": blocked_by_test[
+                    json.dumps(dict(test), sort_keys=True)
+                ]["reason"],
+            }
+            for test in tests
+            if isinstance(test, Mapping)
+            and json.dumps(dict(test), sort_keys=True) in blocked_by_test
         ]
         if not pending_tests:
             proposal = None
             suppression_reason = (
                 "awaiting-pull-request"
                 if in_flight_test_names
+                else "blocked-targets"
+                if blocked_targets
                 else "batch-already-completed"
             )
         else:
@@ -320,6 +351,7 @@ def build_quarantine_session_plan(
                 if isinstance(event.get("pullRequestUrl"), str)
             }
         ),
+        "blockedTargets": blocked_targets if isinstance(tests, list) else [],
     }
 
 
@@ -342,6 +374,11 @@ def record_quarantine_session_event(
     session_id: str,
     pull_request_url: str | None = None,
     completed_test_names: list[str] | None = None,
+    failure_reason: str | None = None,
+    authorization_grant_id: str | None = None,
+    pull_request_head_sha: str | None = None,
+    blocked_targets: list[dict[str, str]] | None = None,
+    allow_pull_request_head_update: bool = False,
 ) -> dict[str, object]:
     if status not in _SESSION_STATUSES:
         raise ValueError(f"Unsupported quarantine session status: {status}")
@@ -351,14 +388,49 @@ def record_quarantine_session_event(
         raise ValueError("Quarantine request batchId must be nonempty.")
     if not isinstance(repository, str) or not repository:
         raise ValueError("Quarantine request repository must be nonempty.")
-    if not isinstance(recorded_at, str) or not recorded_at:
-        raise ValueError("recordedAt must be nonempty.")
+    parse_aware_iso8601(recorded_at, "recordedAt")
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("sessionId must be nonempty.")
+    if authorization_grant_id is not None and (
+        status != "started"
+        or not isinstance(authorization_grant_id, str)
+        or not authorization_grant_id
+    ):
+        raise ValueError(
+            "authorizationGrantId must be nonempty and is valid only for started sessions."
+        )
+    if allow_pull_request_head_update and status != "pull-request-open":
+        raise ValueError(
+            "allowPullRequestHeadUpdate is valid only for pull-request-open sessions."
+        )
+    snapshot_id = request.get("snapshotId")
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        raise ValueError("Quarantine request snapshotId must be nonempty.")
     if pull_request_url is not None and (
         not isinstance(pull_request_url, str) or not pull_request_url
     ):
         raise ValueError("pullRequestUrl must be a nonempty string when provided.")
+    if pull_request_url is not None:
+        match = _PULL_REQUEST_URL_RE.fullmatch(pull_request_url)
+        if (
+            match is None
+            or match.group("repository").casefold() != repository.casefold()
+        ):
+            raise ValueError(
+                f"pullRequestUrl must identify an {repository} pull request."
+            )
+    if status in {"pull-request-open", "completed"} and pull_request_head_sha is None:
+        raise ValueError(
+            f"A {status} quarantine session must record its pull request head SHA."
+        )
+    if pull_request_head_sha is not None and (
+        status not in {"pull-request-open", "completed"}
+        or re.fullmatch(r"[0-9a-fA-F]{40}", pull_request_head_sha) is None
+    ):
+        raise ValueError(
+            "pullRequestHeadSha must be a 40-character Git SHA and is valid "
+            "only for pull-request-open or completed sessions."
+        )
     if status in {"pull-request-open", "completed"} and pull_request_url is None:
         raise ValueError(
             f"A {status} quarantine session must record its pull request."
@@ -373,6 +445,20 @@ def record_quarantine_session_event(
     }:
         raise ValueError(
             "Completed test names are valid only for pull-request-open or completed sessions."
+        )
+    if status == "failed":
+        if not isinstance(failure_reason, str) or not failure_reason:
+            raise ValueError("A failed quarantine session requires a failure reason.")
+    elif failure_reason is not None:
+        raise ValueError("failureReason is valid only for failed sessions.")
+    if blocked_targets is not None and status not in {
+        "pull-request-open",
+        "completed",
+        "failed",
+    }:
+        raise ValueError(
+            "blockedTargets is valid only for pull-request-open, completed, "
+            "or failed sessions."
         )
 
     request_tests = request.get("tests", [])
@@ -406,6 +492,7 @@ def record_quarantine_session_event(
     event: dict[str, object] = {
         "schemaVersion": 1,
         "repository": repository,
+        "snapshotId": snapshot_id,
         "batchId": batch_id,
         "status": status,
         "recordedAt": recorded_at,
@@ -414,10 +501,56 @@ def record_quarantine_session_event(
     }
     if pull_request_url is not None:
         event["pullRequestUrl"] = pull_request_url
+    if pull_request_head_sha is not None:
+        event["pullRequestHeadSha"] = pull_request_head_sha.lower()
+    normalized_blocked_targets: list[dict[str, object]] | None = None
+    if blocked_targets is not None:
+        requested_by_name = {
+            test.get("testName"): test
+            for test in request_tests
+            if isinstance(test, Mapping)
+            and isinstance(test.get("testName"), str)
+            and test["testName"]
+        }
+        completed_names = set(completed_test_names or [])
+        normalized_blocked_targets = []
+        for target in blocked_targets:
+            if not isinstance(target, Mapping):
+                raise ValueError("Each blocked target must be an object.")
+            test_name = target.get("testName")
+            reason = target.get("reason")
+            if (
+                not isinstance(test_name, str)
+                or test_name not in requested_by_name
+                or test_name in completed_names
+                or not isinstance(reason, str)
+                or not reason
+            ):
+                raise ValueError(
+                    "Each blocked target must identify an uncompleted requested "
+                    "test and a nonempty reason."
+                )
+            normalized_blocked_targets.append(
+                {
+                    "test": dict(requested_by_name[test_name]),
+                    "reason": reason,
+                }
+            )
+    if failure_reason is not None:
+        event["failureReason"] = failure_reason
+    if normalized_blocked_targets is not None:
+        event["blockedTargets"] = normalized_blocked_targets
+    if authorization_grant_id is not None:
+        event["authorizationGrantId"] = authorization_grant_id
 
     path = _session_ledger_path(state_directory)
     with exclusive_jsonl_lock(path):
         events = read_jsonl_rows(path)
+        if authorization_grant_id is not None and any(
+            existing.get("authorizationGrantId") == authorization_grant_id
+            for existing in events
+        ):
+            raise ValueError("Quarantine authorization grant has already been consumed.")
         latest_by_batch = {
             str(existing["batchId"]): existing
             for existing in events
@@ -442,7 +575,10 @@ def record_quarantine_session_event(
             }:
                 raise ValueError(f"Quarantine batch {batch_id} is already completed.")
         elif status == "pull-request-open":
-            if previous is None or previous.get("status") != "started":
+            if previous is None or previous.get("status") not in {
+                "started",
+                "pull-request-open",
+            }:
                 raise ValueError(
                     f"Quarantine batch {batch_id} does not have an active session."
                 )
@@ -450,6 +586,25 @@ def record_quarantine_session_event(
                 raise ValueError(
                     f"Quarantine batch {batch_id} belongs to another session."
                 )
+            if previous.get("status") == "pull-request-open":
+                previous_test_names = {
+                    test.get("testName")
+                    for test in previous.get("tests", [])
+                    if isinstance(test, Mapping)
+                }
+                previous_head = previous.get("pullRequestHeadSha")
+                if (
+                    previous.get("pullRequestUrl") != pull_request_url
+                    or previous_test_names != set(completed_test_names or [])
+                    or (
+                        previous_head is not None
+                        and not allow_pull_request_head_update
+                    )
+                ):
+                    raise ValueError(
+                        "Only a GET-verified exact pull-request-open event can "
+                        "enrich or update its head SHA."
+                    )
         elif status == "completed":
             if previous is None or previous.get("status") not in {
                 "started",
@@ -462,6 +617,14 @@ def record_quarantine_session_event(
                 raise ValueError(
                     f"Quarantine batch {batch_id} belongs to another session."
                 )
+            if (
+                previous.get("status") == "pull-request-open"
+                and previous.get("pullRequestHeadSha") is None
+            ):
+                raise ValueError(
+                    "A legacy open pull request must be GET-verified and enriched "
+                    "with its head SHA before completion."
+                )
             # A worker can discover that a stale proposal was already satisfied
             # by a merged PR. In that case there is no truthful open-PR event to
             # record, so reconcile the started batch directly to completion.
@@ -471,6 +634,15 @@ def record_quarantine_session_event(
             ):
                 raise ValueError(
                     "Completed quarantine pull request does not match the recorded draft."
+                )
+            if (
+                previous.get("status") == "pull-request-open"
+                and previous.get("pullRequestHeadSha") is not None
+                and previous.get("pullRequestHeadSha")
+                != (pull_request_head_sha or "").lower()
+            ):
+                raise ValueError(
+                    "Completed quarantine pull request head does not match the recorded draft."
                 )
             previous_test_names = {
                 test.get("testName")
@@ -523,8 +695,21 @@ def render_quarantine_session_section(plan: Mapping[str, Any]) -> str:
                 "No new session was proposed because the candidate tests are "
                 f"already covered by an unmerged quarantine pull request{suffix}."
             )
+        elif reason == "blocked-targets":
+            lines.append(
+                "No new session was proposed because every unchanged target is "
+                "blocked. New source evidence will make the target eligible again."
+            )
         else:
             lines.append("No quarantine session was proposed.")
+        blocked_targets = plan.get("blockedTargets", [])
+        if isinstance(blocked_targets, list) and blocked_targets:
+            lines.extend(["", "| Blocked test | Reason |", "|---|---|"])
+            for target in blocked_targets:
+                if isinstance(target, Mapping):
+                    lines.append(
+                        f"| `{target.get('testName')}` | {target.get('reason')} |"
+                    )
         return "\n".join(lines) + "\n"
 
     lines.extend(
@@ -557,4 +742,21 @@ def render_quarantine_session_section(plan: Mapping[str, Any]) -> str:
             lines.append(
                 f"| `{test_name}` | {issue_links} |"
             )
+    pending_pull_requests = plan.get("pendingPullRequests", [])
+    blocked_targets = plan.get("blockedTargets", [])
+    if isinstance(blocked_targets, list) and blocked_targets:
+        lines.extend(["", "| Blocked test | Reason |", "|---|---|"])
+        for target in blocked_targets:
+            if isinstance(target, Mapping):
+                lines.append(
+                    f"| `{target.get('testName')}` | {target.get('reason')} |"
+                )
+    if isinstance(pending_pull_requests, list) and pending_pull_requests:
+        lines.extend(
+            [
+                "",
+                "**Outstanding quarantine pull requests:** "
+                + ", ".join(f"`{url}`" for url in pending_pull_requests),
+            ]
+        )
     return "\n".join(lines) + "\n"

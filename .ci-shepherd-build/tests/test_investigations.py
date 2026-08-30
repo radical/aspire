@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import copy
@@ -8,8 +9,11 @@ import unittest
 from ci_shepherd.investigations import (
     attach_latest_investigation_results,
     build_investigation_plan,
+    read_investigation_session_events,
     read_investigation_results,
     record_investigation_result,
+    record_investigation_session_event,
+    select_investigation_request,
 )
 
 
@@ -98,6 +102,13 @@ class InvestigationLifecycleTests(unittest.TestCase):
 
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+            )
             record_investigation_result(
                 state,
                 request,
@@ -212,6 +223,13 @@ class InvestigationLifecycleTests(unittest.TestCase):
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             for index, request in enumerate(requests):
+                record_investigation_session_event(
+                    state,
+                    request,
+                    status="started",
+                    recorded_at=f"2026-08-28T20:2{index}:00Z",
+                    session_id=f"investigation-session-{index}",
+                )
                 record_investigation_result(
                     state,
                     request,
@@ -271,6 +289,13 @@ class InvestigationLifecycleTests(unittest.TestCase):
             ledger = state / "ledgers" / "investigation-results.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text('{"truncated":', encoding="utf-8")
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+            )
 
             result = record_investigation_result(
                 state,
@@ -286,6 +311,178 @@ class InvestigationLifecycleTests(unittest.TestCase):
             )
 
             self.assertEqual([result], read_investigation_results(state))
+
+    def test_active_investigation_is_suppressed_until_session_fails(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            started = record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+            )
+
+            active = build_investigation_plan(
+                prepared,
+                judgments,
+                [],
+                read_investigation_session_events(state),
+            )
+
+            self.assertEqual([], active["requests"])
+            self.assertEqual(
+                [request["investigationId"]],
+                active["activeInvestigationIds"],
+            )
+            self.assertEqual("started", started["status"])
+
+            record_investigation_session_event(
+                state,
+                request,
+                status="failed",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+                failure_reason="The worker could not access the cited run.",
+            )
+            retry = build_investigation_plan(
+                prepared,
+                judgments,
+                [],
+                read_investigation_session_events(state),
+            )
+            self.assertEqual(1, len(retry["requests"]))
+            self.assertEqual([], retry["activeInvestigationIds"])
+
+    def test_active_investigation_can_be_recovered_from_a_later_plan(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+            )
+            later_plan = build_investigation_plan(
+                prepared,
+                judgments,
+                [],
+                read_investigation_session_events(state),
+            )
+
+            recovered = select_investigation_request(
+                later_plan,
+                str(request["investigationId"]),
+                state_directory=state,
+            )
+            record_investigation_session_event(
+                state,
+                recovered,
+                status="failed",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+                failure_reason="The worker could not access the cited run.",
+            )
+
+            self.assertEqual(request, recovered)
+            self.assertEqual(
+                "failed",
+                read_investigation_session_events(state)[-1]["status"],
+            )
+
+    def test_result_requires_matching_started_session_and_completes_it(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+        result = {
+            "outcome": "inconclusive",
+            "summary": "The available evidence is insufficient.",
+            "evidenceIds": ["issue:21"],
+            "reassessWhen": "When evidence changes.",
+        }
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+            )
+
+            with self.assertRaisesRegex(ValueError, "belongs to another session"):
+                record_investigation_result(
+                    state,
+                    request,
+                    result,
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="investigation-session-2",
+                )
+
+            first = record_investigation_result(
+                state,
+                request,
+                result,
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+            )
+            replay = record_investigation_result(
+                state,
+                request,
+                result,
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+            )
+
+            self.assertEqual(first, replay)
+            self.assertEqual(
+                ["started", "completed"],
+                [
+                    event["status"]
+                    for event in read_investigation_session_events(state)
+                ],
+            )
+
+    def test_concurrent_investigation_starts_record_only_one_session(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+
+            def start(session_id: str) -> str:
+                try:
+                    record_investigation_session_event(
+                        state,
+                        request,
+                        status="started",
+                        recorded_at="2026-08-28T20:20:00Z",
+                        session_id=session_id,
+                    )
+                except ValueError:
+                    return "rejected"
+                return "started"
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = sorted(
+                    executor.map(
+                        start,
+                        ("investigation-session-1", "investigation-session-2"),
+                    )
+                )
+
+            self.assertEqual(["rejected", "started"], outcomes)
+            self.assertEqual(
+                1,
+                len(read_investigation_session_events(state)),
+            )
 
 
 if __name__ == "__main__":

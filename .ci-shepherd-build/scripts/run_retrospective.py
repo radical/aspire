@@ -104,6 +104,8 @@ def main() -> int:
                     args.state_dir / "action-events.jsonl",
                     args.state_dir / "action-results.json",
                     args.state_dir / "ledgers" / "investigation-results.jsonl",
+                    args.state_dir / "ledgers" / "investigation-sessions.jsonl",
+                    args.state_dir / "ledgers" / "quarantine-sessions.jsonl",
                 ),
             )
             completion = build_run_completion(

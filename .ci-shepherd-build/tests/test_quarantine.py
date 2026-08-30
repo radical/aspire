@@ -258,6 +258,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="session-123",
                 pull_request_url="https://github.com/owner/repo/pull/99",
+                pull_request_head_sha="a" * 40,
                 completed_test_names=[
                     "Tests.FirstTest",
                     "Tests.SecondTest",
@@ -270,6 +271,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 recorded_at="2026-08-28T20:30:00Z",
                 session_id="session-123",
                 pull_request_url="https://github.com/owner/repo/pull/99",
+                pull_request_head_sha="a" * 40,
                 completed_test_names=[
                     "Tests.FirstTest",
                     "Tests.SecondTest",
@@ -306,6 +308,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                     recorded_at="2026-08-28T20:20:00Z",
                     session_id="session-123",
                     pull_request_url="https://github.com/owner/repo/pull/99",
+                    pull_request_head_sha="a" * 40,
                 )
 
     def test_completed_tests_are_removed_from_a_later_batch(self) -> None:
@@ -333,6 +336,64 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertNotIn("Tests.FirstTest", plan["proposal"]["workerPrompt"])
         self.assertIn("Tests.SecondTest", plan["proposal"]["workerPrompt"])
 
+    def test_pull_request_open_requires_a_head_sha(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+            )
+
+            with self.assertRaisesRegex(ValueError, "head SHA"):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="pull-request-open",
+                    recorded_at="2026-08-28T20:20:00Z",
+                    session_id="session-123",
+                    pull_request_url="https://github.com/owner/repo/pull/99",
+                    completed_test_names=["Tests.FirstTest"],
+                )
+
+    def test_headless_legacy_open_event_cannot_complete_without_enrichment(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            ledger = state / "ledgers" / "quarantine-sessions.jsonl"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(
+                json.dumps(
+                    {
+                        **request,
+                        "status": "pull-request-open",
+                        "recordedAt": "2026-08-28T20:20:00Z",
+                        "sessionId": "session-123",
+                        "pullRequestUrl": "https://github.com/owner/repo/pull/99",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "GET-verified and enriched"):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="completed",
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="session-123",
+                    pull_request_url="https://github.com/owner/repo/pull/99",
+                    pull_request_head_sha="a" * 40,
+                    completed_test_names=[
+                        "Tests.FirstTest",
+                        "Tests.SecondTest",
+                    ],
+                )
+
     def test_partial_completion_records_only_validated_tests(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())
         with TemporaryDirectory() as scratch:
@@ -352,6 +413,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="session-123",
                 pull_request_url="https://github.com/owner/repo/pull/99",
+                pull_request_head_sha="a" * 40,
                 completed_test_names=["Tests.FirstTest"],
             )
             next_plan = build_quarantine_session_plan(
@@ -389,6 +451,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="session-123",
                 pull_request_url="https://github.com/owner/repo/pull/99",
+                pull_request_head_sha="a" * 40,
                 completed_test_names=["Tests.FirstTest", "Tests.SecondTest"],
             )
 
@@ -404,6 +467,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 status="failed",
                 recorded_at="2026-08-28T20:30:00Z",
                 session_id="session-123",
+                failure_reason="The draft pull request closed without merging.",
             )
             retried = build_quarantine_session_plan(
                 request,
@@ -430,6 +494,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="session-123",
                 pull_request_url="https://github.com/owner/repo/pull/98",
+                pull_request_head_sha="a" * 40,
                 completed_test_names=[
                     "Tests.FirstTest",
                     "Tests.SecondTest",
@@ -581,7 +646,128 @@ class QuarantineSessionRequestTests(unittest.TestCase):
             ledger.symlink_to(state / "missing-ledger.jsonl")
 
             with self.assertRaisesRegex(ValueError, "must not be a symlink"):
-                read_quarantine_session_events(state)
+                read_quarantine_session_events(state                )
+
+    def test_rejects_a_non_iso8601_recorded_at(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            with self.assertRaisesRegex(
+                ValueError,
+                "recordedAt must be a timezone-aware ISO-8601 timestamp",
+            ):
+                record_quarantine_session_event(
+                    Path(scratch),
+                    request,
+                    status="started",
+                    recorded_at="not-a-timestamp",
+                    session_id="session-123",
+                )
+
+    def test_event_records_the_snapshot_id(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            event = record_quarantine_session_event(
+                Path(scratch),
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+            )
+
+            self.assertEqual(request["snapshotId"], event["snapshotId"])
+
+    def test_failed_event_requires_a_reason(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+            )
+
+            with self.assertRaisesRegex(ValueError, "failure reason"):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="failed",
+                    recorded_at="2026-08-28T20:20:00Z",
+                    session_id="session-123",
+                )
+
+    def test_pull_request_url_must_match_the_ledger_repository(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+            )
+
+            with self.assertRaisesRegex(ValueError, "owner/repo pull request"):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="pull-request-open",
+                    recorded_at="2026-08-28T20:20:00Z",
+                    session_id="session-123",
+                    pull_request_url="https://example.invalid/not-a-pull-request",
+                    completed_test_names=["Tests.FirstTest"],
+                )
+
+    def test_report_lists_pending_pull_requests_with_a_new_proposal(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        plan = build_quarantine_session_plan(
+            request,
+            [
+                {
+                    "repository": "owner/repo",
+                    "batchId": "quarantine:older",
+                    "status": "pull-request-open",
+                    "pullRequestUrl": "https://github.com/owner/repo/pull/7",
+                    "tests": [request["tests"][0]],
+                }
+            ],
+        )
+
+        self.assertIsNotNone(plan["proposal"])
+        self.assertIn(
+            "https://github.com/owner/repo/pull/7",
+            render_quarantine_session_section(plan),
+        )
+
+    def test_report_lists_blocked_targets_alongside_a_new_proposal(self) -> None:
+        rendered = render_quarantine_session_section(
+            {
+                "proposal": {
+                    "batchId": "quarantine:new",
+                    "tests": [
+                        {
+                            "testName": "Tests.New",
+                            "issueUrls": [
+                                "https://github.com/owner/repo/issues/2"
+                            ],
+                        }
+                    ],
+                },
+                "blockedTargets": [
+                    {
+                        "testName": "Tests.Blocked",
+                        "reason": "The source method was ambiguous.",
+                    }
+                ],
+                "pendingPullRequests": [],
+            }
+        )
+
+        self.assertIn("Tests.New", rendered)
+        self.assertIn("Tests.Blocked", rendered)
+        self.assertIn("The source method was ambiguous.", rendered)
 
 
 if __name__ == "__main__":

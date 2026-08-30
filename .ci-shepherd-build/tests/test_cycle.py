@@ -6,7 +6,10 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import cycle as cycle_script
-from ci_shepherd.investigations import record_investigation_result
+from ci_shepherd.investigations import (
+    record_investigation_result,
+    record_investigation_session_event,
+)
 
 
 def snapshot(
@@ -144,6 +147,13 @@ class CycleTests(unittest.TestCase):
                 (first_work / "investigation-plan.json").read_text(encoding="utf-8")
             )
             request = investigation_plan["requests"][0]
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+            )
             record_investigation_result(
                 state,
                 request,

@@ -257,6 +257,21 @@ class RetrospectiveTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (work_dir / "quarantine-session.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "repository": "owner/repo",
+                        "snapshotId": "snapshot:owner/repo:2026-08-29T12:00:00Z",
+                        "proposal": {
+                            "batchId": "quarantine:current",
+                        },
+                        "activeBatchId": None,
+                        "openBatchIds": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             state_dir = work_dir / "state"
             (state_dir / "ledgers").mkdir(parents=True)
             (state_dir / "action-results.json").write_text(
@@ -296,6 +311,29 @@ class RetrospectiveTests(unittest.TestCase):
                     ]
                 )
                 + '\n{"investigationId":"truncated',
+                encoding="utf-8",
+            )
+            (state_dir / "ledgers" / "investigation-sessions.jsonl").write_text(
+                json.dumps(
+                    {
+                        "repository": "owner/repo",
+                        "investigationId": "investigation:complete",
+                        "status": "completed",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (state_dir / "ledgers" / "quarantine-sessions.jsonl").write_text(
+                json.dumps(
+                    {
+                        "repository": "owner/repo",
+                        "snapshotId": "snapshot:owner/repo:2026-08-29T12:00:00Z",
+                        "batchId": "quarantine:current",
+                        "status": "started",
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
             result_path = work_dir / "agent-retrospective.json"
@@ -394,9 +432,24 @@ class RetrospectiveTests(unittest.TestCase):
                 completion["missingInvestigationIds"],
             )
             self.assertEqual(
+                ["investigation:complete"],
+                [
+                    entry["investigationId"]
+                    for entry in completion["investigationSessionEvents"]
+                ],
+            )
+            self.assertEqual(
                 ["action:unrecorded"],
                 completion["unrecordedActionIds"],
             )
+            self.assertEqual(
+                ["quarantine:current"],
+                [
+                    entry["batchId"]
+                    for entry in completion["quarantineSessionEvents"]
+                ],
+            )
+            self.assertEqual([], completion["unrecordedQuarantineBatchIds"])
             for path in (
                 work_dir / "run-completion.json",
                 request_path,

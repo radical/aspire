@@ -20,6 +20,7 @@ _OUTCOMES = frozenset(
         "inconclusive",
     }
 )
+_SESSION_STATUSES = frozenset({"started", "completed", "failed"})
 
 
 def _fingerprint(value: object) -> str:
@@ -78,6 +79,7 @@ def build_investigation_plan(
     prepared: Mapping[str, Any],
     judgments: Mapping[str, Any],
     prior_results: list[Mapping[str, Any]],
+    session_events: list[Mapping[str, Any]] | None = None,
     *,
     max_requests: int = 5,
 ) -> dict[str, object]:
@@ -109,8 +111,27 @@ def build_investigation_plan(
         if isinstance(result.get("investigationId"), str)
         and str(result.get("repository", "")).casefold() == repository.casefold()
     }
+    latest_session_by_id: dict[str, Mapping[str, Any]] = {}
+    for event in session_events or []:
+        if str(event.get("repository", "")).casefold() != repository.casefold():
+            continue
+        investigation_id = event.get("investigationId")
+        status = event.get("status")
+        if not isinstance(investigation_id, str) or not investigation_id:
+            raise ValueError("Investigation session event has no investigationId.")
+        if status not in _SESSION_STATUSES:
+            raise ValueError(
+                f"Unsupported investigation session status for {investigation_id}: {status}"
+            )
+        latest_session_by_id[investigation_id] = event
+    active_ids = {
+        investigation_id
+        for investigation_id, event in latest_session_by_id.items()
+        if event.get("status") == "started"
+    }
     requests: list[dict[str, object]] = []
     reused: list[str] = []
+    active: list[str] = []
     for issue in judgments.get("issues", []):
         if not isinstance(issue, Mapping):
             continue
@@ -158,6 +179,9 @@ def build_investigation_plan(
             if investigation_id in completed_ids:
                 reused.append(investigation_id)
                 continue
+            if investigation_id in active_ids:
+                active.append(investigation_id)
+                continue
             request: dict[str, object] = {
                 "schemaVersion": 1,
                 "repository": repository,
@@ -193,6 +217,7 @@ def build_investigation_plan(
     ]
     requests = requests[:max_requests]
     reused.sort()
+    active.sort()
     return {
         "schemaVersion": 1,
         "repository": repository,
@@ -201,6 +226,7 @@ def build_investigation_plan(
         "deferredRequests": deferred,
         "maxRequests": max_requests,
         "reusedInvestigationIds": reused,
+        "activeInvestigationIds": active,
     }
 
 
@@ -208,10 +234,188 @@ def _results_path(state_directory: Path) -> Path:
     return state_directory / "ledgers" / "investigation-results.jsonl"
 
 
+def _sessions_path(state_directory: Path) -> Path:
+    return state_directory / "ledgers" / "investigation-sessions.jsonl"
+
+
 def read_investigation_results(
     state_directory: Path,
 ) -> list[dict[str, Any]]:
     return read_jsonl_rows(_results_path(state_directory))
+
+
+def read_investigation_session_events(
+    state_directory: Path,
+) -> list[dict[str, Any]]:
+    return read_jsonl_rows(_sessions_path(state_directory))
+
+
+def select_investigation_request(
+    plan: Mapping[str, Any],
+    investigation_id: str,
+    *,
+    state_directory: Path | None = None,
+) -> dict[str, object]:
+    requests = plan.get("requests")
+    if not isinstance(requests, list):
+        raise ValueError("Investigation plan must contain requests.")
+    matches = [
+        request
+        for request in requests
+        if isinstance(request, dict)
+        and request.get("investigationId") == investigation_id
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1 or state_directory is None:
+        raise ValueError(
+            f"Investigation plan must contain exactly one {investigation_id} request."
+        )
+    active_ids = plan.get("activeInvestigationIds")
+    repository = plan.get("repository")
+    if (
+        not isinstance(active_ids, list)
+        or investigation_id not in active_ids
+        or not isinstance(repository, str)
+        or not repository
+    ):
+        raise ValueError(
+            f"Investigation plan has no active {investigation_id} request."
+        )
+    latest = _latest_session_event(
+        read_investigation_session_events(state_directory),
+        repository=repository,
+        investigation_id=investigation_id,
+    )
+    persisted_request = latest.get("request") if latest is not None else None
+    if (
+        latest is None
+        or latest.get("status") != "started"
+        or not isinstance(persisted_request, dict)
+    ):
+        raise ValueError(
+            f"Investigation {investigation_id} has no recoverable active request."
+        )
+    return persisted_request
+
+
+def _investigation_identity(
+    request: Mapping[str, Any],
+) -> tuple[str, str]:
+    investigation_id = request.get("investigationId")
+    repository = request.get("repository")
+    if not isinstance(investigation_id, str) or not investigation_id:
+        raise ValueError("Investigation request has no investigationId.")
+    if not isinstance(repository, str) or not repository:
+        raise ValueError("Investigation request has no repository.")
+    return investigation_id, repository
+
+
+def _session_event(
+    request: Mapping[str, Any],
+    *,
+    status: str,
+    recorded_at: str,
+    session_id: str,
+    failure_reason: str | None = None,
+) -> dict[str, object]:
+    if status not in _SESSION_STATUSES:
+        raise ValueError(f"Unsupported investigation session status: {status}")
+    parse_aware_iso8601(recorded_at, "recordedAt")
+    investigation_id, repository = _investigation_identity(request)
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("sessionId must be nonempty.")
+    if status == "failed":
+        if not isinstance(failure_reason, str) or not failure_reason:
+            raise ValueError("A failed investigation session requires a failure reason.")
+    elif failure_reason is not None:
+        raise ValueError("failureReason is valid only for failed sessions.")
+    event: dict[str, object] = {
+        "schemaVersion": 1,
+        "repository": repository,
+        "investigationId": investigation_id,
+        "issueNumber": request.get("issueNumber"),
+        "target": request.get("target"),
+        "sourceEvidenceFingerprint": request.get("sourceEvidenceFingerprint"),
+        "status": status,
+        "recordedAt": recorded_at,
+        "sessionId": session_id,
+    }
+    if status == "started":
+        event["request"] = dict(request)
+    if failure_reason is not None:
+        event["failureReason"] = failure_reason
+    return event
+
+
+def _latest_session_event(
+    events: list[Mapping[str, Any]],
+    *,
+    repository: str,
+    investigation_id: str,
+) -> Mapping[str, Any] | None:
+    return next(
+        (
+            event
+            for event in reversed(events)
+            if str(event.get("repository", "")).casefold() == repository.casefold()
+            and event.get("investigationId") == investigation_id
+        ),
+        None,
+    )
+
+
+def _validate_session_transition(
+    previous: Mapping[str, Any] | None,
+    event: Mapping[str, Any],
+) -> None:
+    investigation_id = event["investigationId"]
+    status = event["status"]
+    session_id = event["sessionId"]
+    if status == "started":
+        if previous is not None and previous.get("status") == "started":
+            raise ValueError(
+                f"Investigation {investigation_id} already has an active session."
+            )
+        if previous is not None and previous.get("status") == "completed":
+            raise ValueError(f"Investigation {investigation_id} is already completed.")
+        return
+    if previous is None or previous.get("status") != "started":
+        raise ValueError(
+            f"Investigation {investigation_id} does not have an active session."
+        )
+    if previous.get("sessionId") != session_id:
+        raise ValueError(f"Investigation {investigation_id} belongs to another session.")
+
+
+def record_investigation_session_event(
+    state_directory: Path,
+    request: Mapping[str, Any],
+    *,
+    status: str,
+    recorded_at: str,
+    session_id: str,
+    failure_reason: str | None = None,
+) -> dict[str, object]:
+    event = _session_event(
+        request,
+        status=status,
+        recorded_at=recorded_at,
+        session_id=session_id,
+        failure_reason=failure_reason,
+    )
+    investigation_id = str(event["investigationId"])
+    repository = str(event["repository"])
+    path = _sessions_path(state_directory)
+    with exclusive_jsonl_lock(path):
+        previous = _latest_session_event(
+            read_jsonl_rows(path),
+            repository=repository,
+            investigation_id=investigation_id,
+        )
+        _validate_session_transition(previous, event)
+        append_jsonl_rows(path, [event])
+    return event
 
 
 def record_investigation_result(
@@ -226,9 +430,7 @@ def record_investigation_result(
     outcome = result.get("outcome")
     if outcome not in _OUTCOMES:
         raise ValueError(f"Unsupported investigation outcome: {outcome}")
-    investigation_id = request.get("investigationId")
-    if not isinstance(investigation_id, str) or not investigation_id:
-        raise ValueError("Investigation request has no investigationId.")
+    investigation_id, repository = _investigation_identity(request)
     summary = result.get("summary")
     evidence_ids = result.get("evidenceIds")
     reassess_when = result.get("reassessWhen")
@@ -258,7 +460,7 @@ def record_investigation_result(
 
     event: dict[str, object] = {
         "schemaVersion": 1,
-        "repository": request.get("repository"),
+        "repository": repository,
         "investigationId": investigation_id,
         "issueNumber": request.get("issueNumber"),
         "target": request.get("target"),
@@ -275,14 +477,47 @@ def record_investigation_result(
     if isinstance(result.get("missingEvidence"), list):
         event["missingEvidence"] = list(result["missingEvidence"])
 
-    path = _results_path(state_directory)
-    with exclusive_jsonl_lock(path):
-        if any(
-            row.get("investigationId") == investigation_id
-            for row in read_jsonl_rows(path)
-        ):
-            raise ValueError(f"Investigation {investigation_id} is already recorded.")
-        append_jsonl_rows(path, [event])
+    session_event = _session_event(
+        request,
+        status="completed",
+        recorded_at=recorded_at,
+        session_id=session_id,
+    )
+    sessions_path = _sessions_path(state_directory)
+    results_path = _results_path(state_directory)
+    with exclusive_jsonl_lock(sessions_path):
+        session_events = read_jsonl_rows(sessions_path)
+        previous_session = _latest_session_event(
+            session_events,
+            repository=repository,
+            investigation_id=investigation_id,
+        )
+        with exclusive_jsonl_lock(results_path):
+            existing = next(
+                (
+                    row
+                    for row in read_jsonl_rows(results_path)
+                    if row.get("investigationId") == investigation_id
+                    and str(row.get("repository", "")).casefold()
+                    == repository.casefold()
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing != event:
+                    raise ValueError(
+                        f"Investigation {investigation_id} is already recorded."
+                    )
+                if (
+                    previous_session is not None
+                    and previous_session.get("status") == "started"
+                ):
+                    _validate_session_transition(previous_session, session_event)
+                    append_jsonl_rows(sessions_path, [session_event])
+                return dict(existing)
+            _validate_session_transition(previous_session, session_event)
+            append_jsonl_rows(results_path, [event])
+            append_jsonl_rows(sessions_path, [session_event])
     return event
 
 
@@ -326,6 +561,7 @@ def render_investigation_section(plan: Mapping[str, Any]) -> str:
     requests = plan.get("requests", [])
     deferred = plan.get("deferredRequests", [])
     reused = plan.get("reusedInvestigationIds", [])
+    active = plan.get("activeInvestigationIds", [])
     lines = ["## Bounded investigations", ""]
     if not isinstance(requests, list) or not requests:
         lines.append("No new investigation session is needed.")
@@ -357,6 +593,13 @@ def render_investigation_section(plan: Mapping[str, Any]) -> str:
             [
                 "",
                 f"**Reused completed investigations:** {len(reused)}",
+            ]
+        )
+    if isinstance(active, list) and active:
+        lines.extend(
+            [
+                "",
+                f"**Active investigation sessions:** {len(active)}",
             ]
         )
     if isinstance(deferred, list) and deferred:
