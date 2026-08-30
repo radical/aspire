@@ -1068,14 +1068,9 @@ class ModelsTests(unittest.TestCase):
         self.assertEqual(
             frozenset(
                 {
-                    "post-comment",
-                    "apply-label",
-                    "remove-label",
+                    "create-comment",
+                    "edit-comment",
                     "close-issue",
-                    "assign-copilot-investigation",
-                    "dispatch-rerun",
-                    "create-policy-pr",
-                    "create-quarantine-pr",
                 }
             ),
             EXECUTOR_CAPABILITIES,
@@ -1083,6 +1078,26 @@ class ModelsTests(unittest.TestCase):
 
     def test_minimal_snapshot_passes(self) -> None:
         self.assertIsNone(validate_snapshot(minimal_snapshot()))
+
+    def test_collection_error_scope_is_validated(self) -> None:
+        snapshot = minimal_snapshot()
+        snapshot["collectionErrors"] = [
+            {
+                "stage": "comments",
+                "endpoint": "/repos/owner/repo/issues/1/comments",
+                "message": "request failed",
+                "effect": None,
+                "scope": {"kind": "issue", "issueNumbers": [1]},
+            }
+        ]
+        self.assertIsNone(validate_snapshot(snapshot))
+
+        snapshot["collectionErrors"][0]["scope"]["issueNumbers"] = []
+        with self.assertRaisesRegex(
+            ValueError,
+            "collectionErrors\\[0\\]\\.scope\\.issueNumbers",
+        ):
+            validate_snapshot(snapshot)
 
     def test_valid_expansion_manifests_pass_snapshot_validation(self) -> None:
         snapshot = minimal_snapshot()

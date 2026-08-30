@@ -247,14 +247,9 @@ PROPOSAL_INTENTS = frozenset(
 TARGET_KINDS = frozenset({"issue", "test", "failureFingerprint", "workflowRun", "investigation"})
 EXECUTOR_CAPABILITIES = frozenset(
     {
-        "post-comment",
-        "apply-label",
-        "remove-label",
+        "create-comment",
+        "edit-comment",
         "close-issue",
-        "assign-copilot-investigation",
-        "dispatch-rerun",
-        "create-policy-pr",
-        "create-quarantine-pr",
     }
 )
 
@@ -332,12 +327,53 @@ def validate_snapshot(snapshot: object) -> None:
     _require_repository(mapping)
     _require_nonempty_string(mapping, "collectedAt")
     _require_unique_int_list(mapping, "openIssues")
-    _require_list(mapping, "collectionErrors")
+    collection_errors = _require_list(mapping, "collectionErrors")
+    for index, collection_error in enumerate(collection_errors):
+        _validate_collection_error(collection_error, index=index)
 
     evidence = _require_mapping(mapping.get("evidence"), "evidence")
     for evidence_id, record in evidence.items():
         _validate_evidence_record(evidence_id, record)
     _validate_expansion_manifests(mapping)
+
+
+def _validate_collection_error(value: object, *, index: int) -> None:
+    field = f"collectionErrors[{index}]"
+    error = _require_mapping(value, field)
+    _require_only_fields(
+        error,
+        {"stage", "endpoint", "message", "effect", "scope"},
+        field,
+    )
+    for required_field in ("stage", "message"):
+        _require_nonempty_string(error, required_field)
+    endpoint = error.get("endpoint")
+    if endpoint is not None and (not isinstance(endpoint, str) or not endpoint):
+        raise ValidationError(f"{field}.endpoint must be a nonempty string.")
+    effect = error.get("effect")
+    if effect is not None and (not isinstance(effect, str) or not effect):
+        raise ValidationError(f"{field}.effect must be null or a nonempty string.")
+
+    scope = error.get("scope")
+    if scope is None:
+        return
+    scope_mapping = _require_mapping(scope, f"{field}.scope")
+    kind = _require_nonempty_string(scope_mapping, "kind")
+    if kind == "global":
+        _require_only_fields(scope_mapping, {"kind"}, f"{field}.scope")
+        return
+    if kind != "issue":
+        raise ValidationError(f"{field}.scope.kind is unsupported.")
+    _require_only_fields(
+        scope_mapping,
+        {"kind", "issueNumbers"},
+        f"{field}.scope",
+    )
+    issue_numbers = _require_unique_int_list(scope_mapping, "issueNumbers")
+    if not issue_numbers:
+        raise ValidationError(
+            f"{field}.scope.issueNumbers must contain at least one issue number."
+        )
 
 
 def validate_evidence_requests(

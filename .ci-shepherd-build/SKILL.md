@@ -331,7 +331,9 @@ python3 "$CI_SHEPHERD_ROOT/scripts/propose_actions.py" \
 reinterprets `judgments.json`, issue prose, or evidence, and never regenerates
 comment text or close reasons. The compact agent input supplies deterministic
 action-cluster context only; it cannot create a proposal without a matching
-validated judgment.
+validated judgment. A `review-close` judgment without deterministic resolution
+or duplicate evidence is preserved in `blockedRecommendations` and does not
+abort proposal generation for other issues.
 
 The actor is dry-run by default. This command validates and prints every exact
 proposed effect:
@@ -344,7 +346,17 @@ python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
 
 Dry-run performs no GitHub access and does not create or modify
 `action-events.jsonl`. Add `--action-id <exact-id>` to preview only one
-proposal. `--state-dir` is optional for dry-run.
+proposal. `--state-dir` is optional for dry-run. The output includes the
+document `executionEligibility` plus per-action `wouldExecute` and
+`blockingReasons` fields. Legacy proposal documents always report
+`wouldExecute: false`. When a scoped collection failure blocks only one issue,
+the document is `partially-eligible` and unaffected actions remain previewable.
+
+The executor supports only issue `create-comment`, `edit-comment`, and
+`close-issue` operations. Pull-request comments, labels, assignments, workflow
+reruns or retries, policy pull requests, and quarantine pull requests remain
+report-only or separate approval-gated workflows; they are not executable
+action proposals.
 
 Mutation is a separate validated step. `--execute` requires one exact
 `--action-id`, one exact `--authorization` grant, and the grant-bound
@@ -358,6 +370,23 @@ roots, expiry, and mutation/chain budgets. Unknown or duplicate fields are
 rejected. Copying the grant does not reset its budget because consumption is
 derived from the grant ID in the grant-bound append-only event log.
 
+`scripts/create_authorization.py` generates that grant. It infers nothing: it
+accepts a validated proposal document, one or more explicit `--action-id`
+values, `--state-dir`, and `--output`, and derives every allowed operation,
+issue target, and chain root only from the named action IDs. A selected
+action whose `dependsOn` is not itself also named is rejected, so approving
+one action never authorizes another effect. The grant defaults to a 15-minute
+lifetime and `--ttl-minutes` cannot exceed 60. It performs no GitHub access.
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
+  --proposals "$SCRATCH/action-proposals.json" \
+  --action-id "snapshot:...:issue:19149:review-close-comment" \
+  --action-id "snapshot:...:issue:19149:review-close" \
+  --state-dir "$STATE" \
+  --output "$SCRATCH/authorization-grant.json"
+```
+
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
@@ -367,9 +396,11 @@ python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --execute
 ```
 
-Execute mode accepts only proposal schema v2 and re-derives its CI-label,
-occurrence, collection-completeness, and evidence-availability eligibility
-checks. Before any mutation it fsyncs an `intent` event under a bounded lock.
+Execute mode accepts only proposal schema v2 and re-derives the selected
+action's CI-label, occurrence, scoped collection-completeness, and
+evidence-availability eligibility checks. An unscoped collection error blocks
+every action; an issue-scoped error blocks only proposals for the named issues.
+Before any mutation it fsyncs an `intent` event under a bounded lock.
 It then checks dependencies and current GitHub state, performs one fixed
 operation, refetches the target, and appends a terminal event to owner-only
 `$STATE/action-events.jsonl`. A surviving `intent` or `indeterminate` event

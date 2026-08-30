@@ -1062,13 +1062,25 @@ Deployment tests are failing.
         closed_cause = f"/repos/{REPOSITORY}/issues?state=closed&labels=ci-failure-cause&since={CUTOFF}&per_page=100"
         closed_automation = f"/repos/{REPOSITORY}/issues?state=closed&labels=automation-broken&since={CUTOFF}&per_page=100"
         root_comments = f"/repos/{REPOSITORY}/issues/1/comments"
+        second_root_comments = f"/repos/{REPOSITORY}/issues/2/comments"
         support_comments = f"/repos/{REPOSITORY}/issues/401/comments"
         support_detail = f"/repos/{REPOSITORY}/issues/401"
-        root = make_issue(1, labels=["ci-failure-cause"], body="Related to #401")
+        marker = "<!-- ci-failure-cause:shared-timeout -->"
+        root = make_issue(
+            1,
+            labels=["ci-failure-cause"],
+            body=f"Related to #401\n{marker}",
+        )
+        second_root = make_issue(
+            2,
+            labels=["ci-failure-cause"],
+            body=marker,
+        )
         support = make_issue(
             401,
             state="closed",
             closed_at="2026-08-10T00:00:00Z",
+            body=marker,
         )
 
         def comment(comment_id: int, body: str, updated_at: str) -> dict[str, object]:
@@ -1086,11 +1098,12 @@ Deployment tests are failing.
 
         first_client = ScriptedClient(
             pages={
-                open_cause: [root],
+                open_cause: [root, second_root],
                 open_automation: [],
                 closed_cause: [support],
                 closed_automation: [],
                 root_comments: [],
+                second_root_comments: [],
                 support_comments: [
                     comment(9001, "stale supporting detail", "2026-08-10T01:00:00Z"),
                     comment(9002, "deleted supporting detail", "2026-08-10T02:00:00Z"),
@@ -1104,7 +1117,7 @@ Deployment tests are failing.
             "schemaVersion": 1,
             "repository": REPOSITORY,
             "collectedAt": NOW.isoformat().replace("+00:00", "Z"),
-            "openIssues": [1],
+            "openIssues": [1, 2],
             "issues": first.open_issues,
             "supportingIssues": first.supporting_issues,
             "evidence": first.evidence,
@@ -1133,6 +1146,14 @@ Deployment tests are failing.
                 "changedSincePreviousRun": False,
             }],
         }
+        second_decision = copy.deepcopy(report["decisions"][0])
+        second_decision.update(
+            {
+                "issueNumber": 2,
+                "issueUrl": f"https://github.com/{REPOSITORY}/issues/2",
+            }
+        )
+        report["decisions"].append(second_decision)
         history_root = Path(__file__).parent / ".tmp"
         history_root.mkdir(parents=True, exist_ok=True)
         temporary_history = tempfile.TemporaryDirectory(dir=history_root)
@@ -1148,7 +1169,7 @@ Deployment tests are failing.
 
         second_client = ScriptedClient(
             pages={
-                open_cause: [root],
+                open_cause: [root, second_root],
                 open_automation: [],
                 support_comments: [
                     comment(9001, "fresh supporting detail", "2026-08-18T01:00:00Z"),
@@ -1192,7 +1213,7 @@ Deployment tests are failing.
 
         failed_client = ScriptedClient(
             pages={
-                open_cause: [root],
+                open_cause: [root, second_root],
                 open_automation: [],
                 support_comments: RuntimeError("comments unavailable"),
             },
@@ -1215,6 +1236,10 @@ Deployment tests are failing.
         self.assertNotIn(edited_comment_id, failed_completion.refresh)
         self.assertIn(edited_comment_id, failed_completion.retry)
         self.assertIn(deleted_comment_id, failed_completion.retry)
+        self.assertEqual(
+            {"kind": "issue", "issueNumbers": [1, 2]},
+            failed.collection_errors[0].scope,
+        )
 
     def test_incremental_reuses_foreign_commit_and_merged_pull_request(self) -> None:
         foreign_repository = "other/repo"
@@ -3042,6 +3067,13 @@ System.TimeoutException : Timed out.
                 ("comments", f"/repos/{REPOSITORY}/issues/11/comments"),
                 ("timeline", f"/repos/{REPOSITORY}/issues/11/timeline"),
             ],
+        )
+        self.assertEqual(
+            [
+                {"kind": "issue", "issueNumbers": [11]},
+                {"kind": "issue", "issueNumbers": [11]},
+            ],
+            [error.scope for error in result.collection_errors],
         )
 
     def test_collect_emits_budget_warnings_and_truncates_refs_and_supporting_sets(self) -> None:

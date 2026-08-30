@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 import re
 import subprocess
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 from urllib.parse import quote
 from pathlib import Path
 
@@ -82,6 +82,14 @@ class CollectionError:
     endpoint: str
     message: str
     effect: str | None = None
+    scope: dict[str, object] | None = None
+
+
+def _issue_error_scope(issue_numbers: Iterable[int]) -> dict[str, object] | None:
+    scoped_numbers = sorted(set(issue_numbers))
+    if not scoped_numbers:
+        return None
+    return {"kind": "issue", "issueNumbers": scoped_numbers}
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,6 +450,17 @@ class Collector:
             and isinstance(issue.get("number"), int)
             and not isinstance(issue["number"], bool)
         }
+        self._restore_supporting_roots_from_evidence(
+            evidence,
+            supporting_issue_numbers,
+            {
+                int(issue["number"])
+                for issue in inventory.open_issues
+                if isinstance(issue, dict)
+                and isinstance(issue.get("number"), int)
+                and not isinstance(issue["number"], bool)
+            },
+        )
         if refresh_plan is not None:
             self._recollect_supporting_comments(
                 evidence,
@@ -766,6 +785,32 @@ class Collector:
             open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
         )
 
+    def _restore_supporting_roots_from_evidence(
+        self,
+        evidence: dict[str, dict[str, Any]],
+        supporting_issue_numbers: set[int],
+        open_issue_numbers: set[int],
+    ) -> None:
+        for issue_number in supporting_issue_numbers:
+            record = evidence.get(f"issue:{issue_number}")
+            payload = record.get("payload") if isinstance(record, dict) else None
+            referenced_by = payload.get("referencedBy") if isinstance(payload, dict) else None
+            if not isinstance(referenced_by, list):
+                continue
+            roots = {
+                source_issue_number
+                for reference in referenced_by
+                if isinstance(reference, dict)
+                and isinstance(
+                    source_issue_number := reference.get("sourceIssueNumber"),
+                    int,
+                )
+                and not isinstance(source_issue_number, bool)
+                and source_issue_number in open_issue_numbers
+            }
+            if roots:
+                self._supporting_roots_by_issue.setdefault(issue_number, set()).update(roots)
+
     def _recollect_supporting_comments(
         self,
         evidence: dict[str, dict[str, Any]],
@@ -799,7 +844,18 @@ class Collector:
             try:
                 raw_comments = self._client.get_pages(endpoint)
             except Exception as exc:
-                collection_errors.append(CollectionError("comments", endpoint, str(exc)))
+                affected_issue_numbers = self._supporting_roots_by_issue.get(
+                    issue_number,
+                    set(),
+                )
+                collection_errors.append(
+                    CollectionError(
+                        "comments",
+                        endpoint,
+                        str(exc),
+                        scope=_issue_error_scope(affected_issue_numbers),
+                    )
+                )
                 comments: list[dict[str, Any]] = []
                 comments_complete = False
             else:
@@ -1643,9 +1699,17 @@ class Collector:
         try:
             raw_comments = self._client.get_pages(endpoint)
         except Exception as exc:
-            self._collection_errors.append(CollectionError("comments", endpoint, str(exc)))
-            self._mark_supporting_search_incomplete(issue_number)
             supporting_roots = self._supporting_roots_by_issue.get(issue_number, set())
+            affected_issue_numbers = supporting_roots or {issue_number}
+            self._collection_errors.append(
+                CollectionError(
+                    "comments",
+                    endpoint,
+                    str(exc),
+                    scope=_issue_error_scope(affected_issue_numbers),
+                )
+            )
+            self._mark_supporting_search_incomplete(issue_number)
             if supporting_roots:
                 self._supporting_comment_failed_issue_numbers.add(issue_number)
             for root_issue_number in supporting_roots:
@@ -1659,7 +1723,16 @@ class Collector:
         try:
             raw_events = self._client.get_pages(endpoint)
         except Exception as exc:
-            self._collection_errors.append(CollectionError("timeline", endpoint, str(exc)))
+            supporting_roots = self._supporting_roots_by_issue.get(issue_number, set())
+            affected_issue_numbers = supporting_roots or {issue_number}
+            self._collection_errors.append(
+                CollectionError(
+                    "timeline",
+                    endpoint,
+                    str(exc),
+                    scope=_issue_error_scope(affected_issue_numbers),
+                )
+            )
             return []
 
         events: list[dict[str, Any]] = []

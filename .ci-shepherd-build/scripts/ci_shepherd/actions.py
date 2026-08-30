@@ -515,6 +515,14 @@ def _execution_eligibility(
     collection_errors = snapshot.get("collectionErrors")
     if not isinstance(collection_errors, list):
         raise TypeError("Validated snapshot collectionErrors must be a list.")
+    relevant_collection_errors = [
+        error
+        for error in collection_errors
+        if not isinstance(error, dict)
+        or not isinstance(error.get("scope"), dict)
+        or error["scope"].get("kind") != "issue"
+        or issue_number in error["scope"].get("issueNumbers", [])
+    ]
 
     unavailable_evidence_ids = sorted(
         {
@@ -558,7 +566,7 @@ def _execution_eligibility(
         blocking_reasons.append("missing-ci-label")
     if occurrence_count <= 0:
         blocking_reasons.append("no-parsed-occurrences")
-    if collection_errors:
+    if relevant_collection_errors:
         blocking_reasons.append("incomplete-collection")
     if unavailable_evidence_ids:
         blocking_reasons.append("unavailable-evidence")
@@ -569,7 +577,7 @@ def _execution_eligibility(
         "eligible": not blocking_reasons,
         "ciLabels": ci_labels,
         "occurrenceCount": occurrence_count,
-        "collectionComplete": not collection_errors,
+        "collectionComplete": not relevant_collection_errors,
         "unavailableEvidenceIds": unavailable_evidence_ids,
         "untrustedReferenceEvidenceIds": sorted(
             untrusted_reference_evidence_ids
@@ -656,7 +664,13 @@ def _finalize_execution_metadata(
             "proposalTtlHours": DEFAULT_PROPOSAL_TTL_HOURS,
             "maxProposalsPerIssue": MAX_PROPOSALS_PER_ISSUE,
             "executionEligibility": {
-                "status": "blocked" if document_violations else "eligible",
+                "status": (
+                    "eligible"
+                    if not document_violations
+                    else "blocked"
+                    if len(document_violations) == len(proposals)
+                    else "partially-eligible"
+                ),
                 "violations": document_violations,
             },
         }
@@ -957,6 +971,8 @@ def build_action_proposals(
     proposals = result["proposals"]
     if not isinstance(proposals, list):
         raise TypeError("Validated proposals must be a list.")
+    blocked_recommendations: list[dict[str, object]] = []
+    result["blockedRecommendations"] = blocked_recommendations
 
     for issue in judgments["issues"]:
         issue_number = issue["issueNumber"]
@@ -1070,10 +1086,17 @@ def build_action_proposals(
             and bool(recovered_run_evidence_id)
         )
         if not is_duplicate and not has_recovery and not has_run_recovery:
-            raise ValueError(
-                f"Issue {issue_number} review-close requires deterministic "
-                "resolution evidence."
+            blocked_recommendations.append(
+                {
+                    "issueNumber": issue_number,
+                    "disposition": "review-close",
+                    "blockingReasons": [
+                        "missing-deterministic-resolution-evidence"
+                    ],
+                    "evidenceIds": list(status_recommendation["evidenceIds"]),
+                }
             )
+            continue
 
         recommendation = status_recommendation
         key = f"issue:{issue_number}:status"
@@ -1157,5 +1180,6 @@ def build_action_proposals(
             operation_order.get(str(item["operation"]), 2),
         )
     )
+    blocked_recommendations.sort(key=lambda item: int(item["issueNumber"]))
     _finalize_execution_metadata(result, snapshot)
     return result

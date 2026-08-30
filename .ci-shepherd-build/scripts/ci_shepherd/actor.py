@@ -348,7 +348,11 @@ def _validate_document_execution_eligibility(
         )
     status = value.get("status")
     violations = value.get("violations")
-    if status not in {"eligible", "blocked"} or not isinstance(violations, list):
+    if status not in {
+        "eligible",
+        "partially-eligible",
+        "blocked",
+    } or not isinstance(violations, list):
         raise ValueError("executionEligibility document status is invalid.")
 
     derived_violations: list[dict[str, object]] = []
@@ -367,7 +371,13 @@ def _validate_document_execution_eligibility(
                 }
             )
     expected = {
-        "status": "blocked" if derived_violations else "eligible",
+        "status": (
+            "eligible"
+            if not derived_violations
+            else "blocked"
+            if len(derived_violations) == len(proposals)
+            else "partially-eligible"
+        ),
         "violations": derived_violations,
     }
     if value != expected:
@@ -452,11 +462,40 @@ def validate_action_proposals(document: object) -> dict[str, object]:
             "proposals",
             "unchangedIssueNumbers",
         }
+        if "blockedRecommendations" in document:
+            expected_fields.add("blockedRecommendations")
         if set(document) != expected_fields:
             raise ValueError(
                 "Executable action proposals must contain exactly the "
                 "supported document fields."
             )
+        blocked_recommendations = document.get("blockedRecommendations", [])
+        if not isinstance(blocked_recommendations, list):
+            raise TypeError("blockedRecommendations must be a list.")
+        for index, blocked in enumerate(blocked_recommendations):
+            field = f"blockedRecommendations[{index}]"
+            if not isinstance(blocked, dict):
+                raise TypeError(f"{field} must be an object.")
+            if set(blocked) != {
+                "issueNumber",
+                "disposition",
+                "blockingReasons",
+                "evidenceIds",
+            }:
+                raise ValueError(f"{field} contains unsupported fields.")
+            _required_int(blocked.get("issueNumber"), field=f"{field}.issueNumber")
+            if blocked.get("disposition") != "review-close":
+                raise ValueError(f"{field}.disposition is unsupported.")
+            for list_field in ("blockingReasons", "evidenceIds"):
+                values = blocked.get(list_field)
+                if (
+                    not isinstance(values, list)
+                    or not values
+                    or not all(isinstance(value, str) and value for value in values)
+                ):
+                    raise ValueError(
+                        f"{field}.{list_field} must contain nonempty strings."
+                    )
         _required_string(document.get("generatedAtUtc"), field="generatedAtUtc")
         proposal_ttl_hours = _required_int(
             document.get("proposalTtlHours"),
@@ -575,6 +614,8 @@ def _dry_run_action(
     proposal: dict[str, object],
     *,
     repository: str,
+    document_eligible: bool,
+    legacy_schema: bool,
 ) -> dict[str, object]:
     action_id = str(proposal["actionId"])
     target_kind, target_number, target_url, expected_state = _proposal_target(
@@ -582,6 +623,21 @@ def _dry_run_action(
         repository=repository,
         action_id=action_id,
     )
+    eligibility = proposal.get("executionEligibility")
+    proposal_eligible = (
+        eligibility.get("eligible") is True
+        if isinstance(eligibility, dict)
+        else True
+    )
+    if legacy_schema:
+        blocking_reasons = ["legacy-proposal-schema"]
+    else:
+        blocking_reasons = (
+            list(eligibility["blockingReasons"])
+            if isinstance(eligibility, dict)
+            and isinstance(eligibility.get("blockingReasons"), list)
+            else []
+        )
     return {
         "actionId": action_id,
         "targetKind": target_kind,
@@ -593,7 +649,8 @@ def _dry_run_action(
         "evidenceIds": list(proposal["evidenceIds"]),
         "dependsOn": proposal.get("dependsOn"),
         "expectedTargetState": expected_state,
-        "wouldExecute": True,
+        "wouldExecute": document_eligible and proposal_eligible,
+        "blockingReasons": blocking_reasons,
     }
 
 
@@ -610,12 +667,38 @@ def build_dry_run(
         if action_id is not None
         else proposals
     )
+    legacy_schema = validated["schemaVersion"] != 2
+    execution_eligibility = validated.get("executionEligibility")
+    if legacy_schema:
+        execution_eligibility = {
+            "status": "blocked",
+            "violations": [
+                {
+                    "actionId": proposal["actionId"],
+                    "blockingReasons": ["legacy-proposal-schema"],
+                }
+                for proposal in proposals
+                if isinstance(proposal, dict)
+            ],
+        }
+    document_eligible = (
+        execution_eligibility.get("status") in {"eligible", "partially-eligible"}
+        if isinstance(execution_eligibility, dict)
+        else True
+    )
     return {
         "schemaVersion": 1,
         "repository": validated["repository"],
         "mode": "dry-run",
+        "executionEligibility": execution_eligibility,
+        "blockedRecommendations": list(validated.get("blockedRecommendations", [])),
         "actions": [
-            _dry_run_action(proposal, repository=str(validated["repository"]))
+            _dry_run_action(
+                proposal,
+                repository=str(validated["repository"]),
+                document_eligible=document_eligible,
+                legacy_schema=legacy_schema,
+            )
             for proposal in selected
             if isinstance(proposal, dict)
         ],
@@ -720,7 +803,7 @@ def execute_action(
             validated.get("executionEligibility"),
             proposals=validated["proposals"],
         )
-        if document_eligibility["status"] != "eligible":
+        if document_eligibility["status"] == "blocked":
             raise ValueError("Proposal document is not eligible for execution.")
         eligibility = _validate_execution_eligibility(
             proposal.get("executionEligibility"),

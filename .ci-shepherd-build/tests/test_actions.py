@@ -407,6 +407,53 @@ class WatchActionTests(unittest.TestCase):
             proposals["executionEligibility"],
         )
 
+    def test_issue_scoped_collection_error_blocks_only_that_issue(self) -> None:
+        snapshot = _snapshot()
+        snapshot["openIssues"].append(22)
+        snapshot["issues"].append({"number": 22, "state": "open"})
+        issue_evidence = copy.deepcopy(snapshot["evidence"]["issue:21"])
+        issue_evidence["url"] = "https://github.com/owner/repo/issues/22"
+        issue_evidence["payload"]["number"] = 22
+        snapshot["evidence"]["issue:22"] = issue_evidence
+        snapshot["collectionErrors"] = [
+            {
+                "stage": "comments",
+                "endpoint": "/repos/owner/repo/issues/21/comments",
+                "message": "request failed",
+                "scope": {"kind": "issue", "issueNumbers": [21]},
+            }
+        ]
+
+        prepared = _prepared()
+        prepared_issue = copy.deepcopy(prepared["issues"][0])
+        prepared_issue.update(
+            {
+                "issueNumber": 22,
+                "issueUrl": "https://github.com/owner/repo/issues/22",
+            }
+        )
+        prepared_issue["evidenceBundle"][0]["id"] = "issue:22"
+        prepared["issues"].append(prepared_issue)
+
+        judgments = _judgments()
+        second_issue = copy.deepcopy(judgments["issues"][0])
+        second_issue["issueNumber"] = 22
+        second_recommendation = second_issue["recommendations"][0]
+        second_recommendation["evidenceIds"][0] = "issue:22"
+        judgments["issues"].append(second_issue)
+
+        proposals = build_action_proposals(snapshot, prepared, judgments, "ankj")
+
+        by_issue = {
+            proposal["issueNumber"]: proposal for proposal in proposals["proposals"]
+        }
+        self.assertFalse(by_issue[21]["executionEligibility"]["eligible"])
+        self.assertTrue(by_issue[22]["executionEligibility"]["eligible"])
+        self.assertEqual(
+            "partially-eligible",
+            proposals["executionEligibility"]["status"],
+        )
+
     def test_legacy_watch_comment_is_migrated_in_place(self) -> None:
         result = build_watch_proposals(
             _with_owned_comment(
@@ -585,16 +632,53 @@ class WatchActionTests(unittest.TestCase):
         )
 
     def test_build_action_proposals_rejects_unresolved_review_close(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError,
-            "review-close requires deterministic resolution evidence",
-        ):
-            build_action_proposals(
-                _snapshot(),
-                _prepared(),
-                _close_judgments(),
-                "ankj",
-            )
+        snapshot = _snapshot()
+        snapshot["openIssues"].append(22)
+        snapshot["issues"].append({"number": 22, "state": "open"})
+        issue_evidence = copy.deepcopy(snapshot["evidence"]["issue:21"])
+        issue_evidence["url"] = "https://github.com/owner/repo/issues/22"
+        issue_evidence["payload"]["number"] = 22
+        snapshot["evidence"]["issue:22"] = issue_evidence
+
+        prepared = _prepared()
+        prepared_issue = copy.deepcopy(prepared["issues"][0])
+        prepared_issue.update(
+            {
+                "issueNumber": 22,
+                "issueUrl": "https://github.com/owner/repo/issues/22",
+                "title": "Unsupported close recommendation",
+            }
+        )
+        prepared_issue["evidenceBundle"][0]["id"] = "issue:22"
+        prepared["issues"].append(prepared_issue)
+
+        judgments = _judgments()
+        closing_issue = copy.deepcopy(_close_judgments()["issues"][0])
+        closing_issue["issueNumber"] = 22
+        closing_recommendation = closing_issue["recommendations"][0]
+        closing_recommendation["target"]["value"] = 22
+        closing_recommendation["evidenceIds"][0] = "issue:22"
+        judgments["issues"].append(closing_issue)
+
+        result = build_action_proposals(snapshot, prepared, judgments, "ankj")
+
+        self.assertEqual(
+            [21],
+            [proposal["issueNumber"] for proposal in result["proposals"]],
+        )
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "disposition": "review-close",
+                    "blockingReasons": [
+                        "missing-deterministic-resolution-evidence"
+                    ],
+                    "evidenceIds": ["issue:22", "run:777", "pr:22"],
+                }
+            ],
+            result["blockedRecommendations"],
+        )
 
     def test_build_action_proposals_renders_superseded_duplicate_close(self) -> None:
         result = build_action_proposals(

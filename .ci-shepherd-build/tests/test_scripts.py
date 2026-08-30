@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import hashlib
 import importlib.util
 import io
 import json
@@ -16,6 +17,7 @@ from unittest.mock import patch
 
 from ci_shepherd.authorization import AuthorizationBudget, AuthorizationGrant
 from ci_shepherd.collector import CollectionError, InventoryResult
+from ci_shepherd.execution_state import ExecutionBudgetError
 from ci_shepherd.history import HistoryError
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
 from ci_shepherd.poc import build_compact_poc_input
@@ -865,6 +867,158 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def test_create_authorization_cli_writes_owner_only_grant_that_round_trips(
+        self,
+    ) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX mode assertions are not portable to Windows")
+        create_authorization_script = load_script("create_authorization")
+        from ci_shepherd.authorization import load_authorized_execution
+
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        state_dir = scratch / "state"
+        output_path = scratch / "authorization-grant.json"
+        comment_action_id = "action:comment"
+        close_action_id = "action:close"
+        proposals = {
+            "schemaVersion": 2,
+            "repository": "owner/repo",
+            "snapshotId": "snapshot:owner/repo:2026-08-29T20:00:00Z",
+            "shepherdAuthor": "ankj",
+            "generatedAtUtc": "2026-08-29T20:00:00Z",
+            "proposalTtlHours": 24,
+            "maxProposalsPerIssue": 2,
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [
+                {
+                    "actionId": comment_action_id,
+                    "issueNumber": 21,
+                    "issueUrl": "https://github.com/owner/repo/issues/21",
+                    "operation": "create-comment",
+                    "idempotencyKey": "issue:21:watch",
+                    "body": (
+                        "[automated] Watching.\n\n"
+                        "<!-- ci-shepherd:idempotency-key=issue:21:watch -->"
+                    ),
+                    "evidenceIds": ["issue:21"],
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                    },
+                },
+                {
+                    "actionId": close_action_id,
+                    "dependsOn": comment_action_id,
+                    "issueNumber": 21,
+                    "issueUrl": "https://github.com/owner/repo/issues/21",
+                    "operation": "close-issue",
+                    "idempotencyKey": "issue:21:close",
+                    "closeReason": "not_planned",
+                    "evidenceIds": ["issue:21"],
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                    },
+                },
+            ],
+            "unchangedIssueNumbers": [],
+        }
+        proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
+        try:
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "create_authorization.py",
+                    "--proposals",
+                    str(proposals_path),
+                    "--action-id",
+                    comment_action_id,
+                    "--action-id",
+                    close_action_id,
+                    "--state-dir",
+                    str(state_dir),
+                    "--output",
+                    str(output_path),
+                ],
+            ):
+                self.assertEqual(0, create_authorization_script.main())
+
+            self.assertEqual(0o600, output_path.stat().st_mode & 0o777)
+            grant_document = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [close_action_id, comment_action_id],
+                grant_document["allowedActionIds"],
+            )
+
+            for action_id in (comment_action_id, close_action_id):
+                authorized = load_authorized_execution(
+                    proposals_path,
+                    output_path,
+                    state_dir=state_dir,
+                    action_id=action_id,
+                )
+                self.assertEqual(action_id, authorized.proposal["actionId"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_create_authorization_cli_rejects_symlinked_output(self) -> None:
+        create_authorization_script = load_script("create_authorization")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        proposals_path.write_text("{}", encoding="utf-8")
+        target = scratch / "elsewhere.json"
+        target.write_text("{}", encoding="utf-8")
+        output_path = scratch / "authorization-grant.json"
+        output_path.symlink_to(target)
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "create_authorization.py",
+                        "--proposals",
+                        str(proposals_path),
+                        "--action-id",
+                        "action:1",
+                        "--state-dir",
+                        str(scratch / "state"),
+                        "--output",
+                        str(output_path),
+                    ],
+                ),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                create_authorization_script.main()
+
+            self.assertEqual(2, raised.exception.code)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     def test_execute_actions_defaults_to_dry_run_without_github_access(self) -> None:
         execute_script = load_script("execute_actions")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
@@ -1137,6 +1291,156 @@ class PrototypeScriptTests(unittest.TestCase):
             self.assertEqual(0o600, events_path.stat().st_mode & 0o777)
             self.assertEqual(terminal_result, json.loads(stdout.getvalue()))
             self.assertTrue(execute.call_args.kwargs["override_suppression"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_execute_actions_enforces_persisted_grant_budget_end_to_end(self) -> None:
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        authorization_path = scratch / "authorization-grant.json"
+        state_path = (scratch / "state").resolve()
+        generated_at = datetime.now(UTC)
+        action_ids = [f"action:{index}" for index in range(1, 4)]
+        proposals = {
+            "schemaVersion": 2,
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:radical/aspire:budget-test",
+            "shepherdAuthor": "radical",
+            "generatedAtUtc": generated_at.isoformat().replace("+00:00", "Z"),
+            "proposalTtlHours": 1,
+            "maxProposalsPerIssue": 2,
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [
+                {
+                    "actionId": action_id,
+                    "issueNumber": index,
+                    "issueUrl": f"https://github.com/radical/aspire/issues/{index}",
+                    "operation": "create-comment",
+                    "idempotencyKey": f"issue:{index}:status",
+                    "body": (
+                        f"[automated] Watching {index}.\n\n"
+                        "<!-- ci-shepherd:idempotency-key="
+                        f"issue:{index}:status -->"
+                    ),
+                    "evidenceIds": [f"issue:{index}"],
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": generated_at.isoformat().replace(
+                            "+00:00",
+                            "Z",
+                        )
+                    },
+                    **({"dependsOn": action_ids[0]} if index > 1 else {}),
+                }
+                for index, action_id in enumerate(action_ids, start=1)
+            ],
+            "unchangedIssueNumbers": [],
+        }
+        proposal_bytes = json.dumps(proposals).encode()
+        proposals_path.write_bytes(proposal_bytes)
+        authorization_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "grantId": "grant:budget-test",
+                    "repository": "radical/aspire",
+                    "stateDirectory": str(state_path),
+                    "issuedAtUtc": generated_at.isoformat().replace("+00:00", "Z"),
+                    "expiresAtUtc": (
+                        generated_at + timedelta(minutes=15)
+                    ).isoformat().replace("+00:00", "Z"),
+                    "snapshotId": proposals["snapshotId"],
+                    "proposalsDigest": (
+                        f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+                    ),
+                    "allowedActionIds": action_ids,
+                    "allowedOperations": ["create-comment"],
+                    "allowedTargets": [
+                        {"kind": "issue", "number": index}
+                        for index in range(1, 4)
+                    ],
+                    "allowedChainRoots": [action_ids[0]],
+                    "overrideSuppressionForActionIds": [],
+                    "budget": {
+                        "maxMutationAttempts": 2,
+                        "maxChains": 1,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def execute_result(
+            _proposals: object,
+            *,
+            action_id: str,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            return {
+                "actionId": action_id,
+                "attemptedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "outcome": "executed",
+            }
+
+        def argv(action_id: str) -> list[str]:
+            return [
+                "--proposals",
+                str(proposals_path),
+                "--state-dir",
+                str(state_path),
+                "--authorization",
+                str(authorization_path),
+                "--action-id",
+                action_id,
+                "--execute",
+            ]
+
+        try:
+            with (
+                patch.object(
+                    execute_script,
+                    "GitHubActorClient",
+                    return_value=object(),
+                ) as client_factory,
+                patch.object(
+                    execute_script,
+                    "execute_action",
+                    side_effect=execute_result,
+                ) as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(0, execute_script.main(argv(action_ids[0])))
+                self.assertEqual(0, execute_script.main(argv(action_ids[1])))
+                with self.assertRaisesRegex(
+                    ExecutionBudgetError,
+                    "mutation-attempt budget is exhausted",
+                ):
+                    execute_script.main(argv(action_ids[2]))
+
+            self.assertEqual(2, execute.call_count)
+            self.assertEqual(2, client_factory.call_count)
+            events = [
+                json.loads(line)
+                for line in (
+                    state_path / "action-events.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                ["intent", "terminal", "intent", "terminal"],
+                [event["eventType"] for event in events],
+            )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 

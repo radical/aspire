@@ -229,6 +229,139 @@ class ActorTests(unittest.TestCase):
 
         self.assertEqual([], client.calls)
 
+    def test_v2_execution_allows_eligible_action_in_partially_eligible_document(
+        self,
+    ) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {
+                    "status": "partially-eligible",
+                    "violations": [
+                        {
+                            "actionId": CLOSE_ACTION_ID,
+                            "blockingReasons": ["unavailable-evidence"],
+                        }
+                    ],
+                },
+            }
+        )
+        actions = proposals["proposals"]
+        for action in actions:
+            action.pop("requiresSeparateApproval")
+            action["sourceEvidenceFingerprint"] = {
+                "issueUpdatedAt": "2026-08-21T19:54:00Z"
+            }
+            action["executionEligibility"] = {
+                "eligible": True,
+                "ciLabels": ["ci-failure-cause"],
+                "occurrenceCount": 1,
+                "collectionComplete": True,
+                "unavailableEvidenceIds": [],
+                "untrustedReferenceEvidenceIds": [],
+                "blockingReasons": [],
+            }
+        actions[1]["executionEligibility"] = {
+            "eligible": False,
+            "ciLabels": ["ci-failure-cause"],
+            "occurrenceCount": 1,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": ["run:777"],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": ["unavailable-evidence"],
+        }
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                },
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T20:00:01Z",
+                },
+            ],
+            comments=[[]],
+            single_comments=[
+                {"id": 900, "body": COMMENT_BODY, "user": {"login": "ankj"}}
+            ],
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertIn("create_comment", [call[0] for call in client.calls])
+
+    def test_v2_execution_rejects_ineligible_action_in_partially_eligible_document(
+        self,
+    ) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {
+                    "status": "partially-eligible",
+                    "violations": [
+                        {
+                            "actionId": CLOSE_ACTION_ID,
+                            "blockingReasons": ["unavailable-evidence"],
+                        }
+                    ],
+                },
+            }
+        )
+        actions = proposals["proposals"]
+        for action in actions:
+            action.pop("requiresSeparateApproval")
+            action["sourceEvidenceFingerprint"] = {
+                "issueUpdatedAt": "2026-08-21T19:54:00Z"
+            }
+            action["executionEligibility"] = {
+                "eligible": True,
+                "ciLabels": ["ci-failure-cause"],
+                "occurrenceCount": 1,
+                "collectionComplete": True,
+                "unavailableEvidenceIds": [],
+                "untrustedReferenceEvidenceIds": [],
+                "blockingReasons": [],
+            }
+        actions[1]["executionEligibility"] = {
+            "eligible": False,
+            "ciLabels": ["ci-failure-cause"],
+            "occurrenceCount": 1,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": ["run:777"],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": ["unavailable-evidence"],
+        }
+        client = ScriptedActorClient()
+
+        with self.assertRaisesRegex(ValueError, "not eligible"):
+            execute_action(
+                proposals,
+                action_id=CLOSE_ACTION_ID,
+                prior_results=_results(),
+                client=client,
+                now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+            )
+
+        self.assertEqual([], client.calls)
+
     def test_v2_execution_rejects_changed_source_issue_before_mutation(self) -> None:
         proposals = _proposals()
         proposals.update(
@@ -546,7 +679,111 @@ class ActorTests(unittest.TestCase):
             ["create-comment", "close-issue"],
             [action["operation"] for action in rendered["actions"]],
         )
-        self.assertTrue(all(action["wouldExecute"] for action in rendered["actions"]))
+        self.assertTrue(
+            all(not action["wouldExecute"] for action in rendered["actions"])
+        )
+
+    def test_dry_run_reports_partially_eligible_v2_document_per_action(self) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+            }
+        )
+        actions = proposals["proposals"]
+        assert isinstance(actions, list)
+        for action in actions:
+            assert isinstance(action, dict)
+            action.pop("requiresSeparateApproval")
+            action["sourceEvidenceFingerprint"] = {
+                "issueUpdatedAt": "2026-08-21T19:54:00Z"
+            }
+            action["executionEligibility"] = {
+                "eligible": True,
+                "ciLabels": ["ci-failure-cause"],
+                "occurrenceCount": 1,
+                "collectionComplete": True,
+                "unavailableEvidenceIds": [],
+                "untrustedReferenceEvidenceIds": [],
+                "blockingReasons": [],
+            }
+        blocked_action = actions[1]
+        assert isinstance(blocked_action, dict)
+        blocked_action["executionEligibility"] = {
+            "eligible": False,
+            "ciLabels": ["ci-failure-cause"],
+            "occurrenceCount": 1,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": ["run:777"],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": ["unavailable-evidence"],
+        }
+        proposals["executionEligibility"] = {
+            "status": "partially-eligible",
+            "violations": [
+                {
+                    "actionId": CLOSE_ACTION_ID,
+                    "blockingReasons": ["unavailable-evidence"],
+                }
+            ],
+        }
+        proposals["blockedRecommendations"] = [
+            {
+                "issueNumber": 21,
+                "disposition": "review-close",
+                "blockingReasons": ["unsupported-close-action:close-resolved"],
+                "evidenceIds": ["issue:21"],
+            }
+        ]
+
+        rendered = build_dry_run(proposals, action_id=None)
+
+        self.assertEqual(proposals["executionEligibility"], rendered["executionEligibility"])
+        self.assertEqual(
+            proposals["blockedRecommendations"],
+            rendered["blockedRecommendations"],
+        )
+        self.assertEqual(
+            [True, False],
+            [action["wouldExecute"] for action in rendered["actions"]],
+        )
+        self.assertEqual([], rendered["actions"][0]["blockingReasons"])
+        self.assertEqual(
+            ["unavailable-evidence"],
+            rendered["actions"][1]["blockingReasons"],
+        )
+
+    def test_dry_run_reports_legacy_proposals_as_not_executable(self) -> None:
+        rendered = build_dry_run(_proposals(), action_id=None)
+
+        self.assertEqual(
+            {
+                "status": "blocked",
+                "violations": [
+                    {
+                        "actionId": COMMENT_ACTION_ID,
+                        "blockingReasons": ["legacy-proposal-schema"],
+                    },
+                    {
+                        "actionId": CLOSE_ACTION_ID,
+                        "blockingReasons": ["legacy-proposal-schema"],
+                    },
+                ],
+            },
+            rendered["executionEligibility"],
+        )
+        self.assertTrue(
+            all(not action["wouldExecute"] for action in rendered["actions"])
+        )
+        self.assertTrue(
+            all(
+                action["blockingReasons"] == ["legacy-proposal-schema"]
+                for action in rendered["actions"]
+            )
+        )
 
     def test_dry_run_renders_target_shaped_pull_request_action(self) -> None:
         rendered = build_dry_run(_pull_proposals(), action_id=None)
@@ -567,7 +804,8 @@ class ActorTests(unittest.TestCase):
                     "evidenceIds": ["pr:23"],
                     "dependsOn": None,
                     "expectedTargetState": "open",
-                    "wouldExecute": True,
+                    "wouldExecute": False,
+                    "blockingReasons": ["legacy-proposal-schema"],
                 }
             ],
             rendered["actions"],
