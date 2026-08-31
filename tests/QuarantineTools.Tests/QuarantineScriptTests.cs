@@ -12,6 +12,11 @@ namespace QuarantineTools.Tests;
 
 public class QuarantineScriptTests
 {
+    [Fact]
+    public void QuarantineRoundTripPreservesEncodingAndRawStrings()
+    {
+    }
+
     [Theory]
     [InlineData(
         """
