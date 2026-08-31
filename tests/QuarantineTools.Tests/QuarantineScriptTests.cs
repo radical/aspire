@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 using System.Text.RegularExpressions;
 using System.Text;
+using Aspire.TestUtilities;
 
 namespace QuarantineTools.Tests;
 
@@ -170,6 +171,7 @@ public class QuarantineScriptTests
     [InlineData("www.github.com/issue/1", false)]
     [InlineData("/relative/path", false)]
     [InlineData("", false)]
+    [QuarantinedTest("https://github.com/radical/aspire/issues/72")]
     public void UrlValidation_Works(string url, bool expected)
     {
         var result = IsHttpUrl(url);
