@@ -733,6 +733,32 @@ that must not be skipped: H26 is the only check that distinguishes "excluded fro
 selection" from "deleted", and H29 is the only check that confirms the attribute
 actually reached the target branch rather than trusting pull-request metadata.
 
+**Single-test lifecycle status on 2026-08-31:** the Class A path completed
+against `radical/aspire` using issue `#72` and pull request `#76`. The request
+bound the exact test, issue URL, repository policy, source revision, source
+semantic digest, and failed-then-passed TRX identities. The executor changed
+only `tests/QuarantineTools.Tests/QuarantineScriptTests.cs`, added exactly one
+attribute with the original issue URL, built the affected project, discovered
+all six theory rows without quarantine filters, and discovered none with the
+filters. The commit validator bound the pushed head to the canonical diff
+digest, and live pull request verification confirmed the exact head and
+one-file diff.
+
+The merge reconciliation then fetched the changed file at GitHub's merge commit
+and confirmed the exact attribute before recording the batch completed. Reusing
+the consumed grant failed before mutation, and the source issue remained open
+after merge. Cleanup closed the fixture issue and removed both temporary
+branches. Evidence is preserved under
+`files/quarantine-e2e-live-20260831-r3` in the session artifact directory.
+
+The live run found three defects that local happy-path coverage had missed:
+`dotnet test -- --list-tests` did not discover MTP tests, successful
+quarantine-filtered discovery returned MTP's documented no-tests exit code
+`8`, and GitHub's Contents API returned line-wrapped base64 that strict decoding
+rejected. Regression coverage now exercises the direct built runner, accepts
+exit code `8` only for filtered discovery, and decodes line-wrapped GitHub
+content while retaining strict base64 validation.
+
 ### Stage 6 — Incremental stability
 
 Run three consecutive cycles with a scripted mutation stream, including one

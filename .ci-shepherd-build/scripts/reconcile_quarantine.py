@@ -45,7 +45,11 @@ def main() -> int:
             or not isinstance(document.get("content"), str)
         ):
             raise ValueError("GitHub returned invalid merged source content.")
-        return base64.b64decode(document["content"], validate=True)
+        # The Contents API wraps base64 content with newlines, for example:
+        #   "content": "W1F1YXJhbnRpbmVkVGVz\\ndF0K"
+        # Remove only line endings so strict decoding still rejects other junk.
+        content = document["content"].replace("\r", "").replace("\n", "")
+        return base64.b64decode(content, validate=True)
 
     result = reconcile_quarantine_pull_requests(
         state_directory=args.state_dir,

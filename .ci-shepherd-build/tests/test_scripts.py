@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import contextlib
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -1208,6 +1209,7 @@ class PrototypeScriptTests(unittest.TestCase):
         script = load_script("execute_quarantine")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
         shutil.rmtree(scratch, ignore_errors=True)
+
         scratch.mkdir(parents=True)
         output = scratch / "mutation-result.json"
         request = {
@@ -1284,6 +1286,77 @@ class PrototypeScriptTests(unittest.TestCase):
             self.assertEqual(0o600, output.stat().st_mode & 0o777)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_reconcile_quarantine_decodes_line_wrapped_github_content(self) -> None:
+        script = load_script("reconcile_quarantine")
+        source = b'[QuarantinedTest("https://github.com/owner/repo/issues/1")]\n'
+        encoded = base64.b64encode(source).decode("ascii")
+        line_wrapped = "\n".join(
+            encoded[index : index + 20]
+            for index in range(0, len(encoded), 20)
+        )
+        merge_commit = "a" * 40
+
+        def get(path: str) -> dict[str, object]:
+            if "/contents/" in path:
+                return {"encoding": "base64", "content": line_wrapped}
+            raise AssertionError(f"Unexpected GitHub path: {path}")
+
+        def verify_merged_source(
+            _event,
+            _mutation,
+            *,
+            merge_commit_sha,
+            get_file,
+            **_kwargs,
+        ):
+            self.assertEqual(merge_commit, merge_commit_sha)
+            self.assertEqual(source, get_file("tests/Test.cs", merge_commit))
+            return True
+
+        def reconcile(*, verify_merged_source, **_kwargs):
+            self.assertTrue(
+                verify_merged_source(
+                    {"mutationValidation": {}},
+                    {"merge_commit_sha": merge_commit},
+                )
+            )
+            return {"schemaVersion": 1, "repository": "owner/repo", "outcomes": []}
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "reconcile_quarantine.py",
+                    "--state-dir",
+                    "state",
+                    "--repository",
+                    "owner/repo",
+                    "--recorded-at",
+                    "2026-08-31T00:00:00Z",
+                    "--audit",
+                    "audit.jsonl",
+                ],
+            ),
+            patch.object(
+                script,
+                "GitHubClient",
+                return_value=SimpleNamespace(get=get),
+            ),
+            patch.object(
+                script,
+                "verify_merged_quarantine_source",
+                side_effect=verify_merged_source,
+            ),
+            patch.object(
+                script,
+                "reconcile_quarantine_pull_requests",
+                side_effect=reconcile,
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(0, script.main())
 
     def test_execute_quarantine_records_validation_failure(self) -> None:
         script = load_script("execute_quarantine")
