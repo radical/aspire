@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 using System.Text.RegularExpressions;
 using System.Text;
+using Aspire.TestUtilities;
 
 namespace QuarantineTools.Tests;
 
@@ -116,6 +117,7 @@ public class QuarantineScriptTests
     }
 
     [Fact]
+    [QuarantinedTest("https://github.com/radical/aspire/issues/74")]
     public void Quarantine_IsIdempotent_DoesNotDuplicateOrChangeReason()
     {
         const string originalUrl = "https://github.com/microsoft/aspire/issues/100";
