@@ -6,7 +6,10 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.CommandLine;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 //
@@ -37,7 +40,7 @@ using System.Text.RegularExpressions;
 // The tool is conservative: if a requested test is already in the desired state, it makes no change.
 // It also avoids touching files that don't contain the specified methods.
 
-public class Program
+public partial class Program
 {
     private const string DefaultQuarantinedTestAttributeFullName = "Aspire.TestUtilities.QuarantinedTest";
     private const string DefaultActiveIssueAttributeFullName = "Xunit.ActiveIssueAttribute";
@@ -48,6 +51,7 @@ public class Program
 
         var optQuarantine = new Option<bool>("--quarantine", "-q") { Description = "Quarantine the specified test(s)." };
         var optUnquarantine = new Option<bool>("--unquarantine", "-u") { Description = "Unquarantine the specified test(s)." };
+        var optInspect = new Option<bool>("--inspect") { Description = "Inspect the specified test(s) without modifying source files and write JSON to standard output." };
         var optUrl = new Option<string?>("--url", "-i") { Description = "Issue URL required for quarantining (http/https)." };
         var optRoot = new Option<string?>("--root", "-r") { Description = "Tests root to scan (defaults to '<repo>/tests')." };
         var optAttribute = new Option<string?>("--attribute", "-a") { Description = "Fully-qualified attribute type to add/remove. If not specified, defaults based on --mode." };
@@ -58,6 +62,7 @@ public class Program
 
         rootCommand.Options.Add(optQuarantine);
         rootCommand.Options.Add(optUnquarantine);
+        rootCommand.Options.Add(optInspect);
         rootCommand.Options.Add(optUrl);
         rootCommand.Options.Add(optRoot);
         rootCommand.Options.Add(optAttribute);
@@ -68,10 +73,11 @@ public class Program
         {
             var quarantine = parseResult.GetValue<bool>("--quarantine");
             var unquarantine = parseResult.GetValue<bool>("--unquarantine");
+            var inspect = parseResult.GetValue<bool>("--inspect");
 
-            if (quarantine == unquarantine)
+            if ((quarantine ? 1 : 0) + (unquarantine ? 1 : 0) + (inspect ? 1 : 0) != 1)
             {
-                Console.Error.WriteLine("Specify exactly one of -q/--quarantine or -u/--unquarantine.");
+                Console.Error.WriteLine("Specify exactly one of -q/--quarantine, -u/--unquarantine, or --inspect.");
                 return Task.FromResult(1);
             }
 
@@ -87,6 +93,17 @@ public class Program
             var scanRoot = parseResult.GetValue<string?>("--root");
             var mode = parseResult.GetValue<string>("--mode") ?? "quarantine";
             var attributeFullName = parseResult.GetValue<string?>("--attribute");
+
+            if (inspect)
+            {
+                if (!string.IsNullOrWhiteSpace(issueUrl) || !string.IsNullOrWhiteSpace(attributeFullName))
+                {
+                    Console.Error.WriteLine("--inspect does not accept --url or --attribute.");
+                    return Task.FromResult(1);
+                }
+
+                return InspectAsync(tests, scanRoot, token);
+            }
 
             // Validate mode
             if (mode != "quarantine" && mode != "activeissue")
@@ -130,15 +147,129 @@ public class Program
         return rootCommand.Parse(args).InvokeAsync();
     }
 
+    private static async Task<int> InspectAsync(IReadOnlyList<string> fullMethodNames, string? scanRootOverride, CancellationToken cancellationToken)
+    {
+        var repoRoot = FindRepoRoot(Directory.GetCurrentDirectory()) ?? Directory.GetCurrentDirectory();
+        var testsRoot = ResolveTestsRoot(repoRoot, scanRootOverride);
+
+        if (!Directory.Exists(testsRoot))
+        {
+            Console.Error.WriteLine($"Tests folder not found at: {testsRoot}");
+            return 2;
+        }
+
+        var targets = fullMethodNames
+            .Distinct(StringComparer.Ordinal)
+            .Select(testName =>
+            {
+                var parsed = ParseFullMethodName(testName);
+                return new InspectionTarget(testName, parsed.PathPartsBeforeMethod, parsed.Method);
+            })
+            .ToList();
+        var targetsByMethod = targets
+            .GroupBy(target => target.Method, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var methodNamePrefilterRegex = BuildAnyMethodNameRegex(targetsByMethod.Keys);
+        var matchesByTestName = targets.ToDictionary(
+            target => target.TestName,
+            _ => new List<InspectionMatch>(),
+            StringComparer.Ordinal);
+
+        foreach (var file in EnumerateCsFiles(testsRoot, ignoreInaccessible: false).OrderBy(path => path, StringComparer.Ordinal))
+        {
+            var text = await File.ReadAllTextAsync(file, cancellationToken).ConfigureAwait(false);
+            if (!methodNamePrefilterRegex.IsMatch(text))
+            {
+                continue;
+            }
+
+            var tree = CSharpSyntaxTree.ParseText(text, cancellationToken: cancellationToken);
+            var root = tree.GetCompilationUnitRoot(cancellationToken);
+            var fileSemanticDigest = GetFileSemanticDigest(root);
+            var fileQuarantines = GetFileQuarantines(root);
+            var isQuarantineAttribute = CreateAttributeMatcher(
+                root,
+                DefaultQuarantinedTestAttributeFullName);
+            var isActiveIssueAttribute = CreateAttributeMatcher(
+                root,
+                DefaultActiveIssueAttributeFullName);
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                if (!targetsByMethod.TryGetValue(method.Identifier.ValueText, out var candidates))
+                {
+                    continue;
+                }
+
+                var (namespaceName, typeChain) = GetEnclosingNames(method);
+                var actualParts = new List<string>(typeChain.Count + (string.IsNullOrEmpty(namespaceName) ? 0 : namespaceName.Count(character => character == '.') + 1));
+                if (!string.IsNullOrEmpty(namespaceName))
+                {
+                    actualParts.AddRange(namespaceName.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                }
+                actualParts.AddRange(typeChain);
+
+                foreach (var candidate in candidates.Where(candidate => SequenceEquals(actualParts, candidate.PathPartsBeforeMethod)))
+                {
+                    var quarantineAttributes = new List<InspectionAttribute>();
+                    var activeIssueAttributes = new List<InspectionAttribute>();
+                    foreach (var attribute in method.AttributeLists.SelectMany(list => list.Attributes))
+                    {
+                        if (isQuarantineAttribute(attribute))
+                        {
+                            quarantineAttributes.Add(
+                                new InspectionAttribute(
+                                    "QuarantinedTest",
+                                    GetIssueUrl(attribute)));
+                        }
+                        else if (isActiveIssueAttribute(attribute))
+                        {
+                            activeIssueAttributes.Add(
+                                new InspectionAttribute(
+                                    "ActiveIssue",
+                                    GetIssueUrl(attribute)));
+                        }
+                    }
+
+                    var line = method.Identifier.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                    matchesByTestName[candidate.TestName].Add(
+                        new InspectionMatch(
+                            Path.GetRelativePath(testsRoot, file).Replace(Path.DirectorySeparatorChar, '/'),
+                            line,
+                            quarantineAttributes,
+                            activeIssueAttributes,
+                            fileSemanticDigest,
+                            fileQuarantines));
+                }
+            }
+        }
+
+        var results = targets
+            .Select(target =>
+            {
+                var matches = matchesByTestName[target.TestName]
+                    .OrderBy(match => match.File, StringComparer.Ordinal)
+                    .ThenBy(match => match.Line)
+                    .ToList();
+                var status = matches.Count switch
+                {
+                    0 => "not-found",
+                    1 => "resolved",
+                    _ => "ambiguous",
+                };
+                return new InspectionResult(target.TestName, status, matches);
+            })
+            .ToList();
+        var document = new InspectionDocument(1, results);
+        Console.WriteLine(JsonSerializer.Serialize(document, InspectionJsonContext.Default.InspectionDocument));
+
+        return 0;
+    }
+
     private static async Task<int> ExecuteAsync(bool quarantine, bool unquarantine, List<string> fullMethodNames, string? issueUrl, string? scanRootOverride, string attributeFullName, CancellationToken cancellationToken)
     {
         // Resolve repository root and tests folder
         var repoRoot = FindRepoRoot(Directory.GetCurrentDirectory()) ?? Directory.GetCurrentDirectory();
-        var testsRoot = string.IsNullOrWhiteSpace(scanRootOverride)
-                            ? Path.Combine(repoRoot, "tests")
-                            : (Path.IsPathRooted(scanRootOverride!)
-                                ? scanRootOverride!
-                                : Path.GetFullPath(Path.Combine(repoRoot, scanRootOverride!)));
+        var testsRoot = ResolveTestsRoot(repoRoot, scanRootOverride);
 
         if (!Directory.Exists(testsRoot))
         {
@@ -162,7 +293,7 @@ public class Program
         var modifiedFiles = new ConcurrentBag<string>();
 
         // Prep attribute handling based on configuration
-        PrepareAttributeHandling(attributeFullName, out var attributeNameToInsert, out var attributeNamespaceToEnsure, out var isTargetAttribute);
+        PrepareAttributeHandling(attributeFullName, out var attributeNameToInsert, out var attributeNamespaceToEnsure, out _);
         // Build a regex to quickly detect the attribute textually in files
         var attributePrefilterRegex = BuildAttributeRegex(attributeNamespaceToEnsure, attributeNameToInsert);
 
@@ -216,6 +347,9 @@ public class Program
                     var newline = DetectNewLine(text);
                     var tree = CSharpSyntaxTree.ParseText(text, cancellationToken: ct);
                     var root = tree.GetCompilationUnitRoot(ct);
+                    var isTargetAttribute = CreateAttributeMatcher(
+                        root,
+                        attributeFullName);
 
                     var methodNodes = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
 
@@ -258,7 +392,12 @@ public class Program
                         }
                         else if (quarantine) // quarantine
                         {
-                            var updated = AddTargetAttribute(method, attributeNameToInsert, issueUrl ?? string.Empty, newline);
+                            var updated = AddTargetAttribute(
+                                method,
+                                attributeNameToInsert,
+                                issueUrl ?? string.Empty,
+                                newline,
+                                isTargetAttribute);
                             if (!ReferenceEquals(updated, method))
                             {
                                 updates.Add((method, updated));
@@ -346,7 +485,7 @@ public class Program
     /// Enumerate .cs files under root while proactively skipping common heavy/irrelevant directories.
     /// Avoids the overhead of scanning into folders like bin, obj, .git, artifacts, node_modules, etc.
     /// </summary>
-    private static IEnumerable<string> EnumerateCsFiles(string root)
+    private static IEnumerable<string> EnumerateCsFiles(string root, bool ignoreInaccessible = true)
     {
         if (!Directory.Exists(root))
         {
@@ -369,7 +508,7 @@ public class Program
             {
                 subdirs = Directory.EnumerateDirectories(dir);
             }
-            catch
+            catch when (ignoreInaccessible)
             {
                 continue;
             }
@@ -389,14 +528,19 @@ public class Program
             {
                 files = Directory.EnumerateFiles(dir, "*.cs", SearchOption.TopDirectoryOnly);
             }
-            catch
+            catch when (ignoreInaccessible)
             {
                 continue;
             }
 
             foreach (var f in files)
             {
-                yield return f;
+                var fileName = Path.GetFileName(f);
+                if (!fileName.Contains(".received.", StringComparison.OrdinalIgnoreCase)
+                    && !fileName.Contains(".verified.", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return f;
+                }
             }
         }
     }
@@ -469,6 +613,152 @@ public class Program
             return false;
         }
         return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+    }
+
+    private static string ResolveTestsRoot(string repoRoot, string? scanRootOverride)
+    {
+        return string.IsNullOrWhiteSpace(scanRootOverride)
+            ? Path.Combine(repoRoot, "tests")
+            : Path.IsPathRooted(scanRootOverride)
+                ? scanRootOverride
+                : Path.GetFullPath(Path.Combine(repoRoot, scanRootOverride));
+    }
+
+    private static Func<AttributeSyntax, bool> CreateAttributeMatcher(
+        CompilationUnitSyntax root,
+        string attributeFullName)
+    {
+        var lastDot = attributeFullName.LastIndexOf('.');
+        var attributeNamespace = lastDot >= 0
+            ? attributeFullName[..lastDot]
+            : string.Empty;
+        var attributeName = lastDot >= 0
+            ? attributeFullName[(lastDot + 1)..]
+            : attributeFullName;
+        var shortName = attributeName.EndsWith(
+            "Attribute",
+            StringComparison.Ordinal)
+                ? attributeName[..^"Attribute".Length]
+                : attributeName;
+        var acceptedFullNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            string.IsNullOrEmpty(attributeNamespace)
+                ? shortName
+                : $"{attributeNamespace}.{shortName}",
+            string.IsNullOrEmpty(attributeNamespace)
+                ? $"{shortName}Attribute"
+                : $"{attributeNamespace}.{shortName}Attribute",
+        };
+        var aliases = root.Usings
+            .Where(usingDirective => usingDirective.Alias is not null)
+            .Select(usingDirective => (
+                Alias: usingDirective.Alias!.Name.Identifier.ValueText,
+                Target: NormalizeQualifiedName(usingDirective.Name?.ToString())))
+            .Where(alias => acceptedFullNames.Contains(alias.Target))
+            .Select(alias => alias.Alias)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return attribute =>
+        {
+            var name = NormalizeQualifiedName(attribute.Name.ToString());
+            if (acceptedFullNames.Contains(name))
+            {
+                return true;
+            }
+
+            if (attribute.Name is IdentifierNameSyntax identifier)
+            {
+                var value = identifier.Identifier.ValueText;
+                return aliases.Contains(value)
+                    || value == shortName
+                    || value == $"{shortName}Attribute";
+            }
+
+            return false;
+        };
+    }
+
+    private static string NormalizeQualifiedName(string? name)
+    {
+        const string globalPrefix = "global::";
+        return name?.StartsWith(globalPrefix, StringComparison.Ordinal) == true
+            ? name[globalPrefix.Length..]
+            : name ?? string.Empty;
+    }
+
+    private static string? GetIssueUrl(AttributeSyntax attribute)
+    {
+        var firstArgument = attribute.ArgumentList?.Arguments.FirstOrDefault(
+            argument => argument.NameColon is null && argument.NameEquals is null);
+        return firstArgument?.Expression is LiteralExpressionSyntax literal &&
+            literal.IsKind(SyntaxKind.StringLiteralExpression)
+                ? literal.Token.ValueText
+                : null;
+    }
+
+    private static string GetFileSemanticDigest(CompilationUnitSyntax root)
+    {
+        var lastDot = DefaultQuarantinedTestAttributeFullName.LastIndexOf('.');
+        var quarantineNamespace = DefaultQuarantinedTestAttributeFullName[..lastDot];
+        var isQuarantineAttribute = CreateAttributeMatcher(
+            root,
+            DefaultQuarantinedTestAttributeFullName);
+        var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().ToList();
+        var replacements = methods
+            .Select(method =>
+            {
+                var updated = RemoveTargetAttribute(
+                    method,
+                    isQuarantineAttribute,
+                    out _);
+                return (Original: method, Updated: updated);
+            })
+            .Where(replacement => !ReferenceEquals(replacement.Original, replacement.Updated))
+            .ToDictionary(
+                replacement => replacement.Original,
+                replacement => replacement.Updated);
+        var normalizedRoot = replacements.Count == 0
+            ? root
+            : root.ReplaceNodes(
+                replacements.Keys,
+                (original, _) => replacements[original]);
+        if (quarantineNamespace is not null)
+        {
+            normalizedRoot = RemoveUsingDirective(
+                normalizedRoot,
+                quarantineNamespace);
+        }
+
+        var normalized = normalizedRoot.NormalizeWhitespace().ToFullString();
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        return $"sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
+    }
+
+    private static IReadOnlyList<FileQuarantine> GetFileQuarantines(CompilationUnitSyntax root)
+    {
+        var isQuarantineAttribute = CreateAttributeMatcher(
+            root,
+            DefaultQuarantinedTestAttributeFullName);
+        return root.DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .SelectMany(method => method.AttributeLists
+                .SelectMany(list => list.Attributes)
+                .Where(isQuarantineAttribute)
+                .Select(attribute => new FileQuarantine(
+                    GetFullMethodName(method),
+                    GetIssueUrl(attribute))))
+            .OrderBy(quarantine => quarantine.TestName, StringComparer.Ordinal)
+            .ThenBy(quarantine => quarantine.IssueUrl, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static string GetFullMethodName(MethodDeclarationSyntax method)
+    {
+        var (namespaceName, typeChain) = GetEnclosingNames(method);
+        var typeName = string.Join("+", typeChain);
+        return string.IsNullOrEmpty(namespaceName)
+            ? $"{typeName}.{method.Identifier.ValueText}"
+            : $"{namespaceName}.{typeName}.{method.Identifier.ValueText}";
     }
 
     /// <summary>
@@ -660,33 +950,35 @@ public class Program
             }
         }
 
-        return removed ? method.WithAttributeLists(SyntaxFactory.List(newLists)) : method;
+        if (!removed)
+        {
+            return method;
+        }
+
+        // The first attribute list owns comments and directives immediately above the
+        // method. Preserve that trivia when removing the list so semantic validation
+        // cannot become blind to changes in those lines.
+        return method
+            .WithAttributeLists(SyntaxFactory.List(newLists))
+            .WithLeadingTrivia(method.GetLeadingTrivia());
     }
 
     /// <summary>
     /// Adds the configured attribute (optionally with an issue URL) to a method if one does
     /// not already exist. Preserves indentation and ensures a clean newline layout.
     /// </summary>
-    private static MethodDeclarationSyntax AddTargetAttribute(MethodDeclarationSyntax method, string attributeNameToInsert, string issueUrl, string newline)
+    private static MethodDeclarationSyntax AddTargetAttribute(
+        MethodDeclarationSyntax method,
+        string attributeNameToInsert,
+        string issueUrl,
+        string newline,
+        Func<AttributeSyntax, bool> isTargetAttribute)
     {
-        foreach (var list in method.AttributeLists)
+        if (method.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Any(isTargetAttribute))
         {
-            // If any attribute with the same right-most identifier (with/without suffix) exists, skip adding
-            if (list.Attributes.Any(a =>
-            {
-                var id = a.Name switch
-                {
-                    IdentifierNameSyntax ins => ins.Identifier.ValueText,
-                    QualifiedNameSyntax qns => (qns.Right as IdentifierNameSyntax)?.Identifier.ValueText ?? qns.Right.ToString(),
-                    AliasQualifiedNameSyntax aqn => (aqn.Name as IdentifierNameSyntax)?.Identifier.ValueText ?? aqn.Name.ToString(),
-                    _ => a.Name.ToString().Split('.').Last()
-                };
-                return string.Equals(id, attributeNameToInsert, StringComparison.Ordinal)
-                    || string.Equals(id, attributeNameToInsert + "Attribute", StringComparison.Ordinal);
-            }))
-            {
-                return method;
-            }
+            return method;
         }
 
         // Use provided attribute name as-is (can be short or qualified)
@@ -813,4 +1105,26 @@ public class Program
 
         return updated;
     }
+
+    private sealed record InspectionTarget(string TestName, List<string> PathPartsBeforeMethod, string Method);
+
+    private sealed record InspectionDocument(int SchemaVersion, IReadOnlyList<InspectionResult> Tests);
+
+    private sealed record InspectionResult(string TestName, string Status, IReadOnlyList<InspectionMatch> Matches);
+
+    private sealed record InspectionMatch(
+        string File,
+        int Line,
+        IReadOnlyList<InspectionAttribute> QuarantineAttributes,
+        IReadOnlyList<InspectionAttribute> ActiveIssueAttributes,
+        string FileSemanticDigest,
+        IReadOnlyList<FileQuarantine> FileQuarantines);
+
+    private sealed record InspectionAttribute(string Name, string? IssueUrl);
+
+    private sealed record FileQuarantine(string TestName, string? IssueUrl);
+
+    [JsonSerializable(typeof(InspectionDocument))]
+    [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+    private sealed partial class InspectionJsonContext : JsonSerializerContext;
 }
