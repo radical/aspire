@@ -770,7 +770,8 @@ public partial class Program
         var dir = new DirectoryInfo(startDir);
         while (dir != null)
         {
-            if (Directory.Exists(Path.Combine(dir.FullName, ".git")))
+            var gitPath = Path.Combine(dir.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
             {
                 return dir.FullName;
             }
