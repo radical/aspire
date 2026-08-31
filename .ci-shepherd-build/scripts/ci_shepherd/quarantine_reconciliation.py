@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from pathlib import Path
 import json
+import os
 import subprocess
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Mapping
 
 from .quarantine import (
+    quarantine_tool_tree_digest,
     read_quarantine_session_events,
     record_quarantine_session_event,
 )
 from .quarantine_mutation import (
     validate_quarantine_mutation_result,
     validate_quarantine_post_inspection,
+)
+from .quarantine_result import (
+    validate_quarantine_pull_request_target,
+    validate_required_quarantine_approvals,
 )
 
 
@@ -24,15 +31,26 @@ _PULL_URL_RE = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class MergedQuarantineSourceVerification:
+    verified: bool
+    code: str
+    reason: str
+
+    def __bool__(self) -> bool:
+        return self.verified
+
+
 def reconcile_quarantine_pull_requests(
     *,
     state_directory: Path,
     repository: str,
     recorded_at: str,
     get_pull: Callable[[str, int], Mapping[str, Any]],
+    get_reviews: Callable[[str, int], list[Mapping[str, Any]]] | None = None,
     verify_merged_source: Callable[
         [Mapping[str, Any], Mapping[str, Any]],
-        bool,
+        bool | MergedQuarantineSourceVerification,
     ]
     | None = None,
 ) -> dict[str, object]:
@@ -70,6 +88,17 @@ def reconcile_quarantine_pull_requests(
             continue
 
         pull = get_pull(repository, int(match.group("number")))
+        try:
+            validate_quarantine_pull_request_target(event, pull)
+        except ValueError as error:
+            outcomes.append(
+                {
+                    "batchId": batch_id,
+                    "status": "unverifiable",
+                    "reason": str(error),
+                }
+            )
+            continue
         actual_head = pull.get("head")
         actual_head_sha = (
             actual_head.get("sha") if isinstance(actual_head, Mapping) else None
@@ -124,20 +153,62 @@ def reconcile_quarantine_pull_requests(
             "session_id": str(event["sessionId"]),
         }
         if pull.get("state") == "closed" and pull.get("merged_at") is not None:
-            mutation_validation = event.get("mutationValidation")
-            if (
-                not isinstance(mutation_validation, Mapping)
-                or verify_merged_source is None
-                or not verify_merged_source(event, pull)
-            ):
+            try:
+                validate_required_quarantine_approvals(
+                    event,
+                    pull,
+                    (
+                        get_reviews(repository, int(match.group("number")))
+                        if get_reviews is not None
+                        else None
+                    ),
+                )
+            except ValueError as error:
                 outcomes.append(
                     {
                         "batchId": batch_id,
                         "status": "unverifiable",
-                        "reason": (
-                            "The exact quarantine attributes were not verified "
-                            "at the merged commit."
-                        ),
+                        "reason": str(error),
+                    }
+                )
+                continue
+            mutation_validation = event.get("mutationValidation")
+            verification = (
+                verify_merged_source(event, pull)
+                if (
+                    isinstance(mutation_validation, Mapping)
+                    and verify_merged_source is not None
+                )
+                else False
+            )
+            verification_succeeded = (
+                verification is True
+                or (
+                    isinstance(
+                        verification,
+                        MergedQuarantineSourceVerification,
+                    )
+                    and verification.verified
+                    and verification.code == "verified"
+                )
+            )
+            if not verification_succeeded:
+                reason = (
+                    verification.reason
+                    if isinstance(
+                        verification,
+                        MergedQuarantineSourceVerification,
+                    )
+                    else (
+                        "The exact quarantine attributes were not verified "
+                        "at the merged commit."
+                    )
+                )
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "unverifiable",
+                        "reason": reason,
                     }
                 )
                 continue
@@ -192,14 +263,43 @@ def verify_merged_quarantine_source(
     tool_project: Path,
     get_file: Callable[[str, str], bytes],
     timeout_seconds: int = 300,
-) -> bool:
+) -> MergedQuarantineSourceVerification:
     if re.fullmatch(r"[0-9a-fA-F]{40}", merge_commit_sha) is None:
-        return False
+        return _merged_verification(
+            "invalid-input",
+            "The merge commit SHA is invalid.",
+        )
     try:
         validated_mutation = validate_quarantine_mutation_result(
             request,
             mutation_result,
         )
+    except ValueError as error:
+        return _merged_verification(
+            "invalid-input",
+            f"The merged-source input is invalid: {error}",
+        )
+
+    expected_inspector_digest = request.get("inspectorTreeDigest")
+    if not isinstance(expected_inspector_digest, str):
+        return _merged_verification(
+            "invalid-input",
+            "The request lacks an inspector tree digest.",
+        )
+    try:
+        actual_inspector_digest = quarantine_tool_tree_digest(tool_project)
+    except OSError as error:
+        return _merged_verification(
+            "inspector-runtime-failed",
+            f"The merged-source inspector could not be read: {error}",
+        )
+    if actual_inspector_digest != expected_inspector_digest:
+        return _merged_verification(
+            "inspector-digest-drift",
+            "The merged-source inspector differs from the inspected version.",
+        )
+
+    try:
         with TemporaryDirectory() as temporary_directory:
             tests_root = Path(temporary_directory)
             for changed_file in validated_mutation["changedFiles"]:
@@ -207,53 +307,141 @@ def verify_merged_quarantine_source(
                     not isinstance(changed_file, str)
                     or not changed_file.startswith("tests/")
                 ):
-                    return False
+                    return _merged_verification(
+                        "invalid-input",
+                        "A changed file is outside the tests directory.",
+                    )
                 relative_path = Path(changed_file).relative_to("tests")
                 if relative_path.is_absolute() or ".." in relative_path.parts:
-                    return False
+                    return _merged_verification(
+                        "invalid-input",
+                        "A changed test path is unsafe.",
+                    )
                 destination = tests_root / relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(
-                    get_file(changed_file, merge_commit_sha)
-                )
+                try:
+                    content = get_file(changed_file, merge_commit_sha)
+                except (OSError, ValueError) as error:
+                    return _merged_verification(
+                        "source-fetch-failed",
+                        f"The merged source could not be fetched: {error}",
+                    )
+                if not isinstance(content, bytes):
+                    return _merged_verification(
+                        "source-fetch-failed",
+                        "The merged source response was not bytes.",
+                    )
+                destination.write_bytes(content)
             test_names = list(validated_mutation["completedTests"])
-            completed = subprocess.run(
-                [
-                    "dotnet",
-                    "run",
-                    "--project",
-                    str(tool_project),
-                    "--no-restore",
-                    "--verbosity",
-                    "quiet",
-                    "--",
-                    "--inspect",
-                    "--root",
-                    str(tests_root),
-                    *test_names,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
+            try:
+                completed = subprocess.run(
+                    [
+                        "dotnet",
+                        "run",
+                        "--project",
+                        str(tool_project),
+                        "--no-restore",
+                        "--verbosity",
+                        "quiet",
+                        "--",
+                        "--inspect",
+                        "--root",
+                        str(tests_root),
+                        *test_names,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    env={
+                        **os.environ,
+                        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+                        "DOTNET_CLI_UI_LANGUAGE": "en-US",
+                        "DOTNET_NOLOGO": "1",
+                        "DOTNET_ROLL_FORWARD": "Major",
+                        "MSBUILDTERMINALLOGGER": "false",
+                    },
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return _merged_verification(
+                    "inspector-runtime-failed",
+                    f"The merged-source inspector could not run: {error}",
+                )
             if completed.returncode != 0:
-                return False
-            inspection = json.loads(completed.stdout)
-            if not isinstance(inspection, Mapping):
-                return False
-            validated_source = validate_quarantine_post_inspection(
-                request,
-                inspection,
-            )
-            return (
+                return _merged_verification(
+                    "inspector-runtime-failed",
+                    (
+                        "The merged-source inspector exited with code "
+                        f"{completed.returncode}."
+                    ),
+                )
+            try:
+                inspection = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                return _merged_verification(
+                    "inspector-output-malformed",
+                    "The merged-source inspector returned malformed JSON.",
+                )
+            if not _is_inspection_document(inspection):
+                return _merged_verification(
+                    "inspector-output-malformed",
+                    "The merged-source inspector returned an invalid document.",
+                )
+            try:
+                validated_source = validate_quarantine_post_inspection(
+                    request,
+                    inspection,
+                )
+            except ValueError as error:
+                return _merged_verification(
+                    "merged-source-mismatch",
+                    f"The merged quarantine source does not match: {error}",
+                )
+            if (
                 validated_source["completedTests"]
-                == validated_mutation["completedTests"]
+                != validated_mutation["completedTests"]
+            ):
+                return _merged_verification(
+                    "merged-source-mismatch",
+                    "The merged quarantine test set does not match the mutation.",
+                )
+            return MergedQuarantineSourceVerification(
+                verified=True,
+                code="verified",
+                reason="The exact quarantine attributes exist at the merge commit.",
             )
-    except (
-        json.JSONDecodeError,
-        OSError,
-        subprocess.TimeoutExpired,
-        ValueError,
+    except OSError as error:
+        return _merged_verification(
+            "source-fetch-failed",
+            f"The merged source could not be materialized: {error}",
+        )
+
+
+def _is_inspection_document(value: object) -> bool:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"schemaVersion", "tests"}
+        or value.get("schemaVersion") != 1
+        or not isinstance(value.get("tests"), list)
     ):
         return False
+    return all(
+        isinstance(test, Mapping)
+        and set(test) == {"testName", "status", "matches"}
+        and isinstance(test.get("testName"), str)
+        and bool(test["testName"])
+        and isinstance(test.get("status"), str)
+        and isinstance(test.get("matches"), list)
+        for test in value["tests"]
+    )
+
+
+def _merged_verification(
+    code: str,
+    reason: str,
+) -> MergedQuarantineSourceVerification:
+    return MergedQuarantineSourceVerification(
+        verified=False,
+        code=code,
+        reason=reason,
+    )

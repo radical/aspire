@@ -44,6 +44,7 @@ _GRANT_KEYS = frozenset(
 class AuthorizedQuarantineStart:
     request: dict[str, object]
     grant_id: str
+    expires_at: str
 
 
 def create_quarantine_grant(
@@ -165,7 +166,13 @@ def authorize_quarantine_start(
         raise ValueError("Current time must include a UTC offset.")
     if now < issued_at or now >= expires_at:
         raise ValueError("Quarantine authorization is not currently valid.")
-    return AuthorizedQuarantineStart(request=request, grant_id=grant_id)
+    return AuthorizedQuarantineStart(
+        request=request,
+        grant_id=grant_id,
+        expires_at=expires_at.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    )
 
 
 def _read_request(path: Path) -> tuple[bytes, dict[str, object]]:

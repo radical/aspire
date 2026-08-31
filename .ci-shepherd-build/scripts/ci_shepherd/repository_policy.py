@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 from typing import Any, Mapping
 
@@ -17,6 +18,10 @@ class RepositoryPolicyError(ValueError):
 class RetryTestResultsPolicy:
     aggregate_job_suffixes: tuple[str, ...]
     artifact_names: frozenset[str]
+    trx_path_pattern: str
+    job_name_pattern: str
+    trusted_events: frozenset[str]
+    require_head_repository_match: bool
 
     def matches_aggregate_job(self, job_name: str) -> bool:
         return any(
@@ -27,12 +32,58 @@ class RetryTestResultsPolicy:
     def matches_artifact(self, artifact_name: str) -> bool:
         return artifact_name in self.artifact_names
 
+    def identify_trx(self, path: str) -> tuple[str, str] | None:
+        match = re.fullmatch(self.trx_path_pattern, path)
+        if match is None:
+            return None
+        return match.group("lane"), match.group("os")
+
+    def matches_test_job(
+        self,
+        job_name: str,
+        *,
+        lane: str,
+        os_name: str,
+    ) -> bool:
+        match = re.fullmatch(self.job_name_pattern, job_name)
+        return (
+            match is not None
+            and match.group("lane") == lane
+            and match.group("os") == os_name
+        )
+
+    def trusts_run(
+        self,
+        *,
+        event: str,
+        head_repository: str,
+        target_repository: str,
+    ) -> bool:
+        return (
+            event.casefold() in self.trusted_events
+            and (
+                not self.require_head_repository_match
+                or head_repository.casefold() == target_repository.casefold()
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QuarantinePullRequestPolicy:
+    base_ref: str
+    allowed_head_repositories: frozenset[str]
+    required_approving_reviews: int
+
+    def allows_head_repository(self, repository: str) -> bool:
+        return repository.casefold() in self.allowed_head_repositories
+
 
 @dataclass(frozen=True, slots=True)
 class RepositoryPolicy:
     policy_version: str
     repositories: frozenset[str]
     retry_test_results: RetryTestResultsPolicy
+    quarantine_pull_request: QuarantinePullRequestPolicy
 
     def supports_repository(self, repository: str) -> bool:
         return repository.casefold() in self.repositories
@@ -48,6 +99,21 @@ class RepositoryPolicy:
                 ),
                 "artifactNames": sorted(
                     self.retry_test_results.artifact_names
+                ),
+                "trxPathPattern": self.retry_test_results.trx_path_pattern,
+                "jobNamePattern": self.retry_test_results.job_name_pattern,
+                "trustedEvents": sorted(self.retry_test_results.trusted_events),
+                "requireHeadRepositoryMatch": (
+                    self.retry_test_results.require_head_repository_match
+                ),
+            },
+            "quarantinePullRequest": {
+                "baseRef": self.quarantine_pull_request.base_ref,
+                "allowedHeadRepositories": sorted(
+                    self.quarantine_pull_request.allowed_head_repositories
+                ),
+                "requiredApprovingReviews": (
+                    self.quarantine_pull_request.required_approving_reviews
                 ),
             },
         }
@@ -70,12 +136,24 @@ _POLICY_FIELDS = frozenset(
         "policyVersion",
         "repositories",
         "retryTestResults",
+        "quarantinePullRequest",
+    }
+)
+_QUARANTINE_PULL_REQUEST_FIELDS = frozenset(
+    {
+        "baseRef",
+        "allowedHeadRepositories",
+        "requiredApprovingReviews",
     }
 )
 _RETRY_TEST_RESULTS_FIELDS = frozenset(
     {
         "aggregateJobSuffixes",
         "artifactNames",
+        "trxPathPattern",
+        "jobNamePattern",
+        "trustedEvents",
+        "requireHeadRepositoryMatch",
     }
 )
 
@@ -138,6 +216,15 @@ def load_repository_policy_document(document: object) -> RepositoryPolicy:
         _RETRY_TEST_RESULTS_FIELDS,
         "retryTestResults",
     )
+    pull_request_mapping = _require_mapping(
+        mapping.get("quarantinePullRequest"),
+        "quarantinePullRequest",
+    )
+    _require_exact_keys(
+        pull_request_mapping,
+        _QUARANTINE_PULL_REQUEST_FIELDS,
+        "quarantinePullRequest",
+    )
     return RepositoryPolicy(
         policy_version=_require_nonempty_string(mapping, "policyVersion"),
         repositories=frozenset(
@@ -153,6 +240,46 @@ def load_repository_policy_document(document: object) -> RepositoryPolicy:
             ),
             artifact_names=frozenset(
                 _require_unique_strings(retry_mapping, "artifactNames")
+            ),
+            trx_path_pattern=_require_pattern(
+                retry_mapping,
+                "trxPathPattern",
+                required_groups={"lane", "os"},
+            ),
+            job_name_pattern=_require_pattern(
+                retry_mapping,
+                "jobNamePattern",
+                required_groups={"lane", "os"},
+            ),
+            trusted_events=frozenset(
+                value.casefold()
+                for value in _require_unique_strings(
+                    retry_mapping,
+                    "trustedEvents",
+                )
+            ),
+            require_head_repository_match=_require_bool(
+                retry_mapping,
+                "requireHeadRepositoryMatch",
+            ),
+        ),
+        quarantine_pull_request=QuarantinePullRequestPolicy(
+            base_ref=_require_nonempty_string(
+                pull_request_mapping,
+                "baseRef",
+            ),
+            allowed_head_repositories=frozenset(
+                value.casefold()
+                for value in _require_unique_strings(
+                    pull_request_mapping,
+                    "allowedHeadRepositories",
+                )
+            ),
+            required_approving_reviews=_require_bounded_integer(
+                pull_request_mapping,
+                "requiredApprovingReviews",
+                minimum=1,
+                maximum=10,
             ),
         ),
     )
@@ -232,6 +359,57 @@ def _require_unique_strings(
     if len(values) != len(set(values)):
         raise RepositoryPolicyError(f"{field_name} must not contain duplicates.")
     return values
+
+
+def _require_bounded_integer(
+    mapping: Mapping[str, Any],
+    field_name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = mapping.get(field_name)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < minimum
+        or value > maximum
+    ):
+        raise RepositoryPolicyError(
+            f"{field_name} must be an integer from {minimum} through {maximum}."
+        )
+    return value
+
+
+def _require_bool(
+    mapping: Mapping[str, Any],
+    field_name: str,
+) -> bool:
+    value = mapping.get(field_name)
+    if not isinstance(value, bool):
+        raise RepositoryPolicyError(f"{field_name} must be a boolean.")
+    return value
+
+
+def _require_pattern(
+    mapping: Mapping[str, Any],
+    field_name: str,
+    *,
+    required_groups: set[str],
+) -> str:
+    value = _require_nonempty_string(mapping, field_name)
+    try:
+        pattern = re.compile(value)
+    except re.error as error:
+        raise RepositoryPolicyError(f"{field_name} must be a valid regular expression.") from error
+    missing_groups = required_groups - set(pattern.groupindex)
+    if missing_groups:
+        raise RepositoryPolicyError(
+            f"{field_name} must define named groups: "
+            + ", ".join(sorted(required_groups))
+            + "."
+        )
+    return value
 
 
 def _strict_object_pairs_hook(

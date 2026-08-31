@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ci_shepherd.quarantine_result import (
     record_quarantine_worker_result,
+    validate_required_quarantine_approvals,
     validate_quarantine_worker_result,
 )
 from ci_shepherd.quarantine import (
@@ -15,16 +16,47 @@ from ci_shepherd.quarantine import (
     read_quarantine_session_events,
     record_quarantine_session_event,
 )
+from ci_shepherd.repository_policy import load_repository_policy_document
 
 
 class QuarantineWorkerResultTests(unittest.TestCase):
     def setUp(self) -> None:
+        policy = load_repository_policy_document(
+            {
+                "schemaVersion": 1,
+                "policyVersion": "test-v1",
+                "repositories": ["radical/aspire"],
+                "retryTestResults": {
+                    "aggregateJobSuffixes": ["Final Test Results"],
+                    "artifactNames": ["All-TestResults"],
+                    "trxPathPattern": (
+                        r"^(?P<os>[^/]+)/testresults/"
+                        r"(?P<lane>.+)_net[^_]+_[^/]+\.trx$"
+                    ),
+                    "jobNamePattern": (
+                        r"^(?:.* / )?(?P<lane>[^/]+) "
+                        r"\((?P<os>[^()]+)\)$"
+                    ),
+                    "trustedEvents": ["push", "workflow_dispatch"],
+                    "requireHeadRepositoryMatch": True,
+                },
+                "quarantinePullRequest": {
+                    "baseRef": "main",
+                    "allowedHeadRepositories": ["radical/aspire"],
+                    "requiredApprovingReviews": 1,
+                },
+            }
+        )
         self.request = {
             "repository": "radical/aspire",
             "snapshotId": "snapshot:1",
             "batchId": "quarantine:1",
             "sourceRevision": "a" * 40,
             "sourceTreeDigest": "sha256:" + "b" * 64,
+            "repositoryPolicy": {
+                **policy.as_public_dict(),
+                "digest": policy.digest,
+            },
             "tests": [
                 {
                     "testName": "Tests.One",
@@ -185,7 +217,15 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "state": "open",
                     "draft": True,
                     "changed_files": 2,
-                    "head": {"sha": "a" * 40},
+                    "user": {"login": "author"},
+                    "head": {
+                        "sha": "a" * 40,
+                        "repo": {"full_name": "radical/aspire"},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "repo": {"full_name": "radical/aspire"},
+                    },
                 },
                 pull_request_files=self._pull_request_files(),
                 mutation_result=self._mutation_result(),
@@ -208,7 +248,64 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                         "state": "open",
                         "draft": True,
                         "changed_files": 2,
-                        "head": {"sha": "b" * 40},
+                        "head": {
+                            "sha": "b" * 40,
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                        "base": {
+                            "ref": "main",
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                    },
+                )
+
+    def test_rejects_a_pull_request_to_the_wrong_base_branch(self) -> None:
+        result = self._successful_result()
+        with TemporaryDirectory() as scratch:
+            with self.assertRaisesRegex(ValueError, "does not match repository policy"):
+                record_quarantine_worker_result(
+                    state_directory=Path(scratch),
+                    request=self.request,
+                    result=result,
+                    recorded_at="2026-08-30T00:01:00Z",
+                    pull_request_document={
+                        "html_url": result["pullRequest"]["url"],
+                        "state": "open",
+                        "draft": True,
+                        "changed_files": 2,
+                        "head": {
+                            "sha": "a" * 40,
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                        "base": {
+                            "ref": "disposable-branch",
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                    },
+                )
+
+    def test_rejects_a_pull_request_from_an_unapproved_head_repository(self) -> None:
+        result = self._successful_result()
+        with TemporaryDirectory() as scratch:
+            with self.assertRaisesRegex(ValueError, "does not match repository policy"):
+                record_quarantine_worker_result(
+                    state_directory=Path(scratch),
+                    request=self.request,
+                    result=result,
+                    recorded_at="2026-08-30T00:01:00Z",
+                    pull_request_document={
+                        "html_url": result["pullRequest"]["url"],
+                        "state": "open",
+                        "draft": True,
+                        "changed_files": 2,
+                        "head": {
+                            "sha": "a" * 40,
+                            "repo": {"full_name": "someone/aspire"},
+                        },
+                        "base": {
+                            "ref": "main",
+                            "repo": {"full_name": "radical/aspire"},
+                        },
                     },
                 )
 
@@ -233,7 +330,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                         "state": "open",
                         "draft": True,
                         "changed_files": 3,
-                        "head": {"sha": "a" * 40},
+                        "head": {
+                            "sha": "a" * 40,
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                        "base": {
+                            "ref": "main",
+                            "repo": {"full_name": "radical/aspire"},
+                        },
                     },
                     pull_request_files=files,
                     mutation_result=self._mutation_result(),
@@ -269,14 +373,168 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "merged_at": "2026-08-30T00:00:30Z",
                     "draft": False,
                     "changed_files": 2,
-                    "head": {"sha": "a" * 40},
+                    "user": {"login": "author"},
+                    "head": {
+                        "sha": "a" * 40,
+                        "repo": {"full_name": "radical/aspire"},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "repo": {"full_name": "radical/aspire"},
+                    },
                 },
                 pull_request_files=self._pull_request_files(),
+                pull_request_reviews=[
+                    {
+                        "id": 1,
+                        "state": "APPROVED",
+                        "commit_id": "a" * 40,
+                        "author_association": "MEMBER",
+                        "user": {"login": "reviewer"},
+                    }
+                ],
                 mutation_result=self._mutation_result(),
                 commit_validation=self._commit_validation(),
             )
 
         self.assertEqual("completed", event["status"])
+
+    def test_merged_result_requires_the_policy_approval_count(self) -> None:
+        completed = deepcopy(self.result)
+        completed.update(
+            {
+                "outcome": "completed",
+                "completedTests": ["Tests.One", "Tests.Two"],
+                "blockedTargets": [],
+            }
+        )
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_quarantine_session_event(
+                state,
+                self.request,
+                status="started",
+                recorded_at="2026-08-30T00:00:00Z",
+                session_id="session-1",
+            )
+            with self.assertRaisesRegex(ValueError, "required approving reviews"):
+                record_quarantine_worker_result(
+                    state_directory=state,
+                    request=self.request,
+                    result=completed,
+                    recorded_at="2026-08-30T00:01:00Z",
+                    pull_request_document={
+                        "html_url": completed["pullRequest"]["url"],
+                        "state": "closed",
+                        "merged_at": "2026-08-30T00:00:30Z",
+                        "draft": False,
+                        "changed_files": 2,
+                        "user": {"login": "author"},
+                        "head": {
+                            "sha": "a" * 40,
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                        "base": {
+                            "ref": "main",
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                    },
+                    pull_request_files=self._pull_request_files(),
+                    pull_request_reviews=[],
+                    mutation_result=self._mutation_result(),
+                    commit_validation=self._commit_validation(),
+                )
+
+    def test_approval_must_match_the_validated_head_and_an_independent_reviewer(
+        self,
+    ) -> None:
+        pull = {
+            "head": {"sha": "a" * 40},
+            "user": {"login": "author"},
+        }
+        invalid_reviews = [
+            {
+                "id": 1,
+                "state": "APPROVED",
+                "commit_id": "b" * 40,
+                "author_association": "MEMBER",
+                "user": {"login": "reviewer"},
+            },
+            {
+                "id": 2,
+                "state": "APPROVED",
+                "commit_id": "a" * 40,
+                "author_association": "OWNER",
+                "user": {"login": "author"},
+            },
+            {
+                "id": 3,
+                "state": "APPROVED",
+                "commit_id": "a" * 40,
+                "author_association": "CONTRIBUTOR",
+                "user": {"login": "contributor"},
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "required approving reviews"):
+            validate_required_quarantine_approvals(
+                self.request,
+                pull,
+                invalid_reviews,
+            )
+
+    def test_review_comments_do_not_revoke_an_existing_approval(self) -> None:
+        pull = {
+            "head": {"sha": "a" * 40},
+            "user": {"login": "author"},
+        }
+        validate_required_quarantine_approvals(
+            self.request,
+            pull,
+            [
+                {
+                    "id": 1,
+                    "state": "APPROVED",
+                    "commit_id": "a" * 40,
+                    "author_association": "MEMBER",
+                    "user": {"login": "reviewer"},
+                },
+                {
+                    "id": 2,
+                    "state": "COMMENTED",
+                    "commit_id": "a" * 40,
+                    "author_association": "MEMBER",
+                    "user": {"login": "reviewer"},
+                },
+            ],
+        )
+
+    def test_latest_decisive_review_state_can_revoke_an_approval(self) -> None:
+        pull = {
+            "head": {"sha": "a" * 40},
+            "user": {"login": "author"},
+        }
+        with self.assertRaisesRegex(ValueError, "required approving reviews"):
+            validate_required_quarantine_approvals(
+                self.request,
+                pull,
+                [
+                    {
+                        "id": 1,
+                        "state": "APPROVED",
+                        "commit_id": "a" * 40,
+                        "author_association": "MEMBER",
+                        "user": {"login": "reviewer"},
+                    },
+                    {
+                        "id": 2,
+                        "state": "CHANGES_REQUESTED",
+                        "commit_id": "a" * 40,
+                        "author_association": "MEMBER",
+                        "user": {"login": "reviewer"},
+                    },
+                ],
+            )
 
     def test_successful_partial_result_cannot_bypass_mutation_validation(self) -> None:
         with TemporaryDirectory() as scratch:
@@ -299,7 +557,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                         "state": "open",
                         "draft": True,
                         "changed_files": 2,
-                        "head": {"sha": "a" * 40},
+                        "head": {
+                            "sha": "a" * 40,
+                            "repo": {"full_name": "radical/aspire"},
+                        },
+                        "base": {
+                            "ref": "main",
+                            "repo": {"full_name": "radical/aspire"},
+                        },
                     },
                     pull_request_files=self._pull_request_files(),
                     mutation_result=self._mutation_result(),
@@ -327,7 +592,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "state": "open",
                     "draft": True,
                     "changed_files": 2,
-                    "head": {"sha": "a" * 40},
+                    "head": {
+                        "sha": "a" * 40,
+                        "repo": {"full_name": "radical/aspire"},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "repo": {"full_name": "radical/aspire"},
+                    },
                 },
                 pull_request_files=self._pull_request_files(),
                 mutation_result=self._mutation_result(),
@@ -345,7 +617,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "state": "open",
                     "draft": True,
                     "changed_files": 2,
-                    "head": {"sha": "b" * 40},
+                    "head": {
+                        "sha": "b" * 40,
+                        "repo": {"full_name": "radical/aspire"},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "repo": {"full_name": "radical/aspire"},
+                    },
                 },
                 pull_request_files=self._pull_request_files(),
                 mutation_result=self._mutation_result(),

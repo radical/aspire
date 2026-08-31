@@ -47,6 +47,21 @@ def repository_policy_identity(repository: str) -> dict[str, object]:
             "retryTestResults": {
                 "aggregateJobSuffixes": ["Aggregate Results"],
                 "artifactNames": ["Combined-Results"],
+                "trxPathPattern": (
+                    r"^(?P<os>[^/]+)/testresults/"
+                    r"(?P<lane>.+)_net[^_]+_[^/]+\.trx$"
+                ),
+                "jobNamePattern": (
+                    r"^(?:.* / )?(?P<lane>[^/]+) "
+                    r"\((?P<os>[^()]+)\)$"
+                ),
+                "trustedEvents": ["push", "workflow_dispatch"],
+                "requireHeadRepositoryMatch": True,
+            },
+            "quarantinePullRequest": {
+                "baseRef": "main",
+                "allowedHeadRepositories": [repository],
+                "requiredApprovingReviews": 1,
             },
         }
     )
@@ -148,6 +163,7 @@ class QuarantineAuthorizationTests(unittest.TestCase):
 
         self.assertEqual(self.request, result.request)
         self.assertTrue(result.grant_id.startswith("quarantine-grant:"))
+        self.assertEqual("2026-08-30T00:15:00Z", result.expires_at)
 
     def test_plan_wrapper_is_bound_and_returns_its_proposal(self) -> None:
         plan = {
@@ -380,6 +396,7 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             recorded_at=recorded_at,
             session_id="session-1",
             authorization_grant_id=authorized.grant_id,
+            authorization_expires_at=authorized.expires_at,
         )
         record_quarantine_session_event(
             self.state_dir,
@@ -398,6 +415,7 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 recorded_at="2026-08-30T00:03:00Z",
                 session_id="session-2",
                 authorization_grant_id=authorized.grant_id,
+                authorization_expires_at=authorized.expires_at,
             )
 
     def test_cli_requires_and_consumes_the_exact_grant(self) -> None:

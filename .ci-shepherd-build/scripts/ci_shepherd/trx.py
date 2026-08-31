@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from io import BytesIO
 from pathlib import PurePosixPath
-import re
+from typing import Callable
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
@@ -13,13 +13,11 @@ MAX_TRX_FILES = 200
 MAX_TRX_FILE_BYTES = 50 * 1024 * 1024
 MAX_TOTAL_TRX_BYTES = 100 * 1024 * 1024
 
-_TRX_NAME_RE = re.compile(
-    r"^(?P<lane>.+)_net[^_]+_[^/]+\.trx$",
-    re.IGNORECASE,
-)
-
-
-def parse_test_results_archive(content: bytes) -> list[dict[str, str]]:
+def parse_test_results_archive(
+    content: bytes,
+    *,
+    identify_trx: Callable[[str], tuple[str, str] | None],
+) -> list[dict[str, str]]:
     try:
         archive = ZipFile(BytesIO(content))
     except BadZipFile as exc:
@@ -45,11 +43,22 @@ def parse_test_results_archive(content: bytes) -> list[dict[str, str]]:
         matched_trx_count = 0
         for entry in trx_entries:
             path = PurePosixPath(entry.filename)
-            match = _TRX_NAME_RE.fullmatch(path.name)
-            if len(path.parts) < 2 or match is None:
-                continue
+            identity = identify_trx(path.as_posix())
+            if identity is None:
+                raise ValueError(
+                    "Test-results artifact contains a TRX file that does not "
+                    "match the repository convention."
+                )
             matched_trx_count += 1
-            payload = archive.read(entry)
+            try:
+                with archive.open(entry) as stream:
+                    payload = stream.read(MAX_TRX_FILE_BYTES + 1)
+            except BadZipFile as exc:
+                raise ValueError(
+                    "Test-results artifact contains a corrupt TRX entry."
+                ) from exc
+            if len(payload) > MAX_TRX_FILE_BYTES:
+                raise ValueError("Test-results artifact contains an oversized TRX file.")
             if b"<!DOCTYPE" in payload.upper() or b"<!ENTITY" in payload.upper():
                 raise ValueError("Test-results artifact contains XML declarations.")
             try:
@@ -73,8 +82,7 @@ def parse_test_results_archive(content: bytes) -> list[dict[str, str]]:
                     raise ValueError("TRX test identifiers are ambiguous.")
                 definitions[test_id] = canonical_name
 
-            lane = match.group("lane")
-            os_name = path.parts[0]
+            lane, os_name = identity
             for result in _elements(root, "UnitTestResult"):
                 outcome = result.get("outcome")
                 test_name = definitions.get(result.get("testId", ""))

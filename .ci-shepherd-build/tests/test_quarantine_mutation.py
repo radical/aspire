@@ -8,7 +8,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci_shepherd.quarantine import apply_quarantine_source_inspection
+from ci_shepherd.quarantine import (
+    apply_quarantine_source_inspection,
+    quarantine_tool_tree_digest,
+)
 from ci_shepherd.quarantine_mutation import (
     _canonical_checkout_diff,
     create_quarantine_commit_validation,
@@ -34,12 +37,14 @@ class QuarantineMutationValidationTests(unittest.TestCase):
             (checkout / "tools" / "QuarantineTools").mkdir(parents=True)
             request = self._execution_request()
             commands: list[list[str]] = []
+            environments: list[dict[str, str]] = []
 
             def run(
                 command: list[str],
-                **_: object,
+                **kwargs: object,
             ) -> subprocess.CompletedProcess:
                 commands.append(command)
+                environments.append(dict(kwargs["env"]))
                 if "--inspect" in command:
                     return subprocess.CompletedProcess(
                         command,
@@ -130,6 +135,11 @@ class QuarantineMutationValidationTests(unittest.TestCase):
         self.assertEqual(
             2,
             sum(command[-2:] == ["--ignore-exit-code", "8"] for command in commands),
+        )
+        self.assertTrue(environments)
+        self.assertEqual(
+            {"Major"},
+            {environment["DOTNET_ROLL_FORWARD"] for environment in environments},
         )
         self.assertEqual(
             {
@@ -389,6 +399,14 @@ class QuarantineMutationValidationTests(unittest.TestCase):
                 ],
             ):
                 subprocess.run(command, cwd=checkout, check=True)
+            source_revision = subprocess.run(
+                ["git", "--no-pager", "rev-parse", "HEAD"],
+                cwd=checkout,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            request["sourceRevision"] = source_revision
             changed_files = [
                 "tests/One.Tests/OneTests.cs",
                 "tests/Two.Tests/TwoTests.cs",
@@ -401,7 +419,7 @@ class QuarantineMutationValidationTests(unittest.TestCase):
             diff = _canonical_checkout_diff(checkout, changed_files)
             mutation_result = {
                 "schemaVersion": 1,
-                "sourceRevision": "a" * 40,
+                "sourceRevision": source_revision,
                 "sourceTreeDigest": "sha256:" + "b" * 64,
                 "completedTests": ["Tests.One", "Tests.Two"],
                 "changedFiles": changed_files,
@@ -437,6 +455,42 @@ class QuarantineMutationValidationTests(unittest.TestCase):
 
         self.assertEqual(mutation_result["diffDigest"], validated["diffDigest"])
         self.assertEqual(changed_files, validated["changedFiles"])
+
+    def test_commit_validation_rejects_a_commit_with_the_wrong_parent(self) -> None:
+        request = self._execution_request()
+        mutation_result = {
+            "schemaVersion": 1,
+            "sourceRevision": "a" * 40,
+            "sourceTreeDigest": "sha256:" + "b" * 64,
+            "completedTests": ["Tests.One", "Tests.Two"],
+            "changedFiles": [
+                "tests/One.Tests/OneTests.cs",
+                "tests/Two.Tests/TwoTests.cs",
+            ],
+            "affectedProjects": [
+                "tests/One.Tests/One.Tests.csproj",
+                "tests/Two.Tests/Two.Tests.csproj",
+            ],
+            "diffDigest": "sha256:" + "e" * 64,
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkout = Path(temporary_directory)
+            with (
+                patch(
+                    "ci_shepherd.quarantine_mutation._resolve_commit",
+                    return_value="c" * 40,
+                ),
+                patch(
+                    "ci_shepherd.quarantine_mutation._single_commit_parent",
+                    return_value="d" * 40,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "source revision"):
+                    create_quarantine_commit_validation(
+                        request,
+                        mutation_result,
+                        checkout,
+                    )
 
     def test_real_tool_mutation_matches_the_inspected_intent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -483,6 +537,9 @@ public class Tests
                 source_revision="a" * 40,
                 source_tree_digest="sha256:" + "b" * 64,
             )
+            request["inspectorTreeDigest"] = quarantine_tool_tree_digest(
+                QUARANTINE_TOOL
+            )
 
             completed = subprocess.run(
                 [
@@ -523,15 +580,50 @@ public class Tests
                 "affectedProjects": ["tests/Demo.Tests.csproj"],
                 "diffDigest": "sha256:" + "c" * 64,
             }
-            self.assertTrue(
-                verify_merged_quarantine_source(
-                    request,
-                    mutation_result,
-                    merge_commit_sha="d" * 40,
-                    tool_project=QUARANTINE_TOOL,
-                    get_file=lambda _path, _revision: source_path.read_bytes(),
+            environments: list[dict[str, str]] = []
+            run = subprocess.run
+
+            def run_with_environment(
+                command: list[str],
+                **kwargs: object,
+            ) -> subprocess.CompletedProcess:
+                environments.append(dict(kwargs["env"]))
+                return run(command, **kwargs)
+
+            with patch(
+                "ci_shepherd.quarantine_reconciliation.subprocess.run",
+                side_effect=run_with_environment,
+            ):
+                self.assertTrue(
+                    verify_merged_quarantine_source(
+                        request,
+                        mutation_result,
+                        merge_commit_sha="d" * 40,
+                        tool_project=QUARANTINE_TOOL,
+                        get_file=lambda _path, _revision: source_path.read_bytes(),
+                    )
                 )
+            self.assertEqual(
+                {"Major"},
+                {
+                    environment["DOTNET_ROLL_FORWARD"]
+                    for environment in environments
+                },
             )
+
+            with patch(
+                "ci_shepherd.quarantine_reconciliation.quarantine_tool_tree_digest",
+                return_value="sha256:" + "e" * 64,
+            ):
+                self.assertFalse(
+                    verify_merged_quarantine_source(
+                        request,
+                        mutation_result,
+                        merge_commit_sha="d" * 40,
+                        tool_project=QUARANTINE_TOOL,
+                        get_file=lambda _path, _revision: source_path.read_bytes(),
+                    )
+                )
 
     def test_rejects_test_logic_change_even_with_expected_attribute(self) -> None:
         request = {

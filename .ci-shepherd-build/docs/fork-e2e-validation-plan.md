@@ -293,6 +293,14 @@ production quarantine can be enabled.
 | H28 | Draft pull request created after validation | Head SHA and files verified | The refetched pull request's repository, draft state, 40-character head SHA, and complete modified-file list match the commit artifact already bound to the validated diff digest, or the session records `failed` | Close pull request, delete branch | Recording a head SHA the shepherd never validated | E |
 | H29 | Pull request merged on the fork | Recorded `completed` only after observing the merge | The target branch is refetched and the quarantine attribute is confirmed present on the exact method with the exact issue URL; pull-request state alone never records completion | Revert on the fork | Recording completion from pull-request metadata when the attribute never landed | E |
 | H30 | Batch of three tests approved for mutation | Three separate tool invocations | `QuarantineTools` is invoked once per test with its own issue URL argument, even though inspection was batched into one call | Reset worktree | Batching the mutation path and losing per-test reviewability and per-test issue URLs | L+E |
+| H31 | Publication is invoked for `microsoft/aspire` while the production deny is active | Refused before any command or audit intent | No Git or GitHub command runs and no mutation event is written | none | A new publisher bypassing the existing production guard | L |
+| H32 | The checkout has no remote matching the policy-owned head repository | Refused before mutation | Remote URLs are resolved from Git configuration; caller-supplied remote names are not accepted | Fix the fixture remote | Pushing the validated commit to an unintended repository | L+E |
+| H33 | The deterministic remote branch already points at another commit | Refused without force-pushing | The branch is derived from `batchId`; a mismatched remote SHA produces no mutation intent | Delete fixture branch | Destroying or replacing another publication attempt | L+E |
+| H34 | The process dies after writing push intent | Rerun resumes from the exact branch | The unmatched operation ID remains visible; if the remote branch has the validated SHA, rerun skips push and creates the draft pull request | Close pull request, delete branch | Duplicate or untraceable effects after a crash | L+E |
+| H35 | The approved body file changes after publication begins | Original approved body is posted | Publication snapshots the validated body to an owner-only file before the first mutation and passes that snapshot to `gh pr create --body-file` | Close pull request, delete branch | A body TOCTOU publishing unreviewed text | L |
+| H36 | The exact draft pull request already exists on rerun | Existing pull request is reused | Live base, head repository, draft state, and head SHA must all match; no push or create mutation occurs | Close pull request, delete branch | Duplicate pull requests after uncertain client output | L+E |
+| H37 | `HEAD` moves after remote preflight but before push | Refused before push intent | Commit files and diff digest are re-derived immediately before the explicit-SHA push | Reset worktree | A stale validation artifact authorizing different code | L |
+| H38 | Push and pull-request creation both succeed | Two paired intent/outcome operations | Each operation has a unique operation ID; every successful mutation has its matching fsynced intent and outcome | Close pull request, delete branch | Audit rows that cannot be paired across retries | L+E |
 
 ### 4.9 Suite I — Retry and rerun (P2)
 
@@ -733,31 +741,65 @@ that must not be skipped: H26 is the only check that distinguishes "excluded fro
 selection" from "deleted", and H29 is the only check that confirms the attribute
 actually reached the target branch rather than trusting pull-request metadata.
 
-**Single-test lifecycle status on 2026-08-31:** the Class A path completed
-against `radical/aspire` using issue `#72` and pull request `#76`. The request
-bound the exact test, issue URL, repository policy, source revision, source
-semantic digest, and failed-then-passed TRX identities. The executor changed
-only `tests/QuarantineTools.Tests/QuarantineScriptTests.cs`, added exactly one
-attribute with the original issue URL, built the affected project, discovered
-all six theory rows without quarantine filters, and discovered none with the
-filters. The commit validator bound the pushed head to the canonical diff
-digest, and live pull request verification confirmed the exact head and
-one-file diff.
+**Single-test lifecycle finding on 2026-08-31:** a mutation exercise against
+`radical/aspire` using issue `#72` and pull request `#76` proved the local
+source, build, discovery, diff, commit, pull request head, replay, and merged
+source checks. It did **not** satisfy the production lifecycle gate. The pull
+request targeted disposable branch
+`e2e/quarantine-lifecycle-base-20260830`, not policy base `main`, and the
+evidence observations were synthesized after source inspection rather than
+collected from real GitHub TRX artifacts. The old reconciler nevertheless
+recorded the batch completed. That is the defect which motivated policy-bound
+base refs, allowed head repositories, approval counts, and a new live
+collector-to-merge exercise.
 
-The merge reconciliation then fetched the changed file at GitHub's merge commit
-and confirmed the exact attribute before recording the batch completed. Reusing
-the consumed grant failed before mutation, and the source issue remained open
-after merge. Cleanup closed the fixture issue and removed both temporary
-branches. Evidence is preserved under
+Cleanup closed the fixture issue and removed both temporary branches. The
+diagnostic evidence is preserved under
 `files/quarantine-e2e-live-20260831-r3` in the session artifact directory.
 
-The live run found three defects that local happy-path coverage had missed:
+The live run found four defects that local happy-path coverage had missed:
 `dotnet test -- --list-tests` did not discover MTP tests, successful
 quarantine-filtered discovery returned MTP's documented no-tests exit code
 `8`, and GitHub's Contents API returned line-wrapped base64 that strict decoding
-rejected. Regression coverage now exercises the direct built runner, accepts
-exit code `8` only for filtered discovery, and decodes line-wrapped GitHub
-content while retaining strict base64 validation.
+rejected. It also exposed the unbound pull request destination. Regression
+coverage now exercises the direct built runner, accepts exit code `8` only for
+filtered discovery, decodes line-wrapped GitHub content while retaining strict
+base64 validation, and rejects pull requests whose base, head repository, or
+approval state differs from embedded repository policy.
+
+**Real Class A lifecycle status on 2026-08-31:** issue `#77` and workflow run
+`33352115409` supplied exact TRX evidence for the same test failing in attempt
+one and passing in attempt two. Batch
+`quarantine:fnv1a64:35893a0f51e034cc` bound that evidence to the inspected
+source and produced commit `09eb3b822142822353be2dd30e80e6a39b50ea90`.
+The commit validator confirmed the exact one-file diff and digest
+`sha256:7c29ad740d1c8016df5587830dd4855e72764c6c0717fa05a47e1fd67be3145a`.
+Pull request `#78` targeted fork `main`, passed the live head and file checks,
+and merged as `bdff2894002eda43e08e9f22136b9f571accbe14`. The deterministic merged
+source verifier fetched that commit and confirmed the exact test attribute and
+issue URL. The consumed grant also rejected replay.
+
+The fork cannot provide an independent review of its owner's pull request.
+The production policy still requires one approval, and reconciliation correctly
+left the merged fixture `unverifiable` for that reason. Reconciliation stopped
+at the approval gate and did not invoke merged-source verification. The
+merged-source assertion above was a separate deterministic invocation against
+the recorded merge commit, not an integrated completion of the live batch. The
+batch therefore remains `pull-request-open` in the authoritative append-only
+ledger and cannot be abandoned because a merged side effect exists. The
+approval transition is intentionally deferred to the first guarded production
+pull request; the fork exercise did not weaken or bypass the policy.
+After preserving the evidence, cleanup commit
+`0095f7088080014179753e59c54f9579459b71b4` restored the exact pre-fixture
+tree, closed issue `#77`, and removed the remaining fixture branch.
+
+This exercise also explained the earlier `source-inspection-unavailable`
+result. A .NET 10-only checkout runtime could build a project targeting .NET 8
+but could not start the resulting tool without major-version roll-forward.
+Both source inspection and mutation now set `DOTNET_ROLL_FORWARD=Major`.
+Regression coverage asserts that runner contract, and a replay using only the
+.NET 10 runtime resolved the merged method as `already-quarantined` instead of
+reporting inspection unavailable.
 
 ### Stage 6 — Incremental stability
 

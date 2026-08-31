@@ -47,6 +47,7 @@ def main() -> int:
             recorded_at=now.isoformat().replace("+00:00", "Z"),
             session_id=args.session_id,
             authorization_grant_id=authorized.grant_id,
+            authorization_expires_at=authorized.expires_at,
         )
         try:
             result = execute_quarantine_mutation(

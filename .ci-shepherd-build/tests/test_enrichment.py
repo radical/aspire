@@ -6,13 +6,14 @@ import hashlib
 from io import BytesIO
 import json
 import unittest
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from ci_shepherd.collector import Collector, InventoryResult
 from ci_shepherd.models import validate_snapshot
+from ci_shepherd.refresh import RefreshPlan
 from ci_shepherd.repository_policy import (
     load_repository_policy,
     load_repository_policy_document,
@@ -31,6 +32,21 @@ REPOSITORY_POLICY = load_repository_policy_document(
         "retryTestResults": {
             "aggregateJobSuffixes": ["Final Test Results"],
             "artifactNames": ["All-TestResults"],
+            "trxPathPattern": (
+                r"^(?P<os>[^/]+)/testresults/"
+                r"(?P<lane>.+)_net[^_]+_[^/]+\.trx$"
+            ),
+            "jobNamePattern": (
+                r"^(?:.* / )?(?P<lane>[^/]+) "
+                r"\((?P<os>[^()]+)\)$"
+            ),
+            "trustedEvents": ["push", "workflow_dispatch"],
+            "requireHeadRepositoryMatch": True,
+        },
+        "quarantinePullRequest": {
+            "baseRef": "main",
+            "allowedHeadRepositories": [REPOSITORY],
+            "requiredApprovingReviews": 1,
         },
     }
 )
@@ -217,7 +233,8 @@ class GitHubEnrichmentTests(unittest.TestCase):
             "workflow_id": 0,
             "run_attempt": 1,
             "name": "CI",
-            "event": "pull_request",
+            "event": "push",
+            "head_repository": {"full_name": REPOSITORY},
             "head_branch": "feature",
             "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "status": "completed",
@@ -375,6 +392,75 @@ class GitHubEnrichmentTests(unittest.TestCase):
             client.text_calls,
         )
 
+    def test_first_attempt_preserves_exact_failed_result_before_rerun(self) -> None:
+        run = self.make_run()
+        failed_job = self.make_job(1001)
+        failed_job["name"] = (
+            "Tests / QuarantineTools / QuarantineTools (ubuntu-latest)"
+        )
+        final_job = self.make_job(1100, conclusion="success")
+        final_job["name"] = "Tests / Final Test Results"
+        final_job["started_at"] = "2026-08-17T20:20:01Z"
+        final_job["completed_at"] = "2026-08-17T20:21:00Z"
+        failed_results = test_results_archive(
+            "QuarantineTools.Tests.Sample.Flaky",
+            "Failed",
+        )
+        client = EnrichmentClient(
+            pages={
+                f"/repos/{REPOSITORY}/actions/runs/7001/jobs?per_page=100": {
+                    "jobs": [failed_job, final_job]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/artifacts?per_page=100": {
+                    "artifacts": [
+                        {
+                            "id": 3001,
+                            "name": "All-TestResults",
+                            "created_at": "2026-08-17T20:20:30Z",
+                            "expired": False,
+                            "digest": (
+                                "sha256:"
+                                + hashlib.sha256(failed_results).hexdigest()
+                            ),
+                        }
+                    ]
+                },
+            },
+            singles={
+                f"/repos/{REPOSITORY}/actions/runs/7001": run,
+            },
+            bytes_responses={
+                f"/repos/{REPOSITORY}/actions/artifacts/3001/zip": failed_results,
+            },
+        )
+        inventory = self.build_inventory(
+            client,
+            body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
+        )
+
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
+            inventory,
+            minimal_run_evidence=True,
+            include_retry_evidence=True,
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "testName": "QuarantineTools.Tests.Sample.Flaky",
+                    "outcome": "failed",
+                }
+            ],
+            enriched.evidence[
+                "run:7001:attempt:1:job:1001:test-results"
+            ]["payload"]["tests"],
+        )
+
     def test_retry_evidence_collects_matching_attempt_test_results(self) -> None:
         run = self.make_run()
         run["run_attempt"] = 2
@@ -414,15 +500,6 @@ class GitHubEnrichmentTests(unittest.TestCase):
                 f"/repos/{REPOSITORY}/actions/runs/7001/artifacts?per_page=100": {
                     "artifacts": [
                         {
-                            "id": 3001,
-                            "name": "All-TestResults",
-                            "created_at": "2026-08-17T20:20:30Z",
-                            "expired": False,
-                            "digest": (
-                                "sha256:" + hashlib.sha256(failed_results).hexdigest()
-                            ),
-                        },
-                        {
                             "id": 3002,
                             "name": "All-TestResults",
                             "created_at": "2026-08-17T20:21:30Z",
@@ -440,13 +517,68 @@ class GitHubEnrichmentTests(unittest.TestCase):
             texts={
             },
             bytes_responses={
-                f"/repos/{REPOSITORY}/actions/artifacts/3001/zip": failed_results,
                 f"/repos/{REPOSITORY}/actions/artifacts/3002/zip": passed_results,
             },
         )
         inventory = self.build_inventory(
             client,
             body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
+        )
+        failed_evidence_id = "run:7001:attempt:1:job:1001:test-results"
+        inventory = replace(
+            inventory,
+            evidence={
+                "run:7001": {
+                    "kind": "workflow-run",
+                    "url": f"https://github.com/{REPOSITORY}/actions/runs/7001",
+                    "collectedAt": "2026-08-17T21:00:00Z",
+                    "availability": "available",
+                    "payload": {
+                        "runId": 7001,
+                        "attempt": 1,
+                        "targetRepository": REPOSITORY,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "workflowId": 9001,
+                        "branch": "main",
+                        "recentHistoryCollected": True,
+                    },
+                },
+                failed_evidence_id: {
+                    "kind": "workflow-test-results",
+                    "url": f"https://github.com/{REPOSITORY}/actions/runs/7001",
+                    "collectedAt": "2026-08-17T21:00:00Z",
+                    "availability": "available",
+                    "payload": {
+                        "evidenceId": failed_evidence_id,
+                        "runId": 7001,
+                        "attempt": 1,
+                        "jobId": 1001,
+                        "targetRepository": REPOSITORY,
+                        "artifactId": 3001,
+                        "artifactName": "All-TestResults",
+                        "artifactDigest": (
+                            "sha256:" + hashlib.sha256(failed_results).hexdigest()
+                        ),
+                        "results": [
+                            {
+                                "lane": "QuarantineTools",
+                                "os": "ubuntu-latest",
+                                "testName": "QuarantineTools.Tests.Sample.Flaky",
+                                "outcome": "Failed",
+                            }
+                        ],
+                        "tests": [
+                            {
+                                "testName": "QuarantineTools.Tests.Sample.Flaky",
+                                "outcome": "failed",
+                            }
+                        ],
+                        "referencedBy": [],
+                    },
+                }
+            },
+            refresh_plan=RefreshPlan(refresh=("run:7001",)),
         )
 
         enriched = Collector(
@@ -471,12 +603,7 @@ class GitHubEnrichmentTests(unittest.TestCase):
                     "get_bytes",
                     f"/repos/{REPOSITORY}/actions/artifacts/3002/zip",
                     25 * 1024 * 1024,
-                ),
-                (
-                    "get_bytes",
-                    f"/repos/{REPOSITORY}/actions/artifacts/3001/zip",
-                    25 * 1024 * 1024,
-                ),
+                )
             ],
             client.byte_calls,
         )

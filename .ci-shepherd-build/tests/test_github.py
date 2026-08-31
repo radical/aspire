@@ -515,7 +515,7 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(b"PK\x03\x04archive", result)
         command = popen_factory.calls[0][0]
         self.assertNotIn("--include", command)
-        self.assertIn("Accept: application/octet-stream", command)
+        self.assertIn("Accept: application/vnd.github+json", command)
 
     def test_get_bytes_rejects_oversized_response(self) -> None:
         process = FakeProcess(b"12345")

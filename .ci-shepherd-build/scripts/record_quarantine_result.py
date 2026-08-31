@@ -39,6 +39,7 @@ def main() -> int:
     validated = validate_quarantine_worker_result(request, result)
     pull_request_document = None
     pull_request_files = None
+    pull_request_reviews = None
     mutation_result = None
     commit_validation = None
     if validated["outcome"] in {"pull-request-open", "completed"}:
@@ -93,6 +94,12 @@ def main() -> int:
         )
         if not isinstance(pull_request_files, list):
             raise ValueError("GitHub returned an invalid pull request file list.")
+        if validated["outcome"] == "completed":
+            pull_request_reviews = client.get_pages(
+                f"/repos/{quote(repository, safe='/')}/pulls/{number}/reviews"
+            )
+            if not isinstance(pull_request_reviews, list):
+                raise ValueError("GitHub returned an invalid pull request review list.")
 
     event = record_quarantine_worker_result(
         state_directory=args.state_dir,
@@ -101,6 +108,7 @@ def main() -> int:
         recorded_at=args.recorded_at,
         pull_request_document=pull_request_document,
         pull_request_files=pull_request_files,
+        pull_request_reviews=pull_request_reviews,
         mutation_result=mutation_result,
         commit_validation=commit_validation,
     )

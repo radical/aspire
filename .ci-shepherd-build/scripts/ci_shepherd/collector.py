@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -717,6 +718,7 @@ class Collector:
             if (
                 refresh_plan is not None
                 and evidence_id in refresh_plan.refresh
+                and not include_retry_evidence
                 and self._can_refresh_completed_run_history(existing_record)
                 and (
                     not minimal_run_evidence
@@ -3495,7 +3497,18 @@ class Collector:
                 if isinstance(raw_artifact, dict)
                 if _text(raw_artifact, "name")
             ]
-        if include_retry_evidence and run_attempt > 1:
+        if (
+            include_retry_evidence
+            and run_attempt >= 1
+            and self._repository_policy.retry_test_results.trusts_run(
+                event=_text(raw_run, "event"),
+                head_repository=_nested_text(
+                    raw_run,
+                    ("head_repository", "full_name"),
+                ),
+                target_repository=target_repository,
+            )
+        ):
             selected_job_keys = {
                 (job["attempt"], job["jobId"])
                 for job in job_payloads
@@ -3518,6 +3531,19 @@ class Collector:
                 raw_artifacts,
                 [*job_payloads, *final_jobs],
                 referenced_by,
+            )
+        elif include_retry_evidence and run_attempt >= 1:
+            collection_errors.append(
+                CollectionError(
+                    "workflow-test-results",
+                    f"/repos/{target_repository}/actions/runs/{run_id}",
+                    (
+                        "Retry test-results artifacts were rejected because the "
+                        "run event or head repository is not trusted by repository "
+                        "policy."
+                    ),
+                    "untrusted retry test-results source",
+                )
             )
 
         branch = _text(raw_run, "head_branch")
@@ -4059,7 +4085,12 @@ class Collector:
                         raise ValueError(
                             "Test-results artifact digest does not match metadata."
                         )
-                    parsed = parse_test_results_archive(content)
+                    parsed = parse_test_results_archive(
+                        content,
+                        identify_trx=(
+                            self._repository_policy.retry_test_results.identify_trx
+                        ),
+                    )
                 except (RuntimeError, ValueError) as exc:
                     collection_errors.append(
                         CollectionError(
@@ -4078,6 +4109,13 @@ class Collector:
                 for result in results
                 if result["outcome"] == "Failed"
             }
+            failed_names.update(
+                _previous_failed_test_names(
+                    evidence,
+                    target_repository=target_repository,
+                    run_id=run_id,
+                )
+            )
             for attempt, artifact, results in parsed_by_attempt:
                 results_by_job: dict[int, list[dict[str, str]]] = defaultdict(list)
                 for result in results:
@@ -4089,8 +4127,16 @@ class Collector:
                     matching_jobs = [
                         job
                         for job in jobs
+                        # Aggregate artifacts can carry TRX files from earlier
+                        # attempts. A row is attributed only when this attempt
+                        # contains exactly one matching test job; carried rows
+                        # are ignored rather than relabelled.
                         if job.get("attempt") == attempt
-                        and _job_matches_test_result(job, result)
+                        and self._repository_policy.retry_test_results.matches_test_job(
+                            str(job.get("name", "")),
+                            lane=result["lane"],
+                            os_name=result["os"],
+                        )
                     ]
                     if len(matching_jobs) == 1:
                         results_by_job[int(matching_jobs[0]["jobId"])].append(result)
@@ -4263,33 +4309,44 @@ def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
+def _previous_failed_test_names(
+    evidence: Mapping[str, Mapping[str, Any]],
+    *,
+    target_repository: str,
+    run_id: int,
+) -> set[str]:
+    failed: set[str] = set()
+    for record in evidence.values():
+        if record.get("kind") != "workflow-test-results":
+            continue
+        payload = record.get("payload")
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("runId") != run_id
+            or str(payload.get("targetRepository", "")).casefold()
+            != target_repository.casefold()
+        ):
+            continue
+        tests = payload.get("tests")
+        if not isinstance(tests, list):
+            continue
+        for test in tests:
+            if (
+                isinstance(test, Mapping)
+                and test.get("outcome") == "failed"
+                and isinstance(test.get("testName"), str)
+                and test["testName"]
+            ):
+                failed.add(test["testName"])
+    return failed
+
+
 def _job_contains_timestamp(job: dict[str, Any], value: datetime) -> bool:
     started_at = job.get("startedAt")
     completed_at = job.get("completedAt")
     if not isinstance(started_at, str) or not isinstance(completed_at, str):
         return False
     return _parse_timestamp(started_at) <= value <= _parse_timestamp(completed_at)
-
-
-def _job_matches_test_result(
-    job: dict[str, Any],
-    result: dict[str, str],
-) -> bool:
-    name = job.get("name")
-    if not isinstance(name, str):
-        return False
-    runner_match = re.search(r"\((?P<runner>[^()]+)\)\s*$", name)
-    if runner_match is None:
-        return False
-    runner = runner_match.group("runner").strip()
-    without_runner = name[:runner_match.start()].strip()
-    parts = [part.strip() for part in without_runner.split("/") if part.strip()]
-    lane = parts[-1] if parts else without_runner
-    artifact_os = result["os"]
-    return (
-        lane == result["lane"]
-        and (runner == artifact_os or runner.endswith(f"-{artifact_os}"))
-    )
 
 
 def _isoformat(value: datetime) -> str:

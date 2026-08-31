@@ -58,6 +58,9 @@ def main() -> int:
         get_pull=lambda repository, number: client.get(
             f"/repos/{quote(repository, safe='/')}/pulls/{number}"
         ),
+        get_reviews=lambda repository, number: client.get_pages(
+            f"/repos/{quote(repository, safe='/')}/pulls/{number}/reviews"
+        ),
         verify_merged_source=lambda event, pull: (
             isinstance(event.get("mutationValidation"), dict)
             and isinstance(pull.get("merge_commit_sha"), str)

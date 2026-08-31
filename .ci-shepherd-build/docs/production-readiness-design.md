@@ -85,17 +85,20 @@ architecture has three layers:
 
 **Implemented today.** The supported cycle loads the strict, versioned
 `policies/repositories/aspire-v1.json` file. Retry-result aggregation job
-suffixes and artifact names come from that file rather than the collector. The
-canonical policy document and its SHA-256 digest are embedded in the snapshot,
-and snapshot validation rejects content changes or repository mismatches. A
-second checked-in test profile uses different job and artifact names and drives
-the same collector behavior.
+suffixes, artifact names, trusted workflow events, head-repository rules, TRX
+path identity, and test-job identity come from that file rather than the
+collector. The policy also owns the quarantine pull request's exact base ref,
+allowed head repositories, and required approval count. The canonical policy
+document and its SHA-256 digest are embedded in the snapshot and lifecycle
+events, and validation rejects content changes or repository mismatches. A
+second checked-in test profile uses different retry conventions and drives the
+same collector behavior.
 
-**Proposed.** Lane extraction, issue labels, evidence thresholds, mutation
-budgets, protected-repository capabilities, worker text, and the quarantine
-adapter selection remain to be moved behind the same boundary. Until those
-fields are explicit and grant-bound, the repository profile is intentionally
-incomplete and must not be presented as general multi-repository support.
+**Proposed.** Issue labels, evidence thresholds, mutation budgets,
+protected-repository capabilities, worker text, and quarantine adapter
+selection remain to be moved behind the same boundary. Until those fields are
+explicit and grant-bound, the repository profile is intentionally incomplete
+and must not be presented as general multi-repository support.
 
 Repository policy is trusted executable input even when represented as data. A
 policy change can alter which evidence or mutation is accepted, so grants must
@@ -519,6 +522,10 @@ bounded before parsing. Class A computation itself is local and deterministic.
 existing QuarantineTools mutation path in a disposable clean checkout. In the
 recorded production run there were six candidates against seventy-two reviewed
 issues, so this is a single-digit number of per-candidate invocations per cycle.
+The inspector and mutation executor run older target-framework tools with the
+available .NET 10 runtime by setting `DOTNET_ROLL_FORWARD=Major`; without that
+explicit contract, a .NET 10-only checkout can misreport source inspection as
+unavailable after successfully building a .NET 8 tool.
 
 **Not cached.** Live GitHub state used for preflight. Caching preflight would
 defeat its purpose.
@@ -721,7 +728,7 @@ Partial execution deserves an explicit outcome. If a grant authorizes two
 actions and the second fails, the terminal state is "one applied, one not", and
 that must be visible in both the ledger and the report rather than inferred.
 
-### 7.4 Proposed: quarantine post-change validation
+### 7.4 Implemented: quarantine post-change validation
 
 A quarantine mutation edits source. Comparing a diff is not enough, because a
 diff can look correct and still leave the repository in a state where the test
@@ -770,19 +777,50 @@ commit, then require the resulting single non-merge commit to have the same
 exact files and canonical diff digest. Push and open the pull request only from
 that validated commit.
 
+`publish_quarantine.py` is the sole initial-publication boundary. It derives the
+branch from `batchId`, resolves the Git remote from the policy-owned allowed
+head repository, refuses mismatched existing branches rather than
+force-pushing, and re-derives commit validation immediately before an
+explicit-SHA push. It snapshots the validated pull-request body before the
+first mutation. Push and draft-pull-request creation each use a unique, fsynced
+intent/outcome operation ID so a crash is visible and a rerun can reconcile an
+exact existing branch or pull request without duplicating it. The independent
+`microsoft/aspire` production deny remains in force.
+
 **Step 7 — verify the pull request after creation.** Refetch the draft pull
-request and assert its repository, its draft state, its 40-character head SHA,
-and its complete modified-file list match the validated commit artifact. The
-commit artifact already binds that head to the canonical diff digest. A mismatch
-records the session `failed`; it does not record a head SHA the shepherd did not
-validate.
+request and assert its target repository, policy-owned base ref, allowed head
+repository, draft state, 40-character head SHA, and complete modified-file list
+match the validated commit artifact. The commit artifact already binds that
+head to the canonical diff digest. A mismatch records the session `failed`; it
+does not record a head SHA the shepherd did not validate.
 
 **Step 8 — verify the merge before recording completion.** A session is recorded
-`completed` only after refetching the target branch and confirming the
-quarantine attribute is present on the exact method at that branch, with the
-exact issue URL. Merge is not assumed from pull-request state; it is observed in
-the merged tree. Until that observation succeeds, the session remains pending
-and the affected tests stay suppressed from new batches.
+`completed` only after fetching all pull request review pages, confirming the
+policy-required number of latest decisive reviewer states are approvals, and
+refetching the target branch to confirm the quarantine attribute is present on
+the exact method with the exact issue URL. `COMMENTED` and `PENDING` reviews do
+not revoke an approval; later `CHANGES_REQUESTED` or `DISMISSED` states do.
+Merge is not assumed from pull-request state; it is observed in the merged
+tree. Until that observation succeeds, the session remains pending and the
+affected tests stay suppressed from new batches.
+
+The `radical/aspire` Class A exercise proved the live base, head, file, and
+commit checks. Reconciliation then stopped at the required-approval gate because
+the fork owner cannot independently approve its own pull request. A separate
+deterministic invocation proved merge-commit source verification, but it was not
+an integrated reconciliation completion. The authoritative batch remains
+`pull-request-open` and cannot be abandoned after its merged side effect. The
+production approval requirement remains one; the complete approval-to-merge
+transition must be observed on the first guarded `microsoft/aspire` quarantine
+pull request.
+
+**Interrupted sessions fail closed.** The `started` event records the exact
+authorization grant ID and expiry. Grant expiry never releases the batch:
+after an interruption, the same recorded session can be resumed or reconciled
+without consuming a second grant. An operator can release a `started` batch
+only with an explicit `abandoned` event that confirms no branch, commit, or
+pull request was created. If any remote side effect might exist, the batch
+remains active until it is reconciled.
 
 ## 8. Development sequencing
 

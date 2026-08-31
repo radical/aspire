@@ -65,6 +65,7 @@ def execute_quarantine_mutation(
         "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
         "DOTNET_CLI_UI_LANGUAGE": "en-US",
         "DOTNET_NOLOGO": "1",
+        "DOTNET_ROLL_FORWARD": "Major",
         "MSBUILDTERMINALLOGGER": "false",
     }
     for test in tests:
@@ -268,6 +269,10 @@ def create_quarantine_commit_validation(
     checkout = checkout.expanduser().resolve(strict=True)
     resolved_commit = _resolve_commit(checkout, commit_sha)
     parent = _single_commit_parent(checkout, resolved_commit)
+    if parent.casefold() != str(validated["sourceRevision"]).casefold():
+        raise ValueError(
+            "Quarantine commit parent does not match the validated source revision."
+        )
     changed_files = _changed_commit_files(
         checkout,
         parent,

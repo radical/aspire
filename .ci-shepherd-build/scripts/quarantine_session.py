@@ -73,7 +73,7 @@ def main() -> int:
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument(
         "--status",
-        choices=("started", "failed"),
+        choices=("started", "failed", "abandoned"),
         required=True,
     )
     parser.add_argument("--recorded-at", required=True)
@@ -85,6 +85,14 @@ def main() -> int:
     )
     parser.add_argument("--failure-reason")
     parser.add_argument("--authorization", type=Path)
+    parser.add_argument(
+        "--confirm-no-remote-side-effects",
+        action="store_true",
+        help=(
+            "Required for abandonment after the operator verifies that no branch, "
+            "commit, or pull request was created."
+        ),
+    )
     args = parser.parse_args()
     if args.test_name is not None and args.status != "started":
         parser.error("--test-name is valid only with --status started")
@@ -109,12 +117,14 @@ def main() -> int:
             )
             request = authorized.request
             authorization_grant_id = authorized.grant_id
+            authorization_expires_at = authorized.expires_at
         else:
             if args.authorization is not None:
                 raise ValueError(
                     "--authorization is valid only with --status started."
                 )
             request = _load_request(args.request, args.state_dir, args.batch_id)
+            authorization_expires_at = None
         session_id = args.session_id or request.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError(
@@ -128,6 +138,8 @@ def main() -> int:
             session_id=session_id,
             failure_reason=args.failure_reason,
             authorization_grant_id=authorization_grant_id,
+            authorization_expires_at=authorization_expires_at,
+            confirm_no_remote_side_effects=args.confirm_no_remote_side_effects,
         )
     finally:
         os.umask(old_umask)

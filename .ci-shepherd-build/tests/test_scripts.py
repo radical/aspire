@@ -1253,6 +1253,7 @@ class PrototypeScriptTests(unittest.TestCase):
                     return_value=SimpleNamespace(
                         request=request,
                         grant_id="grant:1",
+                        expires_at="2026-08-30T00:15:00Z",
                     ),
                 ),
                 patch.object(
@@ -1358,6 +1359,83 @@ class PrototypeScriptTests(unittest.TestCase):
         ):
             self.assertEqual(0, script.main())
 
+    def test_publish_quarantine_writes_owner_only_worker_result(self) -> None:
+        script = load_script("publish_quarantine")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        request_path = scratch / "request.json"
+        mutation_path = scratch / "mutation.json"
+        commit_path = scratch / "commit.json"
+        body_path = scratch / "body.md"
+        output_path = scratch / "result.json"
+        for path in (request_path, mutation_path, commit_path):
+            path.write_text("{}", encoding="utf-8")
+        body_path.write_text("[automated] fixture", encoding="utf-8")
+        request = {
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:1",
+            "batchId": "quarantine:fnv1a64:0123456789abcdef",
+        }
+        result = {
+            "schemaVersion": 1,
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:1",
+            "batchId": "quarantine:fnv1a64:0123456789abcdef",
+            "sessionId": "session-1",
+            "outcome": "pull-request-open",
+            "completedTests": ["Tests.Flaky"],
+            "blockedTargets": [],
+            "pullRequest": {
+                "url": "https://github.com/radical/aspire/pull/2",
+                "headSha": "a" * 40,
+            },
+        }
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "publish_quarantine.py",
+                    "--state-dir",
+                    str(scratch / "state"),
+                    "--request",
+                    str(request_path),
+                    "--batch-id",
+                    str(request["batchId"]),
+                    "--mutation-result",
+                    str(mutation_path),
+                    "--commit-validation",
+                    str(commit_path),
+                    "--checkout",
+                    str(scratch),
+                    "--session-id",
+                    "session-1",
+                    "--body-file",
+                    str(body_path),
+                    "--mutation-audit",
+                    str(scratch / "mutation-audit.jsonl"),
+                    "--output",
+                    str(output_path),
+                ],
+            ),
+            patch.object(script, "_load_request", return_value=request),
+            patch.object(
+                script,
+                "publish_quarantine_pull_request",
+                return_value=result,
+            ) as publish,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(0, script.main())
+
+        publish.assert_called_once()
+        self.assertEqual(
+            result,
+            json.loads(output_path.read_text(encoding="utf-8")),
+        )
+        self.assertEqual(0o600, output_path.stat().st_mode & 0o777)
+
     def test_execute_quarantine_records_validation_failure(self) -> None:
         script = load_script("execute_quarantine")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
@@ -1400,6 +1478,7 @@ class PrototypeScriptTests(unittest.TestCase):
                     return_value=SimpleNamespace(
                         request=request,
                         grant_id="grant:1",
+                        expires_at="2026-08-30T00:15:00Z",
                     ),
                 ),
                 patch.object(

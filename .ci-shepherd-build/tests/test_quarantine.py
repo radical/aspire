@@ -28,6 +28,21 @@ def _repository_policy_identity(repository: str) -> dict[str, object]:
             "retryTestResults": {
                 "aggregateJobSuffixes": ["Aggregate Results"],
                 "artifactNames": ["Combined-Results"],
+                "trxPathPattern": (
+                    r"^(?P<os>[^/]+)/testresults/"
+                    r"(?P<lane>.+)_net[^_]+_[^/]+\.trx$"
+                ),
+                "jobNamePattern": (
+                    r"^(?:.* / )?(?P<lane>[^/]+) "
+                    r"\((?P<os>[^()]+)\)$"
+                ),
+                "trustedEvents": ["push", "workflow_dispatch"],
+                "requireHeadRepositoryMatch": True,
+            },
+            "quarantinePullRequest": {
+                "baseRef": "main",
+                "allowedHeadRepositories": [repository],
+                "requiredApprovingReviews": 1,
             },
         }
     )
@@ -1088,6 +1103,54 @@ class QuarantineSessionRequestTests(unittest.TestCase):
 
             self.assertEqual(started["batchId"], recovered["batchId"])
             self.assertEqual("session-123", recovered["sessionId"])
+
+    def test_started_session_requires_explicit_safe_abandonment_before_retry(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "explicit confirmation",
+            ):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="abandoned",
+                    recorded_at="2026-08-28T20:20:00Z",
+                    session_id="session-123",
+                    failure_reason="Worker exited before mutation.",
+                )
+
+            blocked = build_quarantine_session_plan(
+                request,
+                read_quarantine_session_events(state),
+            )
+            self.assertEqual("session-already-active", blocked["suppressionReason"])
+
+            abandoned = record_quarantine_session_event(
+                state,
+                request,
+                status="abandoned",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="session-123",
+                failure_reason="Verified no branch, commit, or pull request exists.",
+                confirm_no_remote_side_effects=True,
+            )
+            retried = build_quarantine_session_plan(
+                request,
+                read_quarantine_session_events(state),
+            )
+
+            self.assertTrue(abandoned["confirmedNoRemoteSideEffects"])
+            self.assertIsNotNone(retried["proposal"])
 
     def test_concurrent_starts_record_only_one_active_session(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())

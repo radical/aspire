@@ -316,11 +316,42 @@ hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
    an empty commit or PR. Return a typed `completed` result naming the merged PR
    URL, exact head SHA, and exact test list. `record_quarantine_result.py` GET
    verifies the merged state and identity before completing the started batch.
-8. Show the draft PR title and full body. Only after approval, commit, push the
-   branch to the user's fork, and open a draft PR. The visible body begins with
-   `[automated] ` and uses `Addresses #N`; the original failure issues remain
-   open.
-9. Have the worker write `agent-quarantine-result.json`. It has a closed schema:
+8. Show the draft PR title and full body. Only after approval, have the worker
+   create the local commit and bind it to the mutation result:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/validate_quarantine_commit.py" \
+     --state-dir "$STATE" \
+     --request "$SCRATCH/quarantine-session.json" \
+     --batch-id "<allowedBatchId>" \
+     --mutation-result "$SCRATCH/quarantine-mutation-result.json" \
+     --checkout "<worktree-path>" \
+     --output "$SCRATCH/quarantine-commit-validation.json"
+   ```
+
+   The worker must not push or invoke `gh pr create`. Publish only through the
+   deterministic boundary, which derives the branch from the batch, resolves
+   the policy-allowed fork remote, revalidates the commit, snapshots the
+   approved body, and records paired mutation intents and outcomes:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/publish_quarantine.py" \
+     --state-dir "$STATE" \
+     --request "$SCRATCH/quarantine-session.json" \
+     --batch-id "<allowedBatchId>" \
+     --mutation-result "$SCRATCH/quarantine-mutation-result.json" \
+     --commit-validation "$SCRATCH/quarantine-commit-validation.json" \
+     --checkout "<worktree-path>" \
+     --session-id "<worktree-session-id>" \
+     --body-file "$SCRATCH/quarantine-pr-body.md" \
+     --mutation-audit "$SCRATCH/quarantine-mutations.jsonl" \
+     --output "$SCRATCH/agent-quarantine-result.json"
+   ```
+
+   The visible title and body begin with `[automated] `, the body uses
+   `Addresses #N`, and the original failure issues remain open. Publication
+   remains hard-denied for `microsoft/aspire`.
+9. Use the publisher's `agent-quarantine-result.json`. It has a closed schema:
    repository, snapshot, batch, session, outcome, completed tests, blocked tests
    with reasons, and the draft PR URL and 40-character head SHA. Every requested
    test must be exactly one of completed or blocked; freeform fields are

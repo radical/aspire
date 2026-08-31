@@ -337,8 +337,6 @@ class GitHubClient:
     def _build_binary_command(self, endpoint: str) -> list[str]:
         command = self._build_command(endpoint)
         command.remove("--include")
-        accept_index = command.index("Accept: application/vnd.github+json")
-        command[accept_index] = "Accept: application/octet-stream"
         return command
 
     def _build_env(self) -> dict[str, str]:

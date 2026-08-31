@@ -220,6 +220,64 @@ public class Tests
             inspected["blockedTargets"],
         )
 
+    def test_inspector_rolls_older_test_tools_forward_to_dotnet_10(self) -> None:
+        request = {
+            "schemaVersion": 1,
+            "repository": "owner/repo",
+            "snapshotId": "snapshot:owner/repo:test",
+            "batchId": "quarantine:before-inspection",
+            "tests": [
+                {
+                    "testName": "Demo.Tests.Flaky",
+                    "issueNumber": 1,
+                    "issueUrl": "https://github.com/owner/repo/issues/1",
+                }
+            ],
+            "blockedTargets": [],
+        }
+        inspection = json.dumps(
+            {
+                "schemaVersion": 1,
+                "tests": [
+                    {
+                        "testName": "Demo.Tests.Flaky",
+                        "status": "not-found",
+                        "matches": [],
+                    }
+                ],
+            }
+        )
+        inspector_environment: dict[str, str] = {}
+
+        def run(
+            command: list[str],
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess:
+            inspector_environment.update(kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, inspection, "")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkout = Path(temporary_directory)
+            (checkout / "tests").mkdir()
+            (checkout / "tools" / "QuarantineTools").mkdir(parents=True)
+            with (
+                patch(
+                    "ci_shepherd.quarantine._source_revision",
+                    return_value="a" * 40,
+                ),
+                patch(
+                    "ci_shepherd.quarantine._source_tree_digest",
+                    return_value="sha256:" + "b" * 64,
+                ),
+                patch(
+                    "ci_shepherd.quarantine.subprocess.run",
+                    side_effect=run,
+                ),
+            ):
+                inspect_quarantine_session_request(request, checkout)
+
+        self.assertEqual("Major", inspector_environment["DOTNET_ROLL_FORWARD"])
+
     def test_shepherd_inspects_a_request_against_the_checkout(self) -> None:
         request = {
             "schemaVersion": 1,

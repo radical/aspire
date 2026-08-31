@@ -9,10 +9,17 @@ from .quarantine_mutation import (
     validate_quarantine_commit_validation,
     validate_quarantine_mutation_result,
 )
+from .repository_policy import (
+    RepositoryPolicy,
+    load_embedded_repository_policy,
+)
 
 
 _OUTCOMES = frozenset({"pull-request-open", "completed", "blocked", "failed"})
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+_TRUSTED_REVIEWER_ASSOCIATIONS = frozenset(
+    {"collaborator", "member", "owner"}
+)
 _RESULT_KEYS = frozenset(
     {
         "schemaVersion",
@@ -128,6 +135,7 @@ def record_quarantine_worker_result(
     recorded_at: str,
     pull_request_document: Mapping[str, Any] | None = None,
     pull_request_files: list[Mapping[str, Any]] | None = None,
+    pull_request_reviews: list[Mapping[str, Any]] | None = None,
     mutation_result: Mapping[str, Any] | None = None,
     commit_validation: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
@@ -138,10 +146,17 @@ def record_quarantine_worker_result(
         if not isinstance(pull_request, Mapping):
             raise ValueError("Validated pull request is missing.")
         _validate_live_pull_request(
+            request,
             pull_request,
             pull_request_document,
             completed=outcome == "completed",
         )
+        if outcome == "completed":
+            validate_required_quarantine_approvals(
+                request,
+                pull_request_document,
+                pull_request_reviews,
+            )
         if mutation_result is None:
             raise ValueError(
                 "A successful quarantine result requires deterministic "
@@ -200,6 +215,7 @@ def record_quarantine_worker_result(
 
 
 def _validate_live_pull_request(
+    request: Mapping[str, Any],
     expected: Mapping[str, Any],
     actual: Mapping[str, Any] | None,
     *,
@@ -207,6 +223,7 @@ def _validate_live_pull_request(
 ) -> None:
     if actual is None:
         raise ValueError("The pull request must be verified with a GitHub GET.")
+    validate_quarantine_pull_request_target(request, actual)
     head = actual.get("head")
     if (
         actual.get("html_url") != expected.get("url")
@@ -230,6 +247,114 @@ def _validate_live_pull_request(
     ):
         raise ValueError(
             "The live pull request is not in the expected state at the expected head."
+        )
+
+
+def validate_quarantine_pull_request_target(
+    request: Mapping[str, Any],
+    pull: Mapping[str, Any],
+) -> RepositoryPolicy:
+    repository = request.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise ValueError("Quarantine request repository must be nonempty.")
+    policy = load_embedded_repository_policy(
+        request.get("repositoryPolicy"),
+        repository,
+    )
+    base = pull.get("base")
+    head = pull.get("head")
+    base_repository = base.get("repo") if isinstance(base, Mapping) else None
+    head_repository = head.get("repo") if isinstance(head, Mapping) else None
+    if (
+        not isinstance(base, Mapping)
+        or base.get("ref") != policy.quarantine_pull_request.base_ref
+        or not isinstance(base_repository, Mapping)
+        or str(base_repository.get("full_name", "")).casefold()
+        != repository.casefold()
+        or not isinstance(head_repository, Mapping)
+        or not policy.quarantine_pull_request.allows_head_repository(
+            str(head_repository.get("full_name", ""))
+        )
+    ):
+        raise ValueError(
+            "The live pull request target or source repository does not match "
+            "repository policy."
+        )
+    return policy
+
+
+def validate_required_quarantine_approvals(
+    request: Mapping[str, Any],
+    pull: Mapping[str, Any] | None,
+    reviews: list[Mapping[str, Any]] | None,
+) -> None:
+    repository = request.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise ValueError("Quarantine request repository must be nonempty.")
+    policy = load_embedded_repository_policy(
+        request.get("repositoryPolicy"),
+        repository,
+    )
+    required = policy.quarantine_pull_request.required_approving_reviews
+    if pull is None:
+        raise ValueError("The pull request must be verified with a GitHub GET.")
+    if reviews is None:
+        raise ValueError("The pull request reviews must be verified with a GitHub GET.")
+    head = pull.get("head")
+    author = pull.get("user")
+    head_sha = head.get("sha") if isinstance(head, Mapping) else None
+    author_login = author.get("login") if isinstance(author, Mapping) else None
+    if (
+        not isinstance(head_sha, str)
+        or _SHA_RE.fullmatch(head_sha) is None
+        or not isinstance(author_login, str)
+        or not author_login
+    ):
+        raise ValueError(
+            "The pull request head and author must be verified before approvals."
+        )
+    latest_by_reviewer: dict[str, tuple[int, str]] = {}
+    for review in reviews:
+        user = review.get("user")
+        review_id = review.get("id")
+        state = review.get("state")
+        commit_id = review.get("commit_id")
+        association = review.get("author_association")
+        login = user.get("login") if isinstance(user, Mapping) else None
+        if (
+            not isinstance(login, str)
+            or not login
+            or login.casefold() == author_login.casefold()
+            or not isinstance(review_id, int)
+            or isinstance(review_id, bool)
+            or not isinstance(state, str)
+            or not isinstance(commit_id, str)
+            or commit_id.casefold() != head_sha.casefold()
+            or not isinstance(association, str)
+            or association.casefold() not in _TRUSTED_REVIEWER_ASSOCIATIONS
+        ):
+            continue
+        normalized_state = state.casefold()
+        # COMMENTED and PENDING reviews do not revoke an existing approval in
+        # GitHub's mergeability model. Only decisive review states participate
+        # in the latest-state calculation.
+        if normalized_state not in {
+            "approved",
+            "changes_requested",
+            "dismissed",
+        }:
+            continue
+        previous = latest_by_reviewer.get(login.casefold())
+        if previous is None or review_id > previous[0]:
+            latest_by_reviewer[login.casefold()] = (review_id, normalized_state)
+    approving_reviews = sum(
+        state == "approved"
+        for _, state in latest_by_reviewer.values()
+    )
+    if approving_reviews < required:
+        raise ValueError(
+            "The merged quarantine pull request does not have the repository "
+            "policy's required approving reviews."
         )
 
 

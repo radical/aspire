@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 
 from ci_shepherd.policy import ManualPolicy, PolicyError, load_policy, load_policy_document
-from ci_shepherd.repository_policy import load_repository_policy
+from ci_shepherd.repository_policy import (
+    RepositoryPolicyError,
+    load_repository_policy,
+    load_repository_policy_document,
+)
 
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "policies" / "manual-v1.json"
@@ -155,6 +159,45 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertTrue(
             policy.retry_test_results.matches_artifact("All-TestResults")
         )
+        self.assertEqual(
+            ("Hosting-1", "windows-latest"),
+            policy.retry_test_results.identify_trx(
+                "windows-latest/testresults/"
+                "Hosting-1_net10.0_20260830120000.trx"
+            ),
+        )
+        self.assertEqual(
+            ("Hosting.Keycloak", "windows-latest"),
+            policy.retry_test_results.identify_trx(
+                "windows-latest/testresults/Hosting.Keycloak.trx"
+            ),
+        )
+        self.assertIsNone(
+            policy.retry_test_results.identify_trx(
+                "windows-latest/testresults/nested/Hosting.Keycloak.trx"
+            )
+        )
+        self.assertTrue(
+            policy.retry_test_results.matches_test_job(
+                "Tests / Hosting-1 (windows-latest)",
+                lane="Hosting-1",
+                os_name="windows-latest",
+            )
+        )
+        self.assertTrue(
+            policy.retry_test_results.trusts_run(
+                event="push",
+                head_repository="microsoft/aspire",
+                target_repository="microsoft/aspire",
+            )
+        )
+        self.assertFalse(
+            policy.retry_test_results.trusts_run(
+                event="pull_request",
+                head_repository="contributor/aspire",
+                target_repository="microsoft/aspire",
+            )
+        )
 
     def test_repository_policy_exposes_stable_public_identity(self) -> None:
         policy = load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH)
@@ -170,11 +213,41 @@ class RepositoryPolicyTests(unittest.TestCase):
                 "retryTestResults": {
                     "aggregateJobSuffixes": ["Final Test Results"],
                     "artifactNames": ["All-TestResults"],
+                    "trxPathPattern": (
+                        r"^(?P<os>[^/]+)/testresults/"
+                        r"(?P<lane>[^/]+?)(?=_net[^_]+_[^/]+\.trx$|\.trx$)"
+                        r"(?:_net[^_]+_[^/]+)?\.trx$"
+                    ),
+                    "jobNamePattern": (
+                        r"^(?:.* / )?(?P<lane>[^/]+) "
+                        r"\((?P<os>[^()]+)\)$"
+                    ),
+                    "trustedEvents": [
+                        "push",
+                        "schedule",
+                        "workflow_dispatch",
+                    ],
+                    "requireHeadRepositoryMatch": True,
+                },
+                "quarantinePullRequest": {
+                    "baseRef": "main",
+                    "allowedHeadRepositories": ["radical/aspire"],
+                    "requiredApprovingReviews": 1,
                 },
             },
             policy.as_public_dict(),
         )
         self.assertRegex(policy.digest, r"^sha256:[0-9a-f]{64}$")
+
+    def test_repository_policy_requires_at_least_one_quarantine_approval(
+        self,
+    ) -> None:
+        document = json.loads(
+            ASPIRE_REPOSITORY_POLICY_PATH.read_text(encoding="utf-8")
+        )
+        document["quarantinePullRequest"]["requiredApprovingReviews"] = 0
+        with self.assertRaisesRegex(RepositoryPolicyError, "1 through 10"):
+            load_repository_policy_document(document)
 
     @unittest.skipIf(os.name == "nt", "Windows symlink creation requires privileges.")
     def test_repository_policy_rejects_symlinked_files(self) -> None:

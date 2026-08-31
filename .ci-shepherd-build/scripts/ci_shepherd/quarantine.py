@@ -13,7 +13,7 @@ from .timeutils import parse_aware_iso8601
 
 
 _SESSION_STATUSES = frozenset(
-    {"started", "pull-request-open", "completed", "failed"}
+    {"started", "pull-request-open", "completed", "failed", "abandoned"}
 )
 _PULL_REQUEST_URL_RE = re.compile(
     r"^https://github\.com/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
@@ -39,7 +39,11 @@ def _fingerprint(value: object) -> str:
     return f"fnv1a64:{result:016x}"
 
 
-def _worker_prompt(repository: str, tests: list[dict[str, object]]) -> str:
+def _worker_prompt(
+    repository: str,
+    tests: list[dict[str, object]],
+    repository_policy: Mapping[str, Any] | None,
+) -> str:
     lines = [
         f"Prepare one quarantine pull request for {repository}.",
         "",
@@ -67,6 +71,29 @@ def _worker_prompt(repository: str, tests: list[dict[str, object]]) -> str:
             f"{source_description}; "
             f"the PR body must include {addresses}"
         )
+    pull_request_policy = (
+        repository_policy.get("quarantinePullRequest")
+        if isinstance(repository_policy, Mapping)
+        else None
+    )
+    if isinstance(pull_request_policy, Mapping):
+        base_ref = pull_request_policy.get("baseRef")
+        allowed_heads = pull_request_policy.get("allowedHeadRepositories")
+        if (
+            isinstance(base_ref, str)
+            and base_ref
+            and isinstance(allowed_heads, list)
+            and all(isinstance(value, str) and value for value in allowed_heads)
+        ):
+            lines.extend(
+                [
+                    "",
+                    f"Open the draft pull request against `{repository}:{base_ref}` "
+                    "from one of these policy-approved head repositories: "
+                    + ", ".join(f"`{value}`" for value in allowed_heads)
+                    + ". The recorder rejects any other base or head repository.",
+                ]
+            )
     lines.extend(
         [
             "",
@@ -91,7 +118,19 @@ def _request_for_tests(
         **dict(request),
         "batchId": f"quarantine:{_fingerprint(tests)}" if tests else None,
         "tests": tests,
-        "workerPrompt": _worker_prompt(repository, tests) if tests else None,
+        "workerPrompt": (
+            _worker_prompt(
+                repository,
+                tests,
+                (
+                    request.get("repositoryPolicy")
+                    if isinstance(request.get("repositoryPolicy"), Mapping)
+                    else None
+                ),
+            )
+            if tests
+            else None
+        ),
     }
 
 
@@ -321,7 +360,19 @@ def build_quarantine_session_request(
         "batchId": batch_id,
         "requiresSeparateApproval": True,
         "tests": tests,
-        "workerPrompt": _worker_prompt(repository, tests) if tests else None,
+        "workerPrompt": (
+            _worker_prompt(
+                repository,
+                tests,
+                (
+                    repository_policy
+                    if isinstance(repository_policy, Mapping)
+                    else None
+                ),
+            )
+            if tests
+            else None
+        ),
         "blockedTargets": blocked_targets,
     }
 
@@ -675,6 +726,7 @@ def inspect_quarantine_session_request(
 
         source_revision = _source_revision(checkout)
         source_tree_digest = _source_tree_digest(checkout)
+        inspector_tree_digest = quarantine_tool_tree_digest(tool_project)
 
         test_names = []
         for test in tests:
@@ -709,6 +761,7 @@ def inspect_quarantine_session_request(
                 "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
                 "DOTNET_CLI_UI_LANGUAGE": "en-US",
                 "DOTNET_NOLOGO": "1",
+                "DOTNET_ROLL_FORWARD": "Major",
                 "MSBUILDTERMINALLOGGER": "false",
             },
         )
@@ -722,12 +775,16 @@ def inspect_quarantine_session_request(
             or _source_tree_digest(checkout) != source_tree_digest
         ):
             raise ValueError("Checkout changed during quarantine source inspection.")
-        return apply_quarantine_source_inspection(
+        inspected = apply_quarantine_source_inspection(
             request,
             inspection,
             source_revision=source_revision,
             source_tree_digest=source_tree_digest,
         )
+        return {
+            **inspected,
+            "inspectorTreeDigest": inspector_tree_digest,
+        }
     except (
         FileNotFoundError,
         NotADirectoryError,
@@ -804,63 +861,43 @@ def _source_tree_digest(checkout: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def quarantine_tool_tree_digest(tool_project: Path) -> str:
+    tool_project = tool_project.expanduser().resolve(strict=True)
+    if not tool_project.is_dir():
+        raise ValueError("QuarantineTools project path must be a directory.")
+    digest = hashlib.sha256()
+    digest.update(b"ci-shepherd-quarantine-inspector-v1\0")
+    for candidate in _collect_source_input_files(
+        tool_project,
+        accepted_suffixes=None,
+    ):
+        relative_path = candidate.relative_to(tool_project)
+        digest.update(b"\0file\0")
+        digest.update(os.fsencode(relative_path))
+        digest.update(b"\0")
+        digest.update(candidate.read_bytes())
+    return f"sha256:{digest.hexdigest()}"
+
+
 def _source_input_files(checkout: Path) -> list[Path]:
-    skip_directories = {
-        ".git",
-        ".github",
-        ".idea",
-        ".vs",
-        ".vscode",
-        "artifacts",
-        "bin",
-        "dist",
-        "node_modules",
-        "obj",
-        "out",
-        "packages",
-    }
     files: set[Path] = set()
-
-    def collect(
-        root: Path,
-        *,
-        accepted_suffixes: tuple[str, ...] | None,
-    ) -> None:
-        for directory, child_directories, child_files in os.walk(root):
-            directory_path = Path(directory)
-            child_directories[:] = sorted(
-                child
-                for child in child_directories
-                if child.casefold()
-                not in {name.casefold() for name in skip_directories}
-            )
-            for child in child_directories:
-                if (directory_path / child).is_symlink():
-                    raise ValueError(
-                        "Quarantine source inputs must not traverse symlinks."
-                    )
-            for file_name in sorted(child_files):
-                candidate = directory_path / file_name
-                if candidate.is_symlink() or not candidate.is_file():
-                    raise ValueError(
-                        "Quarantine source inputs must contain regular files."
-                    )
-                if accepted_suffixes is not None and not file_name.endswith(
-                    accepted_suffixes
-                ):
-                    continue
-                if (
-                    ".received." in file_name.casefold()
-                    or ".verified." in file_name.casefold()
-                ):
-                    continue
-                files.add(candidate)
-
-    collect(checkout / "tests", accepted_suffixes=(".cs",))
-    collect(checkout / "tools" / "QuarantineTools", accepted_suffixes=None)
-    collect(
-        checkout / "eng",
-        accepted_suffixes=(".props", ".targets"),
+    files.update(
+        _collect_source_input_files(
+            checkout / "tests",
+            accepted_suffixes=(".cs",),
+        )
+    )
+    files.update(
+        _collect_source_input_files(
+            checkout / "tools" / "QuarantineTools",
+            accepted_suffixes=None,
+        )
+    )
+    files.update(
+        _collect_source_input_files(
+            checkout / "eng",
+            accepted_suffixes=(".props", ".targets"),
+        )
     )
     for file_name in (
         "Directory.Build.props",
@@ -876,6 +913,63 @@ def _source_input_files(checkout: Path) -> list[Path]:
     return sorted(
         files,
         key=lambda path: os.fsencode(path.relative_to(checkout)),
+    )
+
+
+def _collect_source_input_files(
+    root: Path,
+    *,
+    accepted_suffixes: tuple[str, ...] | None,
+) -> list[Path]:
+    skip_directories = {
+        ".git",
+        ".github",
+        ".idea",
+        ".vs",
+        ".vscode",
+        "artifacts",
+        "bin",
+        "dist",
+        "node_modules",
+        "obj",
+        "out",
+        "packages",
+    }
+    normalized_skip_directories = {
+        name.casefold() for name in skip_directories
+    }
+    files: list[Path] = []
+    for directory, child_directories, child_files in os.walk(root):
+        directory_path = Path(directory)
+        child_directories[:] = sorted(
+            child
+            for child in child_directories
+            if child.casefold() not in normalized_skip_directories
+        )
+        for child in child_directories:
+            if (directory_path / child).is_symlink():
+                raise ValueError(
+                    "Quarantine source inputs must not traverse symlinks."
+                )
+        for file_name in sorted(child_files):
+            candidate = directory_path / file_name
+            if candidate.is_symlink() or not candidate.is_file():
+                raise ValueError(
+                    "Quarantine source inputs must contain regular files."
+                )
+            if accepted_suffixes is not None and not file_name.endswith(
+                accepted_suffixes
+            ):
+                continue
+            if (
+                ".received." in file_name.casefold()
+                or ".verified." in file_name.casefold()
+            ):
+                continue
+            files.append(candidate)
+    return sorted(
+        files,
+        key=lambda path: os.fsencode(path.relative_to(root)),
     )
 
 
@@ -1186,10 +1280,12 @@ def record_quarantine_session_event(
     completed_test_names: list[str] | None = None,
     failure_reason: str | None = None,
     authorization_grant_id: str | None = None,
+    authorization_expires_at: str | None = None,
     pull_request_head_sha: str | None = None,
     blocked_targets: list[dict[str, str]] | None = None,
     allow_pull_request_head_update: bool = False,
     mutation_validation: Mapping[str, Any] | None = None,
+    confirm_no_remote_side_effects: bool = False,
 ) -> dict[str, object]:
     if status not in _SESSION_STATUSES:
         raise ValueError(f"Unsupported quarantine session status: {status}")
@@ -1209,6 +1305,33 @@ def record_quarantine_session_event(
     ):
         raise ValueError(
             "authorizationGrantId must be nonempty and is valid only for started sessions."
+        )
+    if authorization_grant_id is not None and authorization_expires_at is None:
+        raise ValueError(
+            "A grant-authorized started session must record authorizationExpiresAt."
+        )
+    if authorization_expires_at is not None:
+        if status != "started" or authorization_grant_id is None:
+            raise ValueError(
+                "authorizationExpiresAt is valid only for a grant-authorized "
+                "started session."
+            )
+        expires_at = parse_aware_iso8601(
+            authorization_expires_at,
+            "authorizationExpiresAt",
+        )
+        if expires_at <= parse_aware_iso8601(recorded_at, "recordedAt"):
+            raise ValueError(
+                "authorizationExpiresAt must follow the started event."
+            )
+    if status == "abandoned" and not confirm_no_remote_side_effects:
+        raise ValueError(
+            "Abandoning a quarantine session requires explicit confirmation "
+            "that no branch, commit, or pull request was created."
+        )
+    if confirm_no_remote_side_effects and status != "abandoned":
+        raise ValueError(
+            "confirmNoRemoteSideEffects is valid only for abandoned sessions."
         )
     if allow_pull_request_head_update and status != "pull-request-open":
         raise ValueError(
@@ -1257,9 +1380,11 @@ def record_quarantine_session_event(
         raise ValueError(
             "Completed test names are valid only for pull-request-open or completed sessions."
         )
-    if status == "failed":
+    if status in {"failed", "abandoned"}:
         if not isinstance(failure_reason, str) or not failure_reason:
-            raise ValueError("A failed quarantine session requires a failure reason.")
+            raise ValueError(
+                f"A {status} quarantine session requires a failure reason."
+            )
     elif failure_reason is not None:
         raise ValueError("failureReason is valid only for failed sessions.")
     if blocked_targets is not None and status not in {
@@ -1318,7 +1443,13 @@ def record_quarantine_session_event(
         "sessionId": session_id,
         "tests": recorded_tests,
     }
-    for source_field in ("sourceRevision", "sourceTreeDigest"):
+    for source_field in (
+        "sourceRevision",
+        "sourceTreeDigest",
+        "inspectorTreeDigest",
+        "repositoryPolicyDigest",
+        "repositoryPolicy",
+    ):
         source_value = request.get(source_field)
         if source_value is not None:
             event[source_field] = source_value
@@ -1365,6 +1496,9 @@ def record_quarantine_session_event(
         event["blockedTargets"] = normalized_blocked_targets
     if authorization_grant_id is not None:
         event["authorizationGrantId"] = authorization_grant_id
+        event["authorizationExpiresAt"] = authorization_expires_at
+    if status == "abandoned":
+        event["confirmedNoRemoteSideEffects"] = True
     if mutation_validation is not None:
         event["mutationValidation"] = dict(mutation_validation)
 
@@ -1489,13 +1623,22 @@ def record_quarantine_session_event(
                 raise ValueError(
                     "Completed tests must exactly match the tests in the merged pull request."
                 )
-        else:
+        elif status == "failed":
             if previous is None or previous.get("status") not in {
                 "started",
                 "pull-request-open",
             }:
                 raise ValueError(
                     f"Quarantine batch {batch_id} has no active or open pull request."
+                )
+            if previous.get("sessionId") != session_id:
+                raise ValueError(
+                    f"Quarantine batch {batch_id} belongs to another session."
+                )
+        else:
+            if previous is None or previous.get("status") != "started":
+                raise ValueError(
+                    f"Quarantine batch {batch_id} has no started session to abandon."
                 )
             if previous.get("sessionId") != session_id:
                 raise ValueError(

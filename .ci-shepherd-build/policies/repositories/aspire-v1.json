@@ -11,6 +11,21 @@
     ],
     "artifactNames": [
       "All-TestResults"
-    ]
+    ],
+    "trxPathPattern": "^(?P<os>[^/]+)/testresults/(?P<lane>[^/]+?)(?=_net[^_]+_[^/]+\\.trx$|\\.trx$)(?:_net[^_]+_[^/]+)?\\.trx$",
+    "jobNamePattern": "^(?:.* / )?(?P<lane>[^/]+) \\((?P<os>[^()]+)\\)$",
+    "trustedEvents": [
+      "push",
+      "schedule",
+      "workflow_dispatch"
+    ],
+    "requireHeadRepositoryMatch": true
+  },
+  "quarantinePullRequest": {
+    "baseRef": "main",
+    "allowedHeadRepositories": [
+      "radical/aspire"
+    ],
+    "requiredApprovingReviews": 1
   }
 }
