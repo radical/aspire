@@ -60,7 +60,12 @@ class QuarantineMutationValidationTests(unittest.TestCase):
                     output = "" if filtered else "\n".join(
                         test["testName"] for test in request["tests"]
                     )
-                    return subprocess.CompletedProcess(command, 0, output, "")
+                    exit_code = (
+                        0
+                        if not filtered or ["--ignore-exit-code", "8"] == command[-2:]
+                        else 8
+                    )
+                    return subprocess.CompletedProcess(command, exit_code, output, "")
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with (
@@ -121,6 +126,10 @@ class QuarantineMutationValidationTests(unittest.TestCase):
         self.assertEqual(
             4,
             sum("--list-tests" in command for command in commands),
+        )
+        self.assertEqual(
+            2,
+            sum(command[-2:] == ["--ignore-exit-code", "8"] for command in commands),
         )
         self.assertEqual(
             {

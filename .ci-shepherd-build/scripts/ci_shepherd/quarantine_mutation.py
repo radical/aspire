@@ -469,6 +469,10 @@ def _validate_test_discovery(
             "quarantined=true",
             "--filter-not-trait",
             "outerloop=true",
+            # MTP exit code 8 means the filters selected zero tests, which is
+            # the expected result after a quarantine.
+            "--ignore-exit-code",
+            "8",
         ],
         checkout,
         environment,
