@@ -309,12 +309,19 @@ public partial class Program
                     // This avoids Roslyn parsing for most files.
                     string text;
                     Encoding encoding;
+                    bool hadEncodingPreamble;
                     try
                     {
                         using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
+                        var prefix = new byte[4];
+                        var prefixLength = await fs.ReadAsync(prefix, ct).ConfigureAwait(false);
+                        fs.Position = 0;
                         using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
                         text = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
                         encoding = reader.CurrentEncoding;
+                        var preamble = encoding.GetPreamble();
+                        hadEncodingPreamble = preamble.Length > 0
+                            && prefix.AsSpan(0, prefixLength).StartsWith(preamble);
                     }
                     catch (Exception ex)
                     {
@@ -440,9 +447,12 @@ public partial class Program
                         try
                         {
                             using var outStream = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.Read, bufferSize: 4096, useAsync: true);
-                            using var writer = new StreamWriter(outStream, encoding);
-                            await writer.WriteAsync(newText.AsMemory(), ct).ConfigureAwait(false);
-                            await writer.FlushAsync(ct).ConfigureAwait(false);
+                            if (hadEncodingPreamble)
+                            {
+                                await outStream.WriteAsync(encoding.GetPreamble(), ct).ConfigureAwait(false);
+                            }
+                            await outStream.WriteAsync(encoding.GetBytes(newText), ct).ConfigureAwait(false);
+                            await outStream.FlushAsync(ct).ConfigureAwait(false);
                             modifiedFiles.Add(file);
                         }
                         catch (Exception ex)
@@ -1090,18 +1100,6 @@ public partial class Program
         {
             var filtered = updated.Usings.Where(u => u.Name == null || u.Name.ToString() != namespaceName).ToList();
             updated = updated.WithUsings(SyntaxFactory.List(filtered));
-        }
-
-        // Fallback: if textual occurrence remains, strip it textually and reparse
-        var text = updated.ToFullString();
-        if (text.Contains($"using {namespaceName};"))
-        {
-            text = System.Text.RegularExpressions.Regex.Replace(
-                text,
-                $@"^\s*using\s+{System.Text.RegularExpressions.Regex.Escape(namespaceName)}\s*;\s*\r?\n",
-                string.Empty,
-                System.Text.RegularExpressions.RegexOptions.Multiline);
-            updated = CSharpSyntaxTree.ParseText(text).GetCompilationUnitRoot();
         }
 
         return updated;

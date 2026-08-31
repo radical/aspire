@@ -669,7 +669,7 @@ def _dependency_fingerprint_matches(
 def _is_immutable_completed_record(record: Mapping[str, Any]) -> bool:
     kind = record.get("kind")
     payload = _mapping(record.get("payload"))
-    if kind in {"commit", "workflow-log"}:
+    if kind in {"commit", "workflow-log", "workflow-test-results"}:
         return True
     if kind == "pull-request":
         return isinstance(payload.get("mergedAt"), str) and bool(payload["mergedAt"])

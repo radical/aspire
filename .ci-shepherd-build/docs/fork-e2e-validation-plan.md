@@ -302,7 +302,7 @@ production quarantine can be enabled.
 | I2 | Transient pattern inside the configured systemic window | Advisory only | Report-only, no proposal | none | Automatic retry without approval | L |
 | I3 | A failing run retried by a human and now green | The issue moves onto the recovery path | Suite F behavior triggers on the next cycle | Delete comment | Green-after-retry not detected | E |
 | I4 | Evidence contains a same-run, same-commit, same-lane failure on attempt 1 and success on attempt 2, with an artifact-derived exact canonical test name that resolves to one source method | The candidate reaches evidence class A **and enters the quarantine batch** | `proposal.tests` contains the exact method; the recorded class is `A` with its reason; the outcome is quarantine eligibility, not merely a recovery comment on the issue | Reset scratch | Strong same-run retry evidence being consumed only as generic issue recovery, so a legitimately flaky test is never quarantined and CI health is not restored | L+E |
-| I5 | Same-run retry recovery, but the successful attempt's artifacts show a different test project or a different selection than the failing attempt | Class A is **not** awarded | The candidate falls back to the weaker classes and requires corroboration; the report states that selection equivalence could not be proven | Reset scratch | A green retry that never ran the failing test being read as proof the test passed | L |
+| I5 | Same-run retry recovery, but the successful attempt is green without an exact passing outcome for the failing test in its TRX artifact | Class A is **not** awarded | The candidate is blocked and the report states that the equivalent lane lacks per-test pass proof | Reset scratch | A green retry that never ran the failing test being read as proof the test passed | L |
 | I6 | Same-run retry recovery where the test name is title-derived rather than artifact-derived | Not quarantine-eligible | Class D contributes zero weight; the candidate is excluded with `insufficient-evidence-class` even though a retry recovery exists | none | Strong retry evidence laundering an unverified test name into a quarantine | L |
 
 ### 4.10 Suite J — Pull-request judgment persistence (P0)
@@ -355,18 +355,26 @@ defect reproductions.
 ### 4.13 Suite M — Evidence classification and lane equivalence (P0)
 
 These rows exercise the flaky-evidence model in section 4 of
-`production-readiness-design.md`. None of this classification exists today.
+`production-readiness-design.md`. Class A is implemented; Classes B and C remain
+design-only and cannot authorize quarantine.
 
-Fixtures are frozen collector snapshots containing synthesized run, attempt, job,
-and artifact rows, so classification is fully deterministic. Two rows carry a
-live confirmation because artifact retention and attempt visibility are GitHub
-behaviors that a fixture cannot prove.
+Fixtures are frozen collector snapshots containing synthesized run, attempt,
+job, and workflow-test-results rows, so classification is fully deterministic.
+Two rows carry a live confirmation because artifact retention, duplicate-name
+attempt association, and attempt visibility are GitHub behaviors that a fixture
+cannot prove.
+
+The production workflow gates `Final Test Results` on
+`github.repository_owner == 'microsoft'`. The fork run must therefore use a
+fixture-only workflow whose sole behavioral difference is allowing that
+aggregation job on `radical/aspire`; otherwise the fork cannot produce the
+attempt-scoped `All-TestResults` artifacts needed by M12.
 
 | ID | Setup | Mutation between cycles | Expected observable | Exact safety assertion | Cleanup | Regression caught | Where |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M1 | Attempt 1 fails the exact test, attempt 2 of the same run at the same commit and same matrix coordinates succeeds, and both attempts' artifacts show the same test project and selection | none | Class A | The recorded `evidenceClass` is `A`, its reason names the proven selection equivalence, and the candidate is quarantine-eligible without corroboration | Reset scratch | Class A never being reached, so no candidate is ever quarantinable | L |
-| M2 | As M1, but the successful attempt's artifacts list a different test project | none | Not Class A | `evidenceClass` is below `A` and the reason is `selection-equivalence-unproven`; quarantine requires corroboration | Reset scratch | A green retry that skipped the failing test being counted as a pass | L |
-| M3 | As M1, but the successful attempt's matrix coordinates differ in OS, architecture, target framework, or shard index | none | Not Class A and not an equivalent lane | Lane equivalence compares every recorded matrix dimension, not a job-name substring | Reset scratch | An environment-specific product bug read as flaky because a different lane went green | L |
+| M1 | Attempt 1's `All-TestResults` artifact contains an exact failed canonical method; attempt 2 of the same run and commit has the same raw job identity and lane, succeeds, and its artifact contains an exact passed outcome for that method | none | Class A | The recorded `evidenceClass` is `A`; the failure occurrence and recovery coverage IDs bind both digest-verified artifacts; the candidate is quarantine-eligible without corroboration | Reset scratch | Class A never being reached, so no candidate is ever quarantinable | L |
+| M2 | As M1, but attempt 2 is green without an exact passed method outcome in its artifact | none | Not Class A | `blockedTargets` reports that the equivalent lane succeeded without per-test pass proof | Reset scratch | A green retry that skipped the failing test being counted as a pass | L |
+| M3 | As M1, but the successful attempt differs in raw job name, normalized lane, OS, workflow, run ID, or head SHA | none | Not Class A and not an equivalent retry | Every implemented retry-identity field must match and the recovery attempt must be later | Reset scratch | An environment-specific or changed-code product bug read as flaky because a different execution went green | L |
 | M4 | Exact test fails at commit `C1`; a later build of an equivalent lane at `C2` succeeds; no relevant path changed between `C1` and `C2`; no other episode exists | none | Class B, **not** quarantine-eligible | The candidate is reported as a likely flaky candidate, and `blockedTargets` carries `insufficient-evidence-class` naming the missing corroborating signal | Reset scratch | Class B independently authorizing an automatic quarantine on doubly-indirect evidence | L |
 | M5 | M4 plus a second independent failure-and-recovery episode for the same test | none | Class B corroborated, quarantine-eligible | The corroborating signal is recorded by name from the closed list; a generic "more occurrences" count is not accepted as corroboration | Reset scratch | Corroboration being satisfiable by unstructured recurrence | L |
 | M6 | M4 plus a green equivalent build immediately before the failure and a deterministic match against the known-nondeterministic signature corpus | none | Class B corroborated, quarantine-eligible | The matched signature ID is recorded; a prose or model-derived match is rejected | Reset scratch | Corroboration inferred from prose rather than a deterministic corpus match | L |
@@ -375,8 +383,21 @@ behaviors that a fixture cannot prove.
 | M9 | Candidate whose evidence is only title-derived names, shard labels, unavailable logs, or jobs that never ran the test | none | Excluded | Class D contributes zero weight; the candidate is excluded even when many such rows exist | Reset scratch | Summing weak rows into a quarantine decision | L |
 | M10 | A relevant path inside the test's project directory changed between the failing and passing builds | none | Class B and C both unavailable | `relevantPathsChanged` is true and the candidate is not classified B or C | Reset scratch | Calling a real regression flaky because a later unrelated build was green | L |
 | M11 | Relevant-path computation unavailable, for example the project graph cannot be resolved | none | B and C withheld entirely | Only Class A can be reached; B and C are not attempted with an assumed-unchanged default | Reset scratch | An unresolvable path mapping silently defaulting to "nothing changed" | L |
-| M12 | Live fork run where the target run's attempt artifacts have been retained | none | Class A reachable against real GitHub data | The evidence class and its reason are derived from live attempt artifacts, matching the fixture-derived expectation for the same shapes | Reset scratch | Classification that works only against synthesized fixtures | E |
-| M13 | Live fork run where attempt artifacts have expired | none | Class A unavailable, reason recorded | The candidate falls back and the report distinguishes "no retry evidence exists" from "retry evidence exists and disagrees" | Reset scratch | Silent downgrade on artifact expiry, indistinguishable from contradicting evidence | E |
+| M12 | Live fork run where both attempts retain `All-TestResults`, the first artifact records the failure, and the later artifact records the pass | none | Class A reachable against real GitHub data | The evidence class and its reason are derived from live digest-verified TRX artifacts, matching the fixture-derived expectation for the same shapes | Reset scratch | Classification that works only against synthesized fixtures | E |
+| M13 | Live fork run where an attempt artifact is expired, ambiguous, oversized, digest-mismatched, malformed, or lacks the exact method outcome | none | Class A unavailable, reason recorded | The report distinguishes absent exact-test proof from a present but non-equivalent retry and records the collection failure | Reset scratch | Silent downgrade on artifact failure, indistinguishable from contradicting evidence | E |
+
+### 4.14 Suite N — Repository-policy portability and integrity (P0)
+
+These scenarios prove that Aspire conventions are inputs to the shepherd rather
+than accidental properties of the generic engine.
+
+| ID | Setup | Mutation between cycles | Expected observable | Exact safety assertion | Cleanup | Regression caught | Where |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| N1 | Run the retry fixture with the Aspire profile, then with a second checked-in profile whose aggregate job and artifact names differ | Swap only the profile path | Both profiles produce the same normalized failure and recovery evidence | No generic collector constant names either repository's job or artifact | Reset scratch | A nominal profile layer that the collector silently ignores | L |
+| N2 | Use a profile whose repository list does not contain the requested repository | none | Cycle start fails before evidence collection | No GitHub request is made and no partial snapshot is recorded | none | Applying a trusted policy to the wrong repository | L |
+| N3 | Modify any embedded profile field after snapshot creation without updating its digest | none | Snapshot validation fails | Assessment, authorization, and execution do not consume the snapshot | none | Policy tampering after evidence collection | L |
+| N4 | Authorize under profile digest `P1`, then replace the policy with `P2` before mutation | Swap policy after grant creation | Execution refuses before mutation | The adapter is not invoked and the mutation ledger records no success | Reset scratch | A safe evidence policy being swapped for a permissive policy after approval | L+E |
+| N5 | Select an unknown repository adapter ID in an otherwise valid profile | none | Cycle reports an unsupported adapter and blocks repository-specific actions | Generic evidence remains readable, but no source inspection or mutation runs | none | Falling back to Aspire mutation behavior for an unknown repository | L |
 
 ## 5. Local versus live placement
 
@@ -670,10 +691,10 @@ at a time.
 Track 1, candidate gating: H1 through H11, H5a, H5b, H6a through H6c, and H17,
 one exclusion reason at a time.
 
-Track 2, evidence classification: M1 through M11, then I4 through I6. Class A
-and its selection-equivalence proof come first, because Class A is the only
-class that authorizes quarantine without corroboration and therefore the only
-one that can restore CI health promptly.
+Track 2, evidence classification: M1 through M3 and M9, then I4 through I6.
+These implemented Class A and Class D rows come first because Class A is the
+only class that authorizes quarantine. M4 through M8, M10, and M11 remain
+deferred with Classes B and C.
 
 Source resolution initially runs once per candidate without caching or batching.
 H18 through H21 are deferred optimization tests and are not part of this gate.
@@ -683,8 +704,9 @@ through the new gate must exclude every invalid candidate, with each exclusion
 reason visible in `blockedTargets` and in the report. That frozen input is the
 best regression corpus available because it already contains the failure
 classes. No Class B or C candidate is quarantine-eligible in the initial version. A
-synthesized same-run retry recovery with an artifact-derived name must reach
-quarantine eligibility, proving the gate is not simply refusing everything.
+synthesized same-run retry recovery with exact failed and passed TRX outcomes must
+reach quarantine eligibility, proving the gate is not simply refusing
+everything.
 
 ### Stage 3 — Mutation matrix, live and non-destructive
 
@@ -738,7 +760,7 @@ Go requires all of the following.
   reason visible in the report.
 - No Class B or Class C candidate quarantine-eligible in the initial version,
   and every recorded evidence class carries its reason.
-- At least one Class A candidate, with proven selection equivalence, driven all
+- At least one Class A candidate, with exact failure-and-pass proof, driven all
   the way to a merged quarantine on the fork and confirmed on the target branch
   by H29.
 - H26 green, meaning a quarantined test is still discoverable and was not

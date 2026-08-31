@@ -19,6 +19,7 @@ _EVIDENCE_PRIORITY = {
     "commit": 3,
     "issue-comment": 4,
     "workflow-job": 5,
+    "workflow-test-results": 6,
     "workflow-log": 6,
     "codeowners": 7,
     "source-path": 8,
@@ -161,6 +162,18 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "normalizedCause",
         "sourceIssueNumber",
     ),
+    "workflow-test-results": (
+        "runId",
+        "attempt",
+        "jobId",
+        "artifactId",
+        "artifactName",
+        "artifactDigest",
+        "tests",
+        "referencedBy",
+        "targetRepository",
+        "sourceIssueNumber",
+    ),
     "source-path": (
         "path",
         "checkoutCommit",
@@ -227,7 +240,7 @@ def prepare_assessment(
         for issue_number in sorted(issue_numbers)
     ]
     snapshot_id = snapshot_id_for(snapshot)
-    return {
+    prepared = {
         "schemaVersion": ASSESSMENT_SCHEMA_VERSION,
         "repository": snapshot.get("repository"),
         "sourceCollectedAt": snapshot.get("collectedAt"),
@@ -244,6 +257,11 @@ def prepare_assessment(
             ),
         },
     }
+    repository_policy = snapshot.get("repositoryPolicy")
+    if isinstance(repository_policy, Mapping):
+        prepared["repositoryPolicy"] = dict(repository_policy)
+        prepared["repositoryPolicyDigest"] = repository_policy.get("digest")
+    return prepared
 
 
 def snapshot_id_for(snapshot: Mapping[str, Any]) -> str:

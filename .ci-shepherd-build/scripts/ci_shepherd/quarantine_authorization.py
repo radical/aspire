@@ -10,8 +10,13 @@ import re
 import secrets
 import stat
 from typing import Any, Mapping
+from urllib.parse import unquote
 
 from .quarantine import select_quarantine_session_request
+from .repository_policy import (
+    RepositoryPolicyError,
+    load_embedded_repository_policy,
+)
 from .timeutils import parse_aware_iso8601
 
 
@@ -25,6 +30,7 @@ _GRANT_KEYS = frozenset(
         "repository",
         "stateDirectory",
         "snapshotId",
+        "repositoryPolicyDigest",
         "quarantinePlanDigest",
         "allowedBatchId",
         "allowedTestNames",
@@ -55,7 +61,10 @@ def create_quarantine_grant(
         request = select_quarantine_session_request(request, test_name)
     if batch_id is None:
         batch_id = _require_string(request, "batchId")
-    repository, snapshot_id, test_names = _validate_request(request, batch_id)
+    repository, snapshot_id, policy_digest, test_names = _validate_request(
+        request,
+        batch_id,
+    )
     _deny_production(repository)
     if issued_at.tzinfo is None or issued_at.utcoffset() is None:
         raise ValueError("issuedAt must include a UTC offset.")
@@ -69,6 +78,7 @@ def create_quarantine_grant(
         "repository": repository,
         "stateDirectory": _canonical_state_directory(state_dir),
         "snapshotId": snapshot_id,
+        "repositoryPolicyDigest": policy_digest,
         "quarantinePlanDigest": hashlib.sha256(request_bytes).hexdigest(),
         "allowedBatchId": batch_id,
         "allowedTestNames": test_names,
@@ -119,7 +129,10 @@ def authorize_quarantine_start(
     request = _select_request(document)
     if test_name is not None:
         request = select_quarantine_session_request(request, test_name)
-    repository, snapshot_id, test_names = _validate_request(request, batch_id)
+    repository, snapshot_id, policy_digest, test_names = _validate_request(
+        request,
+        batch_id,
+    )
     _deny_production(repository)
     grant = _read_json_object(authorization_path, "quarantine authorization")
     if frozenset(grant) != _GRANT_KEYS:
@@ -131,6 +144,7 @@ def authorize_quarantine_start(
         "repository": repository,
         "stateDirectory": _canonical_state_directory(state_dir),
         "snapshotId": snapshot_id,
+        "repositoryPolicyDigest": policy_digest,
         "quarantinePlanDigest": hashlib.sha256(request_bytes).hexdigest(),
         "allowedBatchId": batch_id,
         "allowedTestNames": test_names,
@@ -196,11 +210,27 @@ def _load_json_object(payload: bytes, description: str) -> dict[str, object]:
 def _validate_request(
     request: Mapping[str, object],
     batch_id: str,
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, str, list[str]]:
     if request.get("schemaVersion") != 1:
         raise ValueError("Unsupported quarantine request.")
     repository = _require_string(request, "repository")
     snapshot_id = _require_string(request, "snapshotId")
+    policy_digest = _require_string(request, "repositoryPolicyDigest")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", policy_digest) is None:
+        raise ValueError(
+            "repositoryPolicyDigest must be a SHA-256 digest."
+        )
+    try:
+        policy = load_embedded_repository_policy(
+            request.get("repositoryPolicy"),
+            repository,
+        )
+    except RepositoryPolicyError as exc:
+        raise ValueError(f"repositoryPolicy is invalid: {exc}") from exc
+    if policy.digest != policy_digest:
+        raise ValueError(
+            "repositoryPolicyDigest does not match repositoryPolicy."
+        )
     source_revision = _require_string(request, "sourceRevision")
     source_tree_digest = _require_string(request, "sourceTreeDigest")
     if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
@@ -217,15 +247,108 @@ def _validate_request(
         if not isinstance(item, dict):
             raise ValueError("Quarantine request tests must contain objects.")
         test_names.append(_require_string(item, "testName"))
-        _validate_test_source_baseline(item)
+        _validate_test_source_baseline(item, repository)
     if len(test_names) != len(set(test_names)):
         raise ValueError("Quarantine request test names must be unique.")
-    return repository, snapshot_id, sorted(test_names)
+    return repository, snapshot_id, policy_digest, sorted(test_names)
 
 
-def _validate_test_source_baseline(item: Mapping[str, object]) -> None:
+def _validate_test_source_baseline(
+    item: Mapping[str, object],
+    repository: str,
+) -> None:
     test_name = _require_string(item, "testName")
-    _require_string(item, "issueUrl")
+    issue_number = item.get("issueNumber")
+    if (
+        not isinstance(issue_number, int)
+        or isinstance(issue_number, bool)
+        or issue_number < 1
+    ):
+        raise ValueError(f"issueNumber is invalid for {test_name}.")
+    issue_url = _require_string(item, "issueUrl")
+    if issue_url != f"https://github.com/{repository}/issues/{issue_number}":
+        raise ValueError(f"issueUrl is invalid for {test_name}.")
+    if item.get("evidenceClass") != "A":
+        raise ValueError(f"evidenceClass is invalid for {test_name}.")
+    _require_string(item, "evidenceReason")
+    failure_occurrence_id = _require_string(item, "failureOccurrenceId")
+    recovery_coverage_id = _require_string(item, "recoveryCoverageId")
+    failure_match = re.fullmatch(
+        r"occurrence:[1-9][0-9]*:[1-9][0-9]*:"
+        r"[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*",
+        failure_occurrence_id,
+    )
+    if failure_match is None:
+        raise ValueError(f"failureOccurrenceId is invalid for {test_name}.")
+    failure_parts = failure_occurrence_id.split(":")
+    if int(failure_parts[1]) != issue_number:
+        raise ValueError(f"failureOccurrenceId is invalid for {test_name}.")
+    recovery_match = re.fullmatch(
+        r"coverage:run:(?P<run>[1-9][0-9]*):"
+        r"attempt:(?P<attempt>[1-9][0-9]*):"
+        r"job:(?P<job>[1-9][0-9]*):test:(?P<test>.+)",
+        recovery_coverage_id,
+    )
+    if recovery_match is None or unquote(recovery_match.group("test")) != test_name:
+        raise ValueError(f"recoveryCoverageId is invalid for {test_name}.")
+    failure_run, failure_attempt, failure_job = (
+        int(failure_parts[2]),
+        int(failure_parts[3]),
+        int(failure_parts[4]),
+    )
+    recovery_attempt = int(recovery_match.group("attempt"))
+    if (
+        int(recovery_match.group("run")) != failure_run
+        or recovery_attempt <= failure_attempt
+    ):
+        raise ValueError(f"recoveryCoverageId is invalid for {test_name}.")
+    failure_identity = _validate_retry_identity(
+        item.get("failureIdentity"),
+        test_name,
+        "failureIdentity",
+    )
+    recovery_identity = _validate_retry_identity(
+        item.get("recoveryIdentity"),
+        test_name,
+        "recoveryIdentity",
+    )
+    if (
+        failure_identity["runId"] != failure_run
+        or failure_identity["attempt"] != failure_attempt
+        or failure_identity["jobId"] != failure_job
+        or recovery_identity["runId"] != int(
+            recovery_match.group("run")
+        )
+        or recovery_identity["attempt"] != recovery_attempt
+        or recovery_identity["jobId"] != int(
+            recovery_match.group("job")
+        )
+        or recovery_identity["attempt"] <= failure_identity["attempt"]
+        or recovery_identity["headSha"] != failure_identity["headSha"]
+        or any(
+            recovery_identity[field] != failure_identity[field]
+            for field in ("workflow", "jobName", "lane", "os")
+        )
+    ):
+        raise ValueError(f"retry identity is invalid for {test_name}.")
+    evidence_ids = item.get("evidenceIds")
+    required_test_result_ids = {
+        (
+            f"run:{failure_run}:attempt:{failure_attempt}:"
+            f"job:{failure_job}:test-results"
+        ),
+        (
+            f"run:{failure_run}:attempt:{recovery_attempt}:"
+            f"job:{recovery_match.group('job')}:test-results"
+        ),
+    }
+    if (
+        not isinstance(evidence_ids, list)
+        or evidence_ids != sorted(set(evidence_ids))
+        or not all(isinstance(value, str) and value for value in evidence_ids)
+        or not required_test_result_ids.issubset(evidence_ids)
+    ):
+        raise ValueError(f"evidenceIds are invalid for {test_name}.")
     source_location = item.get("sourceLocation")
     if not isinstance(source_location, Mapping) or set(source_location) != {
         "file",
@@ -268,6 +391,44 @@ def _validate_test_source_baseline(item: Mapping[str, object]) -> None:
         for quarantine in quarantines
     ):
         raise ValueError(f"sourceValidation is invalid for {test_name}.")
+
+
+def _validate_retry_identity(
+    value: object,
+    test_name: str,
+    field_name: str,
+) -> Mapping[str, object]:
+    required_fields = {
+        "runId",
+        "attempt",
+        "jobId",
+        "headSha",
+        "workflow",
+        "jobName",
+        "lane",
+        "os",
+    }
+    if not isinstance(value, Mapping) or set(value) != required_fields:
+        raise ValueError(f"{field_name} is invalid for {test_name}.")
+    for identity_field in ("runId", "attempt", "jobId"):
+        identity_value = value.get(identity_field)
+        if (
+            not isinstance(identity_value, int)
+            or isinstance(identity_value, bool)
+            or identity_value < 1
+        ):
+            raise ValueError(f"{field_name} is invalid for {test_name}.")
+    head_sha = value.get("headSha")
+    if (
+        not isinstance(head_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+    ):
+        raise ValueError(f"{field_name} is invalid for {test_name}.")
+    for identity_field in ("workflow", "jobName", "lane", "os"):
+        identity_value = value.get(identity_field)
+        if not isinstance(identity_value, str) or not identity_value:
+            raise ValueError(f"{field_name} is invalid for {test_name}.")
+    return value
 
 
 def _select_request(

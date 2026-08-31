@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": "widget-v1",
+  "repositories": [
+    "owner/repo"
+  ],
+  "retryTestResults": {
+    "aggregateJobSuffixes": [
+      "Aggregate Results"
+    ],
+    "artifactNames": [
+      "Combined-Results"
+    ]
+  }
+}

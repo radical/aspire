@@ -12,8 +12,14 @@ from ci_shepherd.investigations import (
     record_investigation_result,
     record_investigation_session_event,
 )
+from ci_shepherd.repository_policy import load_repository_policy
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_POLICY = load_repository_policy(
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "repository-policy-widget-v1.json"
+)
 
 
 def snapshot(
@@ -25,6 +31,10 @@ def snapshot(
         "schemaVersion": 1,
         "repository": "owner/repo",
         "collectedAt": collected_at,
+        "repositoryPolicy": {
+            **REPOSITORY_POLICY.as_public_dict(),
+            "digest": REPOSITORY_POLICY.digest,
+        },
         "openIssues": [1],
         "openPullRequests": [],
         "pullRequests": [],
@@ -57,6 +67,127 @@ def snapshot(
             "detail": None,
         },
     }
+
+
+def add_class_a_retry_evidence(
+    value: dict[str, object],
+    test_name: str,
+) -> None:
+    evidence = value["evidence"]
+    assert isinstance(evidence, dict)
+    issue_reference = [
+        {"sourceIssueNumber": 1, "sourceEvidenceId": "issue:1"}
+    ]
+    job_name = "CI Tests / tests-linux (ubuntu-latest)"
+    head_sha = "a" * 40
+    evidence.update(
+        {
+            "run:200": {
+                "kind": "workflow-run",
+                "url": "https://github.com/owner/repo/actions/runs/200",
+                "collectedAt": value["collectedAt"],
+                "availability": "available",
+                "payload": {
+                    "runId": 200,
+                    "targetRepository": "owner/repo",
+                    "workflowId": 9,
+                    "workflow": "CI Tests",
+                    "event": "push",
+                    "branch": "main",
+                    "headSha": head_sha,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "attempt": 2,
+                    "createdAt": "2026-08-28T19:00:00Z",
+                    "updatedAt": "2026-08-28T20:00:00Z",
+                    "runStartedAt": "2026-08-28T19:00:00Z",
+                    "recentHistoryCollected": True,
+                    "recentHistoryTotalCount": 1,
+                    "recentHistory": [],
+                },
+            },
+            "run:200:attempt:1:job:901": {
+                "kind": "workflow-job",
+                "url": "https://github.com/owner/repo/actions/runs/200/job/901",
+                "collectedAt": value["collectedAt"],
+                "availability": "available",
+                "payload": {
+                    "runId": 200,
+                    "targetRepository": "owner/repo",
+                    "attempt": 1,
+                    "jobId": 901,
+                    "checkRunId": 1901,
+                    "name": job_name,
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "startedAt": "2026-08-28T19:01:00Z",
+                    "completedAt": "2026-08-28T19:30:00Z",
+                    "steps": [],
+                    "annotationEvidenceIds": [],
+                    "referencedBy": issue_reference,
+                },
+            },
+            "run:200:attempt:1:job:901:test-results": {
+                "kind": "workflow-test-results",
+                "url": "https://github.com/owner/repo/actions/runs/200",
+                "collectedAt": value["collectedAt"],
+                "availability": "available",
+                "payload": {
+                    "runId": 200,
+                    "attempt": 1,
+                    "jobId": 901,
+                    "targetRepository": "owner/repo",
+                    "tests": [
+                        {
+                            "testName": test_name,
+                            "outcome": "failed",
+                        }
+                    ],
+                    "referencedBy": issue_reference,
+                },
+            },
+            "run:200:attempt:2:job:902": {
+                "kind": "workflow-job",
+                "url": "https://github.com/owner/repo/actions/runs/200/job/902",
+                "collectedAt": value["collectedAt"],
+                "availability": "available",
+                "payload": {
+                    "runId": 200,
+                    "targetRepository": "owner/repo",
+                    "attempt": 2,
+                    "jobId": 902,
+                    "checkRunId": 1902,
+                    "name": job_name,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-08-28T19:31:00Z",
+                    "completedAt": "2026-08-28T20:00:00Z",
+                    "steps": [],
+                    "annotationEvidenceIds": [],
+                    "referencedBy": issue_reference,
+                },
+            },
+            "run:200:attempt:2:job:902:test-results": {
+                "kind": "workflow-test-results",
+                "url": "https://github.com/owner/repo/actions/runs/200",
+                "collectedAt": value["collectedAt"],
+                "availability": "available",
+                "payload": {
+                    "runId": 200,
+                    "attempt": 2,
+                    "jobId": 902,
+                    "targetRepository": "owner/repo",
+                    "tests": [
+                        {
+                            "testName": test_name,
+                            "outcome": "passed",
+                        }
+                    ],
+                    "referencedBy": issue_reference,
+                },
+            },
+        }
+    )
 
 
 def pull_request_snapshot(collected_at: str) -> dict[str, object]:
@@ -358,6 +489,10 @@ class CycleTests(unittest.TestCase):
             input_path = root / "input.json"
             input_snapshot = snapshot("2026-08-28T20:00:00Z")
             input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = []
+            add_class_a_retry_evidence(
+                input_snapshot,
+                "Namespace.Type.FlakyTest",
+            )
             input_path.write_text(
                 json.dumps(input_snapshot),
                 encoding="utf-8",
@@ -422,7 +557,7 @@ class CycleTests(unittest.TestCase):
                 (work / "report.md").read_text(encoding="utf-8"),
             )
 
-    def test_proposes_only_a_source_resolved_quarantine_candidate(self) -> None:
+    def test_fails_closed_when_observation_generation_is_invalid(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
         with TemporaryDirectory(dir=artifacts) as scratch:
@@ -440,13 +575,108 @@ class CycleTests(unittest.TestCase):
                 repository="owner/repo",
                 state_dir=state,
                 work_dir=work,
-                checkout=REPOSITORY_ROOT,
+                checkout=None,
                 shepherd_author="ankj",
                 input_path=input_path,
             )
+            agent_path = work / "agent-judgments.json"
+            agent_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": (
+                            "snapshot:owner/repo:"
+                            "2026-08-28T20:00:00Z"
+                        ),
+                        "issues": [
+                            {
+                                "issueNumber": 1,
+                                "category": "flaky-test",
+                                "recommendations": [
+                                    {
+                                        "disposition": (
+                                            "review-quarantine"
+                                        ),
+                                        "target": {
+                                            "kind": "test",
+                                            "value": (
+                                                "Namespace.Type.FlakyTest"
+                                            ),
+                                        },
+                                        "confidence": "high",
+                                        "summary": (
+                                            "The test recovered."
+                                        ),
+                                        "evidenceIds": ["issue:1"],
+                                        "missingEvidence": [],
+                                        "reassessWhen": (
+                                            "After a retry."
+                                        ),
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                cycle_script,
+                "build_observations",
+                side_effect=ValueError("invalid structured evidence"),
+            ):
+                cycle_script.finish_cycle(
+                    work_dir=work,
+                    agent_judgments_path=agent_path,
+                )
+
+            evidence = json.loads(
+                (work / "quarantine-evidence.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                "invalid structured evidence",
+                evidence["error"],
+            )
+            plan = json.loads(
+                (work / "quarantine-session.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIsNone(plan["proposal"])
+            self.assertEqual(
+                "insufficient-evidence-class",
+                plan["blockedTargets"][0]["reason"],
+            )
+
+    def test_proposes_only_a_source_resolved_quarantine_candidate(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            input_path = root / "input.json"
+            input_snapshot = snapshot("2026-08-28T20:00:00Z")
+            input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = []
             test_name = (
                 "Aspire.Hosting.Tests.SecretsStoreTests."
                 "GetOrSetUserSecret_SavesValueToUserSecrets"
+            )
+            add_class_a_retry_evidence(input_snapshot, test_name)
+            input_path.write_text(
+                json.dumps(input_snapshot),
+                encoding="utf-8",
+            )
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=REPOSITORY_ROOT,
+                shepherd_author="ankj",
+                input_path=input_path,
             )
             agent_path = work / "agent-judgments.json"
             agent_path.write_text(
@@ -506,6 +736,42 @@ class CycleTests(unittest.TestCase):
                     "line": 28,
                 },
                 plan["proposal"]["tests"][0]["sourceLocation"],
+            )
+            proposed_test = plan["proposal"]["tests"][0]
+            self.assertEqual("A", proposed_test["evidenceClass"])
+            self.assertEqual(
+                "occurrence:1:200:1:901:1",
+                proposed_test["failureOccurrenceId"],
+            )
+            self.assertEqual(
+                (
+                    "coverage:run:200:attempt:2:job:902:test:"
+                    "Aspire.Hosting.Tests.SecretsStoreTests."
+                    "GetOrSetUserSecret_SavesValueToUserSecrets"
+                ),
+                proposed_test["recoveryCoverageId"],
+            )
+            quarantine_evidence = json.loads(
+                (work / "quarantine-evidence.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [test_name],
+                [
+                    occurrence["testName"]
+                    for occurrence in quarantine_evidence["occurrences"]
+                    if occurrence.get(
+                        "testNameEvidenceId",
+                        "",
+                    ).endswith(":test-results")
+                ],
+            )
+            self.assertEqual(
+                [test_name],
+                [
+                    coverage["testName"]
+                    for coverage in quarantine_evidence["coverage"]
+                    if coverage["subjectKind"] == "test"
+                ],
             )
             self.assertRegex(
                 plan["proposal"]["sourceRevision"],

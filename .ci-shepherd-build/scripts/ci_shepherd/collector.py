@@ -4,6 +4,7 @@ import copy
 from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+import hashlib
 import re
 import subprocess
 from typing import TYPE_CHECKING, Any, Iterable
@@ -13,6 +14,8 @@ from pathlib import Path
 from . import ownership
 from .pull_requests import build_pull_request_current_state
 from .signals import Occurrence, extract_issue_signals, select_references
+from .trx import parse_test_results_archive
+from .repository_policy import RepositoryPolicy
 
 if TYPE_CHECKING:
     from .refresh import RefreshPlan
@@ -32,6 +35,7 @@ _CORRELATION_MARKER_KEYS = frozenset(
     {"automation-broken", "ci-failure", "ci-failure-cause", "gh-aw-failure-issue"}
 )
 _CORRELATION_FACT_FIELDS = frozenset({"testName"})
+_MAX_TEST_RESULTS_ARTIFACT_BYTES = 25 * 1024 * 1024
 
 _DEFAULT_BUDGETS = {
     "max_supporting_closed": 200,
@@ -171,9 +175,18 @@ class Collector:
         budgets: dict[str, int] | None = None,
         bot_authors: tuple[str, ...] = (),
         shepherd_author: str | None = None,
+        repository_policy: RepositoryPolicy | None = None,
     ) -> None:
         self._client = client
         self._repository = repository
+        self._repository_policy = repository_policy
+        if (
+            self._repository_policy is not None
+            and not self._repository_policy.supports_repository(repository)
+        ):
+            raise ValueError(
+                f"Repository policy does not support repository {repository}."
+            )
         self._now = now.astimezone(UTC)
         self._lookback_days = lookback_days
         self._bot_authors = bot_authors
@@ -429,7 +442,12 @@ class Collector:
         include_issue_references: bool = True,
         minimal_run_evidence: bool = False,
         include_run_history: bool | None = None,
+        include_retry_evidence: bool = False,
     ) -> InventoryResult:
+        if include_retry_evidence and self._repository_policy is None:
+            raise ValueError(
+                "Retry evidence collection requires an explicit repository policy."
+            )
         evidence = copy.deepcopy(inventory.evidence)
         collection_errors = list(inventory.collection_errors)
         warnings = list(inventory.warnings)
@@ -720,6 +738,7 @@ class Collector:
                 run_id,
                 refs,
                 minimal=minimal_run_evidence,
+                include_retry_evidence=include_retry_evidence,
                 include_history=(
                     not minimal_run_evidence
                     if include_run_history is None
@@ -3273,6 +3292,7 @@ class Collector:
         *,
         minimal: bool,
         include_history: bool,
+        include_retry_evidence: bool = False,
     ) -> None:
         run_endpoint = f"/repos/{target_repository}/actions/runs/{run_id}"
         evidence_id = f"run:{run_id}"
@@ -3341,7 +3361,11 @@ class Collector:
             if normalized_job is not None:
                 jobs_by_key[(normalized_job["attempt"], normalized_job["jobId"])] = normalized_job
 
-        for prior_attempt in range(1, run_attempt) if not minimal else range(0):
+        for prior_attempt in (
+            range(max(1, run_attempt - 2), run_attempt)
+            if include_retry_evidence or not minimal
+            else range(0)
+        ):
             attempt_endpoint = f"/repos/{target_repository}/actions/runs/{run_id}/attempts/{prior_attempt}/jobs?per_page=100"
             for raw_job in self._load_paged_list(
                 collection_errors,
@@ -3359,7 +3383,10 @@ class Collector:
 
         job_payloads: list[dict[str, Any]] = []
         failed_logs_collected = 0
-        sorted_jobs = [job for _, job in sorted(jobs_by_key.items())]
+        sorted_jobs = sorted(
+            jobs_by_key.values(),
+            key=lambda job: (-job["attempt"], job["jobId"]),
+        )
         failed_jobs = [
             job
             for job in sorted_jobs
@@ -3370,7 +3397,32 @@ class Collector:
                 "timed_out",
             }
         ]
-        selected_jobs = failed_jobs[:10] if minimal else sorted_jobs
+        failed_job_names = {
+            job["name"]
+            for job in failed_jobs
+            if isinstance(job.get("name"), str) and job["name"]
+        }
+        recovery_jobs = [
+            job
+            for job in sorted_jobs
+            if (
+                include_retry_evidence
+                and job["conclusion"] == "success"
+                and job["attempt"] > 1
+                and job.get("name") in failed_job_names
+                and any(
+                    failed.get("name") == job.get("name")
+                    and failed["attempt"] < job["attempt"]
+                    for failed in failed_jobs
+                )
+            )
+        ]
+        selected_failed_jobs = failed_jobs[:10] if minimal else failed_jobs
+        selected_jobs = (
+            [*selected_failed_jobs, *recovery_jobs[:3]]
+            if minimal
+            else sorted_jobs
+        )
         for job_payload in selected_jobs:
             failed_job = job_payload["conclusion"] in {
                 "action_required",
@@ -3379,7 +3431,12 @@ class Collector:
                 "timed_out",
             }
             log_eligible = _is_log_eligible_conclusion(job_payload["conclusion"])
-            collect_log = failed_job and log_eligible and (not minimal or failed_logs_collected < 3)
+            collect_log = (
+                failed_job
+                and log_eligible
+                and (not minimal or failed_logs_collected < 3)
+                and job_payload["attempt"] == run_attempt
+            )
             annotation_ids = (
                 self._enrich_job_annotations(
                     evidence,
@@ -3419,22 +3476,49 @@ class Collector:
             )
             job_payloads.append(job_payload)
 
+        raw_artifacts: list[Any] = []
         artifacts: list[dict[str, Any]] = []
-        if not minimal:
+        if not minimal or include_retry_evidence:
             artifacts_endpoint = f"/repos/{target_repository}/actions/runs/{run_id}/artifacts?per_page=100"
+            raw_artifacts = self._load_paged_list(
+                collection_errors,
+                stage="workflow-artifacts",
+                endpoint=artifacts_endpoint,
+                key="artifacts",
+            )
             artifacts = [
                 {
                     "name": _text(raw_artifact, "name"),
                     "expired": bool(raw_artifact.get("expired", False)),
                 }
-                for raw_artifact in self._load_paged_list(
-                    collection_errors,
-                    stage="workflow-artifacts",
-                    endpoint=artifacts_endpoint,
-                    key="artifacts",
-                )
+                for raw_artifact in raw_artifacts
+                if isinstance(raw_artifact, dict)
                 if _text(raw_artifact, "name")
             ]
+        if include_retry_evidence and run_attempt > 1:
+            selected_job_keys = {
+                (job["attempt"], job["jobId"])
+                for job in job_payloads
+            }
+            final_jobs = [
+                job
+                for job in sorted_jobs
+                if (job["attempt"], job["jobId"])
+                not in selected_job_keys
+                if isinstance(job.get("name"), str)
+                and self._repository_policy.retry_test_results.matches_aggregate_job(
+                    job["name"]
+                )
+            ]
+            self._enrich_retry_test_results(
+                evidence,
+                collection_errors,
+                target_repository,
+                run_id,
+                raw_artifacts,
+                [*job_payloads, *final_jobs],
+                referenced_by,
+            )
 
         branch = _text(raw_run, "head_branch")
         recent_history: list[dict[str, Any]] = []
@@ -3626,7 +3710,10 @@ class Collector:
                 "attempts": sorted({job["attempt"] for job in job_payloads}) or [run_attempt],
                 "jobs": copy.deepcopy(job_payloads),
                 "totalFailedJobs": len(failed_jobs),
-                "jobsTruncated": minimal and len(failed_jobs) > len(job_payloads),
+                "jobsTruncated": (
+                    minimal
+                    and len(failed_jobs) > len(selected_failed_jobs)
+                ),
                 "artifacts": artifacts,
                 "recentHistory": recent_history,
                 "recentHistoryCollected": recent_history_collected,
@@ -3844,7 +3931,7 @@ class Collector:
         referenced_by: list[dict[str, Any]],
     ) -> str | None:
         conclusion = str(job_payload.get("conclusion", "")).lower()
-        if conclusion not in {"failure", "timed_out", "cancelled"}:
+        if conclusion not in {"success", "failure", "timed_out", "cancelled"}:
             return None
 
         endpoint = f"/repos/{target_repository}/actions/jobs/{job_payload['jobId']}/logs"
@@ -3887,12 +3974,169 @@ class Collector:
                 "jobId": job_payload["jobId"],
                 "targetRepository": target_repository,
                 "excerpt": response.text,
+                "facts": self._extract_facts(response.text, evidence_id),
                 "truncated": bool(getattr(response, "truncated", False)),
                 "status": getattr(response, "status", 0),
                 "referencedBy": referenced_by,
             },
         )
         return evidence_id
+
+    def _enrich_retry_test_results(
+        self,
+        evidence: dict[str, dict[str, Any]],
+        collection_errors: list[CollectionError],
+        target_repository: str,
+        run_id: int,
+        raw_artifacts: list[Any],
+        jobs: list[dict[str, Any]],
+        referenced_by: list[dict[str, Any]],
+    ) -> None:
+            final_jobs = [
+                job
+                for job in jobs
+                if isinstance(job.get("name"), str)
+                and (
+                    self._repository_policy.retry_test_results.matches_aggregate_job(
+                        job["name"]
+                    )
+                )
+            ]
+            artifacts_by_attempt: list[tuple[int, dict[str, Any]]] = []
+            for raw_artifact in raw_artifacts:
+                if (
+                    not isinstance(raw_artifact, dict)
+                    or not self._repository_policy.retry_test_results.matches_artifact(
+                        _text(raw_artifact, "name")
+                    )
+                    or bool(raw_artifact.get("expired", False))
+                ):
+                    continue
+                artifact_id = raw_artifact.get("id")
+                created_at = _text(raw_artifact, "created_at")
+                if (
+                    not isinstance(artifact_id, int)
+                    or isinstance(artifact_id, bool)
+                    or artifact_id < 1
+                    or not created_at
+                ):
+                    continue
+                try:
+                    created = _parse_timestamp(created_at)
+                    matching_jobs = [
+                        job
+                        for job in final_jobs
+                        if _job_contains_timestamp(job, created)
+                    ]
+                except ValueError:
+                    continue
+                if len(matching_jobs) != 1:
+                    continue
+                attempt = matching_jobs[0].get("attempt")
+                if isinstance(attempt, int) and not isinstance(attempt, bool):
+                    artifacts_by_attempt.append((attempt, raw_artifact))
+
+            parsed_by_attempt: list[
+                tuple[int, dict[str, Any], list[dict[str, str]]]
+            ] = []
+            for attempt, artifact in sorted(
+                artifacts_by_attempt,
+                key=lambda item: item[0],
+                reverse=True,
+            )[:3]:
+                artifact_id = int(artifact["id"])
+                endpoint = (
+                    f"/repos/{target_repository}/actions/artifacts/{artifact_id}/zip"
+                )
+                try:
+                    content = self._client.get_bytes(
+                        endpoint,
+                        max_bytes=_MAX_TEST_RESULTS_ARTIFACT_BYTES,
+                    )
+                    expected_digest = _text(artifact, "digest")
+                    actual_digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+                    if expected_digest != actual_digest:
+                        raise ValueError(
+                            "Test-results artifact digest does not match metadata."
+                        )
+                    parsed = parse_test_results_archive(content)
+                except (RuntimeError, ValueError) as exc:
+                    collection_errors.append(
+                        CollectionError(
+                            "workflow-test-results",
+                            endpoint,
+                            str(exc),
+                            "test-results artifact unavailable",
+                        )
+                    )
+                    continue
+                parsed_by_attempt.append((attempt, artifact, parsed))
+
+            failed_names = {
+                result["testName"]
+                for _, _, results in parsed_by_attempt
+                for result in results
+                if result["outcome"] == "Failed"
+            }
+            for attempt, artifact, results in parsed_by_attempt:
+                results_by_job: dict[int, list[dict[str, str]]] = defaultdict(list)
+                for result in results:
+                    if (
+                        result["outcome"] != "Failed"
+                        and result["testName"] not in failed_names
+                    ):
+                        continue
+                    matching_jobs = [
+                        job
+                        for job in jobs
+                        if job.get("attempt") == attempt
+                        and _job_matches_test_result(job, result)
+                    ]
+                    if len(matching_jobs) == 1:
+                        results_by_job[int(matching_jobs[0]["jobId"])].append(result)
+
+                for job in jobs:
+                    job_id = int(job["jobId"])
+                    matching_results = results_by_job.get(job_id, [])
+                    if not matching_results:
+                        continue
+                    evidence_id = (
+                        f"run:{run_id}:attempt:{attempt}:job:{job_id}:test-results"
+                    )
+                    artifact_id = int(artifact["id"])
+                    evidence[evidence_id] = self._make_evidence_record(
+                        "workflow-test-results",
+                        (
+                            f"https://github.com/{target_repository}/actions/runs/"
+                            f"{run_id}/artifacts/{artifact_id}"
+                        ),
+                        {
+                            "evidenceId": evidence_id,
+                            "runId": run_id,
+                            "attempt": attempt,
+                            "jobId": job_id,
+                            "targetRepository": target_repository,
+                            "artifactId": artifact_id,
+                            "artifactName": _text(artifact, "name"),
+                            "artifactDigest": artifact["digest"],
+                            "results": matching_results,
+                            "tests": [
+                                {
+                                    "testName": result["testName"],
+                                    "outcome": result["outcome"].lower(),
+                                }
+                                for result in matching_results
+                            ],
+                            "referencedBy": referenced_by,
+                        },
+                    )
+                    job["testResultsEvidenceId"] = evidence_id
+                    job_evidence_id = (
+                        f"run:{run_id}:attempt:{attempt}:job:{job_id}"
+                    )
+                    evidence[job_evidence_id]["payload"][
+                        "testResultsEvidenceId"
+                    ] = evidence_id
 
     def _normalize_recent_run(self, raw_run: object) -> dict[str, Any]:
         if not isinstance(raw_run, dict):
@@ -4017,6 +4261,35 @@ def _nested_text(mapping: dict[str, Any], keys: tuple[str, ...]) -> str:
 
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _job_contains_timestamp(job: dict[str, Any], value: datetime) -> bool:
+    started_at = job.get("startedAt")
+    completed_at = job.get("completedAt")
+    if not isinstance(started_at, str) or not isinstance(completed_at, str):
+        return False
+    return _parse_timestamp(started_at) <= value <= _parse_timestamp(completed_at)
+
+
+def _job_matches_test_result(
+    job: dict[str, Any],
+    result: dict[str, str],
+) -> bool:
+    name = job.get("name")
+    if not isinstance(name, str):
+        return False
+    runner_match = re.search(r"\((?P<runner>[^()]+)\)\s*$", name)
+    if runner_match is None:
+        return False
+    runner = runner_match.group("runner").strip()
+    without_runner = name[:runner_match.start()].strip()
+    parts = [part.strip() for part in without_runner.split("/") if part.strip()]
+    lane = parts[-1] if parts else without_runner
+    artifact_os = result["os"]
+    return (
+        lane == result["lane"]
+        and (runner == artifact_os or runner.endswith(f"-{artifact_os}"))
+    )
 
 
 def _isoformat(value: datetime) -> str:

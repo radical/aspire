@@ -47,7 +47,15 @@ class QuarantineMutationValidationTests(unittest.TestCase):
                         json.dumps(self._post_inspection()),
                         "",
                     )
-                if command[:2] == ["dotnet", "test"]:
+                if "-getProperty:TargetPath" in command:
+                    project = Path(command[2])
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        str(project.with_suffix(".dll")),
+                        "",
+                    )
+                if "--list-tests" in command:
                     filtered = "--filter-not-trait" in command
                     output = "" if filtered else "\n".join(
                         test["testName"] for test in request["tests"]
@@ -112,7 +120,7 @@ class QuarantineMutationValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             4,
-            sum(command[:2] == ["dotnet", "test"] for command in commands),
+            sum("--list-tests" in command for command in commands),
         )
         self.assertEqual(
             {
@@ -214,6 +222,14 @@ class QuarantineMutationValidationTests(unittest.TestCase):
                         json.dumps(self._post_inspection()),
                         "",
                     )
+                if "-getProperty:TargetPath" in command:
+                    project = Path(command[2])
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        str(project.with_suffix(".dll")),
+                        "",
+                    )
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with (
@@ -244,6 +260,61 @@ class QuarantineMutationValidationTests(unittest.TestCase):
                     ValueError,
                     "missing from unfiltered discovery",
                 ):
+                    execute_quarantine_mutation(request, checkout)
+
+    def test_executor_rejects_a_test_assembly_outside_the_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkout = Path(temporary_directory)
+            self._create_project(checkout, "One.Tests", "OneTests.cs")
+            self._create_project(checkout, "Two.Tests", "TwoTests.cs")
+            (checkout / "tools" / "QuarantineTools").mkdir(parents=True)
+            request = self._execution_request()
+
+            def run(
+                command: list[str],
+                **_: object,
+            ) -> subprocess.CompletedProcess:
+                if "--inspect" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps(self._post_inspection()),
+                        "",
+                    )
+                if "-getProperty:TargetPath" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        "/outside/checkout/Tests.dll\n",
+                        "",
+                    )
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with (
+                patch(
+                    "ci_shepherd.quarantine_mutation._source_revision",
+                    return_value="a" * 40,
+                ),
+                patch(
+                    "ci_shepherd.quarantine_mutation._source_tree_digest",
+                    return_value="sha256:" + "b" * 64,
+                ),
+                patch(
+                    "ci_shepherd.quarantine_mutation._require_clean_checkout",
+                ),
+                patch(
+                    "ci_shepherd.quarantine_mutation._changed_checkout_files",
+                    return_value=[
+                        "tests/One.Tests/OneTests.cs",
+                        "tests/Two.Tests/TwoTests.cs",
+                    ],
+                ),
+                patch(
+                    "ci_shepherd.quarantine_mutation.subprocess.run",
+                    side_effect=run,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "outside the checkout"):
                     execute_quarantine_mutation(request, checkout)
 
     def test_push_revalidation_rejects_a_changed_diff_digest(self) -> None:
@@ -698,7 +769,15 @@ public class Tests
                 json.dumps(self._post_inspection()),
                 "",
             )
-        if command[:2] == ["dotnet", "test"]:
+        if "-getProperty:TargetPath" in command:
+            project = Path(command[2])
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                str(project.with_suffix(".dll")),
+                "",
+            )
+        if "--list-tests" in command:
             filtered = "--filter-not-trait" in command
             output = "" if filtered else "Tests.One\nTests.Two\n"
             return subprocess.CompletedProcess(command, 0, output, "")

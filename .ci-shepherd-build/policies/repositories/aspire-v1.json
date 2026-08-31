@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": "aspire-v1",
+  "repositories": [
+    "microsoft/aspire",
+    "radical/aspire"
+  ],
+  "retryTestResults": {
+    "aggregateJobSuffixes": [
+      "Final Test Results"
+    ],
+    "artifactNames": [
+      "All-TestResults"
+    ]
+  }
+}

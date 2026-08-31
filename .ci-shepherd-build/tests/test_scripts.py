@@ -22,6 +22,7 @@ from ci_shepherd.history import HistoryError
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
 from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.refresh import RefreshPlan
+from ci_shepherd.repository_policy import load_repository_policy
 from ci_shepherd.review_selection import SELECTION_SCHEMA_VERSION
 
 
@@ -249,6 +250,7 @@ class PrototypeScriptTests(unittest.TestCase):
                 "include_issue_references": True,
                 "minimal_run_evidence": True,
                 "include_run_history": True,
+                "include_retry_evidence": True,
             },
             calls["github"],
         )
@@ -297,6 +299,61 @@ class PrototypeScriptTests(unittest.TestCase):
 
         self.assertEqual("ankj", calls["shepherd_author"])
 
+    def test_collect_loads_and_binds_repository_policy(self) -> None:
+        collect_script = load_script("collect")
+        calls: dict[str, object] = {}
+
+        class FakeCollector:
+            def __init__(
+                self,
+                client,
+                repository,
+                now,
+                *,
+                budgets=None,
+                bot_authors=(),
+                repository_policy=None,
+            ):
+                calls["repository_policy"] = repository_policy
+
+            def collect(self, **kwargs):
+                return InventoryResult([], [], {}, [], [], {})
+
+            def enrich_github_evidence(self, inventory, **kwargs):
+                return inventory
+
+            def enrich_ownership_evidence(self, inventory, **kwargs):
+                return inventory
+
+        output_dir = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(output_dir, ignore_errors=True)
+        policy_path = (
+            Path(__file__).resolve().parents[1]
+            / "policies"
+            / "repositories"
+            / "aspire-v1.json"
+        )
+        try:
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=object()),
+                patch.object(collect_script, "Collector", FakeCollector),
+            ):
+                collect_script.collect(
+                    "microsoft/aspire",
+                    output_dir,
+                    None,
+                    repository_policy_path=policy_path,
+                )
+            snapshot = json.loads(
+                (output_dir / "input.json").read_text(encoding="utf-8")
+            )
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+        policy = calls["repository_policy"]
+        self.assertEqual("aspire-v1", policy.policy_version)
+        self.assertEqual(policy.digest, snapshot["repositoryPolicy"]["digest"])
+
     def test_collect_cli_exposes_per_type_reference_budgets(self) -> None:
         collect_script = load_script("collect")
         output_dir = Path(__file__).parent / ".artifacts" / self._testMethodName
@@ -332,6 +389,7 @@ class PrototypeScriptTests(unittest.TestCase):
             state_dir=None,
             full_refresh=False,
             shepherd_author=None,
+            repository_policy_path=collect_script.DEFAULT_REPOSITORY_POLICY_PATH,
         )
 
     def test_collect_cli_exposes_incremental_state_and_full_refresh(self) -> None:
@@ -367,6 +425,7 @@ class PrototypeScriptTests(unittest.TestCase):
             state_dir=state_dir,
             full_refresh=True,
             shepherd_author=None,
+            repository_policy_path=collect_script.DEFAULT_REPOSITORY_POLICY_PATH,
         )
 
     def test_collect_with_missing_state_runs_full_live_collection(self) -> None:
@@ -563,6 +622,68 @@ class PrototypeScriptTests(unittest.TestCase):
             snapshot["refreshSummary"],
         )
         validate_snapshot(snapshot)
+
+    def test_snapshot_binds_repository_policy_identity(self) -> None:
+        collect_script = load_script("collect")
+        inventory = InventoryResult(
+            open_issues=[],
+            supporting_issues=[],
+            evidence={},
+            collection_errors=[],
+            warnings=[],
+            references={},
+        )
+        policy = load_repository_policy(
+            Path(__file__).resolve().parents[1]
+            / "policies"
+            / "repositories"
+            / "aspire-v1.json"
+        )
+
+        snapshot = collect_script.build_snapshot(
+            "microsoft/aspire",
+            collect_script.datetime(2026, 8, 17, 22, 0, tzinfo=collect_script.UTC),
+            inventory,
+            repository_policy=policy,
+        )
+
+        self.assertEqual(
+            {
+                **policy.as_public_dict(),
+                "digest": policy.digest,
+            },
+            snapshot["repositoryPolicy"],
+        )
+        validate_snapshot(snapshot)
+
+    def test_snapshot_rejects_tampered_repository_policy_identity(self) -> None:
+        collect_script = load_script("collect")
+        inventory = InventoryResult(
+            open_issues=[],
+            supporting_issues=[],
+            evidence={},
+            collection_errors=[],
+            warnings=[],
+            references={},
+        )
+        policy = load_repository_policy(
+            Path(__file__).resolve().parents[1]
+            / "policies"
+            / "repositories"
+            / "aspire-v1.json"
+        )
+        snapshot = collect_script.build_snapshot(
+            "microsoft/aspire",
+            collect_script.datetime(2026, 8, 17, 22, 0, tzinfo=collect_script.UTC),
+            inventory,
+            repository_policy=policy,
+        )
+        snapshot["repositoryPolicy"]["retryTestResults"]["artifactNames"] = [
+            "Different-Results"
+        ]
+
+        with self.assertRaisesRegex(ValidationError, "repositoryPolicy digest"):
+            validate_snapshot(snapshot)
 
     def test_skill_documents_thin_poc_artifacts_and_commands(self) -> None:
         skill = SKILL_PATH.read_text()

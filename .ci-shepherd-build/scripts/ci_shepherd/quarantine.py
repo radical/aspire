@@ -149,6 +149,7 @@ def select_quarantine_session_request(
 def build_quarantine_session_request(
     prepared: Mapping[str, Any],
     judgments: Mapping[str, Any],
+    observations: Mapping[str, Any],
 ) -> dict[str, object]:
     repository = prepared.get("repository")
     snapshot_id = prepared.get("snapshotId")
@@ -158,6 +159,15 @@ def build_quarantine_session_request(
         raise ValueError("Prepared snapshotId must be a nonempty string.")
     if judgments.get("snapshotId") != snapshot_id:
         raise ValueError("Judgments snapshotId must match prepared snapshotId.")
+    repository_policy_digest = prepared.get("repositoryPolicyDigest")
+    repository_policy = prepared.get("repositoryPolicy")
+    repository_policy_available = (
+        isinstance(repository_policy, Mapping)
+        and isinstance(repository_policy_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", repository_policy_digest)
+        is not None
+        and repository_policy.get("digest") == repository_policy_digest
+    )
 
     prepared_issues = {
         issue["issueNumber"]: issue
@@ -215,6 +225,14 @@ def build_quarantine_session_request(
             candidates,
             key=lambda item: int(item["issueNumber"]),
         )
+        if not repository_policy_available:
+            blocked_targets.append(
+                {
+                    "testName": test_name,
+                    "reason": "repository-policy-unavailable",
+                }
+            )
+            continue
         if _TEST_METHOD_NAME_RE.fullmatch(test_name) is None:
             blocked_targets.append(
                 {
@@ -243,7 +261,26 @@ def build_quarantine_session_request(
                 }
             )
             continue
-        canonical = source_issues[0]
+        flaky_evidence, evidence_gap = _classify_flaky_evidence(
+            test_name,
+            source_issues,
+            observations,
+        )
+        if flaky_evidence is None:
+            blocked_targets.append(
+                {
+                    "testName": test_name,
+                    "reason": "insufficient-evidence-class",
+                    "evidenceReason": evidence_gap,
+                }
+            )
+            continue
+        evidence_issue_number = flaky_evidence.pop("issueNumber")
+        canonical = next(
+            candidate
+            for candidate in source_issues
+            if candidate["issueNumber"] == evidence_issue_number
+        )
         tests.append(
             {
                 "testName": test_name,
@@ -255,13 +292,7 @@ def build_quarantine_session_request(
                 "issueUrls": [
                     candidate["issueUrl"] for candidate in source_issues
                 ],
-                "evidenceIds": sorted(
-                    {
-                        evidence_id
-                        for candidate in source_issues
-                        for evidence_id in candidate["evidenceIds"]
-                    }
-                ),
+                **flaky_evidence,
                 "summary": " ".join(
                     dict.fromkeys(
                         str(candidate["summary"])
@@ -276,6 +307,16 @@ def build_quarantine_session_request(
         "schemaVersion": 1,
         "repository": repository,
         "snapshotId": snapshot_id,
+        "repositoryPolicyDigest": (
+            repository_policy_digest
+            if repository_policy_available
+            else None
+        ),
+        "repositoryPolicy": (
+            dict(repository_policy)
+            if repository_policy_available
+            else None
+        ),
         "operation": "prepare-quarantine-pr",
         "batchId": batch_id,
         "requiresSeparateApproval": True,
@@ -283,6 +324,177 @@ def build_quarantine_session_request(
         "workerPrompt": _worker_prompt(repository, tests) if tests else None,
         "blockedTargets": blocked_targets,
     }
+
+
+def _classify_flaky_evidence(
+    test_name: str,
+    source_issues: list[dict[str, object]],
+    observations: Mapping[str, Any],
+) -> tuple[dict[str, object] | None, str]:
+    occurrences = observations.get("occurrences")
+    coverage = observations.get("coverage")
+    if not isinstance(occurrences, list) or not isinstance(coverage, list):
+        return None, "deterministic observations are unavailable"
+
+    issue_numbers = {
+        candidate["issueNumber"]
+        for candidate in source_issues
+        if isinstance(candidate.get("issueNumber"), int)
+        and not isinstance(candidate.get("issueNumber"), bool)
+    }
+    exact_failures = [
+        occurrence
+        for occurrence in occurrences
+        if (
+            isinstance(occurrence, Mapping)
+            and occurrence.get("issueNumber") in issue_numbers
+            and occurrence.get("testName") == test_name
+            and _is_test_results_evidence_id(
+                occurrence.get("testNameEvidenceId")
+            )
+            and _valid_retry_identity(occurrence)
+            and occurrence.get("testNameEvidenceId")
+            in occurrence.get("evidenceIds", [])
+        )
+    ]
+    exact_recoveries = [
+        item
+        for item in coverage
+        if (
+            isinstance(item, Mapping)
+            and item.get("subjectKind") == "test"
+            and item.get("testName") == test_name
+            and item.get("status") == "succeeded"
+            and _valid_retry_identity(item)
+            and any(
+                _is_test_results_evidence_id(evidence_id)
+                for evidence_id in item.get("evidenceIds", [])
+            )
+        )
+    ]
+
+    for failure in sorted(
+        exact_failures,
+        key=lambda item: str(item.get("occurrenceId") or ""),
+    ):
+        for recovery in sorted(
+            exact_recoveries,
+            key=lambda item: str(item.get("coverageId") or ""),
+        ):
+            if not _is_later_equivalent_retry(failure, recovery):
+                continue
+            evidence_ids = sorted(
+                {
+                    evidence_id
+                    for record in (failure, recovery)
+                    for evidence_id in record.get("evidenceIds", [])
+                    if isinstance(evidence_id, str) and evidence_id
+                }
+            )
+            return (
+                {
+                    "issueNumber": failure["issueNumber"],
+                    "evidenceClass": "A",
+                    "evidenceReason": (
+                        "the exact test failed and later passed in the same "
+                        "run, commit, and job lane"
+                    ),
+                    "evidenceIds": evidence_ids,
+                    "failureOccurrenceId": failure["occurrenceId"],
+                    "recoveryCoverageId": recovery["coverageId"],
+                    "failureIdentity": _retry_identity(failure),
+                    "recoveryIdentity": _retry_identity(recovery),
+                },
+                "",
+            )
+
+    if any(
+        _matching_successful_lane_exists(failure, coverage)
+        for failure in exact_failures
+    ):
+        return (
+            None,
+            "a later equivalent lane succeeded, but no exact passing test result "
+            "proved that the retry selected this test",
+        )
+    if exact_failures:
+        return None, "no later equivalent retry passed the exact test"
+    return None, "no artifact-derived exact failing test occurrence was collected"
+
+
+def _valid_retry_identity(record: Mapping[str, Any]) -> bool:
+    attempt = record.get("attempt")
+    head_sha = record.get("headSha")
+    return (
+        isinstance(record.get("runId"), int)
+        and not isinstance(record.get("runId"), bool)
+        and isinstance(attempt, int)
+        and not isinstance(attempt, bool)
+        and attempt > 0
+        and isinstance(head_sha, str)
+        and re.fullmatch(r"[0-9a-f]{40}", head_sha) is not None
+        and all(
+            isinstance(record.get(field), str) and bool(record[field])
+            for field in ("workflow", "jobName", "lane", "os")
+        )
+    )
+
+
+def _retry_identity(record: Mapping[str, Any]) -> dict[str, object]:
+    return {
+        field: record[field]
+        for field in (
+            "runId",
+            "attempt",
+            "jobId",
+            "headSha",
+            "workflow",
+            "jobName",
+            "lane",
+            "os",
+        )
+    }
+
+
+def _is_later_equivalent_retry(
+    failure: Mapping[str, Any],
+    recovery: Mapping[str, Any],
+) -> bool:
+    return (
+        recovery["runId"] == failure["runId"]
+        and recovery["attempt"] > failure["attempt"]
+        and recovery["headSha"] == failure["headSha"]
+        and all(
+            recovery[field] == failure[field]
+            for field in ("workflow", "jobName", "lane", "os")
+        )
+    )
+
+
+def _matching_successful_lane_exists(
+    failure: Mapping[str, Any],
+    coverage: list[Any],
+) -> bool:
+    return any(
+        isinstance(item, Mapping)
+        and item.get("subjectKind") == "lane"
+        and item.get("status") == "succeeded"
+        and _valid_retry_identity(item)
+        and _is_later_equivalent_retry(failure, item)
+        for item in coverage
+    )
+
+
+def _is_test_results_evidence_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(
+            r"run:[1-9][0-9]*:attempt:[1-9][0-9]*:"
+            r"job:[1-9][0-9]*:test-results",
+            value,
+        )
+        is not None
+    )
 
 
 def apply_quarantine_source_inspection(

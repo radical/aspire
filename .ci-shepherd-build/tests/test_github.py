@@ -502,6 +502,36 @@ class GitHubClientTests(unittest.TestCase):
         )
         self.assertEqual(0o600, audit_path.stat().st_mode & 0o777)
 
+    def test_get_bytes_returns_bounded_binary_response(self) -> None:
+        process = FakeProcess(b"PK\x03\x04archive")
+        popen_factory = FakePopenFactory([process])
+        client = self.make_client(FakeRunner([]), popen_factory=popen_factory)
+
+        result = client.get_bytes(
+            "/repos/owner/repo/actions/artifacts/123/zip",
+            max_bytes=1024,
+        )
+
+        self.assertEqual(b"PK\x03\x04archive", result)
+        command = popen_factory.calls[0][0]
+        self.assertNotIn("--include", command)
+        self.assertIn("Accept: application/octet-stream", command)
+
+    def test_get_bytes_rejects_oversized_response(self) -> None:
+        process = FakeProcess(b"12345")
+        client = self.make_client(
+            FakeRunner([]),
+            popen_factory=FakePopenFactory([process]),
+        )
+
+        with self.assertRaisesRegex(GitHubApiError, "response-too-large"):
+            client.get_bytes(
+                "/repos/owner/repo/actions/artifacts/123/zip",
+                max_bytes=4,
+            )
+
+        self.assertTrue(process.terminated)
+
     def test_get_text_truncates_large_responses_and_terminates_child(self) -> None:
         stdout = build_response(200, "x" * 120, headers={"content-type": "text/plain"}).encode("utf-8")
         process = FakeProcess(stdout)

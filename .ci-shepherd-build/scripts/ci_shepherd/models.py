@@ -6,6 +6,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any
 
+from .repository_policy import (
+    RepositoryPolicyError,
+    load_embedded_repository_policy,
+)
+
 
 class ValidationError(ValueError):
     pass
@@ -183,6 +188,7 @@ PRIMARY_EVIDENCE_KINDS = frozenset(
         "workflow-run",
         "workflow-job",
         "workflow-log",
+        "workflow-test-results",
         "pull-request",
         "commit",
         "source-path",
@@ -266,7 +272,7 @@ _ISSUE_COMMENT_ID_RE = re.compile(r"^issue:(?P<number>[1-9][0-9]*):comment:(?P<c
 _ISSUE_EVENT_ID_RE = re.compile(r"^issue:(?P<number>[1-9][0-9]*):event:(?P<event_id>[1-9][0-9]*)$")
 _RUN_ID_RE = re.compile(
     r"^run:(?P<run_id>[1-9][0-9]*)(?::attempt:(?P<attempt>[1-9][0-9]*|none)"
-    r":job:(?P<job_id>[1-9][0-9]*)(?::log)?)?$"
+    r":job:(?P<job_id>[1-9][0-9]*)(?::(?:log|test-results))?)?$"
 )
 _RUN_CHECK_ID_RE = re.compile(
     r"^run:(?P<run_id>[1-9][0-9]*):check:(?P<check_run_id>[1-9][0-9]*):annotation:(?P<annotation_id>[1-9][0-9]*)$"
@@ -334,7 +340,21 @@ def validate_snapshot(snapshot: object) -> None:
     evidence = _require_mapping(mapping.get("evidence"), "evidence")
     for evidence_id, record in evidence.items():
         _validate_evidence_record(evidence_id, record)
+    _validate_repository_policy_identity(mapping)
     _validate_expansion_manifests(mapping)
+
+
+def _validate_repository_policy_identity(snapshot: Mapping[str, Any]) -> None:
+    raw_policy = snapshot.get("repositoryPolicy")
+    if raw_policy is None:
+        return
+    try:
+        load_embedded_repository_policy(
+            raw_policy,
+            _require_repository(snapshot),
+        )
+    except RepositoryPolicyError as exc:
+        raise ValidationError(f"repositoryPolicy is invalid: {exc}") from exc
 
 
 def _validate_collection_error(value: object, *, index: int) -> None:
@@ -2570,9 +2590,16 @@ def _validate_evidence_id_kind_pair(evidence_id: str, kind: str) -> None:
     elif _ISSUE_EVENT_ID_RE.fullmatch(evidence_id):
         expected = "issue-event"
     elif _RUN_ID_RE.fullmatch(evidence_id):
-        expected = "workflow-log" if evidence_id.endswith(":log") else (
-            "workflow-job" if ":attempt:" in evidence_id else "workflow-run"
-        )
+        if evidence_id.endswith(":log"):
+            expected = "workflow-log"
+        elif evidence_id.endswith(":test-results"):
+            expected = "workflow-test-results"
+        else:
+            expected = (
+                "workflow-job"
+                if ":attempt:" in evidence_id
+                else "workflow-run"
+            )
     elif _RUN_CHECK_ID_RE.fullmatch(evidence_id):
         expected = "workflow-job"
     elif _PR_ID_RE.fullmatch(evidence_id) or _EXTERNAL_PR_ID_RE.fullmatch(evidence_id):
