@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from ci_shepherd.policy import ManualPolicy, PolicyError, load_policy, load_policy_document
+from ci_shepherd.repository_policy import load_repository_policy
 
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "policies" / "manual-v1.json"
+ASPIRE_REPOSITORY_POLICY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "policies"
+    / "repositories"
+    / "aspire-v1.json"
+)
 
 
 class PolicyTests(unittest.TestCase):
@@ -130,6 +138,65 @@ class PolicyTests(unittest.TestCase):
 
     def _policy_path(self) -> Path:
         return Path(self._temp_dir.name) / "policy.json"
+
+
+class RepositoryPolicyTests(unittest.TestCase):
+    def test_checked_in_aspire_repository_policy_loads(self) -> None:
+        policy = load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH)
+
+        self.assertEqual("aspire-v1", policy.policy_version)
+        self.assertTrue(policy.supports_repository("microsoft/aspire"))
+        self.assertTrue(policy.supports_repository("radical/aspire"))
+        self.assertTrue(
+            policy.retry_test_results.matches_aggregate_job(
+                "Tests / Final Test Results"
+            )
+        )
+        self.assertTrue(
+            policy.retry_test_results.matches_artifact("All-TestResults")
+        )
+
+    def test_repository_policy_exposes_stable_public_identity(self) -> None:
+        policy = load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH)
+
+        self.assertEqual(
+            {
+                "schemaVersion": 1,
+                "policyVersion": "aspire-v1",
+                "repositories": [
+                    "microsoft/aspire",
+                    "radical/aspire",
+                ],
+                "retryTestResults": {
+                    "aggregateJobSuffixes": ["Final Test Results"],
+                    "artifactNames": ["All-TestResults"],
+                },
+            },
+            policy.as_public_dict(),
+        )
+        self.assertRegex(policy.digest, r"^sha256:[0-9a-f]{64}$")
+
+    @unittest.skipIf(os.name == "nt", "Windows symlink creation requires privileges.")
+    def test_repository_policy_rejects_symlinked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.json"
+            target.write_bytes(ASPIRE_REPOSITORY_POLICY_PATH.read_bytes())
+            link = root / "policy.json"
+            link.symlink_to(target)
+
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+                load_repository_policy(link)
+
+    @unittest.skipIf(os.name == "nt", "Windows does not expose POSIX write modes.")
+    def test_repository_policy_rejects_files_writable_by_other_users(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_bytes(ASPIRE_REPOSITORY_POLICY_PATH.read_bytes())
+            policy_path.chmod(0o666)
+
+            with self.assertRaisesRegex(ValueError, "writable by other users"):
+                load_repository_policy(policy_path)
 
 
 def manual_policy(retry_safe_pattern_ids: object) -> ManualPolicy:

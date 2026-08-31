@@ -40,7 +40,9 @@ _POC_RESERVED_RUN_FILES = frozenset(
         "report.md",
     }
 )
-_IMMUTABLE_EVIDENCE_KINDS = frozenset({"commit", "workflow-log"})
+_IMMUTABLE_EVIDENCE_KINDS = frozenset(
+    {"commit", "workflow-log", "workflow-test-results"}
+)
 _SOURCE_VERSIONED_EVIDENCE_KINDS = frozenset(
     {"source-path", "codeowners", "issue-comment"}
 )

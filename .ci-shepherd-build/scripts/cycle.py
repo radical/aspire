@@ -21,6 +21,8 @@ from ci_shepherd.investigations import (
 )
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.models import stable_json, validate_snapshot
+from ci_shepherd.observations import build_observations
+from ci_shepherd.policy import load_policy
 from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.poc_state import load_review_schedule, record_review_events
 from ci_shepherd.pull_requests import build_pull_request_handoff
@@ -44,6 +46,13 @@ from render import render_poc_markdown
 
 DEFAULT_STATE_DIR = Path.home() / ".copilot" / "ci-shepherd" / "state"
 DEFAULT_RUNS_DIR = Path.home() / ".copilot" / "ci-shepherd" / "runs"
+DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[1] / "policies" / "manual-v1.json"
+DEFAULT_REPOSITORY_POLICY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "policies"
+    / "repositories"
+    / "aspire-v1.json"
+)
 
 
 def _write_private_json(path: Path, document: object) -> None:
@@ -214,6 +223,7 @@ def start_cycle(
     shepherd_author: str,
     input_path: Path | None = None,
     full_refresh: bool = False,
+    repository_policy_path: Path = DEFAULT_REPOSITORY_POLICY_PATH,
 ) -> dict[str, object]:
     _ensure_separate_directories(state_dir, work_dir)
     if work_dir.exists() and any(work_dir.iterdir()):
@@ -238,6 +248,7 @@ def start_cycle(
             state_dir=state_dir,
             full_refresh=full_refresh,
             shepherd_author=shepherd_author,
+            repository_policy_path=repository_policy_path,
         )
     else:
         supplied_input = input_path.expanduser().resolve(strict=True)
@@ -447,6 +458,7 @@ def finish_cycle(
         "proposals": work_dir / "action-proposals.json",
         "dryRun": work_dir / "actor-dry-run.json",
         "quarantineSession": work_dir / "quarantine-session.json",
+        "quarantineEvidence": work_dir / "quarantine-evidence.json",
         "investigationPlan": work_dir / "investigation-plan.json",
     }
     finalize(
@@ -474,9 +486,23 @@ def finish_cycle(
         sparse_pull_request_judgments,
     )
     _write_private_json(paths["pullRequestJudgments"], pull_request_judgments)
+    try:
+        quarantine_evidence = build_observations(
+            snapshot,
+            policy=load_policy(DEFAULT_POLICY_PATH),
+        )
+    except ValueError as error:
+        quarantine_evidence = {
+            "occurrences": [],
+            "coverage": [],
+            "fingerprints": [],
+            "error": str(error),
+        }
+    _write_private_json(paths["quarantineEvidence"], quarantine_evidence)
     quarantine_request = build_quarantine_session_request(
         prepared,
         final_judgments,
+        quarantine_evidence,
     )
     quarantine_request = inspect_quarantine_session_request(
         quarantine_request,
@@ -613,6 +639,11 @@ def main() -> int:
     start.add_argument("--shepherd-author", required=True)
     start.add_argument("--input", type=Path)
     start.add_argument("--full-refresh", action="store_true")
+    start.add_argument(
+        "--repository-policy",
+        type=Path,
+        default=DEFAULT_REPOSITORY_POLICY_PATH,
+    )
     finish = subparsers.add_parser("finish")
     finish.add_argument("--work-dir", type=Path, required=True)
     finish.add_argument("--agent-judgments", type=Path, required=True)
@@ -630,6 +661,7 @@ def main() -> int:
                 shepherd_author=args.shepherd_author,
                 input_path=args.input,
                 full_refresh=args.full_refresh,
+                repository_policy_path=args.repository_policy,
             )
         else:
             result = finish_cycle(

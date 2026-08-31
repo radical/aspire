@@ -2,20 +2,38 @@ from __future__ import annotations
 
 import inspect
 import copy
+import hashlib
+from io import BytesIO
 import json
 import unittest
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from ci_shepherd.collector import Collector, InventoryResult
 from ci_shepherd.models import validate_snapshot
+from ci_shepherd.repository_policy import (
+    load_repository_policy,
+    load_repository_policy_document,
+)
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
 REPOSITORY = "owner/repo"
 NOW = datetime(2026, 8, 17, 22, 0, tzinfo=UTC)
 CUTOFF = "2026-05-19T22:00:00Z"
+REPOSITORY_POLICY = load_repository_policy_document(
+    {
+        "schemaVersion": 1,
+        "policyVersion": "test-v1",
+        "repositories": [REPOSITORY],
+        "retryTestResults": {
+            "aggregateJobSuffixes": ["Final Test Results"],
+            "artifactNames": ["All-TestResults"],
+        },
+    }
+)
 
 
 class FakeApiError(RuntimeError):
@@ -32,12 +50,15 @@ class EnrichmentClient:
         pages: dict[str, object] | None = None,
         singles: dict[str, object] | None = None,
         texts: dict[str, object] | None = None,
+        bytes_responses: dict[str, object] | None = None,
     ) -> None:
         self._pages = dict(pages or {})
         self._singles = dict(singles or {})
         self._texts = dict(texts or {})
+        self._bytes = dict(bytes_responses or {})
         self.calls: list[tuple[str, str]] = []
         self.text_calls: list[tuple[str, str, int]] = []
+        self.byte_calls: list[tuple[str, str, int]] = []
 
     def get_pages(self, endpoint: str, key: str | None = None) -> object:
         self.calls.append(("get_pages", endpoint))
@@ -64,6 +85,13 @@ class EnrichmentClient:
             raise response
         return copy.deepcopy(response)
 
+    def get_bytes(self, endpoint: str, max_bytes: int) -> bytes:
+        self.byte_calls.append(("get_bytes", endpoint, max_bytes))
+        response = self._bytes[endpoint]
+        if isinstance(response, Exception):
+            raise response
+        return bytes(response)
+
 
 class FakeTextResponse:
     def __init__(self, text: str, *, truncated: bool, status: int = 200) -> None:
@@ -75,6 +103,28 @@ class FakeTextResponse:
 
 def load_fixture(name: str) -> object:
     return json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
+
+
+def test_results_archive(test_name: str, outcome: str) -> bytes:
+    class_name, method_name = test_name.rsplit(".", 1)
+    trx = f"""<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <TestDefinitions>
+    <UnitTest id="1" name="{test_name}">
+      <TestMethod className="{class_name}" name="{method_name}" />
+    </UnitTest>
+  </TestDefinitions>
+  <Results>
+    <UnitTestResult testId="1" testName="{test_name}" outcome="{outcome}" />
+  </Results>
+</TestRun>"""
+    stream = BytesIO()
+    with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "ubuntu-latest/testresults/QuarantineTools_net8.0_now.trx",
+            trx,
+        )
+    return stream.getvalue()
 
 
 def make_issue(
@@ -118,6 +168,26 @@ def snapshot_from_result(result) -> dict[str, object]:
 
 
 class GitHubEnrichmentTests(unittest.TestCase):
+    def test_retry_evidence_requires_an_explicit_repository_policy(self) -> None:
+        inventory = InventoryResult(
+            open_issues=[],
+            supporting_issues=[],
+            evidence={},
+            collection_errors=[],
+            warnings=[],
+            references={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "explicit repository policy"):
+            Collector(
+                EnrichmentClient(),
+                REPOSITORY,
+                NOW,
+            ).enrich_github_evidence(
+                inventory,
+                include_retry_evidence=True,
+            )
+
     def build_inventory(self, client: EnrichmentClient, *, body: str) -> object:
         pages = dict(client._pages)
         pages.update(
@@ -132,7 +202,12 @@ class GitHubEnrichmentTests(unittest.TestCase):
                 f"/repos/{REPOSITORY}/issues/11/timeline": [],
             }
         )
-        inventory_client = EnrichmentClient(pages=pages, singles=client._singles, texts=client._texts)
+        inventory_client = EnrichmentClient(
+            pages=pages,
+            singles=client._singles,
+            texts=client._texts,
+            bytes_responses=client._bytes,
+        )
         collector = Collector(inventory_client, REPOSITORY, NOW)
         return collector.collect()
 
@@ -205,7 +280,12 @@ class GitHubEnrichmentTests(unittest.TestCase):
             client,
             body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
         )
-        enriched = Collector(client, REPOSITORY, NOW).enrich_github_evidence(
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
             inventory,
             minimal_run_evidence=True,
             include_run_history=True,
@@ -236,7 +316,12 @@ class GitHubEnrichmentTests(unittest.TestCase):
             },
         )
 
-        enriched = Collector(client, REPOSITORY, NOW).enrich_github_evidence(
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
             inventory,
             include_issue_references=False,
         )
@@ -264,7 +349,12 @@ class GitHubEnrichmentTests(unittest.TestCase):
             body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
         )
 
-        enriched = Collector(client, REPOSITORY, NOW).enrich_github_evidence(
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
             inventory,
             minimal_run_evidence=True,
         )
@@ -283,6 +373,368 @@ class GitHubEnrichmentTests(unittest.TestCase):
         self.assertEqual(
             [("get_text", f"/repos/{REPOSITORY}/actions/jobs/2001/logs", 200000)],
             client.text_calls,
+        )
+
+    def test_retry_evidence_collects_matching_attempt_test_results(self) -> None:
+        run = self.make_run()
+        run["run_attempt"] = 2
+        job_name = "Tests / QuarantineTools / QuarantineTools (ubuntu-latest)"
+        failed_job = self.make_job(1001)
+        failed_job["run_attempt"] = 1
+        failed_job["name"] = job_name
+        successful_job = self.make_job(2001, conclusion="success")
+        successful_job["run_attempt"] = 2
+        successful_job["name"] = job_name
+        failed_results = test_results_archive(
+            "QuarantineTools.Tests.Sample.Flaky",
+            "Failed",
+        )
+        passed_results = test_results_archive(
+            "QuarantineTools.Tests.Sample.Flaky",
+            "Passed",
+        )
+        first_final = self.make_job(1100)
+        first_final["run_attempt"] = 1
+        first_final["name"] = "Tests / Final Test Results"
+        first_final["started_at"] = "2026-08-17T20:20:01Z"
+        first_final["completed_at"] = "2026-08-17T20:21:00Z"
+        second_final = self.make_job(2100, conclusion="success")
+        second_final["run_attempt"] = 2
+        second_final["name"] = "Tests / Final Test Results"
+        second_final["started_at"] = "2026-08-17T20:21:01Z"
+        second_final["completed_at"] = "2026-08-17T20:22:00Z"
+        client = EnrichmentClient(
+            pages={
+                f"/repos/{REPOSITORY}/actions/runs/7001/jobs?per_page=100": {
+                    "jobs": [successful_job, second_final]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/1/jobs?per_page=100": {
+                    "jobs": [failed_job, first_final]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/artifacts?per_page=100": {
+                    "artifacts": [
+                        {
+                            "id": 3001,
+                            "name": "All-TestResults",
+                            "created_at": "2026-08-17T20:20:30Z",
+                            "expired": False,
+                            "digest": (
+                                "sha256:" + hashlib.sha256(failed_results).hexdigest()
+                            ),
+                        },
+                        {
+                            "id": 3002,
+                            "name": "All-TestResults",
+                            "created_at": "2026-08-17T20:21:30Z",
+                            "expired": False,
+                            "digest": (
+                                "sha256:" + hashlib.sha256(passed_results).hexdigest()
+                            ),
+                        },
+                    ]
+                },
+            },
+            singles={
+                f"/repos/{REPOSITORY}/actions/runs/7001": run,
+            },
+            texts={
+            },
+            bytes_responses={
+                f"/repos/{REPOSITORY}/actions/artifacts/3001/zip": failed_results,
+                f"/repos/{REPOSITORY}/actions/artifacts/3002/zip": passed_results,
+            },
+        )
+        inventory = self.build_inventory(
+            client,
+            body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
+        )
+
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
+            inventory,
+            minimal_run_evidence=True,
+            include_retry_evidence=True,
+        )
+
+        self.assertEqual(
+            [1001, 1100, 2001, 2100],
+            [job["jobId"] for job in enriched.evidence["run:7001"]["payload"]["jobs"]],
+        )
+        self.assertEqual([], client.text_calls)
+        self.assertEqual(
+            [
+                (
+                    "get_bytes",
+                    f"/repos/{REPOSITORY}/actions/artifacts/3002/zip",
+                    25 * 1024 * 1024,
+                ),
+                (
+                    "get_bytes",
+                    f"/repos/{REPOSITORY}/actions/artifacts/3001/zip",
+                    25 * 1024 * 1024,
+                ),
+            ],
+            client.byte_calls,
+        )
+        self.assertEqual(
+            [
+                {
+                    "lane": "QuarantineTools",
+                    "os": "ubuntu-latest",
+                    "testName": "QuarantineTools.Tests.Sample.Flaky",
+                    "outcome": "Failed",
+                }
+            ],
+            enriched.evidence[
+                "run:7001:attempt:1:job:1001:test-results"
+            ]["payload"]["results"],
+        )
+        self.assertEqual(
+            [
+                {
+                    "testName": (
+                        "QuarantineTools.Tests.Sample.Flaky"
+                    ),
+                    "outcome": "failed",
+                }
+            ],
+            enriched.evidence[
+                "run:7001:attempt:1:job:1001:test-results"
+            ]["payload"]["tests"],
+        )
+        validate_snapshot(snapshot_from_result(enriched))
+
+    def test_retry_evidence_uses_repository_policy_artifact_conventions(self) -> None:
+        run = self.make_run()
+        run["run_attempt"] = 2
+        job_name = "Verification / QuarantineTools / QuarantineTools (ubuntu-latest)"
+        failed_job = self.make_job(1001)
+        failed_job["run_attempt"] = 1
+        failed_job["name"] = job_name
+        successful_job = self.make_job(2001, conclusion="success")
+        successful_job["run_attempt"] = 2
+        successful_job["name"] = job_name
+        failed_results = test_results_archive(
+            "Widget.Tests.Sample.Flaky",
+            "Failed",
+        )
+        passed_results = test_results_archive(
+            "Widget.Tests.Sample.Flaky",
+            "Passed",
+        )
+        first_final = self.make_job(1100)
+        first_final["run_attempt"] = 1
+        first_final["name"] = "Verification / Aggregate Results"
+        first_final["started_at"] = "2026-08-17T20:20:01Z"
+        first_final["completed_at"] = "2026-08-17T20:21:00Z"
+        second_final = self.make_job(2100, conclusion="success")
+        second_final["run_attempt"] = 2
+        second_final["name"] = "Verification / Aggregate Results"
+        second_final["started_at"] = "2026-08-17T20:21:01Z"
+        second_final["completed_at"] = "2026-08-17T20:22:00Z"
+        client = EnrichmentClient(
+            pages={
+                f"/repos/{REPOSITORY}/actions/runs/7001/jobs?per_page=100": {
+                    "jobs": [successful_job, second_final]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/1/jobs?per_page=100": {
+                    "jobs": [failed_job, first_final]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/artifacts?per_page=100": {
+                    "artifacts": [
+                        {
+                            "id": 3001,
+                            "name": "Combined-Results",
+                            "created_at": "2026-08-17T20:20:30Z",
+                            "expired": False,
+                            "digest": (
+                                "sha256:" + hashlib.sha256(failed_results).hexdigest()
+                            ),
+                        },
+                        {
+                            "id": 3002,
+                            "name": "Combined-Results",
+                            "created_at": "2026-08-17T20:21:30Z",
+                            "expired": False,
+                            "digest": (
+                                "sha256:" + hashlib.sha256(passed_results).hexdigest()
+                            ),
+                        },
+                    ]
+                },
+            },
+            singles={
+                f"/repos/{REPOSITORY}/actions/runs/7001": run,
+            },
+            bytes_responses={
+                f"/repos/{REPOSITORY}/actions/artifacts/3001/zip": failed_results,
+                f"/repos/{REPOSITORY}/actions/artifacts/3002/zip": passed_results,
+            },
+        )
+        inventory = self.build_inventory(
+            client,
+            body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
+        )
+        policy = load_repository_policy(
+            FIXTURE_ROOT / "repository-policy-widget-v1.json"
+        )
+
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=policy,
+        ).enrich_github_evidence(
+            inventory,
+            minimal_run_evidence=True,
+            include_retry_evidence=True,
+        )
+
+        self.assertEqual(
+            "Combined-Results",
+            enriched.evidence[
+                "run:7001:attempt:1:job:1001:test-results"
+            ]["payload"]["artifactName"],
+        )
+
+    def test_retry_evidence_reads_only_two_preceding_attempts(self) -> None:
+        run = self.make_run()
+        run["run_attempt"] = 5
+        current_job = self.make_job(5001, conclusion="success")
+        current_job["run_attempt"] = 5
+        client = EnrichmentClient(
+            pages={
+                f"/repos/{REPOSITORY}/actions/runs/7001/jobs?per_page=100": {
+                    "jobs": [current_job]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/3/jobs?per_page=100": {
+                    "jobs": []
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/4/jobs?per_page=100": {
+                    "jobs": []
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/artifacts?per_page=100": {
+                    "artifacts": []
+                },
+            },
+            singles={
+                f"/repos/{REPOSITORY}/actions/runs/7001": run,
+            },
+            texts={},
+        )
+        inventory = self.build_inventory(
+            client,
+            body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
+        )
+
+        Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
+            inventory,
+            minimal_run_evidence=True,
+            include_retry_evidence=True,
+        )
+
+        self.assertIn(
+            (
+                "get_pages",
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/3/jobs?per_page=100",
+            ),
+            client.calls,
+        )
+        self.assertIn(
+            (
+                "get_pages",
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/4/jobs?per_page=100",
+            ),
+            client.calls,
+        )
+        self.assertNotIn(
+            (
+                "get_pages",
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/2/jobs?per_page=100",
+            ),
+            client.calls,
+        )
+
+    def test_retry_evidence_rejects_artifact_digest_mismatch(self) -> None:
+        run = self.make_run()
+        run["run_attempt"] = 2
+        current_job = self.make_job(2001, conclusion="success")
+        current_job["run_attempt"] = 2
+        final_job = self.make_job(1100, conclusion="success")
+        final_job["run_attempt"] = 1
+        final_job["name"] = "Final Test Results"
+        final_job["started_at"] = "2026-08-17T20:20:01Z"
+        final_job["completed_at"] = "2026-08-17T20:21:00Z"
+        archive = test_results_archive(
+            "Tests.Sample.Flaky",
+            "Failed",
+        )
+        client = EnrichmentClient(
+            pages={
+                f"/repos/{REPOSITORY}/actions/runs/7001/jobs?per_page=100": {
+                    "jobs": [current_job]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/attempts/1/jobs?per_page=100": {
+                    "jobs": [final_job]
+                },
+                f"/repos/{REPOSITORY}/actions/runs/7001/artifacts?per_page=100": {
+                    "artifacts": [
+                        {
+                            "id": 3001,
+                            "name": "All-TestResults",
+                            "created_at": (
+                                "2026-08-17T20:20:30Z"
+                            ),
+                            "expired": False,
+                            "digest": "sha256:" + "0" * 64,
+                        }
+                    ]
+                },
+            },
+            singles={
+                f"/repos/{REPOSITORY}/actions/runs/7001": run,
+            },
+            texts={},
+            bytes_responses={
+                f"/repos/{REPOSITORY}/actions/artifacts/3001/zip": archive,
+            },
+        )
+        inventory = self.build_inventory(
+            client,
+            body=f"See https://github.com/{REPOSITORY}/actions/runs/7001",
+        )
+
+        enriched = Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            repository_policy=REPOSITORY_POLICY,
+        ).enrich_github_evidence(
+            inventory,
+            minimal_run_evidence=True,
+            include_retry_evidence=True,
+        )
+
+        self.assertNotIn(
+            "run:7001:attempt:1:job:1100:test-results",
+            enriched.evidence,
+        )
+        self.assertEqual(
+            "workflow-test-results",
+            enriched.collection_errors[-1].stage,
+        )
+        self.assertIn(
+            "digest does not match",
+            enriched.collection_errors[-1].message,
         )
 
     def test_minimal_run_enrichment_can_collect_one_bounded_history_request(self) -> None:
@@ -988,7 +1440,10 @@ class GitHubEnrichmentTests(unittest.TestCase):
         run_payload = enriched.evidence["run:7001"]["payload"]
         self.assertEqual("CI", run_payload["workflow"])
         self.assertEqual([1, 2], run_payload["attempts"])
-        self.assertEqual([1001, 2001, 2002], [job["jobId"] for job in run_payload["jobs"]])
+        self.assertEqual(
+            [2001, 2002, 1001],
+            [job["jobId"] for job in run_payload["jobs"]],
+        )
         self.assertEqual(
             [7112, 7111, 7110, 7109, 7108, 7107, 7106, 7105, 7104, 7103],
             [item["runId"] for item in run_payload["recentHistory"]],

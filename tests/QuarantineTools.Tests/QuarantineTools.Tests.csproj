@@ -16,6 +16,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../tools/QuarantineTools/QuarantineTools.csproj" />
+
     <!-- Roslyn for syntax parsing/manipulation -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="xunit.v3.extensibility.core" />

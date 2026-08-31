@@ -52,10 +52,15 @@ _DIAGNOSTIC_LINE_RE = re.compile(
 _ASSERTION_LINE_RE = re.compile(r"(?i)^\s*(?:expected|actual|assert[a-z.]*)\b")
 # `dotnet test` console output for a passing test, e.g. "  Passed Alpha.Tests.One [42 ms]".
 _PASSED_TEST_RE = re.compile(r"(?m)^\s*Passed\s+(?P<test>.+?)\s+\[[^\]\r\n]+\]\s*$")
+# `dotnet test` console output for a failing test, e.g. "  Failed Alpha.Tests.One [42 ms]".
+_FAILED_TEST_RE = re.compile(r"(?m)^\s*Failed\s+(?P<test>.+?)\s+\[[^\]\r\n]+\]\s*$")
 # Runner labels that name an operating system image, e.g. "ubuntu-latest",
 # "windows-2022", "macos-14.1". Anything else in a matrix job name (a TFM, a
 # configuration, a shard index) is lane detail, not an OS.
-_RUNNER_OS_RE = re.compile(r"(?i)^(?:ubuntu|windows|macos)-(?:latest|[0-9]+(?:\.[0-9]+)?)$")
+_RUNNER_OS_RE = re.compile(
+    r"(?i)(?P<os>(?:ubuntu|windows|macos)-"
+    r"(?:latest|[0-9]+(?:\.[0-9]+)?))$"
+)
 # Repository roots whose files are CI/build configuration rather than product code.
 _REPO_CONFIG_PATH_PREFIXES = (".github/", "eng/")
 # Local workflow evidence IDs, e.g.
@@ -65,6 +70,10 @@ _REPO_CONFIG_PATH_PREFIXES = (".github/", "eng/")
 _WORKFLOW_EVIDENCE_ID_RE = re.compile(
     r"^run:(?P<run_id>[1-9][0-9]*)"
     r"(?::attempt:(?P<attempt>[1-9][0-9]*|none):job:(?P<job_id>[1-9][0-9]*|none)(?P<log>:log)?)?$"
+)
+_TEST_RESULTS_EVIDENCE_ID_RE = re.compile(
+    r"^run:(?P<run_id>[1-9][0-9]*):attempt:(?P<attempt>[1-9][0-9]*):"
+    r"job:(?P<job_id>[1-9][0-9]*):test-results$"
 )
 _ISSUE_EVIDENCE_ID_RE = re.compile(r"^issue:(?P<issue_number>[1-9][0-9]*)$")
 # Check-run annotation evidence IDs emitted by the collector, e.g.
@@ -113,6 +122,7 @@ def build_observations(
     records = _index_evidence(evidence)
     runs_by_id = _index_runs(records)
     logs_by_key = _index_logs(records)
+    test_results_by_key = _index_test_results(records)
     _require_parent_run_evidence(records, runs_by_id)
     for issue_number in issue_numbers:
         _require_issue_record(issue_number, records)
@@ -145,6 +155,7 @@ def build_observations(
                         _require_positive_int(record.payload.get("runId"), f"{record.evidence_id} payload.runId")
                     ],
                     logs_by_key=logs_by_key,
+                    test_results_by_key=test_results_by_key,
                     # Issue-level test facts reach a job only through a deterministic
                     # anchor; otherwise they would be replayed onto every failed job.
                     issue_test_names=(
@@ -170,6 +181,7 @@ def build_observations(
         records,
         runs_by_id,
         logs_by_key,
+        test_results_by_key,
         window_cutoff=window_cutoff,
         collected_at=collected_at,
     )
@@ -263,6 +275,31 @@ def _index_logs(records: Mapping[str, _EvidenceRecord]) -> dict[tuple[int, objec
     for logs in logs_by_key.values():
         logs.sort(key=lambda item: item.evidence_id)
     return logs_by_key
+
+
+def _index_test_results(
+    records: Mapping[str, _EvidenceRecord],
+) -> dict[tuple[int, object, object], list[_EvidenceRecord]]:
+    results_by_key: dict[
+        tuple[int, object, object],
+        list[_EvidenceRecord],
+    ] = defaultdict(list)
+    for record in records.values():
+        if (
+            record.availability != "available"
+            or record.kind != "workflow-test-results"
+        ):
+            continue
+        run_id = _require_positive_int(
+            record.payload.get("runId"),
+            f"{record.evidence_id} payload.runId",
+        )
+        results_by_key[
+            (run_id, record.payload.get("attempt"), record.payload.get("jobId"))
+        ].append(record)
+    for results in results_by_key.values():
+        results.sort(key=lambda item: item.evidence_id)
+    return results_by_key
 
 
 def _require_parent_run_evidence(
@@ -381,6 +418,25 @@ def _require_issue_record(issue_number: int, records: Mapping[str, _EvidenceReco
 
 
 def _validate_identity_payload(evidence_id: str, kind: str, payload: Mapping[str, Any]) -> None:
+    if kind == "workflow-test-results":
+        parsed_results = _parse_test_results_evidence_id(evidence_id)
+        if parsed_results is None:
+            raise ValueError(
+                f"{evidence_id} must cite workflow test results."
+            )
+        for field_name in ("runId", "attempt", "jobId"):
+            _require_positive_int(
+                payload.get(field_name),
+                f"{evidence_id} payload.{field_name}",
+            )
+            _require_identity_match(
+                evidence_id,
+                field_name,
+                parsed_results[field_name],
+                payload.get(field_name),
+            )
+        _validate_test_outcomes(evidence_id, payload.get("tests"))
+        return
     if kind == "workflow-job":
         annotation = _ANNOTATION_EVIDENCE_ID_RE.fullmatch(evidence_id)
         if annotation is not None:
@@ -437,6 +493,10 @@ def _build_job_occurrences(
     job: _EvidenceRecord,
     run_record: _EvidenceRecord,
     logs_by_key: Mapping[tuple[int, object, object], list[_EvidenceRecord]],
+    test_results_by_key: Mapping[
+        tuple[int, object, object],
+        list[_EvidenceRecord],
+    ],
     issue_test_names: list[tuple[str, str]],
     policy: ManualPolicy,
     records: Mapping[str, _EvidenceRecord],
@@ -446,12 +506,23 @@ def _build_job_occurrences(
     job_id = job.payload.get("jobId")
     job_name = job.payload.get("name") if isinstance(job.payload.get("name"), str) else None
     log_records = logs_by_key.get((run_id, attempt, job_id), [])
+    test_results = test_results_by_key.get((run_id, attempt, job_id), [])
     workflow = _workflow_name(run_record)
     lane, os_name = _lane_and_os(job.payload)
     observed_at = _observed_at(job.payload, run_record.payload)
     head_sha = run_record.payload.get("headSha")
-    evidence_ids = _evidence_ids_for_occurrence(run_record, job, log_records)
-    test_names = _collect_job_test_names(issue_test_names, job, log_records)
+    evidence_ids = _evidence_ids_for_occurrence(
+        run_record,
+        job,
+        log_records,
+        test_results,
+    )
+    test_names = _collect_job_test_names(
+        issue_test_names,
+        job,
+        log_records,
+        test_results,
+    )
 
     if test_names:
         return [
@@ -463,11 +534,13 @@ def _build_job_occurrences(
                 "attempt": attempt,
                 "jobId": job_id,
                 "workflow": workflow,
+                "jobName": job_name,
                 "lane": lane,
                 "os": os_name,
                 "headSha": head_sha,
                 "observedAt": observed_at,
                 "testName": test_name,
+                "testNameEvidenceId": evidence_id,
                 "fingerprintId": f"test:{normalize_component(test_name)}",
                 "fingerprintComponents": _fingerprint_components(
                     runner_os=os_name,
@@ -773,6 +846,10 @@ def _build_coverage(
     records: Mapping[str, _EvidenceRecord],
     runs_by_id: Mapping[int, _EvidenceRecord],
     logs_by_key: Mapping[tuple[int, object, object], list[_EvidenceRecord]],
+    test_results_by_key: Mapping[
+        tuple[int, object, object],
+        list[_EvidenceRecord],
+    ],
     *,
     window_cutoff: datetime,
     collected_at: datetime,
@@ -800,8 +877,14 @@ def _build_coverage(
                 "coverageId": _coverage_id(run_id, attempt, job_id),
                 "subjectKind": "lane",
                 "subjectId": subject_base,
+                "workflow": workflow,
+                "jobName": job.payload.get("name"),
+                "lane": lane,
+                "os": os_name,
+                "testName": None,
                 "runId": run_id,
                 "attempt": attempt,
+                "jobId": job_id,
                 "headSha": run_record.payload.get("headSha"),
                 "observedAt": observed_at,
                 "status": "succeeded",
@@ -809,7 +892,10 @@ def _build_coverage(
                 "evidenceIds": evidence_ids,
             }
         )
-        passed_tests = _passed_tests(logs_by_key.get((run_id, attempt, job_id), []))
+        passed_tests = _passed_tests(
+            logs_by_key.get((run_id, attempt, job_id), []),
+            test_results_by_key.get((run_id, attempt, job_id), []),
+        )
         for ordinal, (test_name, evidence_id) in enumerate(passed_tests, start=1):
             coverage.append(
                 {
@@ -820,8 +906,14 @@ def _build_coverage(
                     # for the same test agree; the coverage ID keeps the raw name,
                     # percent-encoded, so two raw spellings never collide.
                     "subjectId": f"{subject_base}:test:{normalize_component(test_name)}",
+                    "workflow": workflow,
+                    "jobName": job.payload.get("name"),
+                    "lane": lane,
+                    "os": os_name,
+                    "testName": test_name,
                     "runId": run_id,
                     "attempt": attempt,
+                    "jobId": job_id,
                     "headSha": run_record.payload.get("headSha"),
                     "observedAt": observed_at,
                     "status": "succeeded",
@@ -1191,6 +1283,7 @@ def _collect_job_test_names(
     issue_test_names: list[tuple[str, str]],
     job: _EvidenceRecord,
     logs: list[_EvidenceRecord],
+    test_results: list[_EvidenceRecord],
 ) -> list[tuple[str, str]]:
     # Provenance order matters: the first evidence ID seen for a name is the one
     # cited, so job-scoped evidence wins over log-scoped, which wins over the
@@ -1203,15 +1296,50 @@ def _collect_job_test_names(
     # and a prose `message` such as "Process completed with exit code 1." Parsing that
     # into a test name would manufacture attribution the evidence does not support.
     # Annotations stay useful as bundled evidence a human reads, not as facts.
-    values = [*_fact_values(job.evidence_id, job.payload, "testName")]
-    for log in logs:
-        values.extend(_fact_values(log.evidence_id, log.payload, "testName"))
-    values.extend(issue_test_names)
+    if test_results:
+        values = _failed_test_results(test_results)
+    else:
+        values = [*_fact_values(job.evidence_id, job.payload, "testName")]
+        for log in logs:
+            values.extend(_fact_values(log.evidence_id, log.payload, "testName"))
+            values.extend(_failed_tests(log))
+        values.extend(issue_test_names)
 
     by_name: dict[str, str] = {}
     for test_name, evidence_id in values:
         by_name.setdefault(test_name, evidence_id)
     return [(test_name, by_name[test_name]) for test_name in sorted(by_name)]
+
+
+def _failed_tests(log: _EvidenceRecord) -> list[tuple[str, str]]:
+    excerpt = log.payload.get("excerpt")
+    if not isinstance(excerpt, str):
+        return []
+    return [
+        (match.group("test").strip(), log.evidence_id)
+        for match in _FAILED_TEST_RE.finditer(excerpt)
+        if match.group("test").strip()
+    ]
+
+
+def _failed_test_results(
+    test_results: list[_EvidenceRecord],
+) -> list[tuple[str, str]]:
+    return _test_results_by_outcome(test_results, "failed")
+
+
+def _test_results_by_outcome(
+    test_results: list[_EvidenceRecord],
+    outcome: str,
+) -> list[tuple[str, str]]:
+    values: list[tuple[str, str]] = []
+    for result_record in test_results:
+        for result in result_record.payload["tests"]:
+            if result["outcome"] == outcome:
+                values.append(
+                    (result["testName"], result_record.evidence_id)
+                )
+    return values
 
 
 def _fact_values(evidence_id: str, payload: Mapping[str, Any], field_name: str) -> list[tuple[str, str]]:
@@ -1303,14 +1431,22 @@ def _has_repo_config_evidence(issue_number: int, records: Mapping[str, _Evidence
     return False
 
 
-def _passed_tests(logs: list[_EvidenceRecord]) -> list[tuple[str, str]]:
-    values: list[tuple[str, str]] = []
-    for log in logs:
-        excerpt = log.payload.get("excerpt")
-        if not isinstance(excerpt, str):
-            continue
-        for match in _PASSED_TEST_RE.finditer(excerpt):
-            values.append((match.group("test").strip(), log.evidence_id))
+def _passed_tests(
+    logs: list[_EvidenceRecord],
+    test_results: list[_EvidenceRecord],
+) -> list[tuple[str, str]]:
+    if test_results:
+        values = _test_results_by_outcome(test_results, "passed")
+    else:
+        values = []
+        for log in logs:
+            excerpt = log.payload.get("excerpt")
+            if not isinstance(excerpt, str):
+                continue
+            for match in _PASSED_TEST_RE.finditer(excerpt):
+                values.append(
+                    (match.group("test").strip(), log.evidence_id)
+                )
     by_name: dict[str, str] = {}
     for test_name, evidence_id in sorted(values, key=lambda item: (item[0], item[1])):
         if not test_name:
@@ -1323,8 +1459,13 @@ def _evidence_ids_for_occurrence(
     run_record: _EvidenceRecord | None,
     job: _EvidenceRecord,
     logs: list[_EvidenceRecord],
+    test_results: list[_EvidenceRecord],
 ) -> list[str]:
-    evidence_ids = [job.evidence_id, *(log.evidence_id for log in logs)]
+    evidence_ids = [
+        job.evidence_id,
+        *(log.evidence_id for log in logs),
+        *(result.evidence_id for result in test_results),
+    ]
     if run_record is not None:
         evidence_ids.append(run_record.evidence_id)
     return sorted(set(evidence_ids))
@@ -1368,8 +1509,9 @@ def _lane_and_os_from_job_name(name: object) -> tuple[str | None, str | None]:
     without_runner = name
     if runner_match is not None:
         candidate = runner_match.group("runner").strip()
-        if _RUNNER_OS_RE.fullmatch(candidate):
-            os_name = candidate
+        os_match = _RUNNER_OS_RE.search(candidate)
+        if os_match is not None:
+            os_name = os_match.group("os")
             without_runner = name[: runner_match.start()].strip()
     parts = [part.strip() for part in without_runner.split("/") if part.strip()]
     lane = parts[-1] if len(parts) > 1 else without_runner.strip()
@@ -1489,6 +1631,48 @@ def _parse_workflow_evidence_id(evidence_id: str) -> dict[str, Any] | None:
         "jobId": _parse_optional_identity_component(match.group("job_id")),
         "isLog": match.group("log") is not None,
     }
+
+
+def _parse_test_results_evidence_id(
+    evidence_id: str,
+) -> dict[str, int] | None:
+    match = _TEST_RESULTS_EVIDENCE_ID_RE.fullmatch(evidence_id)
+    if match is None:
+        return None
+    return {
+        "runId": int(match.group("run_id")),
+        "attempt": int(match.group("attempt")),
+        "jobId": int(match.group("job_id")),
+    }
+
+
+def _validate_test_outcomes(evidence_id: str, value: object) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"{evidence_id} payload.tests must be a list.")
+    seen: set[str] = set()
+    for index, outcome in enumerate(value):
+        if not isinstance(outcome, Mapping):
+            raise ValueError(
+                f"{evidence_id} payload.tests[{index}] must be an object."
+            )
+        test_name = _require_string(
+            outcome.get("testName"),
+            f"{evidence_id} payload.tests[{index}].testName",
+        )
+        if test_name in seen:
+            raise ValueError(
+                f"{evidence_id} payload.tests repeats {test_name!r}."
+            )
+        seen.add(test_name)
+        result = _require_string(
+            outcome.get("outcome"),
+            f"{evidence_id} payload.tests[{index}].outcome",
+        )
+        if result not in {"failed", "passed", "other"}:
+            raise ValueError(
+                f"{evidence_id} payload.tests[{index}].outcome must be "
+                "failed, passed, or other."
+            )
 
 
 def _parse_issue_evidence_id(evidence_id: str) -> dict[str, Any] | None:

@@ -69,6 +69,39 @@ checkout and the source issues showed that several were not valid quarantine
 targets. Candidate quality is currently enforced only by prose inside the
 generated `workerPrompt`, which is model-dependent rather than deterministic.
 
+### 1.1 Repository portability boundary
+
+The shepherd must not encode Aspire's CI vocabulary as universal behavior. Its
+architecture has three layers:
+
+1. The generic engine owns bounded GitHub reads, evidence records, artifact
+   integrity, TRX parsing, deterministic classification, grants, replay
+   protection, and reconciliation.
+2. A repository policy file owns workflow and artifact conventions, accepted
+   evidence classes, labels, budgets, and protected-repository rules.
+3. A repository adapter owns source resolution and mutation mechanics. Aspire's
+   adapter uses QuarantineTools, test-project builds, MTP discovery, and the
+   `QuarantinedTest` attribute; another repository may use different tooling.
+
+**Implemented today.** The supported cycle loads the strict, versioned
+`policies/repositories/aspire-v1.json` file. Retry-result aggregation job
+suffixes and artifact names come from that file rather than the collector. The
+canonical policy document and its SHA-256 digest are embedded in the snapshot,
+and snapshot validation rejects content changes or repository mismatches. A
+second checked-in test profile uses different job and artifact names and drives
+the same collector behavior.
+
+**Proposed.** Lane extraction, issue labels, evidence thresholds, mutation
+budgets, protected-repository capabilities, worker text, and the quarantine
+adapter selection remain to be moved behind the same boundary. Until those
+fields are explicit and grant-bound, the repository profile is intentionally
+incomplete and must not be presented as general multi-repository support.
+
+Repository policy is trusted executable input even when represented as data. A
+policy change can alter which evidence or mutation is accepted, so grants must
+bind the canonical policy digest. The target repository's current checkout
+must never be allowed to substitute a different policy after authorization.
+
 ## 2. Provenance and source resolution
 
 ### 2.1 The required chain
@@ -219,10 +252,20 @@ This section replaces any notion of a separate-days threshold. Failures do not
 need to occur on different days. What matters is whether the evidence
 distinguishes nondeterminism from a deterministic defect.
 
-Passing test names are not collected. Any inference that rests on "the test
-passed later" is therefore indirect, because it is derived from a green build or
-a green lane rather than from an observed passing result for that specific test.
-The model must reflect that asymmetry explicitly.
+Production collection now records exact failed and passed test names from the
+`All-TestResults` artifacts uploaded by the test workflow. It joins each TRX
+`UnitTestResult.testId` to `UnitTest.id`, then uses
+`TestMethod.className + "." + TestMethod.name` as the canonical method:
+
+```xml
+<UnitTestResult testId="..." outcome="Failed" />
+<UnitTest id="...">
+  <TestMethod className="Namespace.Type" name="Test" />
+</UnitTest>
+```
+
+This gives Class A direct per-test evidence. Green builds and green lanes remain
+indirect evidence and cannot substitute for a structured passing result.
 
 ### 4.1 Evidence classes
 
@@ -232,30 +275,17 @@ later attempt of the same run, at the same commit, with the same matrix
 coordinates.
 
 This is the strongest available signal. The commit, the code, and the
-configuration are identical by construction, so a changed outcome is a property
-of execution rather than of the code.
+configuration are identical by construction, and the exact passing result proves
+that the recovery job selected and ran the same test. Class A requires:
 
-Class A still contains one inference that must be stated rather than hidden.
-Passing test names are not recorded, so we do not observe "this test passed on
-attempt 2". We observe that the lane succeeded. That only implies the test
-passed if the successful retry actually ran the same test. A retry that
-re-scoped the run, changed the test selection, skipped the project, or resolved
-a different filter can produce a green lane without ever executing the failing
-test.
+- an exact failed method outcome from a failed attempt's TRX artifact;
+- an exact passed method outcome from a later successful attempt's TRX artifact;
+- the same run ID and 40-character head SHA;
+- the same workflow, raw job name, normalized lane, and operating system.
 
-Class A therefore requires positive evidence that the successful attempt ran the
-same test project and the same selection as the failing attempt:
-
-- the same job identity resolved in both attempts;
-- the same test project or assembly present in the successful attempt's
-  test-result artifacts;
-- the same effective selection or filter inputs, where the workflow records
-  them.
-
-If that equivalence cannot be established, the episode is not Class A. It falls
-back to the weaker classes, which require corroboration. Recording the reason is
-mandatory so a reviewer can tell "no retry evidence" from "retry evidence exists
-but selection equivalence could not be proven".
+A successful retry lane without the exact passing result is not Class A. It
+is blocked with a reason that distinguishes missing per-test proof from a
+missing or non-equivalent retry.
 
 **Class B — exact test failed, later equivalent lane succeeded, relevant paths
 unchanged.**
@@ -332,8 +362,8 @@ framework, shard index, and any configuration matrix dimension must match. A
 evidence about the same execution environment, and treating it as such is how an
 environment-specific product bug gets classified as flaky.
 
-**Class A depends on attempt-level retention.** If run attempts or their
-artifacts are not retained long enough, Class A evidence may simply be
+**Class A depends on attempt-level artifact retention.** If run attempts or
+their `All-TestResults` artifacts are not retained long enough, Class A evidence may simply be
 unavailable for older issues, biasing the system toward the weaker classes
 exactly where confidence matters most. The model must therefore record why a
 candidate reached its class, so a review can distinguish "no retry evidence
@@ -452,19 +482,22 @@ on it are different things.
 ### 4.6 Implemented today
 
 `build_quarantine_session_request` clusters `review-quarantine` recommendations
-by `target.value` and emits them. It validates that `target.kind` is `test`,
-that `evidenceIds` are non-empty strings, and that none of the source issues
-carries `quarantined-test`. A labeled target is excluded deterministically with
-`already-quarantined-by-label` and remains visible in `blockedTargets`. If the
-source issue event or its labels are unavailable, the target fails closed with
-`source-labels-unavailable`.
+by `target.value`. It validates method-name shape, source labels, and
+deterministic Class A evidence before source inspection. Class A is awarded only
+when an artifact-derived exact failure and exact pass share the required retry
+identity. The request records the failure occurrence, recovery coverage row,
+reason, and complete evidence-ID set.
 
-The rest of the section 4 model is not implemented. The request builder does
-not validate name shape, source existence or attributes, failure class,
-run-to-job evidence binding, or recurrence quality.
+`cycle.py` persists those deterministic inputs in
+`quarantine-evidence.json`. Source inspection then resolves each surviving name
+to exactly one method and records its semantic baseline before a proposal is
+grantable. Authorization independently requires Class A, checks that the
+failure and recovery identify the same run, commit, workflow, job, lane, and OS
+with a later attempt, and requires both corresponding test-results evidence IDs.
 
-Those remaining candidate-quality expectations currently live in prose inside
-the generated `workerPrompt`. That is a model instruction, not a gate.
+Classes B and C, infrastructure-signature classification, product-defect vetoes,
+and recurrence quality remain deferred. They cannot authorize quarantine in the
+current implementation.
 
 ## 5. Performance and cost
 
@@ -475,8 +508,12 @@ tiny subset of the inventory.
 fingerprint recording, review selection, and proposal rendering. This is the
 dominant cost today and this design does not add to it.
 
-**Runs every cycle, new but cheap.** Class A computation from data already
-collected, and the run-to-job binding check for candidates only.
+**Runs every cycle, new and bounded.** Attempt-one runs add no retry requests.
+For rerun references, collection fetches at most the two preceding attempts,
+then downloads at most three `All-TestResults` artifacts. Downloads are capped
+at 25 MB and verified against GitHub's SHA-256 artifact digest. ZIP entry count,
+TRX count, per-file size, total uncompressed TRX size, and XML declarations are
+bounded before parsing. Class A computation itself is local and deterministic.
 
 **Runs only for quarantine candidates.** Source resolution through the
 existing QuarantineTools mutation path in a disposable clean checkout. In the
@@ -772,14 +809,14 @@ best available regression corpus, because they already contain the failure
 classes the gate must catch. Start from that frozen input, assert the expected
 exclusions, and watch the test fail before writing the gate.
 
-Within the quarantine work, order matters. Build Class A and its
-selection-equivalence proof first, then one exclusion reason at a time, then
-classes B and C with their corroboration requirement, then post-change
-validation. Class A comes first because it is the only class that authorizes
-quarantine without corroboration, so it is the shortest path to a working
-end-to-end quarantine and therefore the fastest way to prove the whole chain
-holds. Post-change validation comes last only in implementation order; no
-quarantine may be pushed before it exists.
+Within the quarantine work, order matters. Class A and its exact
+failure-and-pass proof are implemented first, followed by one exclusion reason
+at a time and post-change validation. Classes B and C remain deferred until the
+Class A fork lifecycle is complete. Class A comes first because it is the only
+class that authorizes quarantine without corroboration, so it is the shortest
+path to a working end-to-end quarantine and therefore the fastest way to prove
+the whole chain holds. Post-change validation comes last only in implementation
+order; no quarantine may be pushed before it exists.
 
 Every test must assert observable behavior through the public cycle, actor, or
 artifact surface. Tests that reach into private helpers will pass while the
@@ -790,8 +827,9 @@ failures, not unit failures.
 
 - What retention window exists for run attempts and test-result artifacts, and
   how often will Class A evidence be unavailable in practice?
-- Do CI artifacts record enough about a retried attempt's test selection to prove
-  selection equivalence, or does the workflow need to emit it explicitly?
+- Which fork-only workflow fixture should make `Final Test Results` run when the
+  repository owner is not `microsoft`, without changing production workflow
+  behavior?
 - What is the authoritative source for the relevant-path mapping, and can it be
   derived from the existing test-selection project graph without duplicating it?
 - Who curates the known-nondeterministic failure-signature corpus used as a

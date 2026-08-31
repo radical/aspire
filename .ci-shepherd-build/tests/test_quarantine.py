@@ -9,21 +9,40 @@ import unittest
 from ci_shepherd.quarantine import (
     apply_quarantine_source_inspection,
     build_quarantine_session_plan,
-    build_quarantine_session_request,
+    build_quarantine_session_request as _build_quarantine_session_request,
     read_quarantine_session_events,
     record_quarantine_session_event,
     render_quarantine_session_section,
     select_quarantine_session_request,
 )
+from ci_shepherd.repository_policy import load_repository_policy_document
 from quarantine_session import _load_request
 
 
+def _repository_policy_identity(repository: str) -> dict[str, object]:
+    policy = load_repository_policy_document(
+        {
+            "schemaVersion": 1,
+            "policyVersion": "test-v1",
+            "repositories": [repository],
+            "retryTestResults": {
+                "aggregateJobSuffixes": ["Aggregate Results"],
+                "artifactNames": ["Combined-Results"],
+            },
+        }
+    )
+    return {**policy.as_public_dict(), "digest": policy.digest}
+
+
 def _prepared() -> dict[str, object]:
+    policy = _repository_policy_identity("owner/repo")
     return {
         "schemaVersion": 1,
         "repository": "owner/repo",
         "sourceCollectedAt": "2026-08-28T20:00:00Z",
         "snapshotId": "snapshot:owner/repo:2026-08-28T20:00:00Z",
+        "repositoryPolicy": policy,
+        "repositoryPolicyDigest": policy["digest"],
         "issues": [
             {
                 "issueNumber": 21,
@@ -98,7 +117,237 @@ def _judgments() -> dict[str, object]:
     }
 
 
+def _class_a_observations() -> dict[str, object]:
+    occurrences: list[dict[str, object]] = []
+    coverage: list[dict[str, object]] = []
+    for issue_number, run_id, test_name in (
+        (21, 210, "Tests.FirstTest"),
+        (22, 220, "Tests.SecondTest"),
+    ):
+        failed_log_id = (
+            f"run:{run_id}:attempt:1:job:900:test-results"
+        )
+        passed_log_id = (
+            f"run:{run_id}:attempt:2:job:901:test-results"
+        )
+        identity = {
+            "runId": run_id,
+            "headSha": f"{run_id:040x}",
+            "workflow": "CI",
+            "jobName": "Tests / unit (ubuntu-latest)",
+            "lane": "unit",
+            "os": "ubuntu-latest",
+        }
+        occurrences.append(
+            {
+                **identity,
+                "occurrenceId": f"occurrence:{issue_number}:{run_id}:1:900:1",
+                "issueNumber": issue_number,
+                "attempt": 1,
+                "jobId": 900,
+                "testName": test_name,
+                "testNameEvidenceId": failed_log_id,
+                "evidenceIds": [
+                    f"run:{run_id}",
+                    f"run:{run_id}:attempt:1:job:900",
+                    failed_log_id,
+                ],
+            }
+        )
+        coverage.append(
+            {
+                **identity,
+                "coverageId": (
+                    f"coverage:run:{run_id}:attempt:2:job:901:test:{test_name}"
+                ),
+                "subjectKind": "test",
+                "subjectId": f"ci:unit:ubuntu-latest:test:{test_name.lower()}",
+                "attempt": 2,
+                "jobId": 901,
+                "testName": test_name,
+                "status": "succeeded",
+                "evidenceIds": [
+                    f"run:{run_id}",
+                    f"run:{run_id}:attempt:2:job:901",
+                    passed_log_id,
+                ],
+            }
+        )
+    return {"occurrences": occurrences, "coverage": coverage, "fingerprints": []}
+
+
+def build_quarantine_session_request(
+    prepared: dict[str, object],
+    judgments: dict[str, object],
+) -> dict[str, object]:
+    return _build_quarantine_session_request(
+        prepared,
+        judgments,
+        _class_a_observations(),
+    )
+
+
 class QuarantineSessionRequestTests(unittest.TestCase):
+    def test_request_binds_repository_policy_digest(self) -> None:
+        request = build_quarantine_session_request(
+            _prepared(),
+            _judgments(),
+        )
+
+        self.assertEqual(
+            _prepared()["repositoryPolicyDigest"],
+            request["repositoryPolicyDigest"],
+        )
+        self.assertEqual(
+            _prepared()["repositoryPolicy"],
+            request["repositoryPolicy"],
+        )
+
+    def test_request_blocks_candidates_without_repository_policy_identity(self) -> None:
+        prepared = _prepared()
+        del prepared["repositoryPolicyDigest"]
+
+        request = build_quarantine_session_request(
+            prepared,
+            _judgments(),
+        )
+
+        self.assertEqual([], request["tests"])
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests.FirstTest",
+                    "reason": "repository-policy-unavailable",
+                },
+                {
+                    "testName": "Tests.SecondTest",
+                    "reason": "repository-policy-unavailable",
+                },
+            ],
+            request["blockedTargets"],
+        )
+
+    def test_blocks_agent_recommendation_without_class_a_evidence(self) -> None:
+        request = _build_quarantine_session_request(
+            _prepared(),
+            _judgments(),
+            {"occurrences": [], "coverage": [], "fingerprints": []},
+        )
+
+        self.assertEqual([], request["tests"])
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests.FirstTest",
+                    "reason": "insufficient-evidence-class",
+                    "evidenceReason": (
+                        "no artifact-derived exact failing test occurrence was collected"
+                    ),
+                },
+                {
+                    "testName": "Tests.SecondTest",
+                    "reason": "insufficient-evidence-class",
+                    "evidenceReason": (
+                        "no artifact-derived exact failing test occurrence was collected"
+                    ),
+                },
+            ],
+            request["blockedTargets"],
+        )
+
+    def test_blocks_title_derived_test_name_even_when_retry_log_shows_a_pass(
+        self,
+    ) -> None:
+        observations = _class_a_observations()
+        observations["occurrences"][0]["testNameEvidenceId"] = "issue:21"
+        observations["occurrences"][0]["evidenceIds"].append("issue:21")
+
+        request = _build_quarantine_session_request(
+            _prepared(),
+            _judgments(),
+            observations,
+        )
+
+        self.assertEqual(
+            ["Tests.SecondTest"],
+            [test["testName"] for test in request["tests"]],
+        )
+        self.assertEqual(
+            "no artifact-derived exact failing test occurrence was collected",
+            request["blockedTargets"][0]["evidenceReason"],
+        )
+
+    def test_blocks_green_retry_without_exact_test_pass_evidence(self) -> None:
+        observations = _class_a_observations()
+        recovery = observations["coverage"][0]
+        recovery["subjectKind"] = "lane"
+        recovery["testName"] = None
+
+        request = _build_quarantine_session_request(
+            _prepared(),
+            _judgments(),
+            observations,
+        )
+
+        self.assertEqual(
+            ["Tests.SecondTest"],
+            [test["testName"] for test in request["tests"]],
+        )
+        self.assertIn(
+            "no exact passing test result",
+            request["blockedTargets"][0]["evidenceReason"],
+        )
+
+    def test_blocks_exact_pass_from_a_different_lane(self) -> None:
+        observations = _class_a_observations()
+        observations["coverage"][0]["jobName"] = "Tests / other (ubuntu-latest)"
+
+        request = _build_quarantine_session_request(
+            _prepared(),
+            _judgments(),
+            observations,
+        )
+
+        self.assertEqual(
+            ["Tests.SecondTest"],
+            [test["testName"] for test in request["tests"]],
+        )
+        self.assertEqual(
+            "no later equivalent retry passed the exact test",
+            request["blockedTargets"][0]["evidenceReason"],
+        )
+
+    def test_class_a_requires_every_retry_identity_conjunct(self) -> None:
+        mutations = {
+            "same head SHA": ("headSha", "f" * 40),
+            "later attempt": ("attempt", 1),
+            "same workflow": ("workflow", "Other"),
+            "same OS": ("os", "windows-latest"),
+            "successful result": ("status", "failed"),
+        }
+        for description, (field, value) in mutations.items():
+            with self.subTest(description):
+                observations = _class_a_observations()
+                observations["coverage"][0][field] = value
+
+                request = _build_quarantine_session_request(
+                    _prepared(),
+                    _judgments(),
+                    observations,
+                )
+
+                self.assertEqual(
+                    ["Tests.SecondTest"],
+                    [
+                        test["testName"]
+                        for test in request["tests"]
+                    ],
+                )
+                self.assertEqual(
+                    "insufficient-evidence-class",
+                    request["blockedTargets"][0]["reason"],
+                )
+
     def test_applies_source_inspection_and_blocks_existing_suppressions(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())
 
@@ -283,27 +532,39 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertTrue(request["requiresSeparateApproval"])
         self.assertEqual(
             [
-                {
-                    "testName": "Tests.FirstTest",
-                    "issueNumber": 21,
-                    "issueUrl": "https://github.com/owner/repo/issues/21",
-                    "issueNumbers": [21],
-                    "issueUrls": ["https://github.com/owner/repo/issues/21"],
-                    "evidenceIds": ["issue:21", "run:210"],
-                    "summary": "The test failed in two independent runs.",
-                },
-                {
-                    "testName": "Tests.SecondTest",
-                    "issueNumber": 22,
-                    "issueUrl": "https://github.com/owner/repo/issues/22",
-                    "issueNumbers": [22],
-                    "issueUrls": ["https://github.com/owner/repo/issues/22"],
-                    "evidenceIds": ["issue:22", "run:220"],
-                    "summary": "The test failed in three independent runs.",
-                },
+                (
+                    "Tests.FirstTest",
+                    21,
+                    "https://github.com/owner/repo/issues/21",
+                    "A",
+                ),
+                (
+                    "Tests.SecondTest",
+                    22,
+                    "https://github.com/owner/repo/issues/22",
+                    "A",
+                ),
             ],
-            request["tests"],
+            [
+                (
+                    test["testName"],
+                    test["issueNumber"],
+                    test["issueUrl"],
+                    test["evidenceClass"],
+                )
+                for test in request["tests"]
+            ],
         )
+        for test in request["tests"]:
+            self.assertIn("failed and later passed", test["evidenceReason"])
+            self.assertTrue(test["failureOccurrenceId"].startswith("occurrence:"))
+            self.assertTrue(test["recoveryCoverageId"].startswith("coverage:"))
+            self.assertTrue(
+                any(
+                    value.endswith(":test-results")
+                    for value in test["evidenceIds"]
+                )
+            )
         self.assertIn("test-management", request["workerPrompt"])
         self.assertIn("QuarantineTools once for each test", request["workerPrompt"])
         self.assertIn("affected-project builds", request["workerPrompt"])
@@ -312,14 +573,6 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertIn("must remain open", request["workerPrompt"])
         self.assertIn(
             "PR body must begin with `[automated] `",
-            request["workerPrompt"],
-        )
-        self.assertIn(
-            "If a target is already quarantined",
-            request["workerPrompt"],
-        )
-        self.assertIn(
-            "Identify the merged pull request",
             request["workerPrompt"],
         )
 

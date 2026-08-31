@@ -361,6 +361,8 @@ def _run_checked(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
             env=environment,
         )
@@ -402,14 +404,44 @@ def _validate_test_discovery(
     environment: Mapping[str, str],
     timeout_seconds: int,
 ) -> None:
+    dotnet = _dotnet_launcher(checkout)
+    target_path_result = _run_checked(
+        [
+            *dotnet,
+            "msbuild",
+            str(project),
+            "-getProperty:TargetPath",
+            "-nologo",
+        ],
+        checkout,
+        environment,
+        timeout_seconds,
+        f"Unable to resolve test assembly for {project.relative_to(checkout)}",
+    )
+    target_path_lines = [
+        line.strip()
+        for line in target_path_result.stdout.splitlines()
+        if line.strip()
+    ]
+    if not target_path_lines:
+        raise ValueError(
+            f"Test assembly path is unavailable for {project.relative_to(checkout)}."
+        )
+    target_path = Path(target_path_lines[-1])
+    if not target_path.is_absolute():
+        target_path = checkout / target_path
+    try:
+        target_path.resolve().relative_to(checkout)
+    except ValueError as error:
+        raise ValueError(
+            f"Test assembly for {project.relative_to(checkout)} is outside the checkout."
+        ) from error
+
+    # `dotnet test -- --list-tests` can report zero tests under Microsoft.Testing.Platform
+    # even though the xUnit runner supports discovery, so invoke the built runner directly.
     base_command = [
-        "dotnet",
-        "test",
-        "--project",
-        str(project),
-        "--no-build",
-        "--no-launch-profile",
-        "--",
+        *dotnet,
+        str(target_path),
         "--list-tests",
         *[
             argument
@@ -448,6 +480,14 @@ def _validate_test_discovery(
             raise ValueError(
                 f"{test_name} remains in quarantine-filtered discovery."
             )
+
+
+def _dotnet_launcher(checkout: Path) -> list[str]:
+    if os.name == "nt":
+        local_launcher = checkout / "dotnet.cmd"
+    else:
+        local_launcher = checkout / "dotnet.sh"
+    return [str(local_launcher)] if local_launcher.is_file() else ["dotnet"]
 
 
 def _discovery_contains(output: str, test_name: str) -> bool:

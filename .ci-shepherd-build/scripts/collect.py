@@ -16,6 +16,10 @@ from ci_shepherd.history import load_current
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.progress import ProgressTracker
 from ci_shepherd.refresh import RefreshPlan, complete_refresh_plan
+from ci_shepherd.repository_policy import (
+    RepositoryPolicy,
+    load_repository_policy,
+)
 
 
 DEFAULT_COLLECTION_BUDGETS = {
@@ -26,9 +30,21 @@ DEFAULT_COLLECTION_BUDGETS = {
     "marker_candidates": 3,
     "fact_candidates": 3,
 }
+DEFAULT_REPOSITORY_POLICY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "policies"
+    / "repositories"
+    / "aspire-v1.json"
+)
 
 
-def build_snapshot(repository: str, collected_at: datetime, inventory: InventoryResult) -> dict[str, object]:
+def build_snapshot(
+    repository: str,
+    collected_at: datetime,
+    inventory: InventoryResult,
+    *,
+    repository_policy: RepositoryPolicy | None = None,
+) -> dict[str, object]:
     snapshot: dict[str, object] = {
         "schemaVersion": 1,
         "repository": repository,
@@ -62,6 +78,11 @@ def build_snapshot(repository: str, collected_at: datetime, inventory: Inventory
             "newIssueNumbers": list(plan.new_issues),
             "changedIssueNumbers": list(plan.changed_issues),
         }
+    if repository_policy is not None:
+        snapshot["repositoryPolicy"] = {
+            **repository_policy.as_public_dict(),
+            "digest": repository_policy.digest,
+        }
     return snapshot
 
 
@@ -81,6 +102,7 @@ def collect(
     state_dir: Path | None = None,
     full_refresh: bool = False,
     shepherd_author: str | None = None,
+    repository_policy_path: Path | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     output_dir.chmod(0o700)
@@ -113,6 +135,13 @@ def collect(
         }
         if shepherd_author is not None:
             collector_options["shepherd_author"] = shepherd_author
+        repository_policy = (
+            load_repository_policy(repository_policy_path)
+            if repository_policy_path is not None
+            else None
+        )
+        if repository_policy is not None:
+            collector_options["repository_policy"] = repository_policy
         collector = Collector(
             client,
             repository,
@@ -153,6 +182,7 @@ def collect(
             include_issue_references=True,
             minimal_run_evidence=True,
             include_run_history=True,
+            include_retry_evidence=True,
         )
         progress.update(
             current_stage,
@@ -187,7 +217,12 @@ def collect(
 
         current_stage = "write-artifacts"
         progress.update(current_stage, "started", message="Validating and writing collection artifacts.")
-        snapshot = build_snapshot(repository, now, inventory)
+        snapshot = build_snapshot(
+            repository,
+            now,
+            inventory,
+            repository_policy=repository_policy,
+        )
         validate_snapshot(snapshot)
         write_private(output_dir / "input.json", stable_json(snapshot))
         write_private(
@@ -224,6 +259,11 @@ def main() -> int:
     parser.add_argument("--full-refresh", action="store_true")
     parser.add_argument("--shepherd-author")
     parser.add_argument(
+        "--repository-policy",
+        type=Path,
+        default=DEFAULT_REPOSITORY_POLICY_PATH,
+    )
+    parser.add_argument(
         "--max-run-refs-per-issue",
         type=int,
         default=DEFAULT_COLLECTION_BUDGETS["max_run_refs_per_issue"],
@@ -252,6 +292,7 @@ def main() -> int:
             state_dir=args.state_dir,
             full_refresh=args.full_refresh,
             shepherd_author=args.shepherd_author,
+            repository_policy_path=args.repository_policy,
         )
     finally:
         os.umask(old_umask)

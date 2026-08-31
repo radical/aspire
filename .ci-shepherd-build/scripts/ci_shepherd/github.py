@@ -194,6 +194,66 @@ class GitHubClient:
 
         raise AssertionError("Unreachable")
 
+    def get_bytes(self, endpoint: str, max_bytes: int) -> bytes:
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive.")
+        for attempt in range(1, self._max_attempts + 1):
+            self._notify_request(endpoint)
+            with tempfile.TemporaryFile() as stderr_file:
+                process = self._popen_factory(
+                    self._build_binary_command(endpoint),
+                    env=self._build_env(),
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                )
+                payload = process.stdout.read(max_bytes + 1)
+                if len(payload) > max_bytes:
+                    process.terminate()
+                    process.wait(timeout=self._request_timeout_seconds)
+                    raise GitHubApiError(
+                        category="response-too-large",
+                        endpoint=endpoint,
+                        status=200,
+                        headers={},
+                        retryable=False,
+                        attempts=attempt,
+                        sanitized_stderr="",
+                    )
+                try:
+                    returncode = process.wait(timeout=self._request_timeout_seconds)
+                except subprocess.TimeoutExpired as exc:
+                    process.kill()
+                    process.wait(timeout=self._request_timeout_seconds)
+                    raise self._timeout_error(endpoint, attempt) from exc
+                stderr_file.seek(0)
+                stderr = _sanitize_stderr(
+                    stderr_file.read().decode("utf-8", errors="replace")
+                )
+
+            status_match = re.search(r"\bHTTP\s+(?P<status>[0-9]{3})\b", stderr)
+            status = (
+                int(status_match.group("status"))
+                if status_match is not None
+                else (200 if returncode == 0 else 0)
+            )
+            self._append_audit(endpoint, status)
+            if returncode == 0:
+                return payload
+            error = self._classify_error(
+                endpoint=endpoint,
+                status=status,
+                headers={},
+                body="",
+                attempts=attempt,
+                sanitized_stderr=stderr,
+            )
+            delay = self._retry_delay(error)
+            if delay is None or attempt >= self._max_attempts:
+                raise error
+            self._sleep(delay)
+
+        raise AssertionError("Unreachable")
+
     @staticmethod
     def _timeout_error(endpoint: str, attempt: int) -> GitHubApiError:
         return GitHubApiError(
@@ -273,6 +333,13 @@ class GitHubClient:
             "X-GitHub-Api-Version: 2022-11-28",
             endpoint,
         ]
+
+    def _build_binary_command(self, endpoint: str) -> list[str]:
+        command = self._build_command(endpoint)
+        command.remove("--include")
+        accept_index = command.index("Accept: application/vnd.github+json")
+        command[accept_index] = "Accept: application/octet-stream"
+        return command
 
     def _build_env(self) -> dict[str, str]:
         env = dict(os.environ)

@@ -177,6 +177,24 @@ def log_payload(
     return payload
 
 
+def test_results_payload(
+    issue_number: int,
+    *,
+    run_id: int,
+    attempt: int,
+    job_id: int,
+    tests: list[dict[str, str]],
+) -> dict[str, object]:
+    return {
+        "runId": run_id,
+        "attempt": attempt,
+        "jobId": job_id,
+        "targetRepository": REPOSITORY,
+        "tests": tests,
+        "referencedBy": association(issue_number),
+    }
+
+
 def snapshot(
     issue: dict[str, object],
     *extra_evidence: tuple[str, dict[str, object]],
@@ -320,8 +338,14 @@ class ObservationTests(unittest.TestCase):
                     "coverageId": "coverage:run:100:attempt:2:job:900",
                     "subjectKind": "lane",
                     "subjectId": "ci:aspire-hosting-tests:ubuntu-latest",
+                    "workflow": "CI",
+                    "jobName": "Tests / Aspire.Hosting.Tests (ubuntu-latest)",
+                    "lane": "Aspire.Hosting.Tests",
+                    "os": "ubuntu-latest",
+                    "testName": None,
                     "runId": 100,
                     "attempt": 2,
+                    "jobId": 900,
                     "headSha": "b" * 40,
                     "observedAt": "2026-08-19T15:30:00Z",
                     "status": "succeeded",
@@ -452,6 +476,157 @@ class ObservationTests(unittest.TestCase):
                 "ci:tests-linux:ubuntu-latest:test:alpha-tests-punctuation-case",
             ],
             [coverage["subjectId"] for coverage in test_coverage],
+        )
+
+    def test_retry_results_bind_exact_failure_and_pass_to_the_same_test(self) -> None:
+        issue_number = 12
+        test_name = "Alpha.Tests.FlakyTest"
+        failed_log_id = (
+            "run:200:attempt:1:job:901:test-results"
+        )
+        passed_log_id = (
+            "run:200:attempt:2:job:902:test-results"
+        )
+        job_name = "CI Tests / tests-linux (ubuntu-latest)"
+
+        result = build_observations(
+            snapshot(
+                issue_payload(issue_number),
+                evidence(
+                    "run:200",
+                    "workflow-run",
+                    {**run_payload(run_id=200, attempt=2, conclusion="success"), "workflow": "CI Tests"},
+                ),
+                evidence(
+                    "run:200:attempt:1:job:901",
+                    "workflow-job",
+                    job_payload(
+                        issue_number,
+                        run_id=200,
+                        attempt=1,
+                        job_id=901,
+                        name=job_name,
+                        conclusion="failure",
+                    ),
+                ),
+                evidence(
+                    failed_log_id,
+                    "workflow-test-results",
+                    test_results_payload(
+                        issue_number,
+                        run_id=200,
+                        attempt=1,
+                        job_id=901,
+                        tests=[
+                            {
+                                "testName": test_name,
+                                "outcome": "failed",
+                            }
+                        ],
+                    ),
+                ),
+                evidence(
+                    "run:200:attempt:2:job:902",
+                    "workflow-job",
+                    job_payload(
+                        issue_number,
+                        run_id=200,
+                        attempt=2,
+                        job_id=902,
+                        name=job_name,
+                        conclusion="success",
+                    ),
+                ),
+                evidence(
+                    passed_log_id,
+                    "workflow-test-results",
+                    test_results_payload(
+                        issue_number,
+                        run_id=200,
+                        attempt=2,
+                        job_id=902,
+                        tests=[
+                            {
+                                "testName": test_name,
+                                "outcome": "passed",
+                            }
+                        ],
+                    ),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        self.assertEqual(test_name, result["occurrences"][0]["testName"])
+        self.assertEqual(
+            failed_log_id,
+            result["occurrences"][0]["testNameEvidenceId"],
+        )
+        exact_coverage = [
+            item
+            for item in result["coverage"]
+            if item["subjectKind"] == "test"
+        ]
+        self.assertEqual([test_name], [item["testName"] for item in exact_coverage])
+        self.assertIn(passed_log_id, exact_coverage[0]["evidenceIds"])
+
+    def test_structured_results_override_untrusted_test_names(self) -> None:
+        issue_number = 12
+        result_id = "run:100:attempt:1:job:900:test-results"
+        result = build_observations(
+            snapshot(
+                issue_payload(
+                    issue_number,
+                    facts=[fact("testName", "Tests.Wrong")],
+                ),
+                evidence(
+                    "run:100",
+                    "workflow-run",
+                    run_payload(),
+                ),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(issue_number),
+                ),
+                evidence(
+                    "run:100:attempt:1:job:900:log",
+                    "workflow-log",
+                    log_payload(
+                        issue_number,
+                        excerpt="Failed Tests.Wrong [1 ms]",
+                    ),
+                ),
+                evidence(
+                    result_id,
+                    "workflow-test-results",
+                    test_results_payload(
+                        issue_number,
+                        run_id=100,
+                        attempt=1,
+                        job_id=900,
+                        tests=[
+                            {
+                                "testName": "Tests.Real",
+                                "outcome": "failed",
+                            }
+                        ],
+                    ),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        self.assertEqual(
+            ["Tests.Real"],
+            [
+                occurrence["testName"]
+                for occurrence in result["occurrences"]
+            ],
+        )
+        self.assertEqual(
+            result_id,
+            result["occurrences"][0]["testNameEvidenceId"],
         )
 
     def test_exact_test_coverage_subject_matches_the_test_fingerprint_identity(self) -> None:
@@ -859,6 +1034,7 @@ class ObservationTests(unittest.TestCase):
             "attempt": 1,
             "jobId": 900,
             "workflow": "CI",
+            "jobName": "Tests / Aspire.Hosting.Tests (ubuntu-latest)",
             "lane": "Aspire.Hosting.Tests",
             "os": "ubuntu-latest",
             "observedAt": "2026-08-18T15:30:00Z",
@@ -895,6 +1071,7 @@ class ObservationTests(unittest.TestCase):
             "attempt": 1,
             "jobId": 900,
             "workflow": "CI",
+            "jobName": "Tests / Aspire.Hosting.Tests (ubuntu-latest)",
             "lane": "Aspire.Hosting.Tests",
             "os": "ubuntu-latest",
             "observedAt": "2026-08-18T15:30:00Z",
@@ -1673,6 +1850,7 @@ class ObservationTests(unittest.TestCase):
                         "headSha": "c" * 40,
                         "observedAt": "2026-08-18T15:30:00Z",
                         "testName": "Alpha.Tests.FailingTest",
+                        "testNameEvidenceId": "issue:12",
                         "fingerprintId": "test:alpha-tests-failingtest",
                         "allowedCauses": ["unknown"],
                         "retrySafe": True,
@@ -3266,11 +3444,13 @@ class OccurrenceRecordShapeTests(unittest.TestCase):
                     "attempt": 1,
                     "jobId": 900,
                     "workflow": "CI",
+                    "jobName": "Tests / Aspire.Hosting.Tests (ubuntu-latest)",
                     "lane": "Aspire.Hosting.Tests",
                     "os": "ubuntu-latest",
                     "headSha": "a" * 40,
                     "observedAt": "2026-08-19T15:30:00Z",
                     "testName": "Alpha.Tests.FailingTest",
+                    "testNameEvidenceId": "issue:12",
                     "fingerprintId": "test:alpha-tests-failingtest",
                     "fingerprintComponents": {
                         "patternId": None,

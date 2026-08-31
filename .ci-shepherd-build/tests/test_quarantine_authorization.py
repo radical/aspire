@@ -15,6 +15,42 @@ from ci_shepherd.quarantine_authorization import (
     write_quarantine_grant,
 )
 from ci_shepherd.quarantine import record_quarantine_session_event
+from ci_shepherd.repository_policy import load_repository_policy_document
+
+
+def retry_identity(
+    run_id: int,
+    attempt: int,
+    job_id: int,
+) -> dict[str, object]:
+    return {
+        "runId": run_id,
+        "attempt": attempt,
+        "jobId": job_id,
+        "headSha": f"{run_id:040x}",
+        "workflow": "CI",
+        "jobName": "Tests / unit (ubuntu-latest)",
+        "lane": "unit",
+        "os": "ubuntu-latest",
+    }
+
+
+def repository_policy_identity(repository: str) -> dict[str, object]:
+    repositories = [repository]
+    if repository != "microsoft/aspire":
+        repositories.append("microsoft/aspire")
+    policy = load_repository_policy_document(
+        {
+            "schemaVersion": 1,
+            "policyVersion": "test-v1",
+            "repositories": repositories,
+            "retryTestResults": {
+                "aggregateJobSuffixes": ["Aggregate Results"],
+                "artifactNames": ["Combined-Results"],
+            },
+        }
+    )
+    return {**policy.as_public_dict(), "digest": policy.digest}
 
 
 class QuarantineAuthorizationTests(unittest.TestCase):
@@ -24,17 +60,36 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         self.state_dir = self.root / "state"
         self.request_path = self.root / "request.json"
         self.authorization_path = self.root / "authorization.json"
+        repository_policy = repository_policy_identity("radical/aspire")
         self.request = {
             "schemaVersion": 1,
             "repository": "radical/aspire",
             "snapshotId": "snapshot:radical/aspire:2026-08-30T00:00:00Z",
+            "repositoryPolicy": repository_policy,
+            "repositoryPolicyDigest": repository_policy["digest"],
             "batchId": "quarantine:1",
             "sourceRevision": "a" * 40,
             "sourceTreeDigest": "sha256:" + "b" * 64,
             "tests": [
                 {
                     "testName": "Tests.One",
+                    "issueNumber": 1,
                     "issueUrl": "https://github.com/radical/aspire/issues/1",
+                    "evidenceClass": "A",
+                    "evidenceReason": (
+                        "the exact test failed and later passed in the same "
+                        "run, commit, and job lane"
+                    ),
+                    "evidenceIds": [
+                        "run:200:attempt:1:job:901:test-results",
+                        "run:200:attempt:2:job:902:test-results",
+                    ],
+                    "failureOccurrenceId": "occurrence:1:200:1:901:1",
+                    "recoveryCoverageId": (
+                        "coverage:run:200:attempt:2:job:902:test:Tests.One"
+                    ),
+                    "failureIdentity": retry_identity(200, 1, 901),
+                    "recoveryIdentity": retry_identity(200, 2, 902),
                     "sourceLocation": {"file": "OneTests.cs", "line": 10},
                     "sourceValidation": {
                         "fileSemanticDigest": "sha256:" + "c" * 64,
@@ -43,7 +98,23 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 },
                 {
                     "testName": "Tests.Two",
+                    "issueNumber": 2,
                     "issueUrl": "https://github.com/radical/aspire/issues/2",
+                    "evidenceClass": "A",
+                    "evidenceReason": (
+                        "the exact test failed and later passed in the same "
+                        "run, commit, and job lane"
+                    ),
+                    "evidenceIds": [
+                        "run:201:attempt:1:job:903:test-results",
+                        "run:201:attempt:2:job:904:test-results",
+                    ],
+                    "failureOccurrenceId": "occurrence:2:201:1:903:1",
+                    "recoveryCoverageId": (
+                        "coverage:run:201:attempt:2:job:904:test:Tests.Two"
+                    ),
+                    "failureIdentity": retry_identity(201, 1, 903),
+                    "recoveryIdentity": retry_identity(201, 2, 904),
                     "sourceLocation": {"file": "TwoTests.cs", "line": 20},
                     "sourceValidation": {
                         "fileSemanticDigest": "sha256:" + "d" * 64,
@@ -60,6 +131,12 @@ class QuarantineAuthorizationTests(unittest.TestCase):
 
     def test_exact_grant_authorizes_one_batch(self) -> None:
         self._write_grant()
+
+        grant = json.loads(self.authorization_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            self.request["repositoryPolicyDigest"],
+            grant["repositoryPolicyDigest"],
+        )
 
         result = authorize_quarantine_start(
             request_path=self.request_path,
@@ -93,6 +170,27 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         )
 
         self.assertEqual(self.request, result.request)
+
+    def test_grant_rejects_repository_policy_content_tampering(self) -> None:
+        policy = self.request["repositoryPolicy"]
+        assert isinstance(policy, dict)
+        retry_results = policy["retryTestResults"]
+        assert isinstance(retry_results, dict)
+        retry_results["artifactNames"] = ["Substituted-Results"]
+        self._write_request()
+
+        with self.assertRaisesRegex(ValueError, "repositoryPolicy digest"):
+            self._write_grant()
+
+    def test_grant_rejects_repository_policy_digest_substitution(self) -> None:
+        self.request["repositoryPolicyDigest"] = "sha256:" + "f" * 64
+        self._write_request()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "repositoryPolicyDigest does not match repositoryPolicy",
+        ):
+            self._write_grant()
 
     def test_one_byte_plan_change_is_rejected(self) -> None:
         self._write_grant()
@@ -133,6 +231,11 @@ class QuarantineAuthorizationTests(unittest.TestCase):
 
     def test_production_repository_is_denied(self) -> None:
         self.request["repository"] = "microsoft/aspire"
+        for test in self.request["tests"]:
+            test["issueUrl"] = test["issueUrl"].replace(
+                "github.com/radical/aspire/",
+                "github.com/microsoft/aspire/",
+            )
         self._write_request()
 
         with self.assertRaisesRegex(ValueError, "forbidden"):
@@ -149,6 +252,32 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         self._write_request()
 
         with self.assertRaisesRegex(ValueError, "sourceRevision"):
+            create_quarantine_grant(
+                request_path=self.request_path,
+                state_dir=self.state_dir,
+                batch_id="quarantine:1",
+                issued_at=self.now,
+            )
+
+    def test_grant_requires_class_a_evidence_for_every_test(self) -> None:
+        self.request["tests"][0].pop("evidenceClass", None)
+        self._write_request()
+
+        with self.assertRaisesRegex(ValueError, "evidenceClass"):
+            create_quarantine_grant(
+                request_path=self.request_path,
+                state_dir=self.state_dir,
+                batch_id="quarantine:1",
+                issued_at=self.now,
+            )
+
+    def test_grant_binds_failure_and_recovery_logs(self) -> None:
+        self.request["tests"][0]["evidenceIds"] = [
+            "run:200:attempt:1:job:901:test-results"
+        ]
+        self._write_request()
+
+        with self.assertRaisesRegex(ValueError, "evidenceIds"):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
@@ -191,6 +320,18 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             {
                 **deepcopy(self.request["tests"][0]),
                 "testName": "Tests.Three",
+                "issueNumber": 3,
+                "issueUrl": "https://github.com/radical/aspire/issues/3",
+                "evidenceIds": [
+                    "run:202:attempt:1:job:905:test-results",
+                    "run:202:attempt:2:job:906:test-results",
+                ],
+                "failureOccurrenceId": "occurrence:3:202:1:905:1",
+                "recoveryCoverageId": (
+                    "coverage:run:202:attempt:2:job:906:test:Tests.Three"
+                ),
+                "failureIdentity": retry_identity(202, 1, 905),
+                "recoveryIdentity": retry_identity(202, 2, 906),
                 "sourceLocation": {"file": "ThreeTests.cs", "line": 30},
             }
         )
@@ -206,6 +347,20 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 state_dir=self.state_dir,
                 batch_id="quarantine:1",
                 now=self.now + timedelta(minutes=1),
+            )
+
+    def test_retry_identity_mismatch_is_rejected_before_grant(self) -> None:
+        self.request["tests"][0]["recoveryIdentity"]["os"] = (
+            "windows-latest"
+        )
+        self._write_request()
+
+        with self.assertRaisesRegex(ValueError, "retry identity"):
+            create_quarantine_grant(
+                request_path=self.request_path,
+                state_dir=self.state_dir,
+                batch_id="quarantine:1",
+                issued_at=self.now,
             )
 
     def test_consumed_grant_cannot_restart_after_failure(self) -> None:

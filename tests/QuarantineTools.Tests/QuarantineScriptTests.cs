@@ -6,11 +6,79 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 using System.Text.RegularExpressions;
+using System.Text;
 
 namespace QuarantineTools.Tests;
 
 public class QuarantineScriptTests
 {
+    [Fact]
+    public async Task QuarantineRoundTripPreservesEncodingAndRawStrings()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var sourcePath = Path.Combine(tempDirectory.FullName, "RoundTripTests.cs");
+            const string original = """"
+                using Xunit;
+
+                namespace Sample.Tests;
+
+                public class RoundTripTests
+                {
+                    private const string Example = """
+                        using Aspire.TestUtilities;
+                        """;
+
+                    [Fact]
+                    public void Target()
+                    {
+                    }
+                }
+                """";
+            await File.WriteAllTextAsync(
+                sourcePath,
+                original,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            var quarantineExitCode = await global::Program.Main(
+                [
+                    "--quarantine",
+                    "--root",
+                    tempDirectory.FullName,
+                    "--url",
+                    "https://github.com/microsoft/aspire/issues/1",
+                    "Sample.Tests.RoundTripTests.Target",
+                ]);
+            Assert.Equal(0, quarantineExitCode);
+
+            var quarantinedBytes = await File.ReadAllBytesAsync(sourcePath);
+            Assert.False(quarantinedBytes.AsSpan().StartsWith(Encoding.UTF8.Preamble));
+            Assert.Equal(
+                2,
+                Regex.Matches(
+                    Encoding.UTF8.GetString(quarantinedBytes),
+                    "using Aspire.TestUtilities;").Count);
+
+            var unquarantineExitCode = await global::Program.Main(
+                [
+                    "--unquarantine",
+                    "--root",
+                    tempDirectory.FullName,
+                    "Sample.Tests.RoundTripTests.Target",
+                ]);
+            Assert.Equal(0, unquarantineExitCode);
+
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(original),
+                await File.ReadAllBytesAsync(sourcePath));
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(
         """
