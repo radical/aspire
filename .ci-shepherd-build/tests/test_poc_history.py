@@ -270,11 +270,7 @@ class LedgerAppendTests(unittest.TestCase):
             self.assertEqual(0o700, stat.S_IMODE(path.parent.stat().st_mode))
             self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
 
-    def test_missing_trailing_newline_does_not_corrupt_later_appends(self) -> None:
-        # A prior write (e.g. a crash mid-append) can leave the ledger's last
-        # line without its terminating newline. Appending after that must not
-        # concatenate the next row onto it -- that would merge two JSON
-        # objects onto one line and make the whole line unparseable.
+    def test_incomplete_final_row_blocks_later_appends(self) -> None:
         with TemporaryDirectory() as scratch:
             path = Path(scratch) / "fingerprints.jsonl"
             # Simulate a crash mid-write: a truncated JSON object with no
@@ -293,25 +289,18 @@ class LedgerAppendTests(unittest.TestCase):
                 "testName": "Namespace.Type.New",
             }
 
-            appended = append_new_rows(path, [new_row])
+            with self.assertRaisesRegex(ValueError, "incomplete final row"):
+                append_new_rows(path, [new_row])
 
-            self.assertEqual([new_row], appended)
-            # The merged first line is malformed and is skipped, but the new
-            # row -- and any rows appended afterward -- must still round-trip.
-            self.assertEqual([new_row], read_ledger_rows(path))
+            self.assertEqual(truncated_row, path.read_text(encoding="utf-8"))
 
-            later_row = {
-                "fingerprint": "test:namespace.type.later",
-                "issueNumber": 102,
-                "runId": 1002,
-                "attempt": 1,
-                "date": "2026-08-18",
-                "job": "Tests / Linux",
-                "testName": "Namespace.Type.Later",
-            }
-            append_new_rows(path, [later_row])
+    def test_malformed_complete_row_fails_closed(self) -> None:
+        with TemporaryDirectory() as scratch:
+            path = Path(scratch) / "fingerprints.jsonl"
+            path.write_text('{"fingerprint": "valid"}\nnot-json\n', encoding="utf-8")
 
-            self.assertEqual([new_row, later_row], read_ledger_rows(path))
+            with self.assertRaisesRegex(ValueError, "invalid JSON"):
+                read_ledger_rows(path)
 
 
 class GroupRowsByFingerprintTests(unittest.TestCase):

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ci_shepherd.jsonl import repair_incomplete_jsonl_row
 from ci_shepherd.poc_state import (
     case_key,
     load_latest_case_state,
@@ -123,7 +124,7 @@ class PocStateTests(unittest.TestCase):
                 due["issues"]["1"]["wakeReason"],
             )
 
-    def test_preserves_review_events_after_an_interrupted_trailing_newline(self) -> None:
+    def test_repairs_review_event_with_a_missing_trailing_newline(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             record_review_events(
@@ -135,6 +136,8 @@ class PocStateTests(unittest.TestCase):
             )
             ledger = state / "ledgers" / "review-events.jsonl"
             ledger.write_bytes(ledger.read_bytes().rstrip(b"\n"))
+            replacement = json.loads(ledger.read_text(encoding="utf-8"))
+            repair_incomplete_jsonl_row(ledger, replacement)
 
             record_review_events(
                 state,
@@ -248,7 +251,7 @@ class PocStateTests(unittest.TestCase):
                 ),
             )
 
-    def test_preserves_case_events_after_an_interrupted_trailing_newline(self) -> None:
+    def test_repairs_case_event_with_a_missing_trailing_newline(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             record_poc_ledgers(
@@ -262,6 +265,8 @@ class PocStateTests(unittest.TestCase):
             )
             case_ledger = state / "ledgers" / "case-events.jsonl"
             case_ledger.write_bytes(case_ledger.read_bytes().rstrip(b"\n"))
+            replacement = json.loads(case_ledger.read_text(encoding="utf-8"))
+            repair_incomplete_jsonl_row(case_ledger, replacement)
 
             _, events = record_poc_ledgers(
                 state,

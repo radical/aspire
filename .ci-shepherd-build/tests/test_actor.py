@@ -765,8 +765,51 @@ class ActorTests(unittest.TestCase):
             now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
         )
 
-        self.assertEqual("indeterminate", result["outcome"])
+        self.assertEqual("indeterminate", result["outcome"], result)
         self.assertIn("connection lost", result["reason"])
+
+    def test_mutation_timeout_is_indeterminate(self) -> None:
+        def run(
+            command: list[str],
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            method = command[command.index("--method") + 1]
+            endpoint = command[-1]
+            if method == "POST":
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            if endpoint == "repos/owner/repo/issues/21":
+                payload: object = {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                }
+            elif endpoint.startswith("repos/owner/repo/issues/21/comments"):
+                payload = []
+            elif endpoint == "user":
+                payload = {"login": "ankj"}
+            else:
+                raise AssertionError(f"Unexpected endpoint: {endpoint}")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(payload),
+                "",
+            )
+
+        result = execute_action(
+            _proposals(),
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=GitHubActorClient(
+                allowed_repositories={"owner/repo"},
+                runner=run,
+                request_timeout_seconds=0.01,
+            ),
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("indeterminate", result["outcome"], result)
+        self.assertIn("timed out", result["reason"])
 
     def test_reconcile_comment_requires_exact_key_body_and_author(self) -> None:
         client = ScriptedActorClient(

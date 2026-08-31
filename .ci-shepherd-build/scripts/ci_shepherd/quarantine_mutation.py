@@ -68,6 +68,7 @@ def execute_quarantine_mutation(
         "DOTNET_ROLL_FORWARD": "Major",
         "MSBUILDTERMINALLOGGER": "false",
     }
+    dotnet = _dotnet_launcher(checkout)
     for test in tests:
         if not isinstance(test, Mapping):
             raise ValueError("Quarantine mutation tests must contain objects.")
@@ -75,11 +76,10 @@ def execute_quarantine_mutation(
         issue_url = _require_string(test, "issueUrl")
         _run_checked(
             [
-                "dotnet",
+                *dotnet,
                 "run",
                 "--project",
                 str(tool_project),
-                "--no-restore",
                 "--verbosity",
                 "quiet",
                 "--",
@@ -99,11 +99,10 @@ def execute_quarantine_mutation(
     test_names = [_require_string(test, "testName") for test in tests]
     inspection_result = _run_checked(
         [
-            "dotnet",
+            *dotnet,
             "run",
             "--project",
             str(tool_project),
-            "--no-restore",
             "--verbosity",
             "quiet",
             "--",
@@ -154,10 +153,9 @@ def execute_quarantine_mutation(
     ):
         _run_checked(
             [
-                "dotnet",
+                *dotnet,
                 "build",
                 str(project),
-                "--no-restore",
                 "--verbosity",
                 "quiet",
             ],

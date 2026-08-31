@@ -13,7 +13,14 @@ from .timeutils import parse_aware_iso8601
 
 
 _SESSION_STATUSES = frozenset(
-    {"started", "pull-request-open", "completed", "failed", "abandoned"}
+    {
+        "started",
+        "publication-pending",
+        "pull-request-open",
+        "completed",
+        "failed",
+        "abandoned",
+    }
 )
 _PULL_REQUEST_URL_RE = re.compile(
     r"^https://github\.com/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
@@ -1134,7 +1141,7 @@ def build_quarantine_session_plan(
         (
             event
             for event in reversed(list(latest_by_batch.values()))
-            if event.get("status") == "started"
+            if event.get("status") in {"started", "publication-pending"}
         ),
         None,
     )
@@ -1281,11 +1288,14 @@ def record_quarantine_session_event(
     failure_reason: str | None = None,
     authorization_grant_id: str | None = None,
     authorization_expires_at: str | None = None,
+    publication_authorization_grant_id: str | None = None,
+    publication_authorization_expires_at: str | None = None,
     pull_request_head_sha: str | None = None,
     blocked_targets: list[dict[str, str]] | None = None,
     allow_pull_request_head_update: bool = False,
     mutation_validation: Mapping[str, Any] | None = None,
     confirm_no_remote_side_effects: bool = False,
+    checkout: Path | None = None,
 ) -> dict[str, object]:
     if status not in _SESSION_STATUSES:
         raise ValueError(f"Unsupported quarantine session status: {status}")
@@ -1310,6 +1320,12 @@ def record_quarantine_session_event(
         raise ValueError(
             "A grant-authorized started session must record authorizationExpiresAt."
         )
+    if authorization_grant_id is not None and checkout is None:
+        raise ValueError(
+            "A grant-authorized started session must record its checkout."
+        )
+    if checkout is not None and status != "started":
+        raise ValueError("checkout is valid only for started sessions.")
     if authorization_expires_at is not None:
         if status != "started" or authorization_grant_id is None:
             raise ValueError(
@@ -1323,6 +1339,40 @@ def record_quarantine_session_event(
         if expires_at <= parse_aware_iso8601(recorded_at, "recordedAt"):
             raise ValueError(
                 "authorizationExpiresAt must follow the started event."
+            )
+    if publication_authorization_grant_id is not None and (
+        status != "publication-pending"
+        or not isinstance(publication_authorization_grant_id, str)
+        or not publication_authorization_grant_id
+    ):
+        raise ValueError(
+            "publicationAuthorizationGrantId must be nonempty and is valid only "
+            "for publication-pending sessions."
+        )
+    if (
+        publication_authorization_grant_id is not None
+        and publication_authorization_expires_at is None
+    ):
+        raise ValueError(
+            "An authorized publication must record "
+            "publicationAuthorizationExpiresAt."
+        )
+    if publication_authorization_expires_at is not None:
+        if (
+            status != "publication-pending"
+            or publication_authorization_grant_id is None
+        ):
+            raise ValueError(
+                "publicationAuthorizationExpiresAt is valid only for an authorized "
+                "publication-pending session."
+            )
+        if parse_aware_iso8601(
+            publication_authorization_expires_at,
+            "publicationAuthorizationExpiresAt",
+        ) <= parse_aware_iso8601(recorded_at, "recordedAt"):
+            raise ValueError(
+                "publicationAuthorizationExpiresAt must follow the publication "
+                "intent."
             )
     if status == "abandoned" and not confirm_no_remote_side_effects:
         raise ValueError(
@@ -1353,32 +1403,35 @@ def record_quarantine_session_event(
             raise ValueError(
                 f"pullRequestUrl must identify an {repository} pull request."
             )
-    if status in {"pull-request-open", "completed"} and pull_request_head_sha is None:
+    publication_statuses = {
+        "publication-pending",
+        "pull-request-open",
+        "completed",
+    }
+    if status in publication_statuses and pull_request_head_sha is None:
         raise ValueError(
             f"A {status} quarantine session must record its pull request head SHA."
         )
     if pull_request_head_sha is not None and (
-        status not in {"pull-request-open", "completed"}
+        status not in publication_statuses
         or re.fullmatch(r"[0-9a-fA-F]{40}", pull_request_head_sha) is None
     ):
         raise ValueError(
             "pullRequestHeadSha must be a 40-character Git SHA and is valid "
-            "only for pull-request-open or completed sessions."
+            "only for publication-pending, pull-request-open, or completed sessions."
         )
     if status in {"pull-request-open", "completed"} and pull_request_url is None:
         raise ValueError(
             f"A {status} quarantine session must record its pull request."
         )
-    if status in {"pull-request-open", "completed"} and completed_test_names is None:
+    if status in publication_statuses and completed_test_names is None:
         raise ValueError(
             f"Completed test names are required for a {status} quarantine session."
         )
-    if completed_test_names is not None and status not in {
-        "pull-request-open",
-        "completed",
-    }:
+    if completed_test_names is not None and status not in publication_statuses:
         raise ValueError(
-            "Completed test names are valid only for pull-request-open or completed sessions."
+            "Completed test names are valid only for publication-pending, "
+            "pull-request-open, or completed sessions."
         )
     if status in {"failed", "abandoned"}:
         if not isinstance(failure_reason, str) or not failure_reason:
@@ -1396,13 +1449,10 @@ def record_quarantine_session_event(
             "blockedTargets is valid only for pull-request-open, completed, "
             "or failed sessions."
         )
-    if mutation_validation is not None and status not in {
-        "pull-request-open",
-        "completed",
-    }:
+    if mutation_validation is not None and status not in publication_statuses:
         raise ValueError(
-            "mutationValidation is valid only for pull-request-open or "
-            "completed sessions."
+            "mutationValidation is valid only for publication-pending, "
+            "pull-request-open, or completed sessions."
         )
 
     request_tests = request.get("tests", [])
@@ -1497,6 +1547,15 @@ def record_quarantine_session_event(
     if authorization_grant_id is not None:
         event["authorizationGrantId"] = authorization_grant_id
         event["authorizationExpiresAt"] = authorization_expires_at
+        assert checkout is not None
+        event["checkoutPath"] = str(checkout.expanduser().resolve(strict=True))
+    if publication_authorization_grant_id is not None:
+        event["publicationAuthorizationGrantId"] = (
+            publication_authorization_grant_id
+        )
+        event["publicationAuthorizationExpiresAt"] = (
+            publication_authorization_expires_at
+        )
     if status == "abandoned":
         event["confirmedNoRemoteSideEffects"] = True
     if mutation_validation is not None:
@@ -1506,7 +1565,11 @@ def record_quarantine_session_event(
     with exclusive_jsonl_lock(path):
         events = read_jsonl_rows(path)
         if authorization_grant_id is not None and any(
-            existing.get("authorizationGrantId") == authorization_grant_id
+            authorization_grant_id
+            in {
+                existing.get("authorizationGrantId"),
+                existing.get("publicationAuthorizationGrantId"),
+            }
             for existing in events
         ):
             raise ValueError("Quarantine authorization grant has already been consumed.")
@@ -1520,9 +1583,29 @@ def record_quarantine_session_event(
         active = [
             existing
             for existing in latest_by_batch.values()
-            if existing.get("status") == "started"
+            if existing.get("status") in {"started", "publication-pending"}
         ]
         previous = latest_by_batch.get(batch_id)
+        if publication_authorization_grant_id is not None:
+            matching_publication_grants = [
+                existing
+                for existing in events
+                if publication_authorization_grant_id
+                in {
+                    existing.get("authorizationGrantId"),
+                    existing.get("publicationAuthorizationGrantId"),
+                }
+            ]
+            if matching_publication_grants and not (
+                len(matching_publication_grants) == 1
+                and previous is matching_publication_grants[0]
+                and previous.get("status") == "publication-pending"
+                and previous.get("sessionId") == session_id
+            ):
+                raise ValueError(
+                    "Quarantine publication authorization grant has already been "
+                    "consumed."
+                )
         if status == "started":
             if active:
                 raise ValueError(
@@ -1533,9 +1616,43 @@ def record_quarantine_session_event(
                 "completed",
             }:
                 raise ValueError(f"Quarantine batch {batch_id} is already completed.")
+        elif status == "publication-pending":
+            if previous is None or previous.get("status") not in {
+                "started",
+                "publication-pending",
+            }:
+                raise ValueError(
+                    f"Quarantine batch {batch_id} does not have an active session."
+                )
+            if previous.get("sessionId") != session_id:
+                raise ValueError(
+                    f"Quarantine batch {batch_id} belongs to another session."
+                )
+            if previous.get("status") == "publication-pending":
+                previous_test_names = {
+                    test.get("testName")
+                    for test in previous.get("tests", [])
+                    if isinstance(test, Mapping)
+                }
+                if (
+                    previous_test_names != set(completed_test_names or [])
+                    or previous.get("pullRequestHeadSha")
+                    != event.get("pullRequestHeadSha")
+                    or previous.get("mutationValidation")
+                    != event.get("mutationValidation")
+                ):
+                    raise ValueError(
+                        "Quarantine publication intent does not match the active intent."
+                    )
+                if (
+                    previous.get("publicationAuthorizationGrantId")
+                    == publication_authorization_grant_id
+                ):
+                    return dict(previous)
         elif status == "pull-request-open":
             if previous is None or previous.get("status") not in {
                 "started",
+                "publication-pending",
                 "pull-request-open",
             }:
                 raise ValueError(
@@ -1545,7 +1662,10 @@ def record_quarantine_session_event(
                 raise ValueError(
                     f"Quarantine batch {batch_id} belongs to another session."
                 )
-            if previous.get("status") == "pull-request-open":
+            if previous.get("status") in {
+                "publication-pending",
+                "pull-request-open",
+            }:
                 previous_test_names = {
                     test.get("testName")
                     for test in previous.get("tests", [])
@@ -1553,12 +1673,20 @@ def record_quarantine_session_event(
                 }
                 previous_head = previous.get("pullRequestHeadSha")
                 if (
-                    previous.get("pullRequestUrl") != pull_request_url
+                    (
+                        previous.get("status") == "pull-request-open"
+                        and previous.get("pullRequestUrl") != pull_request_url
+                    )
                     or previous_test_names != set(completed_test_names or [])
                     or previous.get("mutationValidation")
                     != event.get("mutationValidation")
                     or (
+                        previous.get("status") == "publication-pending"
+                        and previous_head != event.get("pullRequestHeadSha")
+                    )
+                    or (
                         previous_head is not None
+                        and previous.get("status") == "pull-request-open"
                         and not allow_pull_request_head_update
                     )
                 ):
@@ -1569,6 +1697,7 @@ def record_quarantine_session_event(
         elif status == "completed":
             if previous is None or previous.get("status") not in {
                 "started",
+                "publication-pending",
                 "pull-request-open",
             }:
                 raise ValueError(
@@ -1626,6 +1755,7 @@ def record_quarantine_session_event(
         elif status == "failed":
             if previous is None or previous.get("status") not in {
                 "started",
+                "publication-pending",
                 "pull-request-open",
             }:
                 raise ValueError(

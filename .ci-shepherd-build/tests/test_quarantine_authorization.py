@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from ci_shepherd.quarantine_authorization import (
+    authorize_quarantine_publication,
     authorize_quarantine_start,
     create_quarantine_grant,
     write_quarantine_grant,
@@ -73,6 +74,9 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         self.temporary_directory = TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self.state_dir = self.root / "state"
+        self.checkout = self.root / "checkout"
+        self.checkout.mkdir()
+        self.session_id = "session-1"
         self.request_path = self.root / "request.json"
         self.authorization_path = self.root / "authorization.json"
         repository_policy = repository_policy_identity("radical/aspire")
@@ -157,6 +161,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             request_path=self.request_path,
             authorization_path=self.authorization_path,
             state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
             batch_id="quarantine:1",
             now=self.now + timedelta(minutes=1),
         )
@@ -164,6 +170,51 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         self.assertEqual(self.request, result.request)
         self.assertTrue(result.grant_id.startswith("quarantine-grant:"))
         self.assertEqual("2026-08-30T00:15:00Z", result.expires_at)
+
+    def test_publication_grant_is_distinct_and_binds_a_single_test(self) -> None:
+        grant = create_quarantine_grant(
+            request_path=self.request_path,
+            state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
+            batch_id=None,
+            issued_at=self.now,
+            test_name="Tests.One",
+            grant_type="quarantine-publication",
+        )
+        write_quarantine_grant(self.authorization_path, grant)
+
+        result = authorize_quarantine_publication(
+            request_path=self.request_path,
+            authorization_path=self.authorization_path,
+            state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
+            batch_id=str(grant["allowedBatchId"]),
+            now=self.now + timedelta(minutes=16),
+            test_name="Tests.One",
+        )
+
+        self.assertEqual("quarantine-publication", grant["grantType"])
+        self.assertEqual(["Tests.One"], grant["allowedTestNames"])
+        self.assertEqual(["Tests.One"], [
+            test["testName"]
+            for test in result.request["tests"]
+        ])
+        self.assertEqual("2026-08-30T00:00:00Z", result.issued_at)
+        self.assertEqual("2026-08-30T00:15:00Z", result.expires_at)
+
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            authorize_quarantine_start(
+                request_path=self.request_path,
+                authorization_path=self.authorization_path,
+                state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
+                batch_id=str(grant["allowedBatchId"]),
+                now=self.now + timedelta(minutes=1),
+                test_name="Tests.One",
+            )
 
     def test_plan_wrapper_is_bound_and_returns_its_proposal(self) -> None:
         plan = {
@@ -181,6 +232,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             request_path=self.request_path,
             authorization_path=self.authorization_path,
             state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
             batch_id="quarantine:1",
             now=self.now + timedelta(minutes=1),
         )
@@ -217,6 +270,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 request_path=self.request_path,
                 authorization_path=self.authorization_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 now=self.now + timedelta(minutes=1),
             )
@@ -229,6 +284,38 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 request_path=self.request_path,
                 authorization_path=self.authorization_path,
                 state_dir=self.root / "other-state",
+                checkout=self.checkout,
+                session_id=self.session_id,
+                batch_id="quarantine:1",
+                now=self.now + timedelta(minutes=1),
+            )
+
+    def test_different_checkout_is_rejected(self) -> None:
+        self._write_grant()
+        other_checkout = self.root / "other-checkout"
+        other_checkout.mkdir()
+
+        with self.assertRaisesRegex(ValueError, "checkoutPath"):
+            authorize_quarantine_start(
+                request_path=self.request_path,
+                authorization_path=self.authorization_path,
+                state_dir=self.state_dir,
+                checkout=other_checkout,
+                session_id=self.session_id,
+                batch_id="quarantine:1",
+                now=self.now + timedelta(minutes=1),
+            )
+
+    def test_different_session_is_rejected(self) -> None:
+        self._write_grant()
+
+        with self.assertRaisesRegex(ValueError, "sessionId"):
+            authorize_quarantine_start(
+                request_path=self.request_path,
+                authorization_path=self.authorization_path,
+                state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id="session-2",
                 batch_id="quarantine:1",
                 now=self.now + timedelta(minutes=1),
             )
@@ -241,6 +328,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 request_path=self.request_path,
                 authorization_path=self.authorization_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 now=self.now + timedelta(minutes=16),
             )
@@ -258,6 +347,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
@@ -271,6 +362,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
@@ -283,6 +376,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
@@ -297,6 +392,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
@@ -309,6 +406,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
@@ -320,6 +419,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         grant = create_quarantine_grant(
             request_path=self.request_path,
             state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
             batch_id="quarantine:1",
             issued_at=self.now,
         )
@@ -361,6 +462,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 request_path=self.request_path,
                 authorization_path=self.authorization_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 now=self.now + timedelta(minutes=1),
             )
@@ -375,6 +478,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             create_quarantine_grant(
                 request_path=self.request_path,
                 state_dir=self.state_dir,
+                checkout=self.checkout,
+                session_id=self.session_id,
                 batch_id="quarantine:1",
                 issued_at=self.now,
             )
@@ -385,6 +490,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             request_path=self.request_path,
             authorization_path=self.authorization_path,
             state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
             batch_id="quarantine:1",
             now=self.now + timedelta(minutes=1),
         )
@@ -397,6 +504,7 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             session_id="session-1",
             authorization_grant_id=authorized.grant_id,
             authorization_expires_at=authorized.expires_at,
+            checkout=self.checkout,
         )
         record_quarantine_session_event(
             self.state_dir,
@@ -416,6 +524,7 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 session_id="session-2",
                 authorization_grant_id=authorized.grant_id,
                 authorization_expires_at=authorized.expires_at,
+                checkout=self.checkout,
             )
 
     def test_cli_requires_and_consumes_the_exact_grant(self) -> None:
@@ -438,6 +547,10 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 str(self.request_path),
                 "--state-dir",
                 str(self.state_dir),
+                "--checkout",
+                str(self.checkout),
+                "--session-id",
+                self.session_id,
                 "--batch-id",
                 "quarantine:1",
                 "--output",
@@ -469,6 +582,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 *base_command,
                 "--authorization",
                 str(self.authorization_path),
+                "--checkout",
+                str(self.checkout),
                 "--status",
                 "started",
                 "--session-id",
@@ -498,10 +613,12 @@ class QuarantineAuthorizationTests(unittest.TestCase):
                 *base_command,
                 "--authorization",
                 str(self.authorization_path),
+                "--checkout",
+                str(self.checkout),
                 "--status",
                 "started",
                 "--session-id",
-                "session-2",
+                self.session_id,
             ],
             check=False,
             capture_output=True,
@@ -521,6 +638,8 @@ class QuarantineAuthorizationTests(unittest.TestCase):
         grant = create_quarantine_grant(
             request_path=self.request_path,
             state_dir=self.state_dir,
+            checkout=self.checkout,
+            session_id=self.session_id,
             batch_id="quarantine:1",
             issued_at=self.now,
         )

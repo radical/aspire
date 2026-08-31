@@ -310,7 +310,7 @@ class RetrospectiveTests(unittest.TestCase):
                         ),
                     ]
                 )
-                + '\n{"investigationId":"truncated',
+                + "\n",
                 encoding="utf-8",
             )
             (state_dir / "ledgers" / "investigation-sessions.jsonl").write_text(

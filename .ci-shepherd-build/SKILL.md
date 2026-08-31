@@ -226,7 +226,8 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
   --investigation-id "investigation:..." \
   --status started \
   --recorded-at "2026-08-28T20:20:00Z" \
-  --session-id "<worker-session-id>"
+  --session-id "<worker-session-id>" \
+  --checkout "<worker-worktree-path>"
 ```
 
 The worker must not invoke the issue-investigation workflow, search GitHub,
@@ -242,19 +243,26 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
   --investigation-id "investigation:..." \
   --result "$SCRATCH/investigation-result.json" \
   --recorded-at "2026-08-28T20:30:00Z" \
-  --session-id "<worker-session-id>"
+  --session-id "<worker-session-id>" \
+  --checkout "<worker-worktree-path>"
 ```
 
-Result recording requires the exact active session, writes the completed result,
-and terminally completes the session. Replaying the same result returns the
-persisted result without another terminal event. If the worker exits without a
-valid result, record `--status failed --failure-reason "<specific reason>"`
-with `investigation_session.py`. Use `--failure-category worker-error`,
-`invalid-result`, or `out-of-scope-evidence` so the rejection is durable. The
-same request can be proposed for one replacement attempt; after two started
+Result recording requires the exact active session and checkout, verifies that
+the read-only worktree stayed clean, writes the completed result, and terminally
+completes the session. Replaying the same result returns the persisted result
+without another terminal event. If the worker exits without a valid result,
+record `--status failed --failure-reason "<specific reason>"` with
+`investigation_session.py`. Use `--failure-category worker-error`,
+`invalid-result`, or `out-of-scope-evidence` so the rejection is durable.
+
+If a worker disappears, first confirm through the session manager that it has
+stopped. After the one-hour session limit, record `--status abandoned`,
+`--failure-category worker-unavailable`, the exact `--checkout`, and
+`--confirm-worker-stopped`. Abandonment fails unless the worktree is still clean.
+The same request can be proposed for one replacement attempt; after two started
 attempts it is deferred as `investigation-attempt-limit`. A later cycle's plan
-can complete or fail an active investigation because its complete request is
-persisted in the started-session event.
+can complete, fail, or abandon an active investigation because its complete
+request is persisted in the started-session event.
 
 The next cycle attaches every target-specific result whose source-evidence
 fingerprint still matches. An unchanged issue reuses the completed results and
@@ -274,10 +282,12 @@ quarantine PR and tests in a merged PR are removed from later batches, and an
 active local session suppresses every new quarantine proposal.
 
 Before starting, show the user the batch ID, complete test list, original issue
-links, and exact worker prompt. Approval creates a short-lived grant bound to
-the raw `quarantine-session.json` bytes, canonical state directory, repository,
-snapshot, exact batch, and exact test set. Grant creation and execution both
-hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
+links, and planned draft PR text. Separate start and publication approvals each
+create a short-lived, purpose-specific grant bound to the raw
+`quarantine-session.json` bytes, canonical state directory, exact local session
+and checkout, repository, snapshot, exact batch, and exact test set. Grant
+creation and execution both hard-deny `microsoft/aspire`; quarantine execution
+is fork-only. After approval:
 
 1. Create one idle local worktree session from the repository default branch.
 2. Create the exact authorization grant. For a staged single-test trial, add
@@ -288,41 +298,49 @@ hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
    python3 "$CI_SHEPHERD_ROOT/scripts/authorize_quarantine.py" \
     --state-dir "$STATE" \
     --request "$SCRATCH/quarantine-session.json" \
+    --checkout "<worktree-path>" \
+    --session-id "<worktree-session-id>" \
+    --lifetime-minutes 60 \
     --output "$SCRATCH/quarantine-authorization.json" \
     --test-name "Namespace.Type.Method"
    ```
 
-3. Record `started` before sending work to that session. Supply the exact
-   `allowedBatchId`; a missing, expired, changed-plan, wrong-state-directory,
-   replayed, or production grant fails before the session ledger records work:
+   The one-hour lifetime is the maximum supported window. Do not start the
+   executor until the operator is available to review the resulting diff and
+   approve publication within that same window. If it expires, record the
+   session as failed and restart from a clean worktree with a new grant.
+
+3. Run the deterministic executor from the coordinator. It consumes the grant,
+   records `started` before changing the checkout, runs QuarantineTools once per
+   test through the checkout's repo-local .NET launcher, restores the required
+   tool and project dependencies, validates the resulting attributes, builds
+   each affected test project, and verifies the targets are excluded as
+   quarantined. Supply the exact
+   `allowedBatchId`; a missing, expired, changed-plan, wrong-session,
+   wrong-checkout, wrong-state-directory, replayed, or production grant fails
+   before mutation:
 
    ```bash
-   python3 "$CI_SHEPHERD_ROOT/scripts/quarantine_session.py" \
+   python3 "$CI_SHEPHERD_ROOT/scripts/execute_quarantine.py" \
     --state-dir "$STATE" \
     --request "$SCRATCH/quarantine-session.json" \
     --authorization "$SCRATCH/quarantine-authorization.json" \
     --batch-id "<allowedBatchId>" \
-    --test-name "Namespace.Type.Method" \
-    --status started \
-    --recorded-at "2026-08-28T20:30:00Z" \
-    --session-id "<worktree-session-id>"
+    --checkout "<worktree-path>" \
+    --session-id "<worktree-session-id>" \
+    --output "$SCRATCH/quarantine-mutation-result.json"
    ```
 
-4. Send the proposal's exact `workerPrompt` to the session. Do not start a
-   second quarantine worker.
-5. Require the worker to run QuarantineTools once per test, restore once, build
-   every affected test project, verify every target is excluded as quarantined,
-   and return the exact diff, commands, results, and draft PR title/body.
-6. Leave an unresolved or non-method target unchanged, report it as blocked, and
-   continue validating the remaining targets. If unrelated files changed or a
-   changed target still fails validation after one quarantine-only correction,
-   record `failed` and stop.
-7. If a target is already quarantined with the original issue URL, do not create
-   an empty commit or PR. Return a typed `completed` result naming the merged PR
-   URL, exact head SHA, and exact test list. `record_quarantine_result.py` GET
-   verifies the merged state and identity before completing the started batch.
-8. Show the draft PR title and full body. Only after approval, have the worker
-   create the local commit and bind it to the mutation result:
+   For a staged single-test trial, also pass the same exact
+   `--test-name "Namespace.Type.Method"` used to create the start grant.
+
+4. Do not send a mutation prompt to the worktree session and do not permit the
+   worker to edit files. If deterministic execution cannot resolve or validate
+   any target, record `failed` and stop; never hand unresolved targets to an
+   unconstrained agent.
+5. Show the exact diff, draft PR title, and full body. Only after approval,
+   create the local commit containing exactly the validated mutation, then bind
+   that commit to the mutation result:
 
    ```bash
    python3 "$CI_SHEPHERD_ROOT/scripts/validate_quarantine_commit.py" \
@@ -334,15 +352,37 @@ hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
      --output "$SCRATCH/quarantine-commit-validation.json"
    ```
 
-   The worker must not push or invoke `gh pr create`. Publish only through the
-   deterministic boundary, which derives the branch from the batch, resolves
-   the policy-allowed fork remote, revalidates the commit, snapshots the
-   approved body, and records paired mutation intents and outcomes:
+   No worker may push or invoke `gh pr create`. After approving the exact
+   commit and PR body, create a separate publication grant. For a staged trial,
+   include the same `--test-name`:
+
+   ```bash
+   python3 "$CI_SHEPHERD_ROOT/scripts/authorize_quarantine.py" \
+     --state-dir "$STATE" \
+     --request "$SCRATCH/quarantine-session.json" \
+     --checkout "<worktree-path>" \
+     --session-id "<worktree-session-id>" \
+     --batch-id "<allowedBatchId>" \
+     --lifetime-minutes 60 \
+     --purpose publication \
+     --test-name "Namespace.Type.Method" \
+     --output "$SCRATCH/quarantine-publication-authorization.json"
+   ```
+
+   Publish only through the deterministic boundary, which derives the branch
+   from the batch, validates the remote's effective push URL, requires the
+   remote base ref to still equal the source revision inspected before
+   mutation, uses a creation-only branch lease, revalidates the commit and
+   publication grant at each mutation boundary, snapshots the approved body,
+   and records paired mutation intents and outcomes. Any effective Git `insteadOf` or
+   `pushInsteadOf` configuration aborts publication rather than allowing Git to
+   reinterpret the validated URL:
 
    ```bash
    python3 "$CI_SHEPHERD_ROOT/scripts/publish_quarantine.py" \
      --state-dir "$STATE" \
      --request "$SCRATCH/quarantine-session.json" \
+     --authorization "$SCRATCH/quarantine-publication-authorization.json" \
      --batch-id "<allowedBatchId>" \
      --mutation-result "$SCRATCH/quarantine-mutation-result.json" \
      --commit-validation "$SCRATCH/quarantine-commit-validation.json" \
@@ -350,13 +390,27 @@ hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
      --session-id "<worktree-session-id>" \
      --body-file "$SCRATCH/quarantine-pr-body.md" \
      --mutation-audit "$SCRATCH/quarantine-mutations.jsonl" \
+     --test-name "Namespace.Type.Method" \
      --output "$SCRATCH/agent-quarantine-result.json"
    ```
+
+   These examples show a staged single-test trial. Omit `--test-name` from both
+   commands when publishing the complete authorized batch.
+
+   Publication records `publication-pending` before the first remote mutation.
+   If publication is interrupted, run `reconcile_quarantine.py` first. An exact
+   rerun can return an already-open draft without mutation. If the branch or PR
+   is still missing after the publication grant expires, approve and create a
+   fresh purpose-specific publication grant for the same batch, session,
+   checkout, test set, and validated commit, then rerun the publisher. The
+   renewed intent is appended; existing lifecycle rows are never deleted or
+   rewritten.
 
    The visible title and body begin with `[automated] `, the body uses
    `Addresses #N`, and the original failure issues remain open. Publication
    remains hard-denied for `microsoft/aspire`.
-9. Use the publisher's `agent-quarantine-result.json`. It has a closed schema:
+
+6. Use the publisher's `agent-quarantine-result.json`. It has a closed schema:
    repository, snapshot, batch, session, outcome, completed tests, blocked tests
    with reasons, and the draft PR URL and 40-character head SHA. Every requested
    test must be exactly one of completed or blocked; freeform fields are
@@ -375,7 +429,8 @@ hard-deny `microsoft/aspire`; quarantine execution is fork-only. After approval:
 
    Blocked targets and their reasons remain in the typed result rather than
    being silently dropped.
-10. A draft PR is not completion. Every later pass GET-reconciles each pending
+
+7. A draft PR is not completion. Every later pass GET-reconciles each pending
    PR before proposing another quarantine batch:
 
    ```bash
@@ -598,6 +653,21 @@ from firing again; no blanket age-based reassessment is scheduled.
 the issue, target, and source-evidence fingerprint.
 `quarantine-sessions.jsonl` records the one-at-a-time local quarantine
 lifecycle, including the completed draft pull-request URL.
+All JSONL readers fail closed on malformed or incomplete rows. Writers use an
+atomic same-directory replacement, so a current writer crash leaves either the
+old or complete new ledger. For a legacy torn final row, stop every shepherd
+process, reconstruct the exact complete final event from its immutable
+artifacts, save that one JSON object to a file, and run:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/repair_jsonl.py" \
+  --ledger "<path-to-ledger>" \
+  --replacement-row "<path-to-exact-replacement-row.json>"
+```
+
+The command preserves the corrupt original beside the ledger with mode `0600`.
+It has no discard option: if the missing event cannot be reconstructed exactly,
+keep the state blocked for manual investigation.
 After ledger bootstrap has converged, replaying unchanged evidence must append
 no case event when the deterministic pipeline and agent override input produce
 the same material case state.

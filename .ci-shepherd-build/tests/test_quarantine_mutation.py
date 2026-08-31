@@ -35,6 +35,8 @@ class QuarantineMutationValidationTests(unittest.TestCase):
             self._create_project(checkout, "One.Tests", "OneTests.cs")
             self._create_project(checkout, "Two.Tests", "TwoTests.cs")
             (checkout / "tools" / "QuarantineTools").mkdir(parents=True)
+            launcher = checkout / "dotnet.sh"
+            launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
             request = self._execution_request()
             commands: list[list[str]] = []
             environments: list[dict[str, str]] = []
@@ -126,7 +128,14 @@ class QuarantineMutationValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             2,
-            sum(command[:2] == ["dotnet", "build"] for command in commands),
+            sum(command[1] == "build" for command in commands),
+        )
+        self.assertTrue(
+            all(command[0] == str(launcher.resolve()) for command in commands),
+            commands,
+        )
+        self.assertFalse(
+            any("--no-restore" in command for command in commands)
         )
         self.assertEqual(
             4,

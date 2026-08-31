@@ -8,8 +8,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import reconcile_quarantine as reconcile_quarantine_script
 from ci_shepherd.quarantine import (
     apply_quarantine_source_inspection,
+    build_quarantine_session_plan,
     quarantine_tool_tree_digest,
     read_quarantine_session_events,
     record_quarantine_session_event,
@@ -217,6 +219,23 @@ public class Tests
             terminal = read_quarantine_session_events(state)[-1]
             self.assertEqual("failed", terminal["status"])
             self.assertIn("without merging", terminal["failureReason"])
+            self.assertEqual(
+                [
+                    {
+                        "test": request["tests"][0],
+                        "reason": (
+                            "The quarantine pull request closed without merging."
+                        ),
+                    }
+                ],
+                terminal["blockedTargets"],
+            )
+            plan = build_quarantine_session_plan(
+                request,
+                read_quarantine_session_events(state),
+            )
+            self.assertIsNone(plan["proposal"])
+            self.assertEqual("blocked-targets", plan["suppressionReason"])
 
     def test_changed_head_fails_closed_without_releasing_the_batch(self) -> None:
         with TemporaryDirectory() as scratch:
@@ -242,6 +261,203 @@ public class Tests
                 "pull-request-open",
                 read_quarantine_session_events(state)[-1]["status"],
             )
+
+    def test_publication_pending_recovers_the_created_pull_request(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            request = self._request()
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-30T00:00:00Z",
+                session_id="session-1",
+            )
+            record_quarantine_session_event(
+                state,
+                request,
+                status="publication-pending",
+                recorded_at="2026-08-30T00:01:00Z",
+                session_id="session-1",
+                pull_request_head_sha="a" * 40,
+                completed_test_names=["Tests.One"],
+                mutation_validation=self._mutation_validation(),
+            )
+
+            result = reconcile_quarantine_pull_requests(
+                state_directory=state,
+                repository="radical/aspire",
+                recorded_at="2026-08-30T00:03:00Z",
+                get_pull=lambda _repository, _number: self.fail(
+                    "Recovered publication should not need a second pull read."
+                ),
+                find_pull=lambda _repository, _batch_id, _head_repository: self._pull(
+                    state="open",
+                    merged_at=None,
+                ),
+            )
+
+            self.assertEqual("recovered-open", result["outcomes"][0]["status"])
+            terminal = read_quarantine_session_events(state)[-1]
+            self.assertEqual("pull-request-open", terminal["status"])
+            self.assertEqual(
+                "https://github.com/radical/aspire/pull/73",
+                terminal["pullRequestUrl"],
+            )
+
+    def test_publication_pending_recovers_a_pull_request_that_already_closed(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            request = self._request()
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-30T00:00:00Z",
+                session_id="session-1",
+            )
+            record_quarantine_session_event(
+                state,
+                request,
+                status="publication-pending",
+                recorded_at="2026-08-30T00:01:00Z",
+                session_id="session-1",
+                pull_request_head_sha="a" * 40,
+                completed_test_names=["Tests.One"],
+                mutation_validation=self._mutation_validation(),
+            )
+
+            result = reconcile_quarantine_pull_requests(
+                state_directory=state,
+                repository="radical/aspire",
+                recorded_at="2026-08-30T00:03:00Z",
+                get_pull=lambda _repository, _number: self.fail(
+                    "Recovered publication should not need a second pull read."
+                ),
+                find_pull=lambda _repository, _batch_id, _head_repository: self._pull(
+                    state="closed",
+                    merged_at=None,
+                ),
+            )
+
+            self.assertEqual("recovered-closed", result["outcomes"][0]["status"])
+            terminal = read_quarantine_session_events(state)[-1]
+            self.assertEqual("failed", terminal["status"])
+            self.assertEqual(
+                [
+                    {
+                        "test": request["tests"][0],
+                        "reason": (
+                            "The quarantine pull request closed without merging."
+                        ),
+                    }
+                ],
+                terminal["blockedTargets"],
+            )
+            plan = build_quarantine_session_plan(
+                request,
+                read_quarantine_session_events(state),
+            )
+            self.assertIsNone(plan["proposal"])
+            self.assertEqual("blocked-targets", plan["suppressionReason"])
+
+    def test_pending_lookup_failure_does_not_block_other_batches(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            pending_request = self._request()
+            open_request = {
+                **self._request(),
+                "batchId": "quarantine:fnv1a64:fedcba9876543210",
+            }
+            self._record_open(state, open_request)
+            record_quarantine_session_event(
+                state,
+                pending_request,
+                status="started",
+                recorded_at="2026-08-30T00:00:00Z",
+                session_id="session-2",
+            )
+            record_quarantine_session_event(
+                state,
+                pending_request,
+                status="publication-pending",
+                recorded_at="2026-08-30T00:01:00Z",
+                session_id="session-2",
+                pull_request_head_sha="a" * 40,
+                completed_test_names=["Tests.One"],
+                mutation_validation=self._mutation_validation(),
+            )
+
+            result = reconcile_quarantine_pull_requests(
+                state_directory=state,
+                repository="radical/aspire",
+                recorded_at="2026-08-30T00:03:00Z",
+                find_pull=lambda _repository, _batch_id, _head_repository: (
+                    (_ for _ in ()).throw(ValueError("ambiguous lookup"))
+                ),
+                get_pull=lambda _repository, _number: self._pull(
+                    state="open",
+                    merged_at=None,
+                ),
+            )
+
+            self.assertEqual(
+                ["unverifiable", "pending"],
+                [outcome["status"] for outcome in result["outcomes"]],
+            )
+
+    def test_open_pull_lookup_failure_does_not_block_other_batches(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            first = self._request()
+            second = {
+                **self._request(),
+                "batchId": "quarantine:fnv1a64:fedcba9876543210",
+            }
+            self._record_open(state, first, pull_number=73)
+            self._record_open(state, second, pull_number=74)
+
+            def get_pull(_repository: str, number: int) -> dict[str, object]:
+                if number == 73:
+                    raise RuntimeError("transient lookup failure")
+                return {
+                    **self._pull(state="open", merged_at=None),
+                    "html_url": "https://github.com/radical/aspire/pull/74",
+                }
+
+            result = reconcile_quarantine_pull_requests(
+                state_directory=state,
+                repository="radical/aspire",
+                recorded_at="2026-08-30T00:03:00Z",
+                get_pull=get_pull,
+            )
+
+            self.assertEqual(
+                ["unverifiable", "pending"],
+                [outcome["status"] for outcome in result["outcomes"]],
+            )
+
+    def test_live_lookup_uses_the_allowed_head_repository_owner(self) -> None:
+        class Client:
+            endpoint: str | None = None
+
+            def get(self, endpoint: str) -> list[object]:
+                self.endpoint = endpoint
+                return []
+
+        client = Client()
+
+        result = reconcile_quarantine_script._find_pull_request(
+            client,
+            "microsoft/aspire",
+            "quarantine:fnv1a64:0123456789abcdef",
+            "radical/aspire",
+        )
+
+        self.assertIsNone(result)
+        self.assertIn("head=radical%3A", str(client.endpoint))
 
     def test_merged_pull_without_source_verification_stays_unverifiable(
         self,
@@ -485,6 +701,8 @@ public class Tests
         self,
         state: Path,
         request: dict[str, object],
+        *,
+        pull_number: int = 73,
     ) -> None:
         record_quarantine_session_event(
             state,
@@ -499,7 +717,9 @@ public class Tests
             status="pull-request-open",
             recorded_at="2026-08-30T00:01:00Z",
             session_id="session-1",
-            pull_request_url="https://github.com/radical/aspire/pull/73",
+            pull_request_url=(
+                f"https://github.com/radical/aspire/pull/{pull_number}"
+            ),
             pull_request_head_sha="a" * 40,
             completed_test_names=["Tests.One"],
             mutation_validation=self._mutation_validation(),
@@ -564,6 +784,7 @@ public class Tests
         return {
             "html_url": "https://github.com/radical/aspire/pull/73",
             "state": state,
+            "draft": True,
             "merged_at": merged_at,
             "merge_commit_sha": "c" * 40,
             "user": {"login": "author"},

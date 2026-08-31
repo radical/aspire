@@ -28,6 +28,7 @@ def main() -> int:
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--test-name")
     args = parser.parse_args()
 
     old_umask = os.umask(0o077)
@@ -37,8 +38,11 @@ def main() -> int:
             request_path=args.request,
             authorization_path=args.authorization,
             state_dir=args.state_dir,
+            checkout=args.checkout,
+            session_id=args.session_id,
             batch_id=args.batch_id,
             now=now,
+            test_name=args.test_name,
         )
         record_quarantine_session_event(
             args.state_dir,
@@ -48,6 +52,7 @@ def main() -> int:
             session_id=args.session_id,
             authorization_grant_id=authorized.grant_id,
             authorization_expires_at=authorized.expires_at,
+            checkout=args.checkout,
         )
         try:
             result = execute_quarantine_mutation(

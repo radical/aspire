@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -551,12 +552,40 @@ class CycleTests(unittest.TestCase):
                 (first_work / "investigation-plan.json").read_text(encoding="utf-8")
             )
             request = investigation_plan["requests"][0]
+            checkout = root / "investigation-checkout"
+            checkout.mkdir()
+            subprocess.run(
+                ["git", "init", "--quiet", str(checkout)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(checkout),
+                    "-c",
+                    "user.name=CI Shepherd",
+                    "-c",
+                    "user.email=ci-shepherd@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "initial",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
             record_investigation_session_event(
                 state,
                 request,
                 status="started",
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
             record_investigation_result(
                 state,
@@ -574,6 +603,7 @@ class CycleTests(unittest.TestCase):
                 },
                 recorded_at="2026-08-28T20:30:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
 
             second_input = root / "input-2.json"

@@ -22,6 +22,7 @@ from .quarantine_result import (
     validate_quarantine_pull_request_target,
     validate_required_quarantine_approvals,
 )
+from .repository_policy import load_embedded_repository_policy
 
 
 _PULL_URL_RE = re.compile(
@@ -47,6 +48,7 @@ def reconcile_quarantine_pull_requests(
     repository: str,
     recorded_at: str,
     get_pull: Callable[[str, int], Mapping[str, Any]],
+    find_pull: Callable[[str, str, str], Mapping[str, Any] | None] | None = None,
     get_reviews: Callable[[str, int], list[Mapping[str, Any]]] | None = None,
     verify_merged_source: Callable[
         [Mapping[str, Any], Mapping[str, Any]],
@@ -67,6 +69,141 @@ def reconcile_quarantine_pull_requests(
 
     outcomes: list[dict[str, object]] = []
     for batch_id, event in sorted(latest_by_batch.items()):
+        if event.get("status") == "publication-pending":
+            if find_pull is None:
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "unverifiable",
+                        "reason": (
+                            "Publication recovery requires an exact pull request lookup."
+                        ),
+                    }
+                )
+                continue
+            try:
+                policy = load_embedded_repository_policy(
+                    event.get("repositoryPolicy"),
+                    repository,
+                )
+                allowed_heads = (
+                    policy.quarantine_pull_request.allowed_head_repositories
+                )
+                if len(allowed_heads) != 1:
+                    raise ValueError(
+                        "Publication recovery requires exactly one allowed head "
+                        "repository."
+                    )
+                pull = find_pull(repository, batch_id, next(iter(allowed_heads)))
+            except (OSError, RuntimeError, ValueError) as error:
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "unverifiable",
+                        "reason": f"Pull request lookup failed: {error}",
+                    }
+                )
+                continue
+            head_sha = event.get("pullRequestHeadSha")
+            if pull is None:
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "publication-pending",
+                        "reason": "No pull request exists for the publication intent.",
+                    }
+                )
+                continue
+            try:
+                validate_quarantine_pull_request_target(event, pull)
+            except ValueError as error:
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "unverifiable",
+                        "reason": str(error),
+                    }
+                )
+                continue
+            head = pull.get("head")
+            actual_head_sha = (
+                head.get("sha") if isinstance(head, Mapping) else None
+            )
+            url = pull.get("html_url")
+            mutation_validation = event.get("mutationValidation")
+            if (
+                pull.get("state") not in {"open", "closed"}
+                or pull.get("draft") is not True
+                or not isinstance(url, str)
+                or _PULL_URL_RE.fullmatch(url) is None
+                or not isinstance(head_sha, str)
+                or not isinstance(actual_head_sha, str)
+                or actual_head_sha.casefold() != head_sha.casefold()
+                or not isinstance(mutation_validation, Mapping)
+            ):
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "unverifiable",
+                        "reason": (
+                            "The publication intent does not match the live pull request."
+                        ),
+                    }
+                )
+                continue
+            test_names = [
+                str(test["testName"])
+                for test in event.get("tests", [])
+                if isinstance(test, Mapping)
+                and isinstance(test.get("testName"), str)
+            ]
+            if pull.get("state") == "closed":
+                record_quarantine_session_event(
+                    state_directory,
+                    event,
+                    status="failed",
+                    recorded_at=recorded_at,
+                    session_id=str(event["sessionId"]),
+                    failure_reason=(
+                        "The quarantine pull request closed without merging."
+                    ),
+                    blocked_targets=[
+                        {
+                            "testName": test_name,
+                            "reason": (
+                                "The quarantine pull request closed without merging."
+                            ),
+                        }
+                        for test_name in test_names
+                    ],
+                )
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "recovered-closed",
+                        "pullRequestUrl": url,
+                    }
+                )
+                continue
+            record_quarantine_session_event(
+                state_directory,
+                event,
+                status="pull-request-open",
+                recorded_at=recorded_at,
+                session_id=str(event["sessionId"]),
+                pull_request_url=url,
+                pull_request_head_sha=head_sha,
+                completed_test_names=test_names,
+                mutation_validation=mutation_validation,
+            )
+            outcomes.append(
+                {
+                    "batchId": batch_id,
+                    "status": "recovered-open",
+                    "pullRequestUrl": url,
+                }
+            )
+            continue
         if event.get("status") != "pull-request-open":
             continue
         url = event.get("pullRequestUrl")
@@ -87,7 +224,17 @@ def reconcile_quarantine_pull_requests(
             )
             continue
 
-        pull = get_pull(repository, int(match.group("number")))
+        try:
+            pull = get_pull(repository, int(match.group("number")))
+        except (OSError, RuntimeError, ValueError) as error:
+            outcomes.append(
+                {
+                    "batchId": batch_id,
+                    "status": "unverifiable",
+                    "reason": f"Pull request lookup failed: {error}",
+                }
+            )
+            continue
         try:
             validate_quarantine_pull_request_target(event, pull)
         except ValueError as error:
@@ -223,11 +370,22 @@ def reconcile_quarantine_pull_requests(
             )
             status = "completed"
         elif pull.get("state") == "closed" and pull.get("merged_at") is None:
+            closed_blocked_targets = {
+                target["testName"]: target
+                for target in blocked_targets
+            }
+            for test_name in test_names:
+                closed_blocked_targets[test_name] = {
+                    "testName": test_name,
+                    "reason": (
+                        "The quarantine pull request closed without merging."
+                    ),
+                }
             record_quarantine_session_event(
                 **common,
                 status="failed",
                 failure_reason="The quarantine pull request closed without merging.",
-                blocked_targets=blocked_targets,
+                blocked_targets=list(closed_blocked_targets.values()),
             )
             status = "closed-unmerged"
         elif pull.get("state") == "open":

@@ -37,16 +37,23 @@ def main() -> int:
     parser.add_argument("--investigation-id", required=True)
     parser.add_argument(
         "--status",
-        choices=("started", "failed"),
+        choices=("started", "failed", "abandoned"),
         required=True,
     )
     parser.add_argument("--recorded-at", required=True)
     parser.add_argument("--session-id", required=True)
+    parser.add_argument("--checkout", type=Path)
     parser.add_argument("--failure-reason")
     parser.add_argument(
         "--failure-category",
-        choices=("worker-error", "invalid-result", "out-of-scope-evidence"),
+        choices=(
+            "worker-error",
+            "invalid-result",
+            "out-of-scope-evidence",
+            "worker-unavailable",
+        ),
     )
+    parser.add_argument("--confirm-worker-stopped", action="store_true")
     args = parser.parse_args()
 
     old_umask = os.umask(0o077)
@@ -57,8 +64,10 @@ def main() -> int:
             status=args.status,
             recorded_at=args.recorded_at,
             session_id=args.session_id,
+            checkout=args.checkout,
             failure_reason=args.failure_reason,
             failure_category=args.failure_category,
+            confirm_worker_stopped=args.confirm_worker_stopped,
         )
     finally:
         os.umask(old_umask)

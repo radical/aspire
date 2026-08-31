@@ -827,6 +827,91 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 ],
             )
 
+    def test_publication_authorization_can_be_renewed_but_not_reused_for_start(
+        self,
+    ) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        test_names = sorted(test["testName"] for test in request["tests"])
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch) / "state"
+            checkout = Path(scratch) / "checkout"
+            checkout.mkdir()
+            record_quarantine_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="session-123",
+                authorization_grant_id="quarantine-start-grant",
+                authorization_expires_at="2026-08-28T20:20:00Z",
+                checkout=checkout,
+            )
+            first = record_quarantine_session_event(
+                state,
+                request,
+                status="publication-pending",
+                recorded_at="2026-08-28T20:15:00Z",
+                session_id="session-123",
+                pull_request_head_sha="a" * 40,
+                completed_test_names=test_names,
+                mutation_validation={"schemaVersion": 1},
+                publication_authorization_grant_id="publication-grant-1",
+                publication_authorization_expires_at="2026-08-28T20:25:00Z",
+            )
+            replay = record_quarantine_session_event(
+                state,
+                request,
+                status="publication-pending",
+                recorded_at="2026-08-28T20:16:00Z",
+                session_id="session-123",
+                pull_request_head_sha="a" * 40,
+                completed_test_names=test_names,
+                mutation_validation={"schemaVersion": 1},
+                publication_authorization_grant_id="publication-grant-1",
+                publication_authorization_expires_at="2026-08-28T20:25:00Z",
+            )
+            renewed = record_quarantine_session_event(
+                state,
+                request,
+                status="publication-pending",
+                recorded_at="2026-08-28T20:21:00Z",
+                session_id="session-123",
+                pull_request_head_sha="a" * 40,
+                completed_test_names=test_names,
+                mutation_validation={"schemaVersion": 1},
+                publication_authorization_grant_id="publication-grant-2",
+                publication_authorization_expires_at="2026-08-28T20:31:00Z",
+            )
+
+            self.assertEqual(first, replay)
+            self.assertEqual("publication-grant-2", renewed[
+                "publicationAuthorizationGrantId"
+            ])
+            self.assertEqual(
+                3,
+                len(read_quarantine_session_events(state)),
+            )
+
+            record_quarantine_session_event(
+                state,
+                request,
+                status="failed",
+                recorded_at="2026-08-28T20:22:00Z",
+                session_id="session-123",
+                failure_reason="fixture",
+            )
+            with self.assertRaisesRegex(ValueError, "already been consumed"):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="started",
+                    recorded_at="2026-08-28T20:23:00Z",
+                    session_id="session-123",
+                    authorization_grant_id="publication-grant-2",
+                    authorization_expires_at="2026-08-28T20:31:00Z",
+                    checkout=checkout,
+                )
+
     def test_completion_requires_the_exact_validated_test_names(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())
         with TemporaryDirectory() as scratch:
@@ -1059,7 +1144,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
 
         self.assertIsNotNone(plan["proposal"])
 
-    def test_truncated_ledger_tail_does_not_swallow_a_new_event(self) -> None:
+    def test_truncated_ledger_tail_blocks_a_new_event(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
@@ -1067,18 +1152,14 @@ class QuarantineSessionRequestTests(unittest.TestCase):
             ledger.parent.mkdir(parents=True)
             ledger.write_text('{"truncated":', encoding="utf-8")
 
-            event = record_quarantine_session_event(
-                state,
-                request,
-                status="started",
-                recorded_at="2026-08-28T20:10:00Z",
-                session_id="session-123",
-            )
-
-            self.assertEqual(
-                [event],
-                read_quarantine_session_events(state),
-            )
+            with self.assertRaisesRegex(ValueError, "incomplete final row"):
+                record_quarantine_session_event(
+                    state,
+                    request,
+                    status="started",
+                    recorded_at="2026-08-28T20:10:00Z",
+                    session_id="session-123",
+                )
 
     def test_later_cycle_plan_can_recover_an_abandoned_session(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())

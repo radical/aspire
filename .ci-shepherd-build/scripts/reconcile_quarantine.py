@@ -15,6 +15,7 @@ from ci_shepherd.quarantine_reconciliation import (
     reconcile_quarantine_pull_requests,
     verify_merged_quarantine_source,
 )
+from ci_shepherd.quarantine_publish import _branch_for_batch
 
 
 def main() -> int:
@@ -55,6 +56,12 @@ def main() -> int:
         state_directory=args.state_dir,
         repository=args.repository,
         recorded_at=args.recorded_at,
+        find_pull=lambda repository, batch_id, head_repository: _find_pull_request(
+            client,
+            repository,
+            batch_id,
+            head_repository,
+        ),
         get_pull=lambda repository, number: client.get(
             f"/repos/{quote(repository, safe='/')}/pulls/{number}"
         ),
@@ -79,6 +86,28 @@ def main() -> int:
     )
     print(stable_json(result), end="")
     return 0
+
+
+def _find_pull_request(
+    client: GitHubClient,
+    repository: str,
+    batch_id: str,
+    head_repository: str,
+) -> dict[str, object] | None:
+    owner = head_repository.split("/", 1)[0]
+    head = f"{owner}:{_branch_for_batch(batch_id)}"
+    pulls = client.get(
+        f"/repos/{quote(repository, safe='/')}/pulls"
+        f"?state=all&head={quote(head, safe='')}&per_page=2"
+    )
+    if not isinstance(pulls, list) or len(pulls) > 1:
+        raise ValueError("GitHub returned an ambiguous quarantine pull request lookup.")
+    if not pulls:
+        return None
+    pull = pulls[0]
+    if not isinstance(pull, dict):
+        raise ValueError("GitHub returned an invalid quarantine pull request.")
+    return pull
 
 
 if __name__ == "__main__":

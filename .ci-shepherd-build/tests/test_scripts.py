@@ -1179,6 +1179,10 @@ class PrototypeScriptTests(unittest.TestCase):
                         str(scratch / "quarantine-request.json"),
                         "--state-dir",
                         str(scratch / "quarantine-state"),
+                        "--checkout",
+                        str(scratch),
+                        "--session-id",
+                        "session-1",
                         "--batch-id",
                         "quarantine:1",
                         "--output",
@@ -1245,6 +1249,8 @@ class PrototypeScriptTests(unittest.TestCase):
                         "session-1",
                         "--output",
                         str(output),
+                        "--test-name",
+                        "Tests.One",
                     ],
                 ),
                 patch.object(
@@ -1255,7 +1261,7 @@ class PrototypeScriptTests(unittest.TestCase):
                         grant_id="grant:1",
                         expires_at="2026-08-30T00:15:00Z",
                     ),
-                ),
+                ) as authorize,
                 patch.object(
                     script,
                     "record_quarantine_session_event",
@@ -1272,6 +1278,10 @@ class PrototypeScriptTests(unittest.TestCase):
             execute.assert_called_once_with(
                 request,
                 scratch / "checkout",
+            )
+            self.assertEqual(
+                "Tests.One",
+                authorize.call_args.kwargs["test_name"],
             )
             self.assertEqual(
                 ["started"],
@@ -1368,8 +1378,14 @@ class PrototypeScriptTests(unittest.TestCase):
         mutation_path = scratch / "mutation.json"
         commit_path = scratch / "commit.json"
         body_path = scratch / "body.md"
+        authorization_path = scratch / "authorization.json"
         output_path = scratch / "result.json"
-        for path in (request_path, mutation_path, commit_path):
+        for path in (
+            request_path,
+            mutation_path,
+            commit_path,
+            authorization_path,
+        ):
             path.write_text("{}", encoding="utf-8")
         body_path.write_text("[automated] fixture", encoding="utf-8")
         request = {
@@ -1401,6 +1417,8 @@ class PrototypeScriptTests(unittest.TestCase):
                     str(scratch / "state"),
                     "--request",
                     str(request_path),
+                    "--authorization",
+                    str(authorization_path),
                     "--batch-id",
                     str(request["batchId"]),
                     "--mutation-result",
@@ -1417,9 +1435,15 @@ class PrototypeScriptTests(unittest.TestCase):
                     str(scratch / "mutation-audit.jsonl"),
                     "--output",
                     str(output_path),
+                    "--test-name",
+                    "Tests.Flaky",
                 ],
             ),
-            patch.object(script, "_load_request", return_value=request),
+            patch.object(
+                script,
+                "authorize_quarantine_publication",
+                return_value=SimpleNamespace(request=request),
+            ) as authorize,
             patch.object(
                 script,
                 "publish_quarantine_pull_request",
@@ -1430,6 +1454,11 @@ class PrototypeScriptTests(unittest.TestCase):
             self.assertEqual(0, script.main())
 
         publish.assert_called_once()
+        self.assertIs(request, publish.call_args.kwargs["request"])
+        self.assertEqual(
+            "Tests.Flaky",
+            authorize.call_args.kwargs["test_name"],
+        )
         self.assertEqual(
             result,
             json.loads(output_path.read_text(encoding="utf-8")),

@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import copy
+import subprocess
 import unittest
 
 from ci_shepherd.investigations import (
@@ -68,6 +69,37 @@ def _judgments() -> dict[str, object]:
     }
 
 
+def _clean_checkout(root: Path) -> Path:
+    checkout = root / "checkout"
+    checkout.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet", str(checkout)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=CI Shepherd",
+            "-c",
+            "user.email=ci-shepherd@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return checkout
+
+
 class InvestigationLifecycleTests(unittest.TestCase):
     def test_record_rejects_invalid_recorded_at_timestamp(self) -> None:
         request = build_investigation_plan(_prepared(), _judgments(), [])[
@@ -75,6 +107,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
         ][0]
 
         with TemporaryDirectory() as scratch:
+            checkout = _clean_checkout(Path(scratch))
             with self.assertRaisesRegex(
                 ValueError,
                 "recordedAt must be a timezone-aware ISO-8601 timestamp",
@@ -91,6 +124,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                     },
                     recorded_at="not-a-timestamp",
                     session_id="investigation-session-1",
+                    checkout=checkout,
                 )
 
     def test_completed_result_is_reused_until_source_evidence_changes(self) -> None:
@@ -110,12 +144,14 @@ class InvestigationLifecycleTests(unittest.TestCase):
 
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
             record_investigation_session_event(
                 state,
                 request,
                 status="started",
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
             record_investigation_result(
                 state,
@@ -133,6 +169,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 },
                 recorded_at="2026-08-28T20:30:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
 
             results = read_investigation_results(state)
@@ -195,6 +232,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
             "requests"
         ][0]
         with TemporaryDirectory() as scratch:
+            checkout = _clean_checkout(Path(scratch))
             with self.assertRaisesRegex(ValueError, "fixHandoff.problem"):
                 record_investigation_result(
                     Path(scratch),
@@ -211,6 +249,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                     },
                     recorded_at="2026-08-28T20:30:00Z",
                     session_id="investigation-session-1",
+                    checkout=checkout,
                 )
 
     def test_attaches_results_for_every_target_on_the_issue(self) -> None:
@@ -230,6 +269,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
         )["requests"]
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
             for index, request in enumerate(requests):
                 record_investigation_session_event(
                     state,
@@ -237,6 +277,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                     status="started",
                     recorded_at=f"2026-08-28T20:2{index}:00Z",
                     session_id=f"investigation-session-{index}",
+                    checkout=checkout,
                 )
                 record_investigation_result(
                     state,
@@ -249,6 +290,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                     },
                     recorded_at=f"2026-08-28T20:3{index}:00Z",
                     session_id=f"investigation-session-{index}",
+                    checkout=checkout,
                 )
 
             attached = attach_latest_investigation_results(
@@ -306,12 +348,13 @@ class InvestigationLifecycleTests(unittest.TestCase):
 
         self.assertEqual(first["investigationId"], second["investigationId"])
 
-    def test_truncated_ledger_tail_does_not_swallow_a_new_result(self) -> None:
+    def test_truncated_ledger_tail_blocks_a_new_result(self) -> None:
         request = build_investigation_plan(_prepared(), _judgments(), [])[
             "requests"
         ][0]
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
             ledger = state / "ledgers" / "investigation-results.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text('{"truncated":', encoding="utf-8")
@@ -321,22 +364,23 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 status="started",
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
 
-            result = record_investigation_result(
-                state,
-                request,
-                {
-                    "outcome": "inconclusive",
-                    "summary": "The available evidence is insufficient.",
-                    "evidenceIds": ["issue:21"],
-                    "reassessWhen": "When evidence changes.",
-                },
-                recorded_at="2026-08-28T20:30:00Z",
-                session_id="investigation-session-1",
-            )
-
-            self.assertEqual([result], read_investigation_results(state))
+            with self.assertRaisesRegex(ValueError, "incomplete final row"):
+                record_investigation_result(
+                    state,
+                    request,
+                    {
+                        "outcome": "inconclusive",
+                        "summary": "The available evidence is insufficient.",
+                        "evidenceIds": ["issue:21"],
+                        "reassessWhen": "When evidence changes.",
+                    },
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="investigation-session-1",
+                    checkout=checkout,
+                )
 
     def test_active_investigation_is_suppressed_until_session_fails(self) -> None:
         prepared = _prepared()
@@ -344,12 +388,14 @@ class InvestigationLifecycleTests(unittest.TestCase):
         request = build_investigation_plan(prepared, judgments, [])["requests"][0]
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
             started = record_investigation_session_event(
                 state,
                 request,
                 status="started",
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
 
             active = build_investigation_plan(
@@ -390,6 +436,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 status="started",
                 recorded_at="2026-08-28T20:40:00Z",
                 session_id="investigation-session-2",
+                checkout=checkout,
             )
             rejected = record_investigation_session_event(
                 state,
@@ -420,12 +467,14 @@ class InvestigationLifecycleTests(unittest.TestCase):
         request = build_investigation_plan(prepared, judgments, [])["requests"][0]
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
             record_investigation_session_event(
                 state,
                 request,
                 status="started",
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
             later_plan = build_investigation_plan(
                 prepared,
@@ -454,6 +503,57 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 read_investigation_session_events(state)[-1]["status"],
             )
 
+    def test_active_investigation_uses_the_started_request_scope(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            expanded_request = {
+                **request,
+                "evidenceIds": [*request["evidenceIds"], "run:211"],
+                "allowedEvidenceUrls": [
+                    *request["allowedEvidenceUrls"],
+                    "https://github.com/owner/repo/actions/runs/211",
+                ],
+            }
+            later_plan = {
+                "repository": "owner/repo",
+                "requests": [expanded_request],
+                "activeInvestigationIds": [],
+            }
+
+            recovered = select_investigation_request(
+                later_plan,
+                str(request["investigationId"]),
+                state_directory=state,
+            )
+
+            self.assertEqual(request, recovered)
+            with self.assertRaisesRegex(ValueError, "outside its request"):
+                record_investigation_result(
+                    state,
+                    recovered,
+                    {
+                        "outcome": "inconclusive",
+                        "summary": "The added run remains inconclusive.",
+                        "evidenceIds": ["run:211"],
+                        "reassessWhen": "When evidence changes.",
+                    },
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="investigation-session-1",
+                    checkout=checkout,
+                )
+
     def test_result_requires_matching_started_session_and_completes_it(self) -> None:
         request = build_investigation_plan(_prepared(), _judgments(), [])[
             "requests"
@@ -466,12 +566,14 @@ class InvestigationLifecycleTests(unittest.TestCase):
         }
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
             record_investigation_session_event(
                 state,
                 request,
                 status="started",
                 recorded_at="2026-08-28T20:20:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
 
             with self.assertRaisesRegex(ValueError, "belongs to another session"):
@@ -481,6 +583,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                     result,
                     recorded_at="2026-08-28T20:30:00Z",
                     session_id="investigation-session-2",
+                    checkout=checkout,
                 )
 
             first = record_investigation_result(
@@ -489,13 +592,15 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 result,
                 recorded_at="2026-08-28T20:30:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
             replay = record_investigation_result(
                 state,
                 request,
                 result,
-                recorded_at="2026-08-28T20:30:00Z",
+                recorded_at="2026-08-28T20:31:00Z",
                 session_id="investigation-session-1",
+                checkout=checkout,
             )
 
             self.assertEqual(first, replay)
@@ -513,6 +618,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
         ][0]
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
+            checkout = _clean_checkout(state)
 
             def start(session_id: str) -> str:
                 try:
@@ -522,6 +628,7 @@ class InvestigationLifecycleTests(unittest.TestCase):
                         status="started",
                         recorded_at="2026-08-28T20:20:00Z",
                         session_id=session_id,
+                        checkout=checkout,
                     )
                 except ValueError:
                     return "rejected"
@@ -540,6 +647,164 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 1,
                 len(read_investigation_session_events(state)),
             )
+
+    def test_start_rejects_a_dirty_checkout(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            (checkout / "unexpected.txt").write_text("changed", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "not clean"):
+                record_investigation_session_event(
+                    state,
+                    request,
+                    status="started",
+                    recorded_at="2026-08-28T20:20:00Z",
+                    session_id="investigation-session-1",
+                    checkout=checkout,
+                )
+
+            self.assertEqual([], read_investigation_session_events(state))
+
+    def test_result_rejects_a_dirty_checkout(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+        result = {
+            "outcome": "inconclusive",
+            "summary": "The available evidence is insufficient.",
+            "evidenceIds": ["issue:21"],
+            "reassessWhen": "When evidence changes.",
+        }
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            (checkout / "unexpected.txt").write_text("changed", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "not clean"):
+                record_investigation_result(
+                    state,
+                    request,
+                    result,
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="investigation-session-1",
+                    checkout=checkout,
+                )
+
+    def test_result_rejects_a_committed_checkout_change(self) -> None:
+        request = build_investigation_plan(_prepared(), _judgments(), [])[
+            "requests"
+        ][0]
+        result = {
+            "outcome": "inconclusive",
+            "summary": "The available evidence is insufficient.",
+            "evidenceIds": ["issue:21"],
+            "reassessWhen": "When evidence changes.",
+        }
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            (checkout / "committed.txt").write_text("changed", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(checkout), "add", "committed.txt"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(checkout),
+                    "-c",
+                    "user.name=CI Shepherd",
+                    "-c",
+                    "user.email=ci-shepherd@example.invalid",
+                    "commit",
+                    "-m",
+                    "unexpected worker commit",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            with self.assertRaisesRegex(ValueError, "checkout HEAD changed"):
+                record_investigation_result(
+                    state,
+                    request,
+                    result,
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="investigation-session-1",
+                    checkout=checkout,
+                )
+
+    def test_stopped_stale_worker_can_be_abandoned_and_retried(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+
+            with self.assertRaisesRegex(ValueError, "one-hour session limit"):
+                record_investigation_session_event(
+                    state,
+                    request,
+                    status="abandoned",
+                    recorded_at="2026-08-28T20:30:00Z",
+                    session_id="investigation-session-1",
+                    checkout=checkout,
+                    failure_reason="The worker is no longer running.",
+                    confirm_worker_stopped=True,
+                )
+
+            abandoned = record_investigation_session_event(
+                state,
+                request,
+                status="abandoned",
+                recorded_at="2026-08-28T21:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+                failure_reason="The worker is no longer running.",
+                confirm_worker_stopped=True,
+            )
+            retry = build_investigation_plan(
+                prepared,
+                judgments,
+                [],
+                read_investigation_session_events(state),
+            )
+
+            self.assertEqual("worker-unavailable", abandoned["failureCategory"])
+            self.assertEqual(2, retry["requests"][0]["attempt"])
 
 
 if __name__ == "__main__":

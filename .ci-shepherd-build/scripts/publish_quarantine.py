@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 
 from ci_shepherd.models import stable_json
+from ci_shepherd.quarantine_authorization import authorize_quarantine_publication
 from ci_shepherd.quarantine_mutation import write_quarantine_validation
 from ci_shepherd.quarantine_publish import publish_quarantine_pull_request
-from quarantine_session import _load_request
 
 
 def main() -> int:
@@ -20,6 +21,7 @@ def main() -> int:
     )
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--request", type=Path, required=True)
+    parser.add_argument("--authorization", type=Path, required=True)
     parser.add_argument("--batch-id", required=True)
     parser.add_argument("--mutation-result", type=Path, required=True)
     parser.add_argument("--commit-validation", type=Path, required=True)
@@ -28,15 +30,22 @@ def main() -> int:
     parser.add_argument("--body-file", type=Path, required=True)
     parser.add_argument("--mutation-audit", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--test-name")
     args = parser.parse_args()
 
     old_umask = os.umask(0o077)
     try:
-        request = _load_request(
-            args.request,
-            args.state_dir,
-            args.batch_id,
+        authorization = authorize_quarantine_publication(
+            request_path=args.request,
+            authorization_path=args.authorization,
+            state_dir=args.state_dir,
+            checkout=args.checkout,
+            session_id=args.session_id,
+            batch_id=args.batch_id,
+            now=datetime.now(timezone.utc),
+            test_name=args.test_name,
         )
+        request = authorization.request
         mutation_result = _load_object(
             args.mutation_result,
             "Quarantine mutation result",
@@ -54,6 +63,7 @@ def main() -> int:
             session_id=args.session_id,
             body_file=args.body_file,
             audit_path=args.mutation_audit,
+            authorization=authorization,
         )
         write_quarantine_validation(args.output, result)
     finally:

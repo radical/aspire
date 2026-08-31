@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import copy
+from datetime import timedelta
 import json
 from pathlib import Path
+import re
+import subprocess
 from typing import Any, Mapping
 
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
@@ -20,11 +23,17 @@ _OUTCOMES = frozenset(
         "inconclusive",
     }
 )
-_SESSION_STATUSES = frozenset({"started", "completed", "failed"})
+_SESSION_STATUSES = frozenset({"started", "completed", "failed", "abandoned"})
 _SESSION_FAILURE_CATEGORIES = frozenset(
-    {"worker-error", "invalid-result", "out-of-scope-evidence"}
+    {
+        "worker-error",
+        "invalid-result",
+        "out-of-scope-evidence",
+        "worker-unavailable",
+    }
 )
 _MAX_INVESTIGATION_ATTEMPTS = 2
+_MAX_INVESTIGATION_SESSION_AGE = timedelta(hours=1)
 
 
 def _fingerprint(value: object) -> str:
@@ -302,6 +311,24 @@ def select_investigation_request(
     requests = plan.get("requests")
     if not isinstance(requests, list):
         raise ValueError("Investigation plan must contain requests.")
+    repository = plan.get("repository")
+    if (
+        state_directory is not None
+        and isinstance(repository, str)
+        and repository
+    ):
+        latest = _latest_session_event(
+            read_investigation_session_events(state_directory),
+            repository=repository,
+            investigation_id=investigation_id,
+        )
+        persisted_request = latest.get("request") if latest is not None else None
+        if (
+            latest is not None
+            and latest.get("status") == "started"
+            and isinstance(persisted_request, dict)
+        ):
+            return persisted_request
     matches = [
         request
         for request in requests
@@ -315,7 +342,6 @@ def select_investigation_request(
             f"Investigation plan must contain exactly one {investigation_id} request."
         )
     active_ids = plan.get("activeInvestigationIds")
-    repository = plan.get("repository")
     if (
         not isinstance(active_ids, list)
         or investigation_id not in active_ids
@@ -360,6 +386,7 @@ def _session_event(
     status: str,
     recorded_at: str,
     session_id: str,
+    checkout: Path | None = None,
     failure_reason: str | None = None,
     failure_category: str | None = None,
 ) -> dict[str, object]:
@@ -369,10 +396,14 @@ def _session_event(
     investigation_id, repository = _investigation_identity(request)
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("sessionId must be nonempty.")
-    if status == "failed":
+    if status in {"failed", "abandoned"}:
         if not isinstance(failure_reason, str) or not failure_reason:
-            raise ValueError("A failed investigation session requires a failure reason.")
-        failure_category = failure_category or "worker-error"
+            raise ValueError(
+                f"A {status} investigation session requires a failure reason."
+            )
+        failure_category = failure_category or (
+            "worker-unavailable" if status == "abandoned" else "worker-error"
+        )
         if failure_category not in _SESSION_FAILURE_CATEGORIES:
             raise ValueError(
                 f"Unsupported investigation failure category: {failure_category}"
@@ -392,6 +423,15 @@ def _session_event(
         "recordedAt": recorded_at,
         "sessionId": session_id,
     }
+    if status in {"started", "completed", "abandoned"}:
+        if checkout is None:
+            raise ValueError(f"A {status} investigation session requires a checkout.")
+        event["checkoutPath"] = _canonical_checkout(checkout)
+        event["checkoutHead"] = _checkout_head(checkout)
+    elif checkout is not None:
+        raise ValueError(
+            "checkout is valid only for started, completed, or abandoned sessions."
+        )
     if status == "started":
         event["request"] = dict(request)
     if failure_reason is not None:
@@ -438,6 +478,16 @@ def _validate_session_transition(
         )
     if previous.get("sessionId") != session_id:
         raise ValueError(f"Investigation {investigation_id} belongs to another session.")
+    if status in {"completed", "abandoned"} and previous.get(
+        "checkoutPath"
+    ) != event.get("checkoutPath"):
+        raise ValueError(
+            f"Investigation {investigation_id} belongs to another checkout."
+        )
+    if status in {"completed", "abandoned"} and previous.get(
+        "checkoutHead"
+    ) != event.get("checkoutHead"):
+        raise ValueError(f"Investigation {investigation_id} checkout HEAD changed.")
 
 
 def record_investigation_session_event(
@@ -447,14 +497,19 @@ def record_investigation_session_event(
     status: str,
     recorded_at: str,
     session_id: str,
+    checkout: Path | None = None,
     failure_reason: str | None = None,
     failure_category: str | None = None,
+    confirm_worker_stopped: bool = False,
 ) -> dict[str, object]:
+    if status == "started" and checkout is not None:
+        _require_clean_checkout(checkout)
     event = _session_event(
         request,
         status=status,
         recorded_at=recorded_at,
         session_id=session_id,
+        checkout=checkout,
         failure_reason=failure_reason,
         failure_category=failure_category,
     )
@@ -467,6 +522,16 @@ def record_investigation_session_event(
             repository=repository,
             investigation_id=investigation_id,
         )
+        if status == "abandoned":
+            if not confirm_worker_stopped:
+                raise ValueError(
+                    "Abandonment requires confirmation that the worker stopped."
+                )
+            _validate_abandonment(previous, event, checkout)
+        elif confirm_worker_stopped:
+            raise ValueError(
+                "confirm_worker_stopped is valid only for abandoned sessions."
+            )
         _validate_session_transition(previous, event)
         append_jsonl_rows(path, [event])
     return event
@@ -479,6 +544,7 @@ def record_investigation_result(
     *,
     recorded_at: str,
     session_id: str,
+    checkout: Path,
 ) -> dict[str, object]:
     parse_aware_iso8601(recorded_at, "recordedAt")
     outcome = result.get("outcome")
@@ -536,7 +602,9 @@ def record_investigation_result(
         status="completed",
         recorded_at=recorded_at,
         session_id=session_id,
+        checkout=checkout,
     )
+    _require_clean_checkout(checkout)
     sessions_path = _sessions_path(state_directory)
     results_path = _results_path(state_directory)
     with exclusive_jsonl_lock(sessions_path):
@@ -558,7 +626,17 @@ def record_investigation_result(
                 None,
             )
             if existing is not None:
-                if existing != event:
+                existing_payload = {
+                    key: value
+                    for key, value in existing.items()
+                    if key != "recordedAt"
+                }
+                event_payload = {
+                    key: value
+                    for key, value in event.items()
+                    if key != "recordedAt"
+                }
+                if existing_payload != event_payload:
                     raise ValueError(
                         f"Investigation {investigation_id} is already recorded."
                     )
@@ -573,6 +651,82 @@ def record_investigation_result(
             append_jsonl_rows(results_path, [event])
             append_jsonl_rows(sessions_path, [session_event])
     return event
+
+
+def _canonical_checkout(checkout: Path) -> str:
+    if checkout.is_symlink():
+        raise ValueError("Investigation checkout must not be a symlink.")
+    try:
+        resolved = checkout.expanduser().resolve(strict=True)
+    except FileNotFoundError as error:
+        raise ValueError(f"Investigation checkout does not exist: {checkout}") from error
+    if not resolved.is_dir():
+        raise ValueError("Investigation checkout must be a directory.")
+    return str(resolved)
+
+
+def _require_clean_checkout(checkout: Path) -> None:
+    checkout_path = _canonical_checkout(checkout)
+    result = subprocess.run(
+        ["git", "-C", checkout_path, "status", "--porcelain", "--untracked-files=all"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            "Investigation checkout status could not be verified: "
+            + (result.stderr.strip() or f"git exited {result.returncode}.")
+        )
+    if result.stdout:
+        raise ValueError("Investigation checkout is not clean.")
+
+
+def _checkout_head(checkout: Path) -> str:
+    checkout_path = _canonical_checkout(checkout)
+    result = subprocess.run(
+        [
+            "git",
+            "--no-pager",
+            "-C",
+            checkout_path,
+            "rev-parse",
+            "--verify",
+            "HEAD",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    head = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-fA-F]{40}", head) is None:
+        raise ValueError(
+            "Investigation checkout HEAD could not be verified: "
+            + (result.stderr.strip() or f"git exited {result.returncode}.")
+        )
+    return head.lower()
+
+
+def _validate_abandonment(
+    previous: Mapping[str, Any] | None,
+    event: Mapping[str, Any],
+    checkout: Path | None,
+) -> None:
+    if previous is None or previous.get("status") != "started":
+        raise ValueError("Investigation does not have an active session to abandon.")
+    if checkout is None:
+        raise ValueError("Abandonment requires the investigation checkout.")
+    if previous.get("checkoutPath") != _canonical_checkout(checkout):
+        raise ValueError("Investigation belongs to another checkout.")
+    started_at = parse_aware_iso8601(previous.get("recordedAt"), "recordedAt")
+    abandoned_at = parse_aware_iso8601(event.get("recordedAt"), "recordedAt")
+    if abandoned_at - started_at < _MAX_INVESTIGATION_SESSION_AGE:
+        raise ValueError(
+            "Investigation cannot be abandoned before its one-hour session limit."
+        )
+    _require_clean_checkout(checkout)
 
 
 def attach_latest_investigation_results(

@@ -29,6 +29,8 @@ _GRANT_KEYS = frozenset(
         "grantId",
         "repository",
         "stateDirectory",
+        "checkoutPath",
+        "sessionId",
         "snapshotId",
         "repositoryPolicyDigest",
         "quarantinePlanDigest",
@@ -36,6 +38,12 @@ _GRANT_KEYS = frozenset(
         "allowedTestNames",
         "issuedAt",
         "expiresAt",
+    }
+)
+_GRANT_TYPES = frozenset(
+    {
+        "quarantine-start",
+        "quarantine-publication",
     }
 )
 
@@ -47,14 +55,25 @@ class AuthorizedQuarantineStart:
     expires_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class AuthorizedQuarantinePublication:
+    request: dict[str, object]
+    grant_id: str
+    issued_at: str
+    expires_at: str
+
+
 def create_quarantine_grant(
     *,
     request_path: Path,
     state_dir: Path,
+    checkout: Path,
+    session_id: str,
     batch_id: str | None,
     issued_at: datetime,
     lifetime: timedelta = timedelta(minutes=15),
     test_name: str | None = None,
+    grant_type: str = "quarantine-start",
 ) -> dict[str, object]:
     request_bytes, document = _read_request(request_path)
     request = _select_request(document)
@@ -71,13 +90,19 @@ def create_quarantine_grant(
         raise ValueError("issuedAt must include a UTC offset.")
     if lifetime <= timedelta(0) or lifetime > MAX_GRANT_LIFETIME:
         raise ValueError("Quarantine grant lifetime must be between zero and one hour.")
+    if grant_type not in _GRANT_TYPES:
+        raise ValueError(f"Unsupported quarantine grant type: {grant_type}")
     issued_at = issued_at.astimezone(timezone.utc)
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("sessionId must be nonempty.")
     return {
         "schemaVersion": 1,
-        "grantType": "quarantine-start",
+        "grantType": grant_type,
         "grantId": f"quarantine-grant:{secrets.token_hex(16)}",
         "repository": repository,
         "stateDirectory": _canonical_state_directory(state_dir),
+        "checkoutPath": _canonical_checkout(checkout),
+        "sessionId": session_id,
         "snapshotId": snapshot_id,
         "repositoryPolicyDigest": policy_digest,
         "quarantinePlanDigest": hashlib.sha256(request_bytes).hexdigest(),
@@ -122,10 +147,75 @@ def authorize_quarantine_start(
     request_path: Path,
     authorization_path: Path,
     state_dir: Path,
+    checkout: Path,
+    session_id: str,
     batch_id: str,
     now: datetime,
     test_name: str | None = None,
 ) -> AuthorizedQuarantineStart:
+    request, grant, _, expires_at = _authorize_quarantine_operation(
+        request_path=request_path,
+        authorization_path=authorization_path,
+        state_dir=state_dir,
+        checkout=checkout,
+        session_id=session_id,
+        batch_id=batch_id,
+        now=now,
+        test_name=test_name,
+        grant_type="quarantine-start",
+        require_current=True,
+    )
+    return AuthorizedQuarantineStart(
+        request=request,
+        grant_id=_require_string(grant, "grantId"),
+        expires_at=_format_utc(expires_at),
+    )
+
+
+def authorize_quarantine_publication(
+    *,
+    request_path: Path,
+    authorization_path: Path,
+    state_dir: Path,
+    checkout: Path,
+    session_id: str,
+    batch_id: str,
+    now: datetime,
+    test_name: str | None = None,
+) -> AuthorizedQuarantinePublication:
+    request, grant, issued_at, expires_at = _authorize_quarantine_operation(
+        request_path=request_path,
+        authorization_path=authorization_path,
+        state_dir=state_dir,
+        checkout=checkout,
+        session_id=session_id,
+        batch_id=batch_id,
+        now=now,
+        test_name=test_name,
+        grant_type="quarantine-publication",
+        require_current=False,
+    )
+    return AuthorizedQuarantinePublication(
+        request=request,
+        grant_id=_require_string(grant, "grantId"),
+        issued_at=_format_utc(issued_at),
+        expires_at=_format_utc(expires_at),
+    )
+
+
+def _authorize_quarantine_operation(
+    *,
+    request_path: Path,
+    authorization_path: Path,
+    state_dir: Path,
+    checkout: Path,
+    session_id: str,
+    batch_id: str,
+    now: datetime,
+    test_name: str | None,
+    grant_type: str,
+    require_current: bool,
+) -> tuple[dict[str, object], dict[str, object], datetime, datetime]:
     request_bytes, document = _read_request(request_path)
     request = _select_request(document)
     if test_name is not None:
@@ -138,12 +228,14 @@ def authorize_quarantine_start(
     grant = _read_json_object(authorization_path, "quarantine authorization")
     if frozenset(grant) != _GRANT_KEYS:
         raise ValueError("Quarantine authorization has unexpected or missing fields.")
-    if grant.get("schemaVersion") != 1 or grant.get("grantType") != "quarantine-start":
+    if grant.get("schemaVersion") != 1 or grant.get("grantType") != grant_type:
         raise ValueError("Unsupported quarantine authorization.")
-    grant_id = _require_string(grant, "grantId")
+    _require_string(grant, "grantId")
     checks = {
         "repository": repository,
         "stateDirectory": _canonical_state_directory(state_dir),
+        "checkoutPath": _canonical_checkout(checkout),
+        "sessionId": session_id,
         "snapshotId": snapshot_id,
         "repositoryPolicyDigest": policy_digest,
         "quarantinePlanDigest": hashlib.sha256(request_bytes).hexdigest(),
@@ -164,15 +256,25 @@ def authorize_quarantine_start(
         raise ValueError("Quarantine authorization has an invalid lifetime.")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Current time must include a UTC offset.")
-    if now < issued_at or now >= expires_at:
+    if require_current and (now < issued_at or now >= expires_at):
         raise ValueError("Quarantine authorization is not currently valid.")
-    return AuthorizedQuarantineStart(
-        request=request,
-        grant_id=grant_id,
-        expires_at=expires_at.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
-    )
+    return request, grant, issued_at, expires_at
+
+
+def _format_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _canonical_checkout(checkout: Path) -> str:
+    if checkout.is_symlink():
+        raise ValueError("Quarantine checkout must not be a symlink.")
+    try:
+        resolved = checkout.expanduser().resolve(strict=True)
+    except FileNotFoundError as error:
+        raise ValueError(f"Quarantine checkout does not exist: {checkout}") from error
+    if not resolved.is_dir():
+        raise ValueError("Quarantine checkout must be a directory.")
+    return str(resolved)
 
 
 def _read_request(path: Path) -> tuple[bytes, dict[str, object]]:

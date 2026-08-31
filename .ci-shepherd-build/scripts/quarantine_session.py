@@ -78,6 +78,7 @@ def main() -> int:
     )
     parser.add_argument("--recorded-at", required=True)
     parser.add_argument("--session-id")
+    parser.add_argument("--checkout", type=Path)
     parser.add_argument("--batch-id")
     parser.add_argument(
         "--test-name",
@@ -107,10 +108,16 @@ def main() -> int:
                 )
             if args.batch_id is None:
                 raise ValueError("A started quarantine session requires --batch-id.")
+            if args.session_id is None:
+                raise ValueError("A started quarantine session requires --session-id.")
+            if args.checkout is None:
+                raise ValueError("A started quarantine session requires --checkout.")
             authorized = authorize_quarantine_start(
                 request_path=args.request,
                 authorization_path=args.authorization,
                 state_dir=args.state_dir,
+                checkout=args.checkout,
+                session_id=args.session_id,
                 batch_id=args.batch_id,
                 now=datetime.now(timezone.utc),
                 test_name=args.test_name,
@@ -139,6 +146,7 @@ def main() -> int:
             failure_reason=args.failure_reason,
             authorization_grant_id=authorization_grant_id,
             authorization_expires_at=authorization_expires_at,
+            checkout=args.checkout if args.status == "started" else None,
             confirm_no_remote_side_effects=args.confirm_no_remote_side_effects,
         )
     finally:

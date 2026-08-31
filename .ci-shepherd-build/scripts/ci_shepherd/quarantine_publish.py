@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
@@ -12,8 +13,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock
-from .quarantine import read_quarantine_session_events
-from .quarantine_authorization import _deny_production
+from .quarantine import (
+    read_quarantine_session_events,
+    record_quarantine_session_event,
+)
+from .quarantine_authorization import (
+    AuthorizedQuarantinePublication,
+    _deny_production,
+)
 from .quarantine_mutation import (
     _require_clean_checkout,
     create_quarantine_commit_validation,
@@ -21,6 +28,7 @@ from .quarantine_mutation import (
     validate_quarantine_mutation_result,
 )
 from .repository_policy import load_embedded_repository_policy
+from .timeutils import parse_aware_iso8601
 
 
 _HTTPS_REMOTE_RE = re.compile(
@@ -35,6 +43,12 @@ _SSH_REMOTE_RE = re.compile(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _AllowedRemote:
+    name: str
+    push_url: str
+
+
 def publish_quarantine_pull_request(
     *,
     request: Mapping[str, Any],
@@ -45,10 +59,24 @@ def publish_quarantine_pull_request(
     session_id: str,
     body_file: Path,
     audit_path: Path,
+    authorization: AuthorizedQuarantinePublication,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> dict[str, object]:
+    if clock is None:
+        clock = (
+            (lambda: now)
+            if now is not None
+            else (lambda: datetime.now(timezone.utc))
+        )
+    entered_at = clock()
     repository = _require_string(request, "repository")
     _deny_production(repository)
+    if authorization.request != request:
+        raise ValueError(
+            "Quarantine publication authorization does not match the request."
+        )
     validated_mutation = validate_quarantine_mutation_result(
         request,
         mutation_result,
@@ -56,11 +84,6 @@ def publish_quarantine_pull_request(
     validated_commit = validate_quarantine_commit_validation(
         validated_mutation,
         commit_validation,
-    )
-    _require_started_session(
-        request,
-        state_directory,
-        session_id=session_id,
     )
     policy = load_embedded_repository_policy(
         request.get("repositoryPolicy"),
@@ -72,6 +95,13 @@ def publish_quarantine_pull_request(
             "Quarantine publication requires exactly one allowed head repository."
         )
     head_repository = next(iter(allowed_heads))
+    _deny_production(head_repository)
+    session_event = _require_started_session(
+        request,
+        state_directory,
+        session_id=session_id,
+        checkout=checkout,
+    )
     approved_body = _validate_body(request, body_file)
     checkout = checkout.expanduser().resolve(strict=True)
     _ensure_commit_unchanged(
@@ -97,14 +127,20 @@ def publish_quarantine_pull_request(
     base_ref = policy.quarantine_pull_request.base_ref
     head_owner = head_repository.split("/", 1)[0]
     head_ref = f"{head_owner}:{branch}"
-
+    recorded_at = (
+        entered_at
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    completed_test_names = list(validated_mutation["completedTests"])
     with (
         _approved_body_file(approved_body, audit_path) as approved_body_file,
         exclusive_jsonl_lock(audit_path),
     ):
         remote_sha = _read_remote_branch_sha(
             checkout,
-            remote,
+            remote.push_url,
             branch,
             runner=runner,
         )
@@ -118,6 +154,10 @@ def publish_quarantine_pull_request(
             head_branch=branch,
             runner=runner,
         )
+        if session_event.get("status") == "pull-request-open" and existing is None:
+            raise ValueError(
+                "The recorded quarantine pull request no longer exists."
+            )
         if existing is not None:
             _validate_pull_request_summary(
                 existing,
@@ -126,11 +166,32 @@ def publish_quarantine_pull_request(
                 base_ref=base_ref,
                 commit_sha=commit_sha,
             )
+            pull_request_url = _require_string(existing, "url")
+            if session_event.get("status") == "pull-request-open":
+                if (
+                    session_event.get("pullRequestUrl") != pull_request_url
+                    or session_event.get("pullRequestHeadSha") != commit_sha
+                ):
+                    raise ValueError(
+                        "The recorded quarantine pull request identity changed."
+                    )
+            else:
+                record_quarantine_session_event(
+                    state_directory,
+                    request,
+                    status="pull-request-open",
+                    recorded_at=recorded_at,
+                    session_id=session_id,
+                    pull_request_url=pull_request_url,
+                    pull_request_head_sha=commit_sha,
+                    completed_test_names=completed_test_names,
+                    mutation_validation=validated_mutation,
+                )
             return _worker_result(
                 request=request,
                 validated_commit=validated_commit,
                 session_id=session_id,
-                pull_request_url=_require_string(existing, "url"),
+                pull_request_url=pull_request_url,
             )
 
         _ensure_commit_unchanged(
@@ -138,6 +199,34 @@ def publish_quarantine_pull_request(
             validated_mutation,
             validated_commit,
             checkout,
+        )
+        _require_remote_base_revision(
+            checkout,
+            repository=repository,
+            head_repository=head_repository,
+            head_remote=remote,
+            base_ref=base_ref,
+            source_revision=_require_string(request, "sourceRevision"),
+            runner=runner,
+        )
+        _require_started_session(
+            request,
+            state_directory,
+            session_id=session_id,
+            checkout=checkout,
+        )
+        _require_publication_authorization_valid(authorization, clock())
+        record_quarantine_session_event(
+            state_directory,
+            request,
+            status="publication-pending",
+            recorded_at=recorded_at,
+            session_id=session_id,
+            pull_request_head_sha=commit_sha,
+            completed_test_names=completed_test_names,
+            mutation_validation=validated_mutation,
+            publication_authorization_grant_id=authorization.grant_id,
+            publication_authorization_expires_at=authorization.expires_at,
         )
         _require_clean_checkout(checkout)
         identity = {
@@ -150,6 +239,8 @@ def publish_quarantine_pull_request(
             "commitSha": commit_sha,
         }
         if remote_sha is None:
+            _require_publication_authorization_valid(authorization, clock())
+            _require_no_git_url_rewrites(checkout, runner=runner)
             operation_id = _record_intent(
                 audit_path,
                 identity,
@@ -163,7 +254,11 @@ def publish_quarantine_pull_request(
                         "-C",
                         str(checkout),
                         "push",
-                        remote,
+                        (
+                            "--force-with-lease="
+                            f"refs/heads/{branch}:"
+                        ),
+                        remote.push_url,
                         f"{commit_sha}:refs/heads/{branch}",
                     ],
                     runner=runner,
@@ -190,7 +285,7 @@ def publish_quarantine_pull_request(
 
         published_sha = _read_remote_branch_sha(
             checkout,
-            remote,
+            remote.push_url,
             branch,
             runner=runner,
         )
@@ -199,6 +294,7 @@ def publish_quarantine_pull_request(
                 "The derived quarantine branch changed before pull request creation."
             )
         title = _pull_request_title(request)
+        _require_publication_authorization_valid(authorization, clock())
         operation_id = _record_intent(
             audit_path,
             identity,
@@ -258,6 +354,17 @@ def publish_quarantine_pull_request(
             base_ref=base_ref,
             commit_sha=commit_sha,
         )
+        record_quarantine_session_event(
+            state_directory,
+            request,
+            status="pull-request-open",
+            recorded_at=recorded_at,
+            session_id=session_id,
+            pull_request_url=pull_request_url,
+            pull_request_head_sha=commit_sha,
+            completed_test_names=completed_test_names,
+            mutation_validation=validated_mutation,
+        )
         return _worker_result(
             request=request,
             validated_commit=validated_commit,
@@ -286,7 +393,8 @@ def _require_started_session(
     state_directory: Path,
     *,
     session_id: str,
-) -> None:
+    checkout: Path,
+) -> Mapping[str, Any]:
     batch_id = _require_string(request, "batchId")
     events = read_quarantine_session_events(state_directory)
     latest = next(
@@ -297,11 +405,21 @@ def _require_started_session(
         ),
         None,
     )
+    started = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("batchId") == batch_id
+            and event.get("status") == "started"
+            and event.get("sessionId") == session_id
+        ),
+        None,
+    )
     if (
         latest is None
-        or latest.get("status") != "started"
+        or latest.get("status")
+        not in {"started", "publication-pending", "pull-request-open"}
         or latest.get("sessionId") != session_id
-        or not isinstance(latest.get("authorizationGrantId"), str)
         or any(
             latest.get(field) != request.get(field)
             for field in (
@@ -321,6 +439,39 @@ def _require_started_session(
         raise ValueError(
             "Quarantine publication requires the exact active started session."
         )
+    if started is None:
+        raise ValueError(
+            "Quarantine publication requires its grant-authorized started event."
+        )
+    if not isinstance(started.get("authorizationGrantId"), str):
+        raise ValueError(
+            "Quarantine publication requires its grant-authorized started event."
+        )
+    if started.get("checkoutPath") != str(
+        checkout.expanduser().resolve(strict=True)
+    ):
+        raise ValueError(
+            "Quarantine publication requires its grant-authorized checkout."
+        )
+    return latest
+
+
+def _require_publication_authorization_valid(
+    authorization: AuthorizedQuarantinePublication,
+    now: datetime,
+) -> None:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Current time must include a UTC offset.")
+    issued_at = parse_aware_iso8601(
+        authorization.issued_at,
+        "publication authorization issuedAt",
+    )
+    expires_at = parse_aware_iso8601(
+        authorization.expires_at,
+        "publication authorization expiresAt",
+    )
+    if now < issued_at or now >= expires_at:
+        raise ValueError("Quarantine publication authorization expired.")
 
 
 def _validate_body(
@@ -399,17 +550,18 @@ def _resolve_allowed_remote(
     repository: str,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]],
-) -> str | None:
+) -> _AllowedRemote | None:
+    _require_no_git_url_rewrites(checkout, runner=runner)
     remotes = _run_text(
         ["git", "--no-pager", "-C", str(checkout), "remote"],
         runner=runner,
         description="Unable to enumerate Git remotes.",
     ).splitlines()
-    matches = []
+    matches: list[_AllowedRemote] = []
     for remote in sorted(set(remotes)):
         if not remote:
             continue
-        url = _run_text(
+        fetch_urls = _run_text(
             [
                 "git",
                 "--no-pager",
@@ -417,18 +569,42 @@ def _resolve_allowed_remote(
                 str(checkout),
                 "remote",
                 "get-url",
+                "--all",
                 remote,
             ],
             runner=runner,
             description=f"Unable to resolve Git remote {remote}.",
-        ).strip()
-        resolved = _github_repository_from_remote_url(url)
-        if resolved is not None and resolved.casefold() == repository.casefold():
-            matches.append(remote)
-    if len(matches) > 1:
-        raise ValueError(
-            "Multiple Git remotes match the allowed head repository."
-        )
+        ).splitlines()
+        push_urls = _run_text(
+            [
+                "git",
+                "--no-pager",
+                "-C",
+                str(checkout),
+                "remote",
+                "get-url",
+                "--push",
+                "--all",
+                remote,
+            ],
+            runner=runner,
+            description=f"Unable to resolve Git push target {remote}.",
+        ).splitlines()
+        if len(fetch_urls) != 1 or len(push_urls) != 1:
+            continue
+        fetch_repository = _github_repository_from_remote_url(fetch_urls[0])
+        push_repository = _github_repository_from_remote_url(push_urls[0])
+        if (
+            fetch_repository is not None
+            and push_repository is not None
+            and fetch_repository.casefold() == repository.casefold()
+            and push_repository.casefold() == repository.casefold()
+        ):
+            matches.append(_AllowedRemote(remote, push_urls[0]))
+    owner = repository.split("/", 1)[0]
+    owner_match = next((match for match in matches if match.name == owner), None)
+    if owner_match is not None:
+        return owner_match
     return matches[0] if matches else None
 
 
@@ -452,11 +628,12 @@ def _branch_for_batch(batch_id: str) -> str:
 
 def _read_remote_branch_sha(
     checkout: Path,
-    remote: str,
+    remote_target: str,
     branch: str,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]],
 ) -> str | None:
+    _require_no_git_url_rewrites(checkout, runner=runner)
     ref = f"refs/heads/{branch}"
     output = _run_text(
         [
@@ -466,7 +643,7 @@ def _read_remote_branch_sha(
             str(checkout),
             "ls-remote",
             "--heads",
-            remote,
+            remote_target,
             ref,
         ],
         runner=runner,
@@ -487,6 +664,74 @@ def _read_remote_branch_sha(
     return fields[0]
 
 
+def _require_remote_base_revision(
+    checkout: Path,
+    *,
+    repository: str,
+    head_repository: str,
+    head_remote: _AllowedRemote,
+    base_ref: str,
+    source_revision: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> None:
+    base_remote = head_remote
+    if repository.casefold() != head_repository.casefold():
+        resolved = _resolve_allowed_remote(
+            checkout,
+            repository,
+            runner=runner,
+        )
+        if resolved is None:
+            raise ValueError(
+                "No Git remote matches the quarantine pull request repository."
+            )
+        base_remote = resolved
+
+    base_sha = _read_remote_branch_sha(
+        checkout,
+        base_remote.push_url,
+        base_ref,
+        runner=runner,
+    )
+    if base_sha != source_revision:
+        raise ValueError(
+            "The quarantine pull request base ref no longer matches the "
+            "validated source revision."
+        )
+
+
+def _require_no_git_url_rewrites(
+    checkout: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> None:
+    command = [
+        "git",
+        "--no-pager",
+        "-C",
+        str(checkout),
+        "config",
+        "--get-regexp",
+        r"^url\..*\.(insteadof|pushinsteadof)$",
+    ]
+    completed = runner(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode not in {0, 1}:
+        raise ValueError(
+            "Unable to inspect Git URL rewrite configuration. "
+            f"{completed.stderr.strip()}"
+        )
+    if completed.returncode == 0 or completed.stdout.strip():
+        raise ValueError(
+            "Git URL rewrite configuration is forbidden for quarantine publication."
+        )
+
+
 def _find_existing_pull_request(
     *,
     repository: str,
@@ -503,11 +748,11 @@ def _find_existing_pull_request(
             "--head",
             head_branch,
             "--state",
-            "open",
+            "all",
             "--limit",
             "2",
             "--json",
-            "url,headRefOid,isDraft,baseRefName,headRepository",
+            "url,state,headRefOid,isDraft,baseRefName,headRepository",
         ],
         runner=runner,
         description="Unable to inspect existing quarantine pull requests.",
@@ -547,7 +792,7 @@ def _read_pull_request(
             "--repo",
             repository,
             "--json",
-            "url,headRefOid,isDraft,baseRefName,headRepository",
+            "url,state,headRefOid,isDraft,baseRefName,headRepository",
         ],
         runner=runner,
         description="Unable to verify the created quarantine pull request.",
@@ -583,7 +828,8 @@ def _validate_pull_request_summary(
     url = _require_string(summary, "url")
     _parse_pull_request_url(url, repository)
     if (
-        summary.get("headRefOid") != commit_sha
+        summary.get("state") != "OPEN"
+        or summary.get("headRefOid") != commit_sha
         or summary.get("isDraft") is not True
         or summary.get("baseRefName") != base_ref
         or not isinstance(actual_head, str)

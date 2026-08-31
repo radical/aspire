@@ -13,12 +13,11 @@ already derived by the prepare stage.
 """
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .jsonl import append_jsonl_rows, exclusive_jsonl_lock
+from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
 
 
 def compute_fingerprint(identity: Mapping[str, Any]) -> str | None:
@@ -124,25 +123,8 @@ def _row_identity(row: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
 
 
 def read_ledger_rows(path: Path) -> list[dict[str, Any]]:
-    """Read the JSONL fingerprint ledger, returning an empty list if absent.
-
-    A malformed or truncated line -- for example a partial write left behind
-    by a crash, or a stray line missing its terminating newline -- is skipped
-    rather than raising, so one bad line does not brick all later history.
-    """
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as stream:
-        for line in stream:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return rows
+    """Read the JSONL fingerprint ledger, failing closed on damaged state."""
+    return read_jsonl_rows(path)
 
 
 def append_new_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

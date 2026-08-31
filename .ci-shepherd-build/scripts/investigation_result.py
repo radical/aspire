@@ -30,6 +30,7 @@ def main() -> int:
     parser.add_argument("--result", type=Path, required=True)
     parser.add_argument("--recorded-at", required=True)
     parser.add_argument("--session-id", required=True)
+    parser.add_argument("--checkout", type=Path, required=True)
     args = parser.parse_args()
 
     old_umask = os.umask(0o077)
@@ -44,6 +45,7 @@ def main() -> int:
             _load_object(args.result, "Investigation result"),
             recorded_at=args.recorded_at,
             session_id=args.session_id,
+            checkout=args.checkout,
         )
     finally:
         os.umask(old_umask)
