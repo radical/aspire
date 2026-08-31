@@ -27,6 +27,7 @@ MAX_GRANT_TTL_MINUTES = 60
 AUTHORIZATION_SCHEMA_VERSION = 2
 PRODUCTION_REPOSITORY = "microsoft/aspire"
 PRODUCTION_COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
+MAX_PRODUCTION_COMMENT_ACTIONS = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +218,7 @@ def load_authorized_execution(
             grant,
             action_id=action_id,
             operation=operation,
+            proposals=proposals,
         )
 
     return AuthorizedExecution(
@@ -448,15 +450,28 @@ def _validate_production_comment_selection(
     ttl_minutes: int,
     override_ids: set[str],
 ) -> None:
-    if len(proposals) != 1:
+    if len(proposals) > MAX_PRODUCTION_COMMENT_ACTIONS:
         raise AuthorizationError(
-            "Production comment pilot grants must authorize exactly one action."
+            "Production comment pilot grants may authorize at most "
+            f"{MAX_PRODUCTION_COMMENT_ACTIONS} actions."
         )
-    operation = _require_string(proposals[0], "operation")
-    if operation not in PRODUCTION_COMMENT_OPERATIONS:
-        raise AuthorizationError(
-            "Production comment pilot grants allow comment operations only."
-        )
+    issue_numbers: set[int] = set()
+    for proposal in proposals:
+        operation = _require_string(proposal, "operation")
+        if operation not in PRODUCTION_COMMENT_OPERATIONS:
+            raise AuthorizationError(
+                "Production comment pilot grants allow comment operations only."
+            )
+        if proposal.get("dependsOn") is not None:
+            raise AuthorizationError(
+                "Production comment pilot actions must be independent."
+            )
+        issue_number = _require_positive_int(proposal, "issueNumber")
+        if issue_number in issue_numbers:
+            raise AuthorizationError(
+                "Production comment pilot grants allow one action per issue."
+            )
+        issue_numbers.add(issue_number)
     if ttl_minutes > DEFAULT_GRANT_TTL_MINUTES:
         raise AuthorizationError(
             "Production comment pilot grants may live for at most 15 minutes."
@@ -472,6 +487,7 @@ def _validate_production_comment_grant(
     *,
     action_id: str,
     operation: str,
+    proposals: Sequence[Mapping[str, Any]],
 ) -> None:
     if grant.repository.casefold() != PRODUCTION_REPOSITORY:
         raise AuthorizationError(
@@ -481,38 +497,70 @@ def _validate_production_comment_grant(
         raise AuthorizationError(
             "Authorization grant does not carry the production comment capability."
         )
-    if grant.allowed_action_ids != (action_id,):
-        raise AuthorizationError(
-            "Production comment pilot grant must allow exactly the selected action."
-        )
-    if (
-        operation not in PRODUCTION_COMMENT_OPERATIONS
-        or grant.allowed_operations != frozenset({operation})
+    if not (
+        1 <= len(grant.allowed_action_ids) <= MAX_PRODUCTION_COMMENT_ACTIONS
     ):
         raise AuthorizationError(
-            "Production comment pilot grant must allow exactly one comment operation."
+            "Production comment pilot grant has an invalid action count."
         )
-    if len(grant.allowed_targets) != 1:
+    by_action_id = {
+        proposal.get("actionId"): proposal
+        for proposal in proposals
+        if isinstance(proposal, Mapping)
+    }
+    selected = [
+        by_action_id.get(allowed_action_id)
+        for allowed_action_id in grant.allowed_action_ids
+    ]
+    if any(proposal is None for proposal in selected):
         raise AuthorizationError(
-            "Production comment pilot grant must allow exactly one issue target."
+            "Production comment pilot grant references an unknown action."
         )
-    # The parser's nonempty-subset invariant and the one-action check above
-    # already force this value. Keep the explicit check as a fail-closed guard
-    # if the generic grant invariants change later.
-    if grant.allowed_chain_roots != (action_id,):
+    selected_proposals = [
+        proposal for proposal in selected if proposal is not None
+    ]
+    selected_operations = frozenset(
+        _require_string(proposal, "operation")
+        for proposal in selected_proposals
+    )
+    if (
+        operation not in PRODUCTION_COMMENT_OPERATIONS
+        or not selected_operations.issubset(PRODUCTION_COMMENT_OPERATIONS)
+        or grant.allowed_operations != selected_operations
+    ):
         raise AuthorizationError(
-            "Production comment pilot grant must bind the selected action as its root."
+            "Production comment pilot grant must allow comment operations only."
+        )
+    if any(proposal.get("dependsOn") is not None for proposal in selected_proposals):
+        raise AuthorizationError(
+            "Production comment pilot grant actions must be independent."
+        )
+    selected_targets = frozenset(
+        ("issue", _require_positive_int(proposal, "issueNumber"))
+        for proposal in selected_proposals
+    )
+    if (
+        len(selected_targets) != len(selected_proposals)
+        or grant.allowed_targets != selected_targets
+    ):
+        raise AuthorizationError(
+            "Production comment pilot grant must bind one issue target per action."
+        )
+    if grant.allowed_chain_roots != grant.allowed_action_ids:
+        raise AuthorizationError(
+            "Production comment pilot grant must bind every action as an independent root."
         )
     if grant.override_suppression_for_action_ids:
         raise AuthorizationError(
             "Production comment pilot grant cannot override suppression."
         )
+    action_count = len(grant.allowed_action_ids)
     if grant.budget != AuthorizationBudget(
-        max_mutation_attempts=1,
-        max_chains=1,
+        max_mutation_attempts=action_count,
+        max_chains=action_count,
     ):
         raise AuthorizationError(
-            "Production comment pilot grant budget must allow one mutation and one chain."
+            "Production comment pilot grant budget must match its exact action count."
         )
     if (
         grant.expires_at - grant.issued_at

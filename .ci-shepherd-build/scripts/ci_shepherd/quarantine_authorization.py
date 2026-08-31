@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import stat
 from typing import Any, Mapping
@@ -200,6 +201,12 @@ def _validate_request(
         raise ValueError("Unsupported quarantine request.")
     repository = _require_string(request, "repository")
     snapshot_id = _require_string(request, "snapshotId")
+    source_revision = _require_string(request, "sourceRevision")
+    source_tree_digest = _require_string(request, "sourceTreeDigest")
+    if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+        raise ValueError("sourceRevision must be a lowercase 40-character SHA.")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest) is None:
+        raise ValueError("sourceTreeDigest must be a SHA-256 digest.")
     if request.get("batchId") != batch_id:
         raise ValueError("Quarantine request batchId does not match.")
     tests = request.get("tests")
@@ -210,9 +217,57 @@ def _validate_request(
         if not isinstance(item, dict):
             raise ValueError("Quarantine request tests must contain objects.")
         test_names.append(_require_string(item, "testName"))
+        _validate_test_source_baseline(item)
     if len(test_names) != len(set(test_names)):
         raise ValueError("Quarantine request test names must be unique.")
     return repository, snapshot_id, sorted(test_names)
+
+
+def _validate_test_source_baseline(item: Mapping[str, object]) -> None:
+    test_name = _require_string(item, "testName")
+    _require_string(item, "issueUrl")
+    source_location = item.get("sourceLocation")
+    if not isinstance(source_location, Mapping) or set(source_location) != {
+        "file",
+        "line",
+    }:
+        raise ValueError(f"sourceLocation is invalid for {test_name}.")
+    source_file = _require_string(source_location, "file")
+    line = source_location.get("line")
+    if (
+        Path(source_file).is_absolute()
+        or ".." in Path(source_file).parts
+        or not isinstance(line, int)
+        or isinstance(line, bool)
+        or line < 1
+    ):
+        raise ValueError(f"sourceLocation is invalid for {test_name}.")
+    source_validation = item.get("sourceValidation")
+    if not isinstance(source_validation, Mapping) or set(source_validation) != {
+        "fileSemanticDigest",
+        "fileQuarantines",
+    }:
+        raise ValueError(f"sourceValidation is invalid for {test_name}.")
+    semantic_digest = _require_string(
+        source_validation,
+        "fileSemanticDigest",
+    )
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", semantic_digest) is None:
+        raise ValueError(f"sourceValidation is invalid for {test_name}.")
+    quarantines = source_validation.get("fileQuarantines")
+    if not isinstance(quarantines, list) or not all(
+        isinstance(quarantine, Mapping)
+        and set(quarantine) == {"testName", "issueUrl"}
+        and isinstance(quarantine.get("testName"), str)
+        and quarantine["testName"]
+        and (
+            quarantine.get("issueUrl") is None
+            or isinstance(quarantine.get("issueUrl"), str)
+            and quarantine["issueUrl"]
+        )
+        for quarantine in quarantines
+    ):
+        raise ValueError(f"sourceValidation is invalid for {test_name}.")
 
 
 def _select_request(

@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--batch-id", required=True)
     parser.add_argument("--result", type=Path, required=True)
+    parser.add_argument("--mutation-result", type=Path)
+    parser.add_argument("--commit-validation", type=Path)
     parser.add_argument("--recorded-at", required=True)
     parser.add_argument("--audit", type=Path, required=True)
     args = parser.parse_args()
@@ -36,7 +38,25 @@ def main() -> int:
         raise ValueError("Quarantine worker result must be a JSON object.")
     validated = validate_quarantine_worker_result(request, result)
     pull_request_document = None
+    pull_request_files = None
+    mutation_result = None
+    commit_validation = None
     if validated["outcome"] in {"pull-request-open", "completed"}:
+        if args.mutation_result is None or args.commit_validation is None:
+            raise ValueError(
+                "Successful quarantine results require --mutation-result and "
+                "--commit-validation."
+            )
+        mutation_result = json.loads(
+            args.mutation_result.read_text(encoding="utf-8")
+        )
+        if not isinstance(mutation_result, dict):
+            raise ValueError("Quarantine mutation result must be a JSON object.")
+        commit_validation = json.loads(
+            args.commit_validation.read_text(encoding="utf-8")
+        )
+        if not isinstance(commit_validation, dict):
+            raise ValueError("Quarantine commit validation must be a JSON object.")
         pull_request = validated["pullRequest"]
         if not isinstance(pull_request, dict):
             raise ValueError("Validated pull request is missing.")
@@ -58,6 +78,21 @@ def main() -> int:
         )
         if not isinstance(pull_request_document, dict):
             raise ValueError("GitHub returned an invalid pull request document.")
+        changed_files = pull_request_document.get("changed_files")
+        if (
+            not isinstance(changed_files, int)
+            or isinstance(changed_files, bool)
+            or changed_files < 1
+            or changed_files > 100
+        ):
+            raise ValueError(
+                "Quarantine pull requests must change between 1 and 100 files."
+            )
+        pull_request_files = client.get(
+            f"/repos/{quote(repository, safe='/')}/pulls/{number}/files?per_page=100"
+        )
+        if not isinstance(pull_request_files, list):
+            raise ValueError("GitHub returned an invalid pull request file list.")
 
     event = record_quarantine_worker_result(
         state_directory=args.state_dir,
@@ -65,6 +100,9 @@ def main() -> int:
         result=validated,
         recorded_at=args.recorded_at,
         pull_request_document=pull_request_document,
+        pull_request_files=pull_request_files,
+        mutation_result=mutation_result,
+        commit_validation=commit_validation,
     )
     print(stable_json(event), end="")
     return 0

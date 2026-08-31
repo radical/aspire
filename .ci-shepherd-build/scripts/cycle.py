@@ -31,6 +31,7 @@ from ci_shepherd.pull_requests import (
 from ci_shepherd.quarantine import (
     build_quarantine_session_plan,
     build_quarantine_session_request,
+    inspect_quarantine_session_request,
     read_quarantine_session_events,
     render_quarantine_session_section,
 )
@@ -390,6 +391,11 @@ def start_cycle(
         "repository": repository,
         "snapshotId": prepared["snapshotId"],
         "stateDirectory": str(state_dir.expanduser().resolve(strict=False)),
+        "checkout": (
+            str(checkout.expanduser().resolve(strict=False))
+            if checkout is not None
+            else None
+        ),
         "shepherdAuthor": shepherd_author,
         "stage": "awaiting-review",
         "issueReviewCount": issue_review_count,
@@ -421,6 +427,7 @@ def finish_cycle(
         raise ValueError("Cycle is not awaiting review.")
     repository = manifest.get("repository")
     state_directory = manifest.get("stateDirectory")
+    checkout_value = manifest.get("checkout")
     shepherd_author = manifest.get("shepherdAuthor")
     if not all(isinstance(value, str) and value for value in (repository, state_directory, shepherd_author)):
         raise ValueError("Cycle manifest identity is incomplete.")
@@ -470,6 +477,10 @@ def finish_cycle(
     quarantine_request = build_quarantine_session_request(
         prepared,
         final_judgments,
+    )
+    quarantine_request = inspect_quarantine_session_request(
+        quarantine_request,
+        Path(checkout_value) if isinstance(checkout_value, str) else None,
     )
     quarantine_plan = build_quarantine_session_plan(
         quarantine_request,

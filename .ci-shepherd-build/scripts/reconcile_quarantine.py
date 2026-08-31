@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
@@ -12,6 +13,7 @@ from ci_shepherd.github import GitHubClient
 from ci_shepherd.models import stable_json
 from ci_shepherd.quarantine_reconciliation import (
     reconcile_quarantine_pull_requests,
+    verify_merged_quarantine_source,
 )
 
 
@@ -31,12 +33,41 @@ def main() -> int:
         now=lambda: datetime.now(UTC),
         audit_path=args.audit,
     )
+
+    def get_file(path: str, revision: str) -> bytes:
+        document = client.get(
+            f"/repos/{quote(args.repository, safe='/')}/contents/"
+            f"{quote(path, safe='/')}?ref={quote(revision, safe='')}"
+        )
+        if (
+            not isinstance(document, dict)
+            or document.get("encoding") != "base64"
+            or not isinstance(document.get("content"), str)
+        ):
+            raise ValueError("GitHub returned invalid merged source content.")
+        return base64.b64decode(document["content"], validate=True)
+
     result = reconcile_quarantine_pull_requests(
         state_directory=args.state_dir,
         repository=args.repository,
         recorded_at=args.recorded_at,
         get_pull=lambda repository, number: client.get(
             f"/repos/{quote(repository, safe='/')}/pulls/{number}"
+        ),
+        verify_merged_source=lambda event, pull: (
+            isinstance(event.get("mutationValidation"), dict)
+            and isinstance(pull.get("merge_commit_sha"), str)
+            and verify_merged_quarantine_source(
+                event,
+                event["mutationValidation"],
+                merge_commit_sha=pull["merge_commit_sha"],
+                tool_project=(
+                    Path(__file__).resolve().parents[2]
+                    / "tools"
+                    / "QuarantineTools"
+                ),
+                get_file=get_file,
+            )
         ),
     )
     print(stable_json(result), end="")

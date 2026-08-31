@@ -29,9 +29,27 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             "repository": "radical/aspire",
             "snapshotId": "snapshot:radical/aspire:2026-08-30T00:00:00Z",
             "batchId": "quarantine:1",
+            "sourceRevision": "a" * 40,
+            "sourceTreeDigest": "sha256:" + "b" * 64,
             "tests": [
-                {"testName": "Tests.One"},
-                {"testName": "Tests.Two"},
+                {
+                    "testName": "Tests.One",
+                    "issueUrl": "https://github.com/radical/aspire/issues/1",
+                    "sourceLocation": {"file": "OneTests.cs", "line": 10},
+                    "sourceValidation": {
+                        "fileSemanticDigest": "sha256:" + "c" * 64,
+                        "fileQuarantines": [],
+                    },
+                },
+                {
+                    "testName": "Tests.Two",
+                    "issueUrl": "https://github.com/radical/aspire/issues/2",
+                    "sourceLocation": {"file": "TwoTests.cs", "line": 20},
+                    "sourceValidation": {
+                        "fileSemanticDigest": "sha256:" + "d" * 64,
+                        "fileQuarantines": [],
+                    },
+                },
             ],
         }
         self.now = datetime(2026, 8, 30, tzinfo=timezone.utc)
@@ -126,6 +144,30 @@ class QuarantineAuthorizationTests(unittest.TestCase):
             )
         self.assertFalse(self.authorization_path.exists())
 
+    def test_grant_requires_a_source_bound_request(self) -> None:
+        self.request.pop("sourceRevision", None)
+        self._write_request()
+
+        with self.assertRaisesRegex(ValueError, "sourceRevision"):
+            create_quarantine_grant(
+                request_path=self.request_path,
+                state_dir=self.state_dir,
+                batch_id="quarantine:1",
+                issued_at=self.now,
+            )
+
+    def test_grant_requires_a_source_baseline_for_every_test(self) -> None:
+        self.request["tests"][0].pop("sourceLocation", None)
+        self._write_request()
+
+        with self.assertRaisesRegex(ValueError, "sourceLocation"):
+            create_quarantine_grant(
+                request_path=self.request_path,
+                state_dir=self.state_dir,
+                batch_id="quarantine:1",
+                issued_at=self.now,
+            )
+
     def test_grant_output_must_not_be_a_symlink(self) -> None:
         target = self.root / "target.json"
         target.write_text("unchanged", encoding="utf-8")
@@ -145,7 +187,13 @@ class QuarantineAuthorizationTests(unittest.TestCase):
     def test_changed_test_set_is_rejected_even_with_matching_batch(self) -> None:
         self._write_grant()
         changed = deepcopy(self.request)
-        changed["tests"].append({"testName": "Tests.Three"})
+        changed["tests"].append(
+            {
+                **deepcopy(self.request["tests"][0]),
+                "testName": "Tests.Three",
+                "sourceLocation": {"file": "ThreeTests.cs", "line": 30},
+            }
+        )
         self.request_path.write_text(
             json.dumps(changed, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

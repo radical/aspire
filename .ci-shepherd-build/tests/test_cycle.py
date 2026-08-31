@@ -13,6 +13,8 @@ from ci_shepherd.investigations import (
     record_investigation_session_event,
 )
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
 
 def snapshot(
     collected_at: str,
@@ -345,6 +347,173 @@ class CycleTests(unittest.TestCase):
                 (
                     Path(completed["runDirectory"]) / "quarantine-session.json"
                 ).is_file()
+            )
+
+    def test_fails_closed_when_quarantine_source_inspection_is_unavailable(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            input_path = root / "input.json"
+            input_snapshot = snapshot("2026-08-28T20:00:00Z")
+            input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = []
+            input_path.write_text(
+                json.dumps(input_snapshot),
+                encoding="utf-8",
+            )
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            agent_judgments = {
+                "schemaVersion": 1,
+                "snapshotId": "snapshot:owner/repo:2026-08-28T20:00:00Z",
+                "issues": [
+                    {
+                        "issueNumber": 1,
+                        "category": "flaky-test",
+                        "recommendations": [
+                            {
+                                "disposition": "review-quarantine",
+                                "target": {
+                                    "kind": "test",
+                                    "value": "Namespace.Type.FlakyTest",
+                                },
+                                "confidence": "high",
+                                "summary": "The test recovered on a retry.",
+                                "evidenceIds": ["issue:1"],
+                                "missingEvidence": [],
+                                "reassessWhen": "After the quarantine PR merges.",
+                            }
+                        ],
+                    }
+                ],
+            }
+            agent_path = work / "agent-judgments.json"
+            agent_path.write_text(json.dumps(agent_judgments), encoding="utf-8")
+
+            cycle_script.finish_cycle(
+                work_dir=work,
+                agent_judgments_path=agent_path,
+            )
+
+            plan = json.loads(
+                (work / "quarantine-session.json").read_text(encoding="utf-8")
+            )
+            self.assertIsNone(plan["proposal"])
+            self.assertEqual("blocked-targets", plan["suppressionReason"])
+            self.assertEqual(
+                [
+                    {
+                        "testName": "Namespace.Type.FlakyTest",
+                        "reason": "source-inspection-unavailable",
+                    }
+                ],
+                plan["blockedTargets"],
+            )
+            self.assertIn(
+                "source-inspection-unavailable",
+                (work / "report.md").read_text(encoding="utf-8"),
+            )
+
+    def test_proposes_only_a_source_resolved_quarantine_candidate(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            input_path = root / "input.json"
+            input_snapshot = snapshot("2026-08-28T20:00:00Z")
+            input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = []
+            input_path.write_text(
+                json.dumps(input_snapshot),
+                encoding="utf-8",
+            )
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=REPOSITORY_ROOT,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            test_name = (
+                "Aspire.Hosting.Tests.SecretsStoreTests."
+                "GetOrSetUserSecret_SavesValueToUserSecrets"
+            )
+            agent_path = work / "agent-judgments.json"
+            agent_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": (
+                            "snapshot:owner/repo:2026-08-28T20:00:00Z"
+                        ),
+                        "issues": [
+                            {
+                                "issueNumber": 1,
+                                "category": "flaky-test",
+                                "recommendations": [
+                                    {
+                                        "disposition": "review-quarantine",
+                                        "target": {
+                                            "kind": "test",
+                                            "value": test_name,
+                                        },
+                                        "confidence": "high",
+                                        "summary": (
+                                            "The test recovered on a retry."
+                                        ),
+                                        "evidenceIds": ["issue:1"],
+                                        "missingEvidence": [],
+                                        "reassessWhen": (
+                                            "After the quarantine PR merges."
+                                        ),
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cycle_script.finish_cycle(
+                work_dir=work,
+                agent_judgments_path=agent_path,
+            )
+
+            plan = json.loads(
+                (work / "quarantine-session.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [test_name],
+                [
+                    test["testName"]
+                    for test in plan["proposal"]["tests"]
+                ],
+            )
+            self.assertEqual(
+                {
+                    "file": "Aspire.Hosting.Tests/SecretsStoreTests.cs",
+                    "line": 28,
+                },
+                plan["proposal"]["tests"][0]["sourceLocation"],
+            )
+            self.assertRegex(
+                plan["proposal"]["sourceRevision"],
+                r"^[0-9a-f]{40}$",
+            )
+            self.assertRegex(
+                plan["proposal"]["sourceTreeDigest"],
+                r"^sha256:[0-9a-f]{64}$",
             )
 
     def test_bootstraps_review_events_for_state_created_before_scheduling(self) -> None:

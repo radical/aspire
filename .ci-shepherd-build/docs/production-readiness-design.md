@@ -140,7 +140,7 @@ candidate is excluded with reason `insufficient-recurrence`.
 This directly addresses recurrence rows attributed to unrelated jobs or runs,
 including cases where an unrelated issue reference was absorbed into a cluster.
 
-### 2.5 Proposed: exact source resolution via QuarantineTools
+### 2.5 Implemented: exact source resolution via QuarantineTools
 
 `tools/QuarantineTools` already uses Roslyn (`Microsoft.CodeAnalysis.CSharp`) to
 locate and edit test methods. It returns 3 when no method matches and returns 0
@@ -148,26 +148,30 @@ with no modified file when the matching method already carries the requested
 attribute. These behaviors are defined in
 `tools/QuarantineTools/Quarantine.cs`.
 
-The initial source gate should use the existing tool once per candidate in a
-disposable clean checkout:
+The source gate adds a read-only inspection mode to the existing tool and invokes
+it once with every candidate in the cycle:
 
 ```bash
 dotnet run --project tools/QuarantineTools -- \
-  --quarantine \
-  --issue-url "https://github.com/microsoft/aspire/issues/12345" \
+  --inspect \
   "Aspire.Dashboard.Tests.Model.DashboardClientTests.SubscribeResources_Foo"
 ```
 
-The shepherd then inspects the scratch diff and syntax tree. Exactly one method
-must have changed, the only semantic change must be one quarantine attribute
-whose URL is byte-equal to the source issue URL, and the original method body and
-signature must be unchanged. A zero-file result is inspected to distinguish an
-existing `QuarantinedTest` or `ActiveIssue` suppression from an unexpected
-no-op. More than one matching method is ambiguous and fails closed.
+The JSON response contains one exact result per requested method. A method is
+eligible only when it resolves once and has neither `QuarantinedTest` nor
+`ActiveIssue`. Missing, ambiguous, already-quarantined, and already-disabled
+methods are reported with distinct exclusion reasons. The request records the
+checkout commit and a deterministic SHA-256 digest of the exact C# source tree
+the inspector scans, the QuarantineTools project, and its repository build
+inputs. The commit and digest are read both before and after inspection and must
+remain unchanged. The grant therefore binds the resolution to a stable inspected
+source, inspector implementation, and build configuration without depending on
+local Git diff settings.
 
-Using the same Roslyn code path that performs the eventual edit avoids a second
-name resolver drifting from the mutating tool. Per-candidate invocation also
-preserves exact attribution between the name, issue URL, output, and diff.
+Using QuarantineTools' Roslyn name parsing and namespace/type matching avoids a
+second resolver drifting from the mutating tool. Inspection is batched into one
+process because results remain separate and deterministic; mutation remains one
+invocation per candidate to preserve exact issue-URL attribution.
 
 **Fail-closed behavior.** If inspection cannot run for any reason, including a
 build failure, a missing SDK, a timeout, a non-zero exit, or output that fails
@@ -176,11 +180,10 @@ schema validation, every affected candidate is excluded with reason
 the test exists". Quarantine removes coverage, so the safe default is to do
 nothing.
 
-Do not cache or batch this gate initially. The recorded production run had six
-candidates, and correctness is more important than saving a handful of local
-process launches. Add optimization only after measured cycle time shows a
-problem; any future cache must include the checkout tree and tool identity, not
-only the HEAD SHA and method name.
+The gate intentionally has no cache. One process scans all candidates, so cycle
+cost stays bounded without introducing stale cache state. Any future cache must
+include the checkout tree and tool identity, not only the HEAD SHA and method
+name.
 
 ## 3. Eligibility
 
@@ -724,15 +727,18 @@ trait filter and assert the exact method is **present**. Step 4 alone can be
 satisfied by deleting or renaming the test, which would silently destroy
 coverage while producing a passing exclusion check. Steps 4 and 5 must both hold.
 
-**Step 6 — bind the result to the tree before pushing.** Record the validated
-HEAD SHA and a digest of the validated diff. Push and open the pull request only
-if the working tree still matches that digest at push time, closing the window
-between validation and push.
+**Step 6 — bind the result to the tree before pushing.** Record a canonical
+digest of the validated working-tree diff, revalidate it immediately before
+commit, then require the resulting single non-merge commit to have the same
+exact files and canonical diff digest. Push and open the pull request only from
+that validated commit.
 
 **Step 7 — verify the pull request after creation.** Refetch the draft pull
 request and assert its repository, its draft state, its 40-character head SHA,
-and its diff digest match what was validated. A mismatch records the session
-`failed`; it does not record a head SHA the shepherd did not validate.
+and its complete modified-file list match the validated commit artifact. The
+commit artifact already binds that head to the canonical diff digest. A mismatch
+records the session `failed`; it does not record a head SHA the shepherd did not
+validate.
 
 **Step 8 — verify the merge before recording completion.** A session is recorded
 `completed` only after refetching the target branch and confirming the

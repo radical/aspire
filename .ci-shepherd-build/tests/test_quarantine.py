@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from ci_shepherd.quarantine import (
+    apply_quarantine_source_inspection,
     build_quarantine_session_plan,
     build_quarantine_session_request,
     read_quarantine_session_events,
@@ -98,6 +99,181 @@ def _judgments() -> dict[str, object]:
 
 
 class QuarantineSessionRequestTests(unittest.TestCase):
+    def test_applies_source_inspection_and_blocks_existing_suppressions(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+
+        inspected = apply_quarantine_source_inspection(
+            request,
+            {
+                "schemaVersion": 1,
+                "tests": [
+                    {
+                        "testName": "Tests.FirstTest",
+                        "status": "resolved",
+                        "matches": [
+                            {
+                                "file": "Project/FirstTests.cs",
+                                "line": 42,
+                                "quarantineAttributes": [],
+                                "activeIssueAttributes": [],
+                                "fileSemanticDigest": "sha256:" + "c" * 64,
+                                "fileQuarantines": [],
+                            }
+                        ],
+                    },
+                    {
+                        "testName": "Tests.SecondTest",
+                        "status": "resolved",
+                        "matches": [
+                            {
+                                "file": "Project/SecondTests.cs",
+                                "line": 84,
+                                "quarantineAttributes": [
+                                    {
+                                        "name": "QuarantinedTest",
+                                        "issueUrl": "https://github.com/owner/repo/issues/20",
+                                    }
+                                ],
+                                "activeIssueAttributes": [],
+                                "fileSemanticDigest": "sha256:" + "d" * 64,
+                                "fileQuarantines": [
+                                    {
+                                        "testName": "Tests.SecondTest",
+                                        "issueUrl": "https://github.com/owner/repo/issues/20",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                ],
+            },
+            source_revision="a" * 40,
+            source_tree_digest="sha256:" + "b" * 64,
+        )
+
+        self.assertEqual(
+            ["Tests.FirstTest"],
+            [test["testName"] for test in inspected["tests"]],
+        )
+        self.assertEqual(
+            {
+                "file": "Project/FirstTests.cs",
+                "line": 42,
+            },
+            inspected["tests"][0]["sourceLocation"],
+        )
+        self.assertEqual(
+            {
+                "fileSemanticDigest": "sha256:" + "c" * 64,
+                "fileQuarantines": [],
+            },
+            inspected["tests"][0]["sourceValidation"],
+        )
+        self.assertEqual("a" * 40, inspected["sourceRevision"])
+        self.assertEqual(
+            "sha256:" + "b" * 64,
+            inspected["sourceTreeDigest"],
+        )
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests.SecondTest",
+                    "reason": "already-quarantined",
+                    "sourceFile": "Project/SecondTests.cs",
+                    "existingIssueUrl": "https://github.com/owner/repo/issues/20",
+                }
+            ],
+            inspected["blockedTargets"],
+        )
+
+    def test_source_inspection_blocks_missing_ambiguous_and_disabled_targets(self) -> None:
+        request = build_quarantine_session_request(_prepared(), _judgments())
+        request["tests"].append(
+            {
+                **request["tests"][0],
+                "testName": "Tests.DisabledTest",
+            }
+        )
+
+        inspected = apply_quarantine_source_inspection(
+            request,
+            {
+                "schemaVersion": 1,
+                "tests": [
+                    {
+                        "testName": "Tests.FirstTest",
+                        "status": "not-found",
+                        "matches": [],
+                    },
+                    {
+                        "testName": "Tests.SecondTest",
+                        "status": "ambiguous",
+                        "matches": [
+                            {
+                                "file": "One/SecondTests.cs",
+                                "line": 10,
+                                "quarantineAttributes": [],
+                                "activeIssueAttributes": [],
+                                "fileSemanticDigest": "sha256:" + "c" * 64,
+                                "fileQuarantines": [],
+                            },
+                            {
+                                "file": "Two/SecondTests.cs",
+                                "line": 20,
+                                "quarantineAttributes": [],
+                                "activeIssueAttributes": [],
+                                "fileSemanticDigest": "sha256:" + "d" * 64,
+                                "fileQuarantines": [],
+                            },
+                        ],
+                    },
+                    {
+                        "testName": "Tests.DisabledTest",
+                        "status": "resolved",
+                        "matches": [
+                            {
+                                "file": "DisabledTests.cs",
+                                "line": 30,
+                                "quarantineAttributes": [],
+                                "activeIssueAttributes": [
+                                    {
+                                        "name": "ActiveIssue",
+                                        "issueUrl": "https://github.com/owner/repo/issues/19",
+                                    }
+                                ],
+                                "fileSemanticDigest": "sha256:" + "e" * 64,
+                                "fileQuarantines": [],
+                            }
+                        ],
+                    },
+                ],
+            },
+            source_revision="a" * 40,
+            source_tree_digest="sha256:" + "b" * 64,
+        )
+
+        self.assertEqual([], inspected["tests"])
+        self.assertEqual(
+            [
+                {
+                    "testName": "Tests.FirstTest",
+                    "reason": "target-not-found-in-checkout",
+                },
+                {
+                    "testName": "Tests.SecondTest",
+                    "reason": "ambiguous-target-in-checkout",
+                },
+                {
+                    "testName": "Tests.DisabledTest",
+                    "reason": "already-suppressed",
+                    "sourceFile": "DisabledTests.cs",
+                    "existingAttribute": "ActiveIssue",
+                    "existingIssueUrl": "https://github.com/owner/repo/issues/19",
+                },
+            ],
+            inspected["blockedTargets"],
+        )
+
     def test_batches_all_quarantine_candidates_with_original_issue_urls(self) -> None:
         request = build_quarantine_session_request(_prepared(), _judgments())
 
@@ -130,7 +306,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         )
         self.assertIn("test-management", request["workerPrompt"])
         self.assertIn("QuarantineTools once for each test", request["workerPrompt"])
-        self.assertIn("Build every affected test project", request["workerPrompt"])
+        self.assertIn("affected-project builds", request["workerPrompt"])
         self.assertIn("Addresses #21", request["workerPrompt"])
         self.assertIn("Addresses #22", request["workerPrompt"])
         self.assertIn("must remain open", request["workerPrompt"])

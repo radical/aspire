@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+import json
+import subprocess
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Mapping
 
 from .quarantine import (
     read_quarantine_session_events,
     record_quarantine_session_event,
+)
+from .quarantine_mutation import (
+    validate_quarantine_mutation_result,
+    validate_quarantine_post_inspection,
 )
 
 
@@ -23,6 +30,11 @@ def reconcile_quarantine_pull_requests(
     repository: str,
     recorded_at: str,
     get_pull: Callable[[str, int], Mapping[str, Any]],
+    verify_merged_source: Callable[
+        [Mapping[str, Any], Mapping[str, Any]],
+        bool,
+    ]
+    | None = None,
 ) -> dict[str, object]:
     events = read_quarantine_session_events(state_directory)
     latest_by_batch: dict[str, dict[str, Any]] = {}
@@ -112,6 +124,23 @@ def reconcile_quarantine_pull_requests(
             "session_id": str(event["sessionId"]),
         }
         if pull.get("state") == "closed" and pull.get("merged_at") is not None:
+            mutation_validation = event.get("mutationValidation")
+            if (
+                not isinstance(mutation_validation, Mapping)
+                or verify_merged_source is None
+                or not verify_merged_source(event, pull)
+            ):
+                outcomes.append(
+                    {
+                        "batchId": batch_id,
+                        "status": "unverifiable",
+                        "reason": (
+                            "The exact quarantine attributes were not verified "
+                            "at the merged commit."
+                        ),
+                    }
+                )
+                continue
             record_quarantine_session_event(
                 **common,
                 status="completed",
@@ -119,6 +148,7 @@ def reconcile_quarantine_pull_requests(
                 pull_request_head_sha=head_sha,
                 completed_test_names=test_names,
                 blocked_targets=blocked_targets,
+                mutation_validation=mutation_validation,
             )
             status = "completed"
         elif pull.get("state") == "closed" and pull.get("merged_at") is None:
@@ -152,3 +182,78 @@ def reconcile_quarantine_pull_requests(
         "repository": repository,
         "outcomes": outcomes,
     }
+
+
+def verify_merged_quarantine_source(
+    request: Mapping[str, Any],
+    mutation_result: Mapping[str, Any],
+    *,
+    merge_commit_sha: str,
+    tool_project: Path,
+    get_file: Callable[[str, str], bytes],
+    timeout_seconds: int = 300,
+) -> bool:
+    if re.fullmatch(r"[0-9a-fA-F]{40}", merge_commit_sha) is None:
+        return False
+    try:
+        validated_mutation = validate_quarantine_mutation_result(
+            request,
+            mutation_result,
+        )
+        with TemporaryDirectory() as temporary_directory:
+            tests_root = Path(temporary_directory)
+            for changed_file in validated_mutation["changedFiles"]:
+                if (
+                    not isinstance(changed_file, str)
+                    or not changed_file.startswith("tests/")
+                ):
+                    return False
+                relative_path = Path(changed_file).relative_to("tests")
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    return False
+                destination = tests_root / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(
+                    get_file(changed_file, merge_commit_sha)
+                )
+            test_names = list(validated_mutation["completedTests"])
+            completed = subprocess.run(
+                [
+                    "dotnet",
+                    "run",
+                    "--project",
+                    str(tool_project),
+                    "--no-restore",
+                    "--verbosity",
+                    "quiet",
+                    "--",
+                    "--inspect",
+                    "--root",
+                    str(tests_root),
+                    *test_names,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            if completed.returncode != 0:
+                return False
+            inspection = json.loads(completed.stdout)
+            if not isinstance(inspection, Mapping):
+                return False
+            validated_source = validate_quarantine_post_inspection(
+                request,
+                inspection,
+            )
+            return (
+                validated_source["completedTests"]
+                == validated_mutation["completedTests"]
+            )
+    except (
+        json.JSONDecodeError,
+        OSError,
+        subprocess.TimeoutExpired,
+        ValueError,
+    ):
+        return False

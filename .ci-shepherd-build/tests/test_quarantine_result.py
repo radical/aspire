@@ -23,6 +23,8 @@ class QuarantineWorkerResultTests(unittest.TestCase):
             "repository": "radical/aspire",
             "snapshotId": "snapshot:1",
             "batchId": "quarantine:1",
+            "sourceRevision": "a" * 40,
+            "sourceTreeDigest": "sha256:" + "b" * 64,
             "tests": [
                 {
                     "testName": "Tests.One",
@@ -32,6 +34,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "issueUrls": ["https://github.com/radical/aspire/issues/1"],
                     "evidenceIds": ["issue:1"],
                     "summary": "Review Tests.One for quarantine.",
+                    "sourceLocation": {
+                        "file": "One.Tests/OneTests.cs",
+                        "line": 10,
+                    },
+                    "sourceValidation": {
+                        "fileSemanticDigest": "sha256:" + "c" * 64,
+                        "fileQuarantines": [],
+                    },
                 },
                 {
                     "testName": "Tests.Two",
@@ -41,6 +51,14 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "issueUrls": ["https://github.com/radical/aspire/issues/2"],
                     "evidenceIds": ["issue:2"],
                     "summary": "Review Tests.Two for quarantine.",
+                    "sourceLocation": {
+                        "file": "Two.Tests/TwoTests.cs",
+                        "line": 20,
+                    },
+                    "sourceValidation": {
+                        "fileSemanticDigest": "sha256:" + "d" * 64,
+                        "fileQuarantines": [],
+                    },
                 },
             ],
         }
@@ -148,6 +166,7 @@ class QuarantineWorkerResultTests(unittest.TestCase):
             validate_quarantine_worker_result(self.request, self.result)
 
     def test_records_only_a_get_verified_open_draft(self) -> None:
+        result = self._successful_result()
         with TemporaryDirectory() as scratch:
             record_quarantine_session_event(
                 Path(scratch),
@@ -159,14 +178,18 @@ class QuarantineWorkerResultTests(unittest.TestCase):
             event = record_quarantine_worker_result(
                 state_directory=Path(scratch),
                 request=self.request,
-                result=self.result,
+                result=result,
                 recorded_at="2026-08-30T00:01:00Z",
                 pull_request_document={
-                    "html_url": self.result["pullRequest"]["url"],
+                    "html_url": result["pullRequest"]["url"],
                     "state": "open",
                     "draft": True,
+                    "changed_files": 2,
                     "head": {"sha": "a" * 40},
                 },
+                pull_request_files=self._pull_request_files(),
+                mutation_result=self._mutation_result(),
+                commit_validation=self._commit_validation(),
             )
 
         self.assertEqual("pull-request-open", event["status"])
@@ -184,8 +207,37 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                         "html_url": self.result["pullRequest"]["url"],
                         "state": "open",
                         "draft": True,
+                        "changed_files": 2,
                         "head": {"sha": "b" * 40},
                     },
+                )
+
+    def test_rejects_live_pull_request_with_an_extra_file(self) -> None:
+        result = self._successful_result()
+        files = self._pull_request_files()
+        files.append(
+            {
+                "filename": "Directory.Build.props",
+                "status": "modified",
+            }
+        )
+        with TemporaryDirectory() as scratch:
+            with self.assertRaisesRegex(ValueError, "files do not match"):
+                record_quarantine_worker_result(
+                    state_directory=Path(scratch),
+                    request=self.request,
+                    result=result,
+                    recorded_at="2026-08-30T00:01:00Z",
+                    pull_request_document={
+                        "html_url": result["pullRequest"]["url"],
+                        "state": "open",
+                        "draft": True,
+                        "changed_files": 3,
+                        "head": {"sha": "a" * 40},
+                    },
+                    pull_request_files=files,
+                    mutation_result=self._mutation_result(),
+                    commit_validation=self._commit_validation(),
                 )
 
     def test_get_verified_merged_result_completes_without_manual_override(self) -> None:
@@ -216,13 +268,17 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "state": "closed",
                     "merged_at": "2026-08-30T00:00:30Z",
                     "draft": False,
+                    "changed_files": 2,
                     "head": {"sha": "a" * 40},
                 },
+                pull_request_files=self._pull_request_files(),
+                mutation_result=self._mutation_result(),
+                commit_validation=self._commit_validation(),
             )
 
         self.assertEqual("completed", event["status"])
 
-    def test_blocked_test_identity_survives_changed_evidence_metadata(self) -> None:
+    def test_successful_partial_result_cannot_bypass_mutation_validation(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             record_quarantine_session_event(
@@ -232,48 +288,26 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                 recorded_at="2026-08-30T00:00:00Z",
                 session_id="session-1",
             )
-            event = record_quarantine_worker_result(
-                state_directory=state,
-                request=self.request,
-                result=self.result,
-                recorded_at="2026-08-30T00:01:00Z",
-                pull_request_document={
-                    "html_url": self.result["pullRequest"]["url"],
-                    "state": "open",
-                    "draft": True,
-                    "head": {"sha": "a" * 40},
-                },
-            )
-            unchanged = build_quarantine_session_plan(
-                self.request,
-                read_quarantine_session_events(state),
-            )
-            changed_request = deepcopy(self.request)
-            changed_request["tests"][1]["evidenceIds"] = ["run:new"]
-            changed = build_quarantine_session_plan(
-                changed_request,
-                read_quarantine_session_events(state),
-            )
-
-        self.assertEqual(
-            "Tests.Two",
-            event["blockedTargets"][0]["test"]["testName"],
-        )
-        self.assertEqual(
-            "Test source was not found.",
-            event["blockedTargets"][0]["reason"],
-        )
-        self.assertIsNone(unchanged["proposal"])
-        self.assertIsNone(changed["proposal"])
-        self.assertEqual(
-            {
-                "testName": "Tests.Two",
-                "reason": "Test source was not found.",
-            },
-            changed["blockedTargets"][0],
-        )
+            with self.assertRaisesRegex(ValueError, "completedTests"):
+                record_quarantine_worker_result(
+                    state_directory=state,
+                    request=self.request,
+                    result=self.result,
+                    recorded_at="2026-08-30T00:01:00Z",
+                    pull_request_document={
+                        "html_url": self.result["pullRequest"]["url"],
+                        "state": "open",
+                        "draft": True,
+                        "changed_files": 2,
+                        "head": {"sha": "a" * 40},
+                    },
+                    pull_request_files=self._pull_request_files(),
+                    mutation_result=self._mutation_result(),
+                    commit_validation=self._commit_validation(),
+                )
 
     def test_get_verified_result_advances_the_head_after_a_repair_push(self) -> None:
+        result = self._successful_result()
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             record_quarantine_session_event(
@@ -286,16 +320,20 @@ class QuarantineWorkerResultTests(unittest.TestCase):
             record_quarantine_worker_result(
                 state_directory=state,
                 request=self.request,
-                result=self.result,
+                result=result,
                 recorded_at="2026-08-30T00:01:00Z",
                 pull_request_document={
-                    "html_url": self.result["pullRequest"]["url"],
+                    "html_url": result["pullRequest"]["url"],
                     "state": "open",
                     "draft": True,
+                    "changed_files": 2,
                     "head": {"sha": "a" * 40},
                 },
+                pull_request_files=self._pull_request_files(),
+                mutation_result=self._mutation_result(),
+                commit_validation=self._commit_validation(),
             )
-            updated = deepcopy(self.result)
+            updated = deepcopy(result)
             updated["pullRequest"]["headSha"] = "b" * 40
             event = record_quarantine_worker_result(
                 state_directory=state,
@@ -306,11 +344,66 @@ class QuarantineWorkerResultTests(unittest.TestCase):
                     "html_url": updated["pullRequest"]["url"],
                     "state": "open",
                     "draft": True,
+                    "changed_files": 2,
                     "head": {"sha": "b" * 40},
+                },
+                pull_request_files=self._pull_request_files(),
+                mutation_result=self._mutation_result(),
+                commit_validation={
+                    **self._commit_validation(),
+                    "commitSha": "b" * 40,
                 },
             )
 
         self.assertEqual("b" * 40, event["pullRequestHeadSha"])
+
+    def _successful_result(self) -> dict[str, object]:
+        result = deepcopy(self.result)
+        result["completedTests"] = ["Tests.One", "Tests.Two"]
+        result["blockedTargets"] = []
+        return result
+
+    def _mutation_result(self) -> dict[str, object]:
+        return {
+            "schemaVersion": 1,
+            "sourceRevision": self.request["sourceRevision"],
+            "sourceTreeDigest": self.request["sourceTreeDigest"],
+            "completedTests": ["Tests.One", "Tests.Two"],
+            "changedFiles": [
+                "tests/One.Tests/OneTests.cs",
+                "tests/Two.Tests/TwoTests.cs",
+            ],
+            "affectedProjects": [
+                "tests/One.Tests/One.Tests.csproj",
+                "tests/Two.Tests/Two.Tests.csproj",
+            ],
+            "diffDigest": "sha256:" + "e" * 64,
+        }
+
+    @staticmethod
+    def _pull_request_files() -> list[dict[str, object]]:
+        return [
+            {
+                "filename": "tests/One.Tests/OneTests.cs",
+                "status": "modified",
+            },
+            {
+                "filename": "tests/Two.Tests/TwoTests.cs",
+                "status": "modified",
+            },
+        ]
+
+    @staticmethod
+    def _commit_validation() -> dict[str, object]:
+        return {
+            "schemaVersion": 1,
+            "commitSha": "a" * 40,
+            "changedFiles": [
+                "tests/One.Tests/OneTests.cs",
+                "tests/Two.Tests/TwoTests.cs",
+            ],
+            "diffDigest": "sha256:" + "e" * 64,
+        }
 
 
 if __name__ == "__main__":

@@ -524,6 +524,36 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             "microsoft/aspire",
         )
 
+    def _add_comment_proposal(
+        self,
+        issue_number: int,
+        *,
+        suffix: str = "watch-comment",
+    ) -> str:
+        proposal = copy.deepcopy(self.proposals["proposals"][0])
+        action_id = (
+            f"{self.proposals['snapshotId']}:issue:{issue_number}:{suffix}"
+        )
+        proposal.update(
+            {
+                "actionId": action_id,
+                "issueNumber": issue_number,
+                "issueUrl": (
+                    f"https://github.com/{self.proposals['repository']}/issues/"
+                    f"{issue_number}"
+                ),
+                "idempotencyKey": f"issue:{issue_number}:status:{suffix}",
+                "body": (
+                    f"[automated] Watching #{issue_number}.\n\n"
+                    "<!-- ci-shepherd:idempotency-key="
+                    f"issue:{issue_number}:status:{suffix} -->"
+                ),
+            }
+        )
+        proposal.pop("dependsOn", None)
+        self.proposals["proposals"].append(proposal)
+        return action_id
+
     def test_two_action_chain_round_trips_through_the_loader(self) -> None:
         proposal_bytes = self._write_proposals()
 
@@ -825,6 +855,91 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertTrue(authorized.grant.production_comment_pilot)
         self.assertEqual(self.comment_action_id, authorized.proposal["actionId"])
 
+    def test_production_comment_pilot_allows_an_exact_independent_batch(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        second_action_id = self._add_comment_proposal(2)
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id, second_action_id],
+            allow_production_comment_pilot=True,
+        )
+
+        self.assertEqual(
+            sorted([self.comment_action_id, second_action_id]),
+            grant["allowedActionIds"],
+        )
+        self.assertEqual(
+            [
+                {"kind": "issue", "number": 1},
+                {"kind": "issue", "number": 2},
+            ],
+            grant["allowedTargets"],
+        )
+        self.assertEqual(
+            {"maxMutationAttempts": 2, "maxChains": 2},
+            grant["budget"],
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        for action_id in (self.comment_action_id, second_action_id):
+            with self.subTest(action_id=action_id):
+                authorized = load_authorized_execution(
+                    self.proposals_path,
+                    self.output_path,
+                    state_dir=self.state_dir,
+                    action_id=action_id,
+                    allow_production_comment_pilot=True,
+                    now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+                )
+                self.assertEqual(action_id, authorized.proposal["actionId"])
+
+    def test_production_comment_batch_is_capped_at_ten_actions(self) -> None:
+        self._use_production_repository()
+        action_ids = [self.comment_action_id]
+        action_ids.extend(
+            self._add_comment_proposal(issue_number)
+            for issue_number in range(2, 12)
+        )
+        self._write_proposals()
+
+        with self.assertRaisesRegex(AuthorizationError, "at most 10 actions"):
+            self._generate(
+                action_ids=action_ids,
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_batch_allows_only_one_action_per_issue(self) -> None:
+        self._use_production_repository()
+        self.proposals["proposals"] = [self.proposals["proposals"][0]]
+        second_action_id = self._add_comment_proposal(
+            1,
+            suffix="second-comment",
+        )
+        self._write_proposals()
+
+        with self.assertRaisesRegex(AuthorizationError, "one action per issue"):
+            self._generate(
+                action_ids=[self.comment_action_id, second_action_id],
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_batch_actions_cannot_depend_on_each_other(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        second_action_id = self._add_comment_proposal(2)
+        second = self.proposals["proposals"][-1]
+        second["dependsOn"] = self.comment_action_id
+        self._write_proposals()
+
+        with self.assertRaisesRegex(AuthorizationError, "must be independent"):
+            self._generate(
+                action_ids=[self.comment_action_id, second_action_id],
+                allow_production_comment_pilot=True,
+            )
+
     def test_production_pilot_grant_requires_execution_confirmation(self) -> None:
         self._use_production_repository()
         self._write_proposals()
@@ -849,10 +964,10 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         cases = [
             (
-                "multiple actions",
+                "comment plus closure",
                 [self.comment_action_id, self.close_action_id],
                 {},
-                "exactly one action",
+                "comment operations only",
             ),
             (
                 "closure",
@@ -910,13 +1025,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "action",
                 "allowedActionIds",
                 [self.comment_action_id, self.close_action_id],
-                "exactly the selected action",
+                "comment operations only",
             ),
             (
                 "operation",
                 "allowedOperations",
                 ["create-comment", "close-issue"],
-                "exactly one comment operation",
+                "comment operations only",
             ),
             (
                 "target",
@@ -925,7 +1040,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                     {"kind": "issue", "number": 1},
                     {"kind": "issue", "number": 2},
                 ],
-                "exactly one issue target",
+                "one issue target per action",
             ),
             (
                 "suppression",
@@ -937,7 +1052,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "budget",
                 "budget",
                 {"maxMutationAttempts": 2, "maxChains": 1},
-                "one mutation and one chain",
+                "exact action count",
             ),
             (
                 "lifetime",

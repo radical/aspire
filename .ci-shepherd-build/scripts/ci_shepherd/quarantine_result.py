@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .quarantine import record_quarantine_session_event
+from .quarantine_mutation import (
+    validate_quarantine_commit_validation,
+    validate_quarantine_mutation_result,
+)
 
 
 _OUTCOMES = frozenset({"pull-request-open", "completed", "blocked", "failed"})
@@ -123,6 +127,9 @@ def record_quarantine_worker_result(
     result: Mapping[str, Any],
     recorded_at: str,
     pull_request_document: Mapping[str, Any] | None = None,
+    pull_request_files: list[Mapping[str, Any]] | None = None,
+    mutation_result: Mapping[str, Any] | None = None,
+    commit_validation: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     validated = validate_quarantine_worker_result(request, result)
     outcome = validated["outcome"]
@@ -135,6 +142,39 @@ def record_quarantine_worker_result(
             pull_request_document,
             completed=outcome == "completed",
         )
+        if mutation_result is None:
+            raise ValueError(
+                "A successful quarantine result requires deterministic "
+                "mutation validation."
+            )
+        validated_mutation = validate_quarantine_mutation_result(
+            request,
+            mutation_result,
+        )
+        if commit_validation is None:
+            raise ValueError(
+                "A successful quarantine result requires commit validation."
+            )
+        validated_commit = validate_quarantine_commit_validation(
+            validated_mutation,
+            commit_validation,
+        )
+        if (
+            str(validated_commit["commitSha"]).casefold()
+            != str(pull_request["headSha"]).casefold()
+        ):
+            raise ValueError(
+                "Quarantine pull request head does not match commit validation."
+            )
+        if validated_mutation["completedTests"] != validated["completedTests"]:
+            raise ValueError(
+                "Quarantine worker completedTests do not match mutation validation."
+            )
+        _validate_live_pull_request_files(
+            validated_mutation,
+            pull_request_document,
+            pull_request_files,
+        )
         return record_quarantine_session_event(
             state_directory,
             request,
@@ -146,6 +186,7 @@ def record_quarantine_worker_result(
             completed_test_names=list(validated["completedTests"]),
             blocked_targets=list(validated["blockedTargets"]),
             allow_pull_request_head_update=outcome == "pull-request-open",
+            mutation_validation=validated_mutation,
         )
     return record_quarantine_session_event(
         state_directory,
@@ -189,6 +230,33 @@ def _validate_live_pull_request(
     ):
         raise ValueError(
             "The live pull request is not in the expected state at the expected head."
+        )
+
+
+def _validate_live_pull_request_files(
+    mutation_result: Mapping[str, Any],
+    pull_request: Mapping[str, Any] | None,
+    files: list[Mapping[str, Any]] | None,
+) -> None:
+    if pull_request is None or files is None:
+        raise ValueError(
+            "The pull request file list must be verified with a GitHub GET."
+        )
+    expected = mutation_result.get("changedFiles")
+    actual = sorted(
+        file.get("filename")
+        for file in files
+        if isinstance(file.get("filename"), str)
+        and file.get("status") == "modified"
+    )
+    if (
+        not isinstance(expected, list)
+        or pull_request.get("changed_files") != len(files)
+        or actual != expected
+        or len(actual) != len(files)
+    ):
+        raise ValueError(
+            "The live pull request files do not match mutation validation."
         )
 
 

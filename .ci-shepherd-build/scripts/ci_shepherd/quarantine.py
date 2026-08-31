@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Mapping
 
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
@@ -43,30 +46,33 @@ def _worker_prompt(repository: str, tests: list[dict[str, object]]) -> str:
         "Use the test-management skill. Work only in the provided worktree and do "
         "not switch branches.",
         "",
-        "Run QuarantineTools once for each test with that test's original issue URL:",
+        "Do not edit test source by hand or invoke QuarantineTools directly. "
+        "Use the authorized deterministic quarantine executor, which invokes "
+        "QuarantineTools once for each test with its original issue URL:",
     ]
     for test in tests:
         issue_numbers = test.get("issueNumbers")
         if not isinstance(issue_numbers, list) or not issue_numbers:
             issue_numbers = [test["issueNumber"]]
         addresses = ", ".join(f"Addresses #{number}" for number in issue_numbers)
+        source_location = test.get("sourceLocation")
+        source_description = (
+            f"; the inspected source is "
+            f"`{source_location['file']}:{source_location['line']}`"
+            if isinstance(source_location, Mapping)
+            else ""
+        )
         lines.append(
-            f"- `{test['testName']}` — use {test['issueUrl']} with QuarantineTools; "
+            f"- `{test['testName']}` — use {test['issueUrl']} with QuarantineTools"
+            f"{source_description}; "
             f"the PR body must include {addresses}"
         )
     lines.extend(
         [
             "",
-            "Before editing:",
-            "If a target is already quarantined with its original issue URL, make no change. Identify the merged pull request that introduced the exact attribute, verify that it merged, and report its URL so the coordinator can reconcile the stale proposal directly to completion.",
+            "The executor must revalidate the recorded source revision and source-input digest before changing the clean worktree. It then owns post-mutation Roslyn inspection, exact changed-file validation, affected-project builds, and both filtered and unfiltered MTP discovery.",
             "",
-            "After editing:",
-            "1. Confirm the diff contains only the expected quarantine attributes and required using directives.",
-            "2. Run `./restore.sh` once.",
-            "3. Build every affected test project.",
-            "4. Run each affected test through the repository's MTP filters and confirm it is excluded as quarantined.",
-            "5. If a test cannot be resolved to an exact fully-qualified method, leave it unchanged, report it as blocked, and continue with the remaining targets.",
-            "6. If the diff touches unexpected files or validation still fails after one quarantine-only correction, stop and report the failure.",
+            "Before push, run the deterministic diff and commit validators. Stop on any mismatch; do not repair or broaden the diff manually.",
             "",
             "Do not push or open a pull request yet. Return the validated and blocked target lists, validated diff, exact commands and outcomes, and a draft PR title and body. The PR body must begin with `[automated] ` and use `Addresses #N` for every original issue represented by a changed test. Those issues must remain open until the underlying failures are fixed.",
         ]
@@ -279,6 +285,521 @@ def build_quarantine_session_request(
     }
 
 
+def apply_quarantine_source_inspection(
+    request: Mapping[str, Any],
+    inspection: Mapping[str, Any],
+    *,
+    source_revision: str,
+    source_tree_digest: str,
+) -> dict[str, object]:
+    tests = request.get("tests")
+    if not isinstance(tests, list):
+        raise ValueError("Quarantine request tests must be a list.")
+    if (
+        not isinstance(source_revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+    ):
+        raise ValueError("Source revision must be a lowercase 40-character SHA.")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest) is None:
+        raise ValueError("Source tree digest must be a SHA-256 digest.")
+    if set(inspection) != {"schemaVersion", "tests"}:
+        raise ValueError("Source inspection has unexpected or missing fields.")
+    if inspection.get("schemaVersion") != 1:
+        raise ValueError("Unsupported source inspection schema.")
+    inspection_tests = inspection.get("tests")
+    if not isinstance(inspection_tests, list):
+        raise ValueError("Source inspection tests must be a list.")
+
+    results_by_name: dict[str, Mapping[str, Any]] = {}
+    for result in inspection_tests:
+        if not isinstance(result, Mapping):
+            raise ValueError("Source inspection tests must contain objects.")
+        if set(result) != {"testName", "status", "matches"}:
+            raise ValueError(
+                "Source inspection test has unexpected or missing fields."
+            )
+        test_name = result.get("testName")
+        if not isinstance(test_name, str) or not test_name:
+            raise ValueError("Source inspection testName must be nonempty.")
+        if test_name in results_by_name:
+            raise ValueError(f"Source inspection contains duplicate {test_name}.")
+        results_by_name[test_name] = result
+
+    request_names = {
+        str(test["testName"])
+        for test in tests
+        if isinstance(test, Mapping)
+        and isinstance(test.get("testName"), str)
+        and test["testName"]
+    }
+    if set(results_by_name) != request_names:
+        raise ValueError(
+            "Source inspection test names must exactly match the request."
+        )
+
+    eligible: list[dict[str, object]] = []
+    blocked = [
+        dict(target)
+        for target in request.get("blockedTargets", [])
+        if isinstance(target, Mapping)
+    ]
+    for test in tests:
+        if not isinstance(test, Mapping):
+            raise ValueError("Quarantine request tests must contain objects.")
+        test_name = test.get("testName")
+        if not isinstance(test_name, str) or not test_name:
+            raise ValueError("Quarantine request testName must be nonempty.")
+        result = results_by_name[test_name]
+        status = result.get("status")
+        matches = result.get("matches")
+        if (
+            status not in {"resolved", "not-found", "ambiguous"}
+            or not isinstance(matches, list)
+        ):
+            raise ValueError(f"Invalid source inspection result for {test_name}.")
+        validated_matches = [
+            _validate_source_inspection_match(test_name, match)
+            for match in matches
+        ]
+        if status == "not-found":
+            if validated_matches:
+                raise ValueError(
+                    f"Not-found source inspection for {test_name} has matches."
+                )
+            blocked.append(
+                {
+                    "testName": test_name,
+                    "reason": "target-not-found-in-checkout",
+                }
+            )
+            continue
+        if status == "ambiguous":
+            if len(validated_matches) < 2:
+                raise ValueError(
+                    f"Ambiguous source inspection for {test_name} needs multiple matches."
+                )
+            blocked.append(
+                {
+                    "testName": test_name,
+                    "reason": "ambiguous-target-in-checkout",
+                }
+            )
+            continue
+        if len(validated_matches) != 1:
+            raise ValueError(
+                f"Resolved source inspection for {test_name} needs one match."
+            )
+
+        match = validated_matches[0]
+        quarantine_attributes = match["quarantineAttributes"]
+        active_issue_attributes = match["activeIssueAttributes"]
+        if quarantine_attributes:
+            blocked_target: dict[str, object] = {
+                "testName": test_name,
+                "reason": "already-quarantined",
+                "sourceFile": match["file"],
+            }
+            issue_url = quarantine_attributes[0]["issueUrl"]
+            if issue_url is not None:
+                blocked_target["existingIssueUrl"] = issue_url
+            blocked.append(blocked_target)
+            continue
+        if active_issue_attributes:
+            blocked_target = {
+                "testName": test_name,
+                "reason": "already-suppressed",
+                "sourceFile": match["file"],
+                "existingAttribute": "ActiveIssue",
+            }
+            issue_url = active_issue_attributes[0]["issueUrl"]
+            if issue_url is not None:
+                blocked_target["existingIssueUrl"] = issue_url
+            blocked.append(blocked_target)
+            continue
+
+        eligible.append(
+            {
+                **dict(test),
+                "sourceLocation": {
+                    "file": match["file"],
+                    "line": match["line"],
+                },
+                "sourceValidation": {
+                    "fileSemanticDigest": match["fileSemanticDigest"],
+                    "fileQuarantines": match["fileQuarantines"],
+                },
+            }
+        )
+
+    inspected_request = {
+        **dict(request),
+        "sourceRevision": source_revision,
+        "sourceTreeDigest": source_tree_digest,
+        "blockedTargets": blocked,
+    }
+    return _request_for_tests(inspected_request, eligible)
+
+
+def inspect_quarantine_session_request(
+    request: Mapping[str, Any],
+    checkout: Path | None,
+    *,
+    timeout_seconds: int = 120,
+) -> dict[str, object]:
+    tests = request.get("tests")
+    if not isinstance(tests, list):
+        raise ValueError("Quarantine request tests must be a list.")
+    if not tests:
+        return dict(request)
+    if checkout is None:
+        return _block_source_inspection_unavailable(request)
+
+    try:
+        checkout = checkout.expanduser().resolve(strict=True)
+        tool_project = checkout / "tools" / "QuarantineTools"
+        tests_root = checkout / "tests"
+        if not tool_project.is_dir() or not tests_root.is_dir():
+            raise ValueError("Checkout does not contain QuarantineTools and tests.")
+
+        source_revision = _source_revision(checkout)
+        source_tree_digest = _source_tree_digest(checkout)
+
+        test_names = []
+        for test in tests:
+            if not isinstance(test, Mapping):
+                raise ValueError("Quarantine request tests must contain objects.")
+            test_name = test.get("testName")
+            if not isinstance(test_name, str) or not test_name:
+                raise ValueError("Quarantine request testName must be nonempty.")
+            test_names.append(test_name)
+        inspection_result = subprocess.run(
+            [
+                "dotnet",
+                "run",
+                "--project",
+                str(tool_project),
+                "--no-restore",
+                "--verbosity",
+                "quiet",
+                "--",
+                "--inspect",
+                "--root",
+                str(tests_root),
+                *test_names,
+            ],
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env={
+                **os.environ,
+                "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+                "DOTNET_CLI_UI_LANGUAGE": "en-US",
+                "DOTNET_NOLOGO": "1",
+                "MSBUILDTERMINALLOGGER": "false",
+            },
+        )
+        if inspection_result.returncode != 0:
+            raise ValueError("Quarantine source inspector failed.")
+        inspection = json.loads(inspection_result.stdout)
+        if not isinstance(inspection, Mapping):
+            raise ValueError("Quarantine source inspector returned invalid JSON.")
+        if (
+            _source_revision(checkout) != source_revision
+            or _source_tree_digest(checkout) != source_tree_digest
+        ):
+            raise ValueError("Checkout changed during quarantine source inspection.")
+        return apply_quarantine_source_inspection(
+            request,
+            inspection,
+            source_revision=source_revision,
+            source_tree_digest=source_tree_digest,
+        )
+    except (
+        FileNotFoundError,
+        NotADirectoryError,
+        OSError,
+        subprocess.TimeoutExpired,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return _block_source_inspection_unavailable(request)
+
+
+def _block_source_inspection_unavailable(
+    request: Mapping[str, Any],
+) -> dict[str, object]:
+    tests = request.get("tests")
+    if not isinstance(tests, list):
+        raise ValueError("Quarantine request tests must be a list.")
+    blocked = [
+        dict(target)
+        for target in request.get("blockedTargets", [])
+        if isinstance(target, Mapping)
+    ]
+    blocked.extend(
+        {
+            "testName": test["testName"],
+            "reason": "source-inspection-unavailable",
+        }
+        for test in tests
+        if isinstance(test, Mapping)
+        and isinstance(test.get("testName"), str)
+        and test["testName"]
+    )
+    return _request_for_tests(
+        {
+            **dict(request),
+            "blockedTargets": blocked,
+        },
+        [],
+    )
+
+
+def _source_revision(checkout: Path) -> str:
+    result = subprocess.run(
+        [
+            "git",
+            "--no-pager",
+            "-C",
+            str(checkout),
+            "rev-parse",
+            "HEAD",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    revision = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError("Unable to resolve checkout revision.")
+    return revision
+
+
+def _source_tree_digest(checkout: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"ci-shepherd-quarantine-source-v2\0")
+    for candidate in _source_input_files(checkout):
+        relative_path = candidate.relative_to(checkout)
+        encoded_path = os.fsencode(relative_path)
+        digest.update(b"\0file\0")
+        digest.update(encoded_path)
+        digest.update(b"\0")
+        digest.update(candidate.read_bytes())
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _source_input_files(checkout: Path) -> list[Path]:
+    skip_directories = {
+        ".git",
+        ".github",
+        ".idea",
+        ".vs",
+        ".vscode",
+        "artifacts",
+        "bin",
+        "dist",
+        "node_modules",
+        "obj",
+        "out",
+        "packages",
+    }
+    files: set[Path] = set()
+
+    def collect(
+        root: Path,
+        *,
+        accepted_suffixes: tuple[str, ...] | None,
+    ) -> None:
+        for directory, child_directories, child_files in os.walk(root):
+            directory_path = Path(directory)
+            child_directories[:] = sorted(
+                child
+                for child in child_directories
+                if child.casefold()
+                not in {name.casefold() for name in skip_directories}
+            )
+            for child in child_directories:
+                if (directory_path / child).is_symlink():
+                    raise ValueError(
+                        "Quarantine source inputs must not traverse symlinks."
+                    )
+            for file_name in sorted(child_files):
+                candidate = directory_path / file_name
+                if candidate.is_symlink() or not candidate.is_file():
+                    raise ValueError(
+                        "Quarantine source inputs must contain regular files."
+                    )
+                if accepted_suffixes is not None and not file_name.endswith(
+                    accepted_suffixes
+                ):
+                    continue
+                if (
+                    ".received." in file_name.casefold()
+                    or ".verified." in file_name.casefold()
+                ):
+                    continue
+                files.add(candidate)
+
+    collect(checkout / "tests", accepted_suffixes=(".cs",))
+    collect(checkout / "tools" / "QuarantineTools", accepted_suffixes=None)
+    collect(
+        checkout / "eng",
+        accepted_suffixes=(".props", ".targets"),
+    )
+    for file_name in (
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Packages.props",
+        "NuGet.config",
+        "global.json",
+    ):
+        candidate = checkout / file_name
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ValueError(f"Missing quarantine source input {file_name}.")
+        files.add(candidate)
+    return sorted(
+        files,
+        key=lambda path: os.fsencode(path.relative_to(checkout)),
+    )
+
+
+def _validate_source_inspection_match(
+    test_name: str,
+    match: object,
+) -> dict[str, Any]:
+    if not isinstance(match, Mapping):
+        raise ValueError(f"Source inspection matches for {test_name} must be objects.")
+    if set(match) != {
+        "file",
+        "line",
+        "quarantineAttributes",
+        "activeIssueAttributes",
+        "fileSemanticDigest",
+        "fileQuarantines",
+    }:
+        raise ValueError(
+            f"Source inspection match for {test_name} has unexpected or missing fields."
+        )
+    file = match.get("file")
+    line = match.get("line")
+    if (
+        not isinstance(file, str)
+        or not file
+        or Path(file).is_absolute()
+        or ".." in Path(file).parts
+    ):
+        raise ValueError(f"Source inspection file for {test_name} is invalid.")
+    if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+        raise ValueError(f"Source inspection line for {test_name} is invalid.")
+    file_semantic_digest = match.get("fileSemanticDigest")
+    if (
+        not isinstance(file_semantic_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", file_semantic_digest) is None
+    ):
+        raise ValueError(
+            f"Source inspection semantic digest for {test_name} is invalid."
+        )
+    return {
+        "file": file,
+        "line": line,
+        "fileSemanticDigest": file_semantic_digest,
+        "fileQuarantines": _validate_file_quarantines(
+            test_name,
+            match.get("fileQuarantines"),
+        ),
+        "quarantineAttributes": _validate_source_inspection_attributes(
+            test_name,
+            match.get("quarantineAttributes"),
+            "QuarantinedTest",
+        ),
+        "activeIssueAttributes": _validate_source_inspection_attributes(
+            test_name,
+            match.get("activeIssueAttributes"),
+            "ActiveIssue",
+        ),
+    }
+
+
+def _validate_source_inspection_attributes(
+    test_name: str,
+    attributes: object,
+    expected_name: str,
+) -> list[dict[str, str | None]]:
+    if not isinstance(attributes, list):
+        raise ValueError(
+            f"Source inspection attributes for {test_name} must be a list."
+        )
+    validated: list[dict[str, str | None]] = []
+    for attribute in attributes:
+        if not isinstance(attribute, Mapping) or set(attribute) != {
+            "name",
+            "issueUrl",
+        }:
+            raise ValueError(
+                f"Source inspection attribute for {test_name} is invalid."
+            )
+        issue_url = attribute.get("issueUrl")
+        if attribute.get("name") != expected_name or (
+            issue_url is not None
+            and (not isinstance(issue_url, str) or not issue_url)
+        ):
+            raise ValueError(
+                f"Source inspection attribute for {test_name} is invalid."
+            )
+        validated.append({"name": expected_name, "issueUrl": issue_url})
+    return validated
+
+
+def _validate_file_quarantines(
+    test_name: str,
+    quarantines: object,
+) -> list[dict[str, str | None]]:
+    if not isinstance(quarantines, list):
+        raise ValueError(
+            f"Source file quarantine inventory for {test_name} must be a list."
+        )
+    validated: list[dict[str, str | None]] = []
+    for quarantine in quarantines:
+        if not isinstance(quarantine, Mapping) or set(quarantine) != {
+            "testName",
+            "issueUrl",
+        }:
+            raise ValueError(
+                f"Source file quarantine inventory for {test_name} is invalid."
+            )
+        quarantined_test_name = quarantine.get("testName")
+        issue_url = quarantine.get("issueUrl")
+        if (
+            not isinstance(quarantined_test_name, str)
+            or not quarantined_test_name
+            or (
+                issue_url is not None
+                and (not isinstance(issue_url, str) or not issue_url)
+            )
+        ):
+            raise ValueError(
+                f"Source file quarantine inventory for {test_name} is invalid."
+            )
+        validated.append(
+            {
+                "testName": quarantined_test_name,
+                "issueUrl": issue_url,
+            }
+        )
+    if validated != sorted(
+        validated,
+        key=lambda item: (item["testName"], item["issueUrl"] or ""),
+    ):
+        raise ValueError(
+            f"Source file quarantine inventory for {test_name} is not sorted."
+        )
+    return validated
+
+
 def build_quarantine_session_plan(
     request: Mapping[str, Any],
     session_events: list[Mapping[str, Any]],
@@ -456,6 +977,7 @@ def record_quarantine_session_event(
     pull_request_head_sha: str | None = None,
     blocked_targets: list[dict[str, str]] | None = None,
     allow_pull_request_head_update: bool = False,
+    mutation_validation: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     if status not in _SESSION_STATUSES:
         raise ValueError(f"Unsupported quarantine session status: {status}")
@@ -537,6 +1059,14 @@ def record_quarantine_session_event(
             "blockedTargets is valid only for pull-request-open, completed, "
             "or failed sessions."
         )
+    if mutation_validation is not None and status not in {
+        "pull-request-open",
+        "completed",
+    }:
+        raise ValueError(
+            "mutationValidation is valid only for pull-request-open or "
+            "completed sessions."
+        )
 
     request_tests = request.get("tests", [])
     if not isinstance(request_tests, list):
@@ -576,6 +1106,10 @@ def record_quarantine_session_event(
         "sessionId": session_id,
         "tests": recorded_tests,
     }
+    for source_field in ("sourceRevision", "sourceTreeDigest"):
+        source_value = request.get(source_field)
+        if source_value is not None:
+            event[source_field] = source_value
     if pull_request_url is not None:
         event["pullRequestUrl"] = pull_request_url
     if pull_request_head_sha is not None:
@@ -619,6 +1153,8 @@ def record_quarantine_session_event(
         event["blockedTargets"] = normalized_blocked_targets
     if authorization_grant_id is not None:
         event["authorizationGrantId"] = authorization_grant_id
+    if mutation_validation is not None:
+        event["mutationValidation"] = dict(mutation_validation)
 
     path = _session_ledger_path(state_directory)
     with exclusive_jsonl_lock(path):
@@ -673,6 +1209,8 @@ def record_quarantine_session_event(
                 if (
                     previous.get("pullRequestUrl") != pull_request_url
                     or previous_test_names != set(completed_test_names or [])
+                    or previous.get("mutationValidation")
+                    != event.get("mutationValidation")
                     or (
                         previous_head is not None
                         and not allow_pull_request_head_update
@@ -720,6 +1258,15 @@ def record_quarantine_session_event(
             ):
                 raise ValueError(
                     "Completed quarantine pull request head does not match the recorded draft."
+                )
+            if (
+                previous.get("status") == "pull-request-open"
+                and previous.get("mutationValidation")
+                != event.get("mutationValidation")
+            ):
+                raise ValueError(
+                    "Completed quarantine mutation validation does not match "
+                    "the recorded draft."
                 )
             previous_test_names = {
                 test.get("testName")
@@ -792,8 +1339,8 @@ def render_quarantine_session_section(plan: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "One local quarantine session is ready for approval.",
-            "The worker must resolve each target to an exact test method. "
-            "Unresolved targets remain unchanged and are reported as blocked.",
+            "Every candidate was resolved to exactly one unsuppressed source method "
+            "at the recorded checkout revision and tree digest.",
             "",
             f"**Batch:** `{proposal.get('batchId')}`",
             "",

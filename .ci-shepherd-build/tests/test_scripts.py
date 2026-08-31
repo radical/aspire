@@ -1081,6 +1081,157 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def test_execute_quarantine_owns_and_records_the_authorized_mutation(
+        self,
+    ) -> None:
+        script = load_script("execute_quarantine")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        output = scratch / "mutation-result.json"
+        request = {
+            "schemaVersion": 1,
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:radical/aspire:test",
+            "batchId": "quarantine:test",
+            "tests": [{"testName": "Tests.One"}],
+        }
+        result = {
+            "schemaVersion": 1,
+            "completedTests": ["Tests.One"],
+            "diffDigest": "sha256:" + "a" * 64,
+        }
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "execute_quarantine.py",
+                        "--state-dir",
+                        str(scratch / "state"),
+                        "--request",
+                        str(scratch / "request.json"),
+                        "--authorization",
+                        str(scratch / "authorization.json"),
+                        "--batch-id",
+                        "quarantine:test",
+                        "--checkout",
+                        str(scratch / "checkout"),
+                        "--session-id",
+                        "session-1",
+                        "--output",
+                        str(output),
+                    ],
+                ),
+                patch.object(
+                    script,
+                    "authorize_quarantine_start",
+                    return_value=SimpleNamespace(
+                        request=request,
+                        grant_id="grant:1",
+                    ),
+                ),
+                patch.object(
+                    script,
+                    "record_quarantine_session_event",
+                ) as record_event,
+                patch.object(
+                    script,
+                    "execute_quarantine_mutation",
+                    return_value=result,
+                ) as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(0, script.main())
+
+            execute.assert_called_once_with(
+                request,
+                scratch / "checkout",
+            )
+            self.assertEqual(
+                ["started"],
+                [
+                    call.kwargs["status"]
+                    for call in record_event.call_args_list
+                ],
+            )
+            self.assertEqual(
+                result,
+                json.loads(output.read_text(encoding="utf-8")),
+            )
+            self.assertEqual(0o600, output.stat().st_mode & 0o777)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_execute_quarantine_records_validation_failure(self) -> None:
+        script = load_script("execute_quarantine")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        output = scratch / "mutation-result.json"
+        request = {
+            "schemaVersion": 1,
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:radical/aspire:test",
+            "batchId": "quarantine:test",
+            "tests": [{"testName": "Tests.One"}],
+        }
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "execute_quarantine.py",
+                        "--state-dir",
+                        str(scratch / "state"),
+                        "--request",
+                        str(scratch / "request.json"),
+                        "--authorization",
+                        str(scratch / "authorization.json"),
+                        "--batch-id",
+                        "quarantine:test",
+                        "--checkout",
+                        str(scratch / "checkout"),
+                        "--session-id",
+                        "session-1",
+                        "--output",
+                        str(output),
+                    ],
+                ),
+                patch.object(
+                    script,
+                    "authorize_quarantine_start",
+                    return_value=SimpleNamespace(
+                        request=request,
+                        grant_id="grant:1",
+                    ),
+                ),
+                patch.object(
+                    script,
+                    "record_quarantine_session_event",
+                ) as record_event,
+                patch.object(
+                    script,
+                    "execute_quarantine_mutation",
+                    side_effect=ValueError("filtered discovery failed"),
+                ),
+                self.assertRaisesRegex(ValueError, "filtered discovery"),
+            ):
+                script.main()
+
+            self.assertEqual(
+                ["started", "failed"],
+                [
+                    call.kwargs["status"]
+                    for call in record_event.call_args_list
+                ],
+            )
+            self.assertFalse(output.exists())
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     def test_create_authorization_forwards_production_comment_confirmation(
         self,
     ) -> None:

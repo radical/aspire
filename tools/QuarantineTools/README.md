@@ -4,6 +4,7 @@ Roslyn based utility to add or remove `[QuarantinedTest]` or `[ActiveIssue]` att
 
 - Quarantine: adds `[QuarantinedTest("<issue url>")]` or `[ActiveIssue("<issue url>")]`
 - Unquarantine: removes any `QuarantinedTest` or `ActiveIssue` attribute from the method
+- Inspect: resolves exact methods and reports existing suppression attributes as JSON without changing source
 
 ## Prerequisites
 
@@ -14,6 +15,9 @@ Roslyn based utility to add or remove `[QuarantinedTest]` or `[ActiveIssue]` att
 ```bash
 # Show help
 dotnet run --project tools/QuarantineTools -- --help
+
+# Inspect one or more methods without modifying source
+dotnet run --project tools/QuarantineTools -- --inspect Full.Namespace.Type.Method
 
 # Quarantine a test with QuarantinedTest (default mode)
 dotnet run --project tools/QuarantineTools -- -q -i https://github.com/microsoft/aspire/issues/1234 Full.Namespace.Type.Method
@@ -37,6 +41,7 @@ dotnet run --project tools/QuarantineTools -- -q -a MyCompany.Testing.CustomQuar
 ## Notes on CLI flags
 
 - `-q`/`--quarantine` and `-u`/`--unquarantine` are mutually exclusive (pick one).
+- `--inspect`, `-q`/`--quarantine`, and `-u`/`--unquarantine` are mutually exclusive.
 - `-i`/`--url <issue-url>` is required when using `-q`.
 - `-m`/`--mode <mode>` controls which attribute to add/remove:
   - `quarantine` (default): Uses `Aspire.TestUtilities.QuarantinedTest`
@@ -45,10 +50,18 @@ dotnet run --project tools/QuarantineTools -- -q -a MyCompany.Testing.CustomQuar
 - `-r`/`--root <folder>` overrides the scan root (by default, `<repo-root>/tests`). Relative paths are resolved against the repository root.
 - `-h`/`--help` prints usage information and exits.
 
+Inspection writes one JSON document to standard output. Each requested method is
+reported as `resolved`, `not-found`, or `ambiguous`. Resolved matches include the
+source file and line plus existing `QuarantinedTest` and `ActiveIssue` attributes
+and their literal issue URLs. Attribute matching recognizes unqualified,
+fully-qualified, `global::`-qualified, and using-alias forms. A valid not-found
+or ambiguous result exits successfully; non-zero exit codes indicate that
+inspection itself failed.
+
 ## Notes
 
 - Methods are matched by fully-qualified name: `Namespace.Type.Method`. Nested types can use `+`, e.g. `Namespace.Outer+Inner.TestMethod`.
-- The tool scans the repo `tests/` folder and edits files in place, ignoring `bin/` and `obj/`.
+- The tool scans the repo `tests/` folder and edits files in place, ignoring build-output directories and Verify `.received.`/`.verified.` artifacts.
 - Quarantine is idempotent (won't duplicate attributes); unquarantine only removes the attribute if present.
 - When using `activeissue` mode, the tool adds `using Xunit;` if needed.
 - When using `quarantine` mode (default), the tool adds `using Aspire.TestUtilities;` if needed.
