@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,6 +19,56 @@ QUARANTINE_TOOL = REPOSITORY_ROOT / "tools" / "QuarantineTools"
 
 
 class QuarantineSourceInspectionTests(unittest.TestCase):
+    def test_default_scan_root_stops_at_a_git_worktree_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            parent = Path(temporary_directory)
+            (parent / ".git").mkdir()
+            (parent / "tests").mkdir()
+            worktree = parent / "worktree"
+            tests_root = worktree / "tests"
+            tests_root.mkdir(parents=True)
+            (worktree / ".git").write_text(
+                "gitdir: ../.git/worktrees/test\n",
+                encoding="utf-8",
+            )
+            (tests_root / "Tests.cs").write_text(
+                """
+namespace Demo;
+public class Tests
+{
+    public void Flaky() { }
+}
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    str(REPOSITORY_ROOT / ".dotnet" / "dotnet"),
+                    "run",
+                    "--project",
+                    str(QUARANTINE_TOOL),
+                    "--no-restore",
+                    "--verbosity",
+                    "quiet",
+                    "--",
+                    "--inspect",
+                    "Demo.Tests.Flaky",
+                ],
+                cwd=worktree,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=os.environ,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual(
+            "resolved",
+            json.loads(completed.stdout)["tests"][0]["status"],
+        )
+
     def test_source_digest_covers_inspector_inputs_but_not_verify_outputs(
         self,
     ) -> None:
