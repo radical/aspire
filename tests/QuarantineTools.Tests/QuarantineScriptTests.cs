@@ -13,6 +13,7 @@ namespace QuarantineTools.Tests;
 public class QuarantineScriptTests
 {
     [Fact]
+    [QuarantinedTest("https://github.com/radical/aspire/issues/77")]
     public void QuarantineRoundTripPreservesEncodingAndRawStrings()
     {
     }
