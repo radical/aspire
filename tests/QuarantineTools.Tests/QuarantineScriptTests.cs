@@ -111,6 +111,7 @@ public class QuarantineScriptTests
     }
 
     [Fact]
+    [QuarantinedTest("https://github.com/radical/aspire/issues/74")]
     public void Quarantine_AddsUsingDirective_WhenMissing()
     {
         const string code = """
