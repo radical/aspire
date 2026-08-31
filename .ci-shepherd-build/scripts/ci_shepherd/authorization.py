@@ -26,8 +26,9 @@ DEFAULT_GRANT_TTL_MINUTES = 15
 MAX_GRANT_TTL_MINUTES = 60
 AUTHORIZATION_SCHEMA_VERSION = 2
 PRODUCTION_REPOSITORY = "microsoft/aspire"
-PRODUCTION_COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
-MAX_PRODUCTION_COMMENT_ACTIONS = 10
+PRODUCTION_COMMENT_OPERATIONS = frozenset({"edit-comment"})
+MAX_PRODUCTION_COMMENT_ACTIONS = 1
+MAX_PRODUCTION_SNAPSHOT_AGE = timedelta(minutes=15)
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +310,10 @@ def generate_authorization_grant(
             "microsoft/aspire."
         )
     snapshot_id = _require_string(proposal_document, "snapshotId")
+    issued_at = now if now is not None else datetime.now(UTC)
+    if issued_at.tzinfo is None:
+        raise AuthorizationError("Grant issuedAtUtc must be timezone-aware.")
+    issued_at = issued_at.astimezone(UTC)
 
     document_eligibility = proposal_document.get("executionEligibility")
     if (
@@ -402,16 +407,21 @@ def generate_authorization_grant(
             ttl_minutes=ttl_minutes,
             override_ids=override_ids,
         )
+        production_freshness_deadline = _production_freshness_deadline(
+            snapshot_id,
+            repository=repository,
+            issued_at=issued_at,
+        )
+    else:
+        production_freshness_deadline = None
 
     expanded_state_dir = state_dir.expanduser()
     _reject_symlink_path(expanded_state_dir, "State directory")
     canonical_state_dir = expanded_state_dir.resolve(strict=False)
 
-    issued_at = now if now is not None else datetime.now(UTC)
-    if issued_at.tzinfo is None:
-        raise AuthorizationError("Grant issuedAtUtc must be timezone-aware.")
-    issued_at = issued_at.astimezone(UTC)
     expires_at = issued_at + timedelta(minutes=ttl_minutes)
+    if production_freshness_deadline is not None:
+        expires_at = min(expires_at, production_freshness_deadline)
 
     if grant_id is not None and (not isinstance(grant_id, str) or not grant_id):
         raise AuthorizationError("grantId must be a non-empty string.")
@@ -444,23 +454,60 @@ def _generate_grant_id() -> str:
     return f"grant:{secrets.token_hex(16)}"
 
 
+def _production_freshness_deadline(
+    snapshot_id: str,
+    *,
+    repository: str,
+    issued_at: datetime,
+) -> datetime:
+    prefix = f"snapshot:{repository}:"
+    suffix = ":r1"
+    if not snapshot_id.startswith(prefix) or not snapshot_id.endswith(suffix):
+        raise AuthorizationError(
+            "Production comment pilot grants require a freshly expanded snapshot."
+        )
+    collected_at_text = snapshot_id[len(prefix) : -len(suffix)]
+    try:
+        collected_at = datetime.fromisoformat(
+            collected_at_text.replace("Z", "+00:00")
+        )
+    except ValueError as error:
+        raise AuthorizationError(
+            "Production comment pilot snapshot time is invalid."
+        ) from error
+    if collected_at.tzinfo is None:
+        raise AuthorizationError(
+            "Production comment pilot snapshot time must be timezone-aware."
+        )
+    collected_at = collected_at.astimezone(UTC)
+    freshness_deadline = collected_at + MAX_PRODUCTION_SNAPSHOT_AGE
+    if issued_at < collected_at:
+        raise AuthorizationError(
+            "Production comment pilot snapshot is not active yet."
+        )
+    if issued_at >= freshness_deadline:
+        raise AuthorizationError(
+            "Production comment pilot snapshots must be less than 15 minutes old."
+        )
+    return freshness_deadline
+
+
 def _validate_production_comment_selection(
     proposals: Sequence[Mapping[str, Any]],
     *,
     ttl_minutes: int,
     override_ids: set[str],
 ) -> None:
-    if len(proposals) > MAX_PRODUCTION_COMMENT_ACTIONS:
+    if len(proposals) != MAX_PRODUCTION_COMMENT_ACTIONS:
         raise AuthorizationError(
-            "Production comment pilot grants may authorize at most "
-            f"{MAX_PRODUCTION_COMMENT_ACTIONS} actions."
+            "Production comment pilot grants must authorize exactly one action."
         )
     issue_numbers: set[int] = set()
     for proposal in proposals:
         operation = _require_string(proposal, "operation")
         if operation not in PRODUCTION_COMMENT_OPERATIONS:
             raise AuthorizationError(
-                "Production comment pilot grants allow comment operations only."
+                "Production comment pilot grants allow existing comment edits only."
             )
         if proposal.get("dependsOn") is not None:
             raise AuthorizationError(
@@ -497,11 +544,18 @@ def _validate_production_comment_grant(
         raise AuthorizationError(
             "Authorization grant does not carry the production comment capability."
         )
-    if not (
-        1 <= len(grant.allowed_action_ids) <= MAX_PRODUCTION_COMMENT_ACTIONS
-    ):
+    if len(grant.allowed_action_ids) != MAX_PRODUCTION_COMMENT_ACTIONS:
         raise AuthorizationError(
             "Production comment pilot grant has an invalid action count."
+        )
+    freshness_deadline = _production_freshness_deadline(
+        grant.snapshot_id,
+        repository=grant.repository,
+        issued_at=grant.issued_at,
+    )
+    if grant.expires_at > freshness_deadline:
+        raise AuthorizationError(
+            "Production comment pilot grant outlives its source snapshot."
         )
     by_action_id = {
         proposal.get("actionId"): proposal
@@ -529,7 +583,7 @@ def _validate_production_comment_grant(
         or grant.allowed_operations != selected_operations
     ):
         raise AuthorizationError(
-            "Production comment pilot grant must allow comment operations only."
+            "Production comment pilot grant must allow existing comment edits only."
         )
     if any(proposal.get("dependsOn") is not None for proposal in selected_proposals):
         raise AuthorizationError(

@@ -735,6 +735,11 @@ class HistoryTests(unittest.TestCase):
                     payload={"source": "derived", "updatedAt": "2026-08-18T13:00:00Z"},
                 ),
                 "run:3": evidence_record("workflow-run", availability="partial"),
+                "run:6": evidence_record(
+                    "workflow-run",
+                    payload={"errorRetryable": False},
+                    availability="partial",
+                ),
             }
         )
 
@@ -760,6 +765,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(evidence["pr:5"]["freshnessClass"], "immutable")
         self.assertEqual(evidence["issue:2"]["freshnessClass"], "derived")
         self.assertEqual(evidence["run:3"]["freshnessClass"], "retryable")
+        self.assertEqual(evidence["run:6"]["freshnessClass"], "immutable")
         self.assertEqual(evidence["issue:1"]["observedAt"], OBSERVED_AT)
         self.assertEqual(
             evidence["source:src%2Fapp.py"]["sourceUpdatedAt"],

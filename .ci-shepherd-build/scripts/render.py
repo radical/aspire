@@ -96,6 +96,7 @@ def render_poc_markdown(
     *,
     prepared_path: Path,
     snapshot: object,
+    visible_issue_numbers: set[int] | None = None,
 ) -> str:
     validate_poc_judgments(prepared, judgments)
     if not isinstance(prepared, dict) or not isinstance(judgments, dict):
@@ -105,9 +106,47 @@ def render_poc_markdown(
     issue_judgments = judgments.get("issues")
     if not isinstance(issue_judgments, list):
         raise TypeError("Validated issue judgments must be a list.")
+    if visible_issue_numbers is None:
+        rendered_issue_judgments = issue_judgments
+    else:
+        unknown_issue_numbers = visible_issue_numbers - set(issue_metadata)
+        if unknown_issue_numbers:
+            raise ValueError(
+                "Visible issue numbers include an unknown issue: "
+                f"{min(unknown_issue_numbers)}."
+            )
+        rendered_issue_judgments = [
+            issue
+            for issue in issue_judgments
+            if isinstance(issue, dict)
+            and issue.get("issueNumber") in visible_issue_numbers
+        ]
+    carried_issue_count = len(issue_judgments) - len(rendered_issue_judgments)
+    rendered_issue_numbers = {
+        issue["issueNumber"]
+        for issue in rendered_issue_judgments
+        if isinstance(issue, dict)
+    }
+    carried_queue_issue_numbers: dict[str, set[int]] = {}
+    for issue in issue_judgments:
+        if not isinstance(issue, dict):
+            raise TypeError("Validated issue judgment must be an object.")
+        issue_number = issue["issueNumber"]
+        if issue_number in rendered_issue_numbers:
+            continue
+        recommendations = issue["recommendations"]
+        if not isinstance(recommendations, list):
+            raise TypeError("Validated recommendations must be a list.")
+        for recommendation in recommendations:
+            if not isinstance(recommendation, dict):
+                raise TypeError("Validated recommendation must be an object.")
+            carried_queue_issue_numbers.setdefault(
+                str(recommendation["disposition"]),
+                set(),
+            ).add(int(issue_number))
 
     rows: list[dict[str, object]] = []
-    for issue in issue_judgments:
+    for issue in rendered_issue_judgments:
         if not isinstance(issue, dict):
             raise TypeError("Validated issue judgment must be an object.")
         issue_number = issue["issueNumber"]
@@ -135,7 +174,9 @@ def render_poc_markdown(
                 }
             )
 
-    category_counts = Counter(str(issue["category"]) for issue in issue_judgments)
+    category_counts = Counter(
+        str(issue["category"]) for issue in rendered_issue_judgments
+    )
     disposition_counts = Counter(str(row["disposition"]) for row in rows)
     confidence_counts = Counter(str(row["confidence"]) for row in rows)
 
@@ -145,7 +186,8 @@ def render_poc_markdown(
         f"**Repository:** `{_markdown_text(prepared['repository'])}`  ",
         f"**Snapshot:** `{_markdown_text(prepared['snapshotId'])}`  ",
         f"**Prepared input:** `{_markdown_text(prepared_path)}`  ",
-        f"**Recommendations:** {len(rows)}",
+        f"**Recommendations this cycle:** {len(rows)}  ",
+        f"**Carried forward unchanged cases:** {carried_issue_count}",
         "",
         "## Counts",
         "",
@@ -203,9 +245,18 @@ def render_poc_markdown(
             if row["disposition"] == disposition
         ]
         queue.sort(key=lambda row: (int(row["issueNumber"]), _target_text(row["target"])))
+        carried_queue_count = len(carried_queue_issue_numbers.get(disposition, set()))
         lines.extend(["", f"## {heading}", ""])
         if not queue:
-            lines.append("None.")
+            if carried_queue_count:
+                issue_word = "issue" if carried_queue_count == 1 else "issues"
+                lines.append(
+                    "No recommendations this cycle; "
+                    f"{carried_queue_count} unchanged {issue_word} carried forward "
+                    "in this queue."
+                )
+            else:
+                lines.append("None.")
             continue
         lines.extend(
             [
@@ -234,6 +285,15 @@ def render_poc_markdown(
         if disposition == "ping-human":
             for row in queue:
                 _append_human_comment_draft(lines, row)
+        if carried_queue_count:
+            issue_word = "issue" if carried_queue_count == 1 else "issues"
+            lines.extend(
+                [
+                    "",
+                    f"{carried_queue_count} unchanged {issue_word} also carried "
+                    "forward in this queue.",
+                ]
+            )
 
     lines.append("")
     return "\n".join(lines)

@@ -515,6 +515,14 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             "microsoft/aspire",
         )
         self.proposals = json.loads(serialized)
+        self.proposals["snapshotId"] += ":r1"
+        for proposal in self.proposals["proposals"]:
+            if proposal["operation"] == "create-comment":
+                proposal["operation"] = "edit-comment"
+                proposal["commentId"] = 1000 + proposal["issueNumber"]
+                proposal["sourceCommentFingerprint"] = {
+                    "bodySha256": "0" * 64
+                }
         self.comment_action_id = self.comment_action_id.replace(
             "radical/aspire",
             "microsoft/aspire",
@@ -855,90 +863,84 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertTrue(authorized.grant.production_comment_pilot)
         self.assertEqual(self.comment_action_id, authorized.proposal["actionId"])
 
-    def test_production_comment_pilot_allows_an_exact_independent_batch(
+    def test_production_comment_pilot_rejects_multiple_actions(
         self,
     ) -> None:
         self._use_production_repository()
         second_action_id = self._add_comment_proposal(2)
         self._write_proposals()
 
-        grant = self._generate(
-            action_ids=[self.comment_action_id, second_action_id],
+        with self.assertRaisesRegex(AuthorizationError, "exactly one action"):
+            self._generate(
+                action_ids=[self.comment_action_id, second_action_id],
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_pilot_rejects_comment_creation(self) -> None:
+        self._use_production_repository()
+        proposal = self.proposals["proposals"][0]
+        proposal["operation"] = "create-comment"
+        proposal.pop("commentId")
+        proposal.pop("sourceCommentFingerprint")
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "existing comment edits only",
+        ):
+            self._generate(
+                action_ids=[self.comment_action_id],
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_pilot_requires_expanded_snapshot(self) -> None:
+        self._use_production_repository()
+        self.proposals["snapshotId"] = self.proposals["snapshotId"].removesuffix(
+            ":r1"
+        )
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "freshly expanded snapshot",
+        ):
+            self._generate(
+                action_ids=[self.comment_action_id],
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_pilot_rejects_stale_expanded_snapshot(self) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "less than 15 minutes old",
+        ):
+            generate_authorization_grant(
+                self.proposals_path,
+                action_ids=[self.comment_action_id],
+                state_dir=self.state_dir,
+                allow_production_comment_pilot=True,
+                now=datetime(2026, 8, 29, 20, 16, tzinfo=UTC),
+                grant_id="grant:test",
+            )
+
+    def test_production_comment_pilot_expires_with_snapshot_freshness(self) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+
+        grant = generate_authorization_grant(
+            self.proposals_path,
+            action_ids=[self.comment_action_id],
+            state_dir=self.state_dir,
+            ttl_minutes=15,
             allow_production_comment_pilot=True,
+            now=datetime(2026, 8, 29, 20, 10, tzinfo=UTC),
+            grant_id="grant:test",
         )
 
-        self.assertEqual(
-            sorted([self.comment_action_id, second_action_id]),
-            grant["allowedActionIds"],
-        )
-        self.assertEqual(
-            [
-                {"kind": "issue", "number": 1},
-                {"kind": "issue", "number": 2},
-            ],
-            grant["allowedTargets"],
-        )
-        self.assertEqual(
-            {"maxMutationAttempts": 2, "maxChains": 2},
-            grant["budget"],
-        )
-        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
-        for action_id in (self.comment_action_id, second_action_id):
-            with self.subTest(action_id=action_id):
-                authorized = load_authorized_execution(
-                    self.proposals_path,
-                    self.output_path,
-                    state_dir=self.state_dir,
-                    action_id=action_id,
-                    allow_production_comment_pilot=True,
-                    now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
-                )
-                self.assertEqual(action_id, authorized.proposal["actionId"])
-
-    def test_production_comment_batch_is_capped_at_ten_actions(self) -> None:
-        self._use_production_repository()
-        action_ids = [self.comment_action_id]
-        action_ids.extend(
-            self._add_comment_proposal(issue_number)
-            for issue_number in range(2, 12)
-        )
-        self._write_proposals()
-
-        with self.assertRaisesRegex(AuthorizationError, "at most 10 actions"):
-            self._generate(
-                action_ids=action_ids,
-                allow_production_comment_pilot=True,
-            )
-
-    def test_production_comment_batch_allows_only_one_action_per_issue(self) -> None:
-        self._use_production_repository()
-        self.proposals["proposals"] = [self.proposals["proposals"][0]]
-        second_action_id = self._add_comment_proposal(
-            1,
-            suffix="second-comment",
-        )
-        self._write_proposals()
-
-        with self.assertRaisesRegex(AuthorizationError, "one action per issue"):
-            self._generate(
-                action_ids=[self.comment_action_id, second_action_id],
-                allow_production_comment_pilot=True,
-            )
-
-    def test_production_comment_batch_actions_cannot_depend_on_each_other(
-        self,
-    ) -> None:
-        self._use_production_repository()
-        second_action_id = self._add_comment_proposal(2)
-        second = self.proposals["proposals"][-1]
-        second["dependsOn"] = self.comment_action_id
-        self._write_proposals()
-
-        with self.assertRaisesRegex(AuthorizationError, "must be independent"):
-            self._generate(
-                action_ids=[self.comment_action_id, second_action_id],
-                allow_production_comment_pilot=True,
-            )
+        self.assertEqual("2026-08-29T20:15:00Z", grant["expiresAtUtc"])
 
     def test_production_pilot_grant_requires_execution_confirmation(self) -> None:
         self._use_production_repository()
@@ -967,13 +969,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "comment plus closure",
                 [self.comment_action_id, self.close_action_id],
                 {},
-                "comment operations only",
+                "exactly one action",
             ),
             (
                 "closure",
                 [self.comment_action_id],
                 {"operation": "close-issue"},
-                "comment operations only",
+                "existing comment edits only",
             ),
             (
                 "long lifetime",
@@ -1004,6 +1006,8 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                     assert isinstance(proposal, dict)
                     proposal["operation"] = operation
                     proposal.pop("body")
+                    proposal.pop("commentId")
+                    proposal.pop("sourceCommentFingerprint")
                     proposal["closeReason"] = "not_planned"
                 self._write_proposals()
                 with self.assertRaisesRegex(AuthorizationError, message):
@@ -1025,13 +1029,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "action",
                 "allowedActionIds",
                 [self.comment_action_id, self.close_action_id],
-                "comment operations only",
+                "invalid action count",
             ),
             (
                 "operation",
                 "allowedOperations",
-                ["create-comment", "close-issue"],
-                "comment operations only",
+                ["edit-comment", "create-comment"],
+                "existing comment edits only",
             ),
             (
                 "target",
@@ -1058,7 +1062,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "lifetime",
                 "expiresAtUtc",
                 "2026-08-29T20:16:00Z",
-                "must not exceed 15 minutes",
+                "outlives its source snapshot",
             ),
         ]
         for name, key, value, message in cases:

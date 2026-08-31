@@ -13,6 +13,7 @@ from urllib.parse import quote
 from pathlib import Path
 
 from . import ownership
+from .eligibility import executable_ci_labels
 from .pull_requests import build_pull_request_current_state
 from .signals import Occurrence, extract_issue_signals, select_references
 from .trx import parse_test_results_archive
@@ -36,7 +37,7 @@ _CORRELATION_MARKER_KEYS = frozenset(
     {"automation-broken", "ci-failure", "ci-failure-cause", "gh-aw-failure-issue"}
 )
 _CORRELATION_FACT_FIELDS = frozenset({"testName"})
-_MAX_TEST_RESULTS_ARTIFACT_BYTES = 25 * 1024 * 1024
+_MAX_TEST_RESULTS_ARTIFACT_BYTES = 64 * 1024 * 1024
 
 _DEFAULT_BUDGETS = {
     "max_supporting_closed": 200,
@@ -95,6 +96,20 @@ def _issue_error_scope(issue_numbers: Iterable[int]) -> dict[str, object] | None
     if not scoped_numbers:
         return None
     return {"kind": "issue", "issueNumbers": scoped_numbers}
+
+
+def _referenced_error_scope(
+    referenced_by: Iterable[Mapping[str, Any]],
+) -> dict[str, object] | None:
+    return _issue_error_scope(
+        source_issue_number
+        for reference in referenced_by
+        if isinstance(reference, Mapping)
+        for source_issue_number in [reference.get("sourceIssueNumber")]
+        if isinstance(source_issue_number, int)
+        and not isinstance(source_issue_number, bool)
+        and source_issue_number > 0
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +239,7 @@ class Collector:
         *,
         include_supporting: bool = True,
         include_timeline: bool = True,
+        include_closed_discovery: bool = False,
         _open_seed: dict[int, dict[str, Any]] | None = None,
     ) -> InventoryResult:
         open_seed = (
@@ -240,16 +256,23 @@ class Collector:
         self._supporting_dispositions_by_issue_and_root.clear()
         self._supporting_provenance_by_issue_root_disposition.clear()
 
-        if include_supporting:
+        if include_supporting and include_closed_discovery:
             for label in TARGET_LABELS:
                 closed_endpoint = self._issue_query_endpoint("closed", label)
                 try:
                     closed_items = self._client.get_pages(closed_endpoint)
                 except Exception as exc:
-                    self._collection_errors.append(CollectionError("closed-label", closed_endpoint, str(exc)))
+                    self._collection_errors.append(
+                        CollectionError("closed-label", closed_endpoint, str(exc))
+                    )
                     closed_inventory_failed = True
                     continue
-                self._merge_issue_inventory(recent_closed_seed, closed_items, label, require_recently_closed=True)
+                self._merge_issue_inventory(
+                    recent_closed_seed,
+                    closed_items,
+                    label,
+                    require_recently_closed=True,
+                )
             for author in self._bot_authors:
                 closed_endpoint = self._bot_issue_query_endpoint("closed", author)
                 try:
@@ -328,17 +351,19 @@ class Collector:
             traversal,
             include_timeline=include_timeline,
         )
-
-        marker_index, fact_index = self._build_candidate_indexes(recent_closed_candidates)
-        self._match_recent_closed_candidates(
-            open_details,
-            marker_index,
-            fact_index,
-            recent_closed_candidates,
-            recent_closed_seed,
-            traversal,
-            include_timeline=include_timeline,
-        )
+        if include_closed_discovery:
+            marker_index, fact_index = self._build_candidate_indexes(
+                recent_closed_candidates
+            )
+            self._match_recent_closed_candidates(
+                open_details,
+                marker_index,
+                fact_index,
+                recent_closed_candidates,
+                recent_closed_seed,
+                traversal,
+                include_timeline=include_timeline,
+            )
         self._append_supporting_budget_warnings(traversal)
 
         supporting_by_open = traversal.selected_candidates_by_root
@@ -381,6 +406,7 @@ class Collector:
         *,
         include_supporting: bool = True,
         include_timeline: bool = True,
+        include_closed_discovery: bool = False,
         full_refresh: bool = False,
     ) -> InventoryResult:
         from .refresh import plan_refresh, reconstruct_inventory
@@ -425,6 +451,7 @@ class Collector:
         inventory = self.collect(
             include_supporting=include_supporting,
             include_timeline=include_timeline,
+            include_closed_discovery=include_closed_discovery,
             _open_seed=open_seed,
         )
         reused = set(plan.reuse)
@@ -434,6 +461,30 @@ class Collector:
                 record = previous_evidence.get(evidence_id)
                 if isinstance(record, dict) and evidence_id in inventory.evidence:
                     inventory.evidence[evidence_id] = copy.deepcopy(record)
+            for evidence_id in plan.refresh:
+                previous_record = previous_evidence.get(evidence_id)
+                current_record = inventory.evidence.get(evidence_id)
+                if (
+                    not self._can_refresh_completed_run_history(previous_record)
+                    or not isinstance(current_record, dict)
+                ):
+                    continue
+                previous_payload = previous_record["payload"]
+                if (
+                    previous_payload.get("recentHistoryCollected") is not True
+                    and previous_payload.get("recentHistoryGap")
+                    in {None, "not-requested"}
+                ):
+                    continue
+                current_payload = current_record.get("payload")
+                carried_record = copy.deepcopy(previous_record)
+                if isinstance(current_payload, dict) and isinstance(
+                    current_payload.get("referencedBy"), list
+                ):
+                    carried_record["payload"]["referencedBy"] = copy.deepcopy(
+                        current_payload["referencedBy"]
+                    )
+                inventory.evidence[evidence_id] = carried_record
         return replace(inventory, refresh_plan=plan)
 
     def enrich_github_evidence(
@@ -1222,7 +1273,21 @@ class Collector:
                 raise InventoryError(
                     f"Failed open issue query for author {author}: {endpoint}: {exc}"
                 ) from exc
-            self._merge_issue_inventory(open_seed, items, None)
+            self._merge_issue_inventory(
+                open_seed,
+                [
+                    item
+                    for item in items
+                    if isinstance(item, dict)
+                    and (
+                        "pull_request" in item
+                        or executable_ci_labels(item.get("labels"))
+                    )
+                ]
+                if isinstance(items, list)
+                else items,
+                None,
+            )
         self._merge_bot_authored_open_inventory(open_seed)
         return open_seed
 
@@ -1274,7 +1339,12 @@ class Collector:
             bot_items.extend(
                 raw_issue
                 for raw_issue in payload
-                if isinstance(raw_issue, dict) and _is_bot_authored(raw_issue)
+                if isinstance(raw_issue, dict)
+                and _is_bot_authored(raw_issue)
+                and (
+                    "pull_request" in raw_issue
+                    or executable_ci_labels(raw_issue.get("labels"))
+                )
             )
             if len(payload) < OPEN_SCAN_PAGE_SIZE:
                 reached_end = True
@@ -2803,6 +2873,9 @@ class Collector:
                 carried_payload["referencedBy"] = referenced_by
                 carried_payload["errorCategory"] = _error_category(exc)
                 carried_payload["errorMessage"] = str(exc)
+                error_retryable = getattr(exc, "retryable", None)
+                if isinstance(error_retryable, bool):
+                    carried_payload["errorRetryable"] = error_retryable
                 return
             evidence[evidence_id] = self._make_partial_record(
                 "issue-event",
@@ -3303,7 +3376,14 @@ class Collector:
         try:
             raw_run = self._client.get(run_endpoint)
         except Exception as exc:
-            collection_errors.append(CollectionError("workflow-run", run_endpoint, str(exc)))
+            collection_errors.append(
+                CollectionError(
+                    "workflow-run",
+                    run_endpoint,
+                    str(exc),
+                    scope=_referenced_error_scope(referenced_by),
+                )
+            )
             evidence[evidence_id] = self._make_partial_record(
                 "workflow-run",
                 fallback_url,
@@ -3323,7 +3403,14 @@ class Collector:
             return
 
         if not isinstance(raw_run, dict):
-            collection_errors.append(CollectionError("workflow-run", run_endpoint, "Unexpected workflow run payload shape"))
+            collection_errors.append(
+                CollectionError(
+                    "workflow-run",
+                    run_endpoint,
+                    "Unexpected workflow run payload shape",
+                    scope=_referenced_error_scope(referenced_by),
+                )
+            )
             evidence[evidence_id] = self._make_partial_record(
                 "workflow-run",
                 fallback_url,
@@ -3354,6 +3441,7 @@ class Collector:
             stage="workflow-jobs",
             endpoint=current_jobs_endpoint,
             key="jobs",
+            scope=_referenced_error_scope(referenced_by),
         ):
             normalized_job = self._normalize_workflow_job(
                 raw_job,
@@ -3374,6 +3462,7 @@ class Collector:
                 stage="workflow-jobs",
                 endpoint=attempt_endpoint,
                 key="jobs",
+                scope=_referenced_error_scope(referenced_by),
             ):
                 normalized_job = self._normalize_workflow_job(
                     raw_job,
@@ -3487,6 +3576,7 @@ class Collector:
                 stage="workflow-artifacts",
                 endpoint=artifacts_endpoint,
                 key="artifacts",
+                scope=_referenced_error_scope(referenced_by),
             )
             artifacts = [
                 {
@@ -3543,6 +3633,7 @@ class Collector:
                         "policy."
                     ),
                     "untrusted retry test-results source",
+                    scope=_referenced_error_scope(referenced_by),
                 )
             )
 
@@ -3576,6 +3667,7 @@ class Collector:
                         run_endpoint,
                         "source run identity/timestamp unavailable for bounded recent-history collection",
                         "recent workflow history not collected",
+                        scope=_referenced_error_scope(referenced_by),
                     )
                 )
             elif workflow_id_value <= 0 or not branch:
@@ -3586,6 +3678,7 @@ class Collector:
                         run_endpoint,
                         "workflow/branch identity unavailable for bounded recent-history collection",
                         "recent workflow history not collected",
+                        scope=_referenced_error_scope(referenced_by),
                     )
                 )
             else:
@@ -3603,6 +3696,7 @@ class Collector:
                             history_endpoint,
                             str(exc),
                             "recent workflow history not collected",
+                            scope=_referenced_error_scope(referenced_by),
                         )
                     )
                 else:
@@ -3640,6 +3734,7 @@ class Collector:
                                 history_endpoint,
                                 "Unexpected workflow history payload shape",
                                 "recent workflow history not collected",
+                                scope=_referenced_error_scope(referenced_by),
                             )
                         )
                     else:
@@ -3656,6 +3751,7 @@ class Collector:
                                     history_endpoint,
                                     f"Malformed workflow history response: {exc}",
                                     "recent workflow history not collected",
+                                    scope=_referenced_error_scope(referenced_by),
                                 )
                             )
                         else:
@@ -3677,6 +3773,7 @@ class Collector:
                                         history_endpoint,
                                         "Malformed workflow history response: total_count does not match the complete first page",
                                         "recent workflow history not collected",
+                                        scope=_referenced_error_scope(referenced_by),
                                     )
                                 )
                             else:
@@ -3803,27 +3900,70 @@ class Collector:
                 )
             ):
                 raise ValueError("Unexpected workflow history payload shape")
-            normalized = [self._normalize_recent_run(raw_run) for raw_run in raw_runs]
-            normalized.sort(
+            response_history = [
+                self._normalize_recent_run(raw_run) for raw_run in raw_runs
+            ]
+            response_history.sort(
                 key=lambda item: (item["createdAt"], item["runId"]),
                 reverse=True,
             )
-            recent_history = normalized[:10]
-            total_count = raw_total if isinstance(raw_total, int) else None
-            if total_count is not None and total_count <= 10 and total_count != len(normalized):
+            response_history = response_history[:10]
+            response_total_count = raw_total if isinstance(raw_total, int) else None
+            if (
+                response_total_count is not None
+                and response_total_count <= 10
+                and response_total_count != len(response_history)
+            ):
                 raise ValueError(
                     "Malformed workflow history response: total_count does not match the complete first page"
                 )
+
+            # GitHub can briefly serve an older first page for this endpoint.
+            # Merge it with the last collected window so immutable completed-run
+            # history never moves backward and creates a false material change.
+            existing_history = payload.get("recentHistory")
+            if not isinstance(existing_history, list):
+                existing_history = []
+            merged_by_run_id = {
+                item["runId"]: copy.deepcopy(item)
+                for item in existing_history
+                if isinstance(item, dict)
+                and isinstance(item.get("runId"), int)
+                and not isinstance(item.get("runId"), bool)
+                and isinstance(item.get("createdAt"), str)
+            }
+            merged_by_run_id.update(
+                {item["runId"]: item for item in response_history}
+            )
+            merged_history = sorted(
+                merged_by_run_id.values(),
+                key=lambda item: (item["createdAt"], item["runId"]),
+                reverse=True,
+            )
+            recent_history = merged_history[:10]
+            existing_total_count = payload.get("recentHistoryTotalCount")
+            total_count_candidates = [
+                count
+                for count in (response_total_count, existing_total_count)
+                if isinstance(count, int)
+                and not isinstance(count, bool)
+                and count >= 0
+            ]
+            total_count = (
+                max(*total_count_candidates, len(merged_history))
+                if total_count_candidates
+                else None
+            )
             truncated = (
                 total_count > len(recent_history)
                 if total_count is not None
-                else len(normalized) >= 10
+                else len(merged_history) >= 10
             )
             source_in_window = any(item["runId"] == run_id for item in recent_history)
             complete_window = (
                 total_count is not None and total_count <= 10
             ) or (
-                total_count is None and len(normalized) < 10
+                total_count is None and len(merged_history) < 10
             )
             covers_source = source_in_window or complete_window
         except Exception as exc:
@@ -3833,6 +3973,9 @@ class Collector:
                     endpoint,
                     str(exc),
                     "recent workflow history not collected",
+                    scope=_referenced_error_scope(
+                        payload.get("referencedBy", [])
+                    ),
                 )
             )
             record["availability"] = "partial"
@@ -3919,6 +4062,7 @@ class Collector:
                 stage="workflow-annotation",
                 endpoint=endpoint,
                 key="annotations",
+                scope=_referenced_error_scope(referenced_by),
             ),
             start=1,
         ):
@@ -3972,6 +4116,7 @@ class Collector:
                     endpoint,
                     str(exc),
                     "workflow-log evidence unavailable" if unavailable else None,
+                    scope=_referenced_error_scope(referenced_by),
                 )
             )
             evidence[evidence_id] = self._make_partial_record(
@@ -4098,6 +4243,7 @@ class Collector:
                             endpoint,
                             str(exc),
                             "test-results artifact unavailable",
+                            scope=_referenced_error_scope(referenced_by),
                         )
                     )
                     continue
@@ -4219,11 +4365,14 @@ class Collector:
         stage: str,
         endpoint: str,
         key: str,
+        scope: dict[str, object] | None = None,
     ) -> list[dict[str, Any]]:
         try:
             payload = self._client.get_pages(endpoint, key=key)
         except Exception as exc:
-            collection_errors.append(CollectionError(stage, endpoint, str(exc)))
+            collection_errors.append(
+                CollectionError(stage, endpoint, str(exc), scope=scope)
+            )
             return []
         return _paged_dict_items(payload, key)
 
@@ -4240,6 +4389,9 @@ class Collector:
         record["availability"] = availability
         record["payload"]["errorCategory"] = _error_category(exc)
         record["payload"]["errorMessage"] = str(exc)
+        error_retryable = getattr(exc, "retryable", None)
+        if isinstance(error_retryable, bool):
+            record["payload"]["errorRetryable"] = error_retryable
         return record
 
 

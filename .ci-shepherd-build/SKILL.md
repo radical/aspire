@@ -1,17 +1,17 @@
 ---
 name: ci-shepherd
-description: "Incremental CI shepherd for microsoft/aspire. A coordinator refreshes bounded GET-only evidence, a fresh agent reviews first-seen, materially changed, or periodically due cases, and deterministic scripts validate reports and exact-action proposals."
+description: "Incremental CI shepherd for microsoft/aspire. A coordinator refreshes bounded GET-only evidence, a fresh agent reviews first-seen, materially changed, or explicitly woken cases, and deterministic scripts validate reports and exact-action proposals."
 ---
 
 # CI Shepherd
 
 The shepherd refreshes the complete eligible issue and pull-request inventory,
 reuses unchanged factual evidence, and sends first-seen, materially changed, or
-periodically due cases to a fresh assessment agent. Stable reviewed cases stay
-out of model input until their seven-day reassessment deadline. Collection and
-assessment are advisory. The coordinator may run bounded read-only
-investigations without approval. GitHub-visible effects and local quarantine
-work remain separate, individually approved actions.
+explicitly woken cases to a fresh assessment agent. Stable reviewed cases stay
+out of model input until their evidence changes or a typed wakeup becomes due.
+Collection and assessment are advisory. The coordinator may run bounded
+read-only investigations without approval. GitHub-visible effects and local
+quarantine work remain separate, individually approved actions.
 
 ## Supported cycle
 
@@ -48,7 +48,7 @@ The assessment agent writes sparse issue overrides to
 `$SCRATCH/agent-pull-request-judgments.json`. Silence for a selected case means
 "keep the deterministic default"; omitted cases must not be returned. The
 coordinator carries the last validated override for an unchanged omitted case
-until evidence changes or scheduled reassessment selects it again. Finish the
+until evidence changes or a typed wakeup selects it again. Finish the
 exact cycle with:
 
 ```bash
@@ -65,7 +65,7 @@ artifacts under `$STATE/runs/<cycle-id>/`. A failed or interrupted cycle does
 not advance `current.json`. Successfully selected issue and pull-request reviews
 are recorded in
 `$STATE/ledgers/review-events.jsonl`; merely refreshing an unchanged case does
-not reset its reassessment clock.
+not consume a future typed wakeup.
 
 ## Open inventory scope
 
@@ -120,7 +120,7 @@ never read as a clean one.
 
 ### Pull-request assessment
 
-New, changed, or periodically due primary pull requests carry current
+New, changed, or explicitly woken primary pull requests carry current
 head-commit checks, current review state, mergeability, and only shepherd-owned
 canonical status comments.
 If any current-state fetch fails, the handoff says the evidence is incomplete
@@ -212,9 +212,9 @@ requires separate approval.
 current `investigate` recommendations whose issue, target, or source evidence
 has not already been investigated. Additional requests remain visible under
 `deferredRequests` and become eligible after earlier requests are recorded.
-Each request has a deterministic
-`investigationId`, the issue URL, evidence IDs, missing evidence, stop
-condition, and an exact `workerPrompt`.
+Each request has a deterministic `investigationId`, the issue URL, evidence
+IDs, exact allowed evidence URLs, missing evidence, stop condition, attempt
+limit, and an exact `workerPrompt`.
 
 Create each new request in a fresh read-only agent, then record its `started`
 session before sending the exact worker prompt:
@@ -229,9 +229,11 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
   --session-id "<worker-session-id>"
 ```
 
-The worker must use the issue-investigation workflow, must not edit code or
-write to GitHub, and must return the required JSON result. Validate and record
-it with:
+The worker must not invoke the issue-investigation workflow, search GitHub,
+follow links, or otherwise expand evidence. It may read only the IDs and exact
+URLs in the request. Insufficient assigned evidence must produce
+`needs-evidence`, not a live search. The worker must not edit code or write to
+GitHub, and must return the required JSON result. Validate and record it with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
@@ -246,10 +248,13 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
 Result recording requires the exact active session, writes the completed result,
 and terminally completes the session. Replaying the same result returns the
 persisted result without another terminal event. If the worker exits without a
-valid result, record `--status failed --failure-reason "<specific reason>"` with
-`investigation_session.py`; the same request can then be proposed again. A later
-cycle's plan can complete or fail an active investigation because its complete
-request is persisted in the started-session event.
+valid result, record `--status failed --failure-reason "<specific reason>"`
+with `investigation_session.py`. Use `--failure-category worker-error`,
+`invalid-result`, or `out-of-scope-evidence` so the rejection is durable. The
+same request can be proposed for one replacement attempt; after two started
+attempts it is deferred as `investigation-attempt-limit`. A later cycle's plan
+can complete or fail an active investigation because its complete request is
+persisted in the started-session event.
 
 The next cycle attaches every target-specific result whose source-evidence
 fingerprint still matches. An unchanged issue reuses the completed results and
@@ -478,10 +483,12 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
 the sole exception: it requires `--production-comment-pilot` at both grant
 creation and execution, and the generated grant records
 `productionCommentPilot: true`. Such a grant must name exactly one
-`create-comment` or `edit-comment` action, have no dependency or suppression
-override, and expire within 15 minutes. The final actor boundary allows only
-the corresponding comment POST or PATCH; issue closure remains denied there
-even if an invalid caller bypasses authorization validation.
+`edit-comment` action against an existing shepherd-owned comment, have no
+dependency or suppression override, and come from a round-one expanded snapshot
+collected less than 15 minutes earlier. The grant expires no later than 15
+minutes after that collection. The final actor boundary allows only the
+corresponding comment PATCH; issue closure remains denied there even if an
+invalid caller bypasses authorization validation.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
@@ -585,8 +592,8 @@ history matching. The compact handoff is generated by `compact.py` from
 under `$STATE/ledgers`, so recurrence survives scratch cleanup.
 `case-events.jsonl` records bootstrap and material disposition transitions.
 `review-events.jsonl` records only cases actually handed to the assessment
-agent. Its latest timestamp per target drives the seven-day reassessment
-backstop; automatic unchanged cycles do not postpone that review.
+agent. Its latest timestamp per target prevents already-consumed typed wakeups
+from firing again; no blanket age-based reassessment is scheduled.
 `investigation-results.jsonl` records validated read-only conclusions keyed by
 the issue, target, and source-evidence fingerprint.
 `quarantine-sessions.jsonl` records the one-at-a-time local quarantine
@@ -600,10 +607,10 @@ The `round-1` artifacts are one bounded evidence-planning and expansion pass:
 the request document, immutable expanded snapshot, regenerated prepared input,
 fresh compact verifier input, and fresh verifier judgments.
 `review-selection.json` sends every first-seen issue, every materially changed
-issue, and every issue whose seven-day reassessment is due to the model.
+issue, and every issue whose explicit typed wakeup is due to the model.
 `agent-input.json` is filtered to that same set. Stable reviewed cases are
-omitted from both until they change or become due, while their last validated
-agent overrides remain effective.
+omitted from both until they change or a wakeup becomes due, while their last
+validated agent overrides remain effective.
 `agent-judgments.json` is the only issue assessment-agent output. `finalize.py`
 accepts sparse agent changes only for selected cases, carries forward validated
 overrides for unchanged omitted cases, and restores safe deterministic defaults
@@ -722,6 +729,16 @@ python3 "$CI_SHEPHERD_ROOT/scripts/replay_scenario.py" \
 The POC uses one expansion round and at most 25 requests. The purpose is to
 verify recurrence, recovery, duplication, and current workflow state well
 enough to choose a queue. It is not a failure-diagnosis loop.
+
+The supported `cycle.py` path plans exact workflow-run requests from partial
+evidence that blocks provisional action proposals. `finish` runs those requests
+through `expand.py`, preserves the pre-expansion input, proposals, issue
+selection, and pull request handoff, then regenerates the assessment artifacts
+with an `:r1` snapshot ID. Only issues whose exact evidence was expanded return
+to agent review; completed pull request judgments are retained, and both review
+rounds are recorded only after the cycle completes. A fresh assessment must
+finish the regenerated input. The same cycle never starts a second expansion
+round; unresolved or deferred evidence remains blocking.
 
 Use this artifact flow:
 
@@ -880,15 +897,15 @@ disposition counts, in the completion response. The coordinator owns finalized
 `judgments.json`.
 
 The deterministic selector includes every first-seen issue, every direct or
-derived material change, and every seven-day scheduled reassessment. Selected
+derived material change, and every due typed wakeup. Selected
 cases carry structured `changeReasons`, their previous category and disposition
 when known, and prior review timing when available. This lets the agent judge
 the delta instead of reconstructing history from prose. It omits unchanged
-reviewed cases before their deadline, even when their deterministic default
-still says review is required. This is the cheap baseline-refresh boundary:
-GitHub evidence is refreshed deterministically for the full inventory, while
-model reasoning is reserved for initial analysis, observed change, and a
-periodic stale-understanding backstop.
+reviewed cases without a due wakeup, even when their deterministic default still
+says review is required. This is the cheap baseline-refresh boundary: GitHub
+evidence is refreshed deterministically for the full inventory, while model
+reasoning is reserved for initial analysis, observed change, and explicit
+domain-specific wake conditions.
 
 State created before `review-events.jsonl` existed receives one bootstrap
 assessment for each current nonsuperseded case. That migration establishes the

@@ -51,6 +51,14 @@ _FENCED_CODE_BLOCK_RE = re.compile(
 _INLINE_CODE_RE = re.compile(
     r"(?P<delimiter>`+)(?!`)[^\r\n]*?(?P=delimiter)(?!`)"
 )
+_EXAMPLE_LINE_RE = re.compile(
+    r"(?im)^[ \t]*(?:[-*]\s*)?examples?\s*:.*$"
+)
+_EXAMPLE_SECTION_RE = re.compile(
+    r"(?ims)^#{1,6}[ \t]+examples?[ \t]*\r?$.*?(?=^#{1,6}[ \t]+|\Z)"
+)
+_HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+_BLOCKQUOTE_LINE_RE = re.compile(r"(?m)^[ \t]*>.*$")
 _TRIGGERING_PULL_RE = re.compile(
     rf"(?im)^pull request\s*:\s*#(?P<number>{_GITHUB_ID_PATTERN})\s*$"
 )
@@ -621,7 +629,16 @@ def _extract_references(
     references: list[dict[str, object]] = []
     resolution_spans = _resolution_spans(text)
 
-    for match in _FULL_ISSUE_OR_PULL_RE.finditer(text):
+    untrusted_context_spans: list[tuple[int, int]] = []
+    untrusted_context_spans.extend(match.span() for match in _FENCED_CODE_BLOCK_RE.finditer(text))
+    untrusted_context_spans.extend(match.span() for match in _INLINE_CODE_RE.finditer(text))
+    untrusted_context_spans.extend(match.span() for match in _EXAMPLE_LINE_RE.finditer(text))
+    untrusted_context_spans.extend(match.span() for match in _EXAMPLE_SECTION_RE.finditer(text))
+    untrusted_context_spans.extend(match.span() for match in _HTML_COMMENT_RE.finditer(text))
+    untrusted_context_spans.extend(match.span() for match in _BLOCKQUOTE_LINE_RE.finditer(text))
+    reference_text = _mask_spans(text, untrusted_context_spans)
+
+    for match in _FULL_ISSUE_OR_PULL_RE.finditer(reference_text):
         number = _parse_github_id(match.group("number"))
         if number is None:
             continue
@@ -638,11 +655,11 @@ def _extract_references(
                     match.group(0),
                     "full-issue-url" if kind == "issues" else "full-pull-url",
                 ),
-                **_decision_metadata(text, match.start(), resolution_spans),
+                **_decision_metadata(reference_text, match.start(), resolution_spans),
             }
         )
 
-    for match in _RUN_RE.finditer(text):
+    for match in _RUN_RE.finditer(reference_text):
         run_id = _parse_github_id(match.group("run_id"))
         if run_id is None:
             continue
@@ -654,11 +671,11 @@ def _extract_references(
                 "runId": run_id,
                 "targetUrl": match.group(0),
                 "extractionMethod": "actions-run-url",
-                **_decision_metadata(text, match.start(), resolution_spans),
+                **_decision_metadata(reference_text, match.start(), resolution_spans),
             }
         )
 
-    for match in _COMMIT_URL_RE.finditer(text):
+    for match in _COMMIT_URL_RE.finditer(reference_text):
         sha = match.group("sha").lower()
         references.append(
             {
@@ -668,14 +685,13 @@ def _extract_references(
                 "sha": sha,
                 "targetUrl": match.group(0),
                 "extractionMethod": "commit-url",
-                **_decision_metadata(text, match.start(), resolution_spans),
+                **_decision_metadata(reference_text, match.start(), resolution_spans),
             }
         )
     masked_spans: list[tuple[int, int]] = list(occurrence_spans)
     masked_spans.extend(_markdown_link_spans(text))
-    masked_spans.extend(match.span() for match in _URL_RE.finditer(text))
-    masked_spans.extend(match.span() for match in _FENCED_CODE_BLOCK_RE.finditer(text))
-    masked_spans.extend(match.span() for match in _INLINE_CODE_RE.finditer(text))
+    masked_spans.extend(match.span() for match in _URL_RE.finditer(reference_text))
+    masked_spans.extend(untrusted_context_spans)
 
     for match in _TRIGGERING_PULL_RE.finditer(text):
         number = _parse_github_id(match.group("number"))

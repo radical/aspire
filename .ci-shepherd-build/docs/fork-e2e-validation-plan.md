@@ -201,7 +201,7 @@ passes.
 | C11 | Shared executable-label policy | none | Proposer and executor use one constant and one normalizer | A mixed-case executable label is accepted and canonicalized in both paths | none | Label-set or case-handling drift between proposal and execution | L |
 | C12 | Token downgraded to read-only mid-run | Swap credentials | Execute fails cleanly | Failure is a clean refusal with a terminal failure event, not a partial write or a hang | Restore token | Permission change during execution | E |
 | C13 | Grant issued for snapshot S1, proposals from snapshot S2 | none | Reject | Non-zero exit, no mutation | none | Cross-snapshot grant replay (T8) | L |
-| C14 | Exact `microsoft/aspire` comment proposal | Request the production pilot | Grant creation and execution each require their own flag; the grant records the capability | Any multiple-action, closure, dependency, suppression override, lifetime above 15 minutes, flag mismatch, or broadened grant is rejected; the actor independently rejects non-comment endpoints | none | A nominal pilot switch lifting unrelated production guards (T1, T2) | L |
+| C14 | Exact `microsoft/aspire` edit proposal from a round-one expanded snapshot collected less than 15 minutes earlier | Request the production pilot | Grant creation and execution each require their own flag; the grant records the capability and expires no later than 15 minutes after collection | Any create, multiple-action, closure, dependency, suppression override, stale or unexpanded snapshot, flag mismatch, or broadened grant is rejected; the actor independently rejects non-comment endpoints | none | A nominal pilot switch lifting unrelated production guards (T1, T2) | L |
 
 ### 4.4 Suite D — Evidence freshness and transitions (P1)
 
@@ -215,7 +215,7 @@ passes.
 | D6 | Open-bot scan budget reduced below inventory size | Shrink budget | Warning plus `open_bot_scan: truncated` in the report | `report.md` never reads as a clean inventory | Restore budget | Truncated inventory read as complete (T11) | L |
 | D7 | Open-bot scan page returns 500 | Inject failure | `failed` plus a `CollectionError` with stage `open-bot-scan` | Error recorded, cycle degrades rather than aborts | none | Failed scan degrading silently | L |
 | D8 | Fixture issue with a stable fingerprint | Push a new failing workflow run citing the same test | Fingerprint changes and the issue is re-selected | `cycle.json` reports a non-zero issue review count | Delete run | Material change not triggering reassessment | E |
-| D9 | Issue reviewed and stable | Advance the clock past the seven-day reassessment deadline | The issue is re-selected without any evidence change | It appears in `review-selection.json` | none | Reassessment backstop not firing | L |
+| D9 | Issue reviewed and stable | Record a typed wakeup and advance the clock past its `evaluateAt` timestamp | The issue is re-selected without any evidence change | It appears in `review-selection.json` with the wakeup reason | none | Explicit wakeup not firing | L |
 
 ### 4.5 Suite E — Duplicate clusters (P1)
 

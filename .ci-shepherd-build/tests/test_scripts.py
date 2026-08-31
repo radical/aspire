@@ -747,7 +747,7 @@ class PrototypeScriptTests(unittest.TestCase):
             "load each input file only once.",
             "Write only `agent-judgments.json`.",
             "A `watch` recommendation must name its `watchReason` and the exact evidence event that ends the watch.",
-            "every first-seen issue, every direct or derived material change, and every seven-day scheduled reassessment.",
+            "every first-seen issue, every direct or derived material change, and every due typed wakeup.",
             "`review-events.jsonl` records only cases actually handed to the assessment agent.",
             "Aggregate `clusterOccurrenceSummary` only when the listed relationship and failure symptoms are compatible.",
             "A generic exit code with unavailable logs is an investigation, not a watch.",
@@ -1657,6 +1657,7 @@ class PrototypeScriptTests(unittest.TestCase):
             client_factory.assert_called_once_with(
                 allowed_repositories={"microsoft/aspire"},
                 protected_comment_repositories={"microsoft/aspire"},
+                audit_path=state_path / "api-calls.jsonl",
             )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
@@ -3087,6 +3088,64 @@ class PrototypeScriptTests(unittest.TestCase):
         self.assertIn(quarantine_summary, markdown_section(markdown, "Quarantine review"))
         self.assertNotIn(quarantine_summary, markdown_section(markdown, "Watch"))
         self.assertNotIn(quarantine_summary, markdown_section(markdown, "No action"))
+
+    def test_render_poc_summarizes_carried_cases_outside_the_current_cycle(self) -> None:
+        render_script = load_script("render")
+        prepared = poc_prepared([(1, "Stable failure"), (2, "Changed failure")])
+        judgments = poc_judgments(
+            prepared,
+            [
+                (1, "unknown", "watch", "issue", 1, "low", [], "After new evidence."),
+                (2, "flaky-test", "investigate", "issue", 2, "low", [], "After investigation."),
+            ],
+        )
+
+        markdown = render_script.render_poc_markdown(
+            prepared,
+            judgments,
+            prepared_path=Path("assessment-input.json"),
+            snapshot={},
+            visible_issue_numbers={2},
+        )
+
+        self.assertIn("**Recommendations this cycle:** 1", markdown)
+        self.assertIn("**Carried forward unchanged cases:** 1", markdown)
+        self.assertIn("[#2]", markdown)
+        self.assertNotIn("[#1]", markdown)
+
+    def test_render_poc_reports_carried_queue_without_repeating_issue_detail(self) -> None:
+        render_script = load_script("render")
+        prepared = poc_prepared([(1, "Stable retry candidate")])
+        judgments = poc_judgments(
+            prepared,
+            [
+                (
+                    1,
+                    "transient-infrastructure",
+                    "review-retry",
+                    "workflow-run",
+                    "123",
+                    "medium",
+                    [],
+                    "After retry review.",
+                )
+            ],
+        )
+
+        markdown = render_script.render_poc_markdown(
+            prepared,
+            judgments,
+            prepared_path=Path("assessment-input.json"),
+            snapshot={},
+            visible_issue_numbers=set(),
+        )
+
+        retry_review = markdown_section(markdown, "Retry review")
+        self.assertIn(
+            "No recommendations this cycle; 1 unchanged issue carried forward in this queue.",
+            retry_review,
+        )
+        self.assertNotIn("Stable retry candidate", markdown)
 
     def test_render_poc_category_counts_count_issue_once_with_multiple_recommendations(self) -> None:
         render_script = load_script("render")

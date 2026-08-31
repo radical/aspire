@@ -8,10 +8,12 @@ import unittest
 from unittest.mock import patch
 
 import cycle as cycle_script
+from ci_shepherd.history import HistoryError
 from ci_shepherd.investigations import (
     record_investigation_result,
     record_investigation_session_event,
 )
+from ci_shepherd.poc_state import record_review_wakeup
 from ci_shepherd.repository_policy import load_repository_policy
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -190,6 +192,37 @@ def add_class_a_retry_evidence(
     )
 
 
+def add_source_path_evidence(
+    value: dict[str, object],
+    revision: str,
+) -> None:
+    evidence = value["evidence"]
+    assert isinstance(evidence, dict)
+    path = "src/Product/Parser.cs"
+    source_url = f"https://github.com/owner/repo/blob/{revision}/{path}"
+    evidence[f"source:{path}"] = {
+        "kind": "source-path",
+        "url": source_url,
+        "collectedAt": value["collectedAt"],
+        "availability": "available",
+        "payload": {
+            "checkoutCommit": revision,
+            "path": path,
+            "recentCommits": [],
+            "referencedBy": [
+                {
+                    "extractionMethod": "local-issue",
+                    "sourceEvidenceId": "issue:1",
+                    "sourceIssueNumber": 1,
+                    "sourceUrl": "https://github.com/owner/repo/issues/1",
+                }
+            ],
+            "sourceUrl": source_url,
+            "targetRepository": "owner/repo",
+        },
+    }
+
+
 def pull_request_snapshot(collected_at: str) -> dict[str, object]:
     current_state = {
         "headSha": "abc",
@@ -254,6 +287,242 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_blocking_evidence_expands_once_and_requires_fresh_review(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            input_path = root / "source.json"
+            source_snapshot = snapshot("2026-08-31T12:00:00Z")
+            pull_requests = pull_request_snapshot("2026-08-31T12:00:00Z")
+            source_snapshot["openPullRequests"] = pull_requests["openPullRequests"]
+            source_snapshot["pullRequests"] = pull_requests["pullRequests"]
+            source_evidence = source_snapshot["evidence"]
+            pull_request_evidence = pull_requests["evidence"]
+            assert isinstance(source_evidence, dict)
+            assert isinstance(pull_request_evidence, dict)
+            source_evidence.update(pull_request_evidence)
+            input_path.write_text(json.dumps(source_snapshot), encoding="utf-8")
+            work = root / "work"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            request_document = {
+                "schemaVersion": 1,
+                "repository": "owner/repo",
+                "round": 1,
+                "requests": [
+                    {
+                        "type": "workflow-run",
+                        "sourceIssueNumber": 1,
+                        "evidenceId": "run:123",
+                        "decisionGate": "current-failing-run",
+                        "reason": "Refresh the exact run.",
+                    }
+                ],
+            }
+            expansion_calls = 0
+
+            def fake_expand(
+                source_path: Path,
+                requests_path: Path,
+                output_path: Path,
+                errors_path: Path,
+                *,
+                checkout: Path | None,
+                audit_path: Path,
+            ) -> Path:
+                nonlocal expansion_calls
+                expansion_calls += 1
+                self.assertIsNone(checkout)
+                self.assertEqual(
+                    request_document,
+                    json.loads(requests_path.read_text(encoding="utf-8")),
+                )
+                expanded = json.loads(source_path.read_text(encoding="utf-8"))
+                expanded["expansions"] = [
+                    {
+                        "round": 1,
+                        "requests": request_document["requests"],
+                        "status": "complete",
+                        "errors": [],
+                    }
+                ]
+                output_path.write_text(json.dumps(expanded), encoding="utf-8")
+                errors_path.write_text("[]\n", encoding="utf-8")
+                audit_path.touch()
+                return output_path
+
+            with (
+                patch.object(
+                    cycle_script,
+                    "build_proposal_evidence_requests",
+                    return_value=(request_document, []),
+                ),
+                patch.object(cycle_script, "expand_files", side_effect=fake_expand),
+            ):
+                restarted = cycle_script.finish_cycle(
+                    work_dir=work,
+                    agent_judgments_path=work / "agent-judgments.json",
+                )
+                self.assertEqual("awaiting-review", restarted["stage"])
+                self.assertEqual(1, restarted["evidenceExpansionRound"])
+                self.assertEqual(
+                    "snapshot:owner/repo:2026-08-31T12:00:00Z:r1",
+                    restarted["snapshotId"],
+                )
+                self.assertTrue((work / "input.pre-expansion.json").is_file())
+                self.assertTrue(
+                    (work / "action-proposals.pre-expansion.json").is_file()
+                )
+                self.assertEqual(0, restarted["pullRequestReviewCount"])
+                restarted_pull_requests = json.loads(
+                    (work / "pull-request-review.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual([], restarted_pull_requests["tasks"])
+                self.assertEqual(
+                    [23],
+                    [
+                        entry["number"]
+                        for entry in restarted_pull_requests["excluded"]
+                        if "retainedJudgment" in entry
+                    ],
+                )
+                reset_judgments = json.loads(
+                    (work / "agent-judgments.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(restarted["snapshotId"], reset_judgments["snapshotId"])
+
+                completed = cycle_script.finish_cycle(
+                    work_dir=work,
+                    agent_judgments_path=work / "agent-judgments.json",
+                )
+
+            self.assertEqual("completed", completed["stage"])
+            self.assertEqual(1, expansion_calls)
+            self.assertTrue(
+                (Path(completed["runDirectory"]) / "evidence-requests.json").is_file()
+            )
+            self.assertTrue(
+                (
+                    Path(completed["runDirectory"])
+                    / "action-proposals.pre-expansion.json"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    Path(completed["runDirectory"])
+                    / "review-selection.pre-expansion.json"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    Path(completed["runDirectory"])
+                    / "pull-request-review.pre-expansion.json"
+                ).is_file()
+            )
+            pull_request_judgments = json.loads(
+                (work / "pull-request-judgments.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [23],
+                [
+                    judgment["pullRequestNumber"]
+                    for judgment in pull_request_judgments["pullRequests"]
+                ],
+            )
+            review_events = [
+                json.loads(line)
+                for line in (
+                    state / "ledgers" / "review-events.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                [("issue", 1), ("pull-request", 23)],
+                [
+                    (event["targetKind"], event["targetNumber"])
+                    for event in review_events
+                ],
+            )
+            successor_input = root / "successor-input.json"
+            successor_snapshot = json.loads(
+                (work / "input.json").read_text(encoding="utf-8")
+            )
+            successor_snapshot["collectedAt"] = "2026-08-31T13:00:00Z"
+            for evidence_record in successor_snapshot["evidence"].values():
+                evidence_record["collectedAt"] = "2026-08-31T13:00:00Z"
+            successor_input.write_text(
+                json.dumps(successor_snapshot),
+                encoding="utf-8",
+            )
+            successor = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=root / "successor-work",
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=successor_input,
+            )
+            self.assertEqual("completed", successor["stage"])
+            self.assertEqual(0, successor["issueReviewCount"])
+            self.assertEqual(0, successor["pullRequestReviewCount"])
+
+    def test_cycle_refuses_to_publish_when_history_advanced_after_start(self) -> None:
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            state.mkdir()
+            state = state.resolve()
+            state.chmod(0o700)
+            first_input = root / "input-1.json"
+            second_input = root / "input-2.json"
+            first_input.write_text(
+                json.dumps(snapshot("2026-08-28T10:00:00Z")),
+                encoding="utf-8",
+            )
+            second_input.write_text(
+                json.dumps(snapshot("2026-08-28T11:00:00Z")),
+                encoding="utf-8",
+            )
+            first_work = root / "work-1"
+            second_work = root / "work-2"
+
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+
+            with self.assertRaisesRegex(
+                HistoryError,
+                "History advanced after this cycle started",
+            ):
+                cycle_script.finish_cycle(
+                    work_dir=second_work,
+                    agent_judgments_path=second_work / "agent-judgments.json",
+                )
+
     def test_next_cycle_receives_completed_investigation_result(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
@@ -411,7 +680,7 @@ class CycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             work = root / "work"
-            cycle_script.start_cycle(
+            started = cycle_script.start_cycle(
                 repository="owner/repo",
                 state_dir=state,
                 work_dir=work,
@@ -419,65 +688,19 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=input_path,
             )
-            agent_judgments = {
-                "schemaVersion": 1,
-                "snapshotId": "snapshot:owner/repo:2026-08-28T20:00:00Z",
-                "issues": [
-                    {
-                        "issueNumber": 1,
-                        "category": "flaky-test",
-                        "recommendations": [
-                            {
-                                "disposition": "review-quarantine",
-                                "target": {
-                                    "kind": "test",
-                                    "value": "Namespace.Type.FlakyTest",
-                                },
-                                "confidence": "high",
-                                "summary": "The test failed in independent runs.",
-                                "evidenceIds": ["issue:1"],
-                                "missingEvidence": [],
-                                "reassessWhen": "After the quarantine PR merges.",
-                            }
-                        ],
-                    }
-                ],
-            }
-            agent_path = work / "agent-judgments.json"
-            agent_path.write_text(json.dumps(agent_judgments), encoding="utf-8")
-
-            completed = cycle_script.finish_cycle(
-                work_dir=work,
-                agent_judgments_path=agent_path,
+            agent_input = json.loads(
+                (work / "agent-input.json").read_text(encoding="utf-8")
+            )
+            selection = json.loads(
+                (work / "review-selection.json").read_text(encoding="utf-8")
             )
 
-            plan = json.loads(
-                (work / "quarantine-session.json").read_text(encoding="utf-8")
-            )
-            self.assertIsNone(plan["proposal"])
+            self.assertEqual("completed", started["stage"])
+            self.assertEqual([], agent_input["issues"])
+            self.assertEqual([], selection["selected"])
             self.assertEqual(
-                "blocked-targets",
-                plan["suppressionReason"],
-            )
-            self.assertEqual(
-                [
-                    {
-                        "testName": "Namespace.Type.FlakyTest",
-                        "reason": "already-quarantined-by-label",
-                    }
-                ],
-                plan["blockedTargets"],
-            )
-            self.assertEqual(0, completed["proposalCount"])
-            report = (work / "report.md").read_text(encoding="utf-8")
-            self.assertIn("## Quarantine session", report)
-            self.assertIn("No new session was proposed", report)
-            self.assertIn("`Namespace.Type.FlakyTest`", report)
-            self.assertIn("already-quarantined-by-label", report)
-            self.assertTrue(
-                (
-                    Path(completed["runDirectory"]) / "quarantine-session.json"
-                ).is_file()
+                [{"issueNumber": 1, "reason": "not-review-required"}],
+                selection["omitted"],
             )
 
     def test_fails_closed_when_quarantine_source_inspection_is_unavailable(self) -> None:
@@ -837,7 +1060,7 @@ class CycleTests(unittest.TestCase):
                 selection["selected"][0]["reviewReasons"],
             )
 
-    def test_reselects_an_unchanged_case_when_its_review_becomes_due(self) -> None:
+    def test_reselects_an_unchanged_case_when_its_typed_wakeup_becomes_due(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
         with TemporaryDirectory(dir=artifacts) as scratch:
@@ -863,6 +1086,14 @@ class CycleTests(unittest.TestCase):
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
             self.assertEqual("awaiting-review", started["stage"])
+            record_review_wakeup(
+                state,
+                "owner/repo",
+                target_kind="issue",
+                target_number=1,
+                evaluate_at="2026-08-27T12:00:00Z",
+                reason="closure-without-recurrence",
+            )
 
             due_input = root / "input-2.json"
             due_input.write_text(
@@ -980,6 +1211,12 @@ class CycleTests(unittest.TestCase):
             self.assertEqual("completed", unchanged["stage"])
             self.assertEqual(0, unchanged["issueReviewCount"])
             self.assertEqual(2, len(list((state / "runs").iterdir())))
+            unchanged_report = (second_work / "report.md").read_text(encoding="utf-8")
+            self.assertNotIn("Unclassified CI failure", unchanged_report)
+            self.assertIn(
+                "**Carried forward unchanged cases:** 1",
+                unchanged_report,
+            )
 
             changed_work = root / "work-3"
             changed_input = root / "input-3.json"
@@ -1014,6 +1251,48 @@ class CycleTests(unittest.TestCase):
                 "investigate",
                 changed_selection["selected"][0]["previousDisposition"],
             )
+
+    def test_checkout_revision_alone_does_not_reselect_unchanged_issue(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_snapshot = snapshot("2026-08-27T12:00:00Z")
+            add_source_path_evidence(first_snapshot, "a" * 40)
+            first_input = root / "input-1.json"
+            first_input.write_text(json.dumps(first_snapshot), encoding="utf-8")
+            first_work = root / "work-1"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+
+            second_snapshot = snapshot("2026-08-28T12:00:00Z")
+            add_source_path_evidence(second_snapshot, "b" * 40)
+            second_input = root / "input-2.json"
+            second_input.write_text(json.dumps(second_snapshot), encoding="utf-8")
+            second_work = root / "work-2"
+
+            result = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            self.assertEqual("completed", result["stage"])
+            self.assertEqual(0, result["issueReviewCount"])
 
     def test_unchanged_cycle_carries_forward_issue_agent_override(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"

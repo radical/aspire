@@ -43,6 +43,10 @@ def main() -> int:
     parser.add_argument("--recorded-at", required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--failure-reason")
+    parser.add_argument(
+        "--failure-category",
+        choices=("worker-error", "invalid-result", "out-of-scope-evidence"),
+    )
     args = parser.parse_args()
 
     old_umask = os.umask(0o077)
@@ -54,6 +58,7 @@ def main() -> int:
             recorded_at=args.recorded_at,
             session_id=args.session_id,
             failure_reason=args.failure_reason,
+            failure_category=args.failure_category,
         )
     finally:
         os.umask(old_umask)

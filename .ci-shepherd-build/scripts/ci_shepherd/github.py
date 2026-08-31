@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .jsonl import append_jsonl_rows, exclusive_jsonl_lock
+
 
 _HTTP_STATUS_RE = re.compile(r"(?m)^HTTP/\S+\s+(?P<status>\d{3})(?:\s+.*)?$")
+_NEXT_LINK_RE = re.compile(r'<(?P<url>[^>]+)>\s*;\s*rel="next"')
 _TOKEN_PATTERNS = (
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]+\b"),
@@ -73,9 +76,12 @@ class GitHubClient:
         audit_path: Path | str | None = None,
         request_timeout_seconds: float = 60,
         request_observer: Callable[[str], None] | None = None,
+        max_pages: int = 100,
     ) -> None:
         if request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive.")
+        if max_pages <= 0:
+            raise ValueError("max_pages must be positive.")
         self._runner = runner
         self._popen_factory = popen_factory
         self._sleep = sleep
@@ -85,11 +91,16 @@ class GitHubClient:
         self._audit_path = Path(audit_path) if audit_path is not None else None
         self._request_timeout_seconds = request_timeout_seconds
         self._request_observer = request_observer
+        self._max_pages = max_pages
 
     def get(self, endpoint: str) -> Any:
+        payload, _ = self._get_json_response(endpoint)
+        return payload
+
+    def _get_json_response(self, endpoint: str) -> tuple[Any, _ParsedResponse]:
         parsed, attempts, stderr = self._request(endpoint)
         try:
-            return json.loads(parsed.body)
+            return json.loads(parsed.body), parsed
         except json.JSONDecodeError as exc:
             raise GitHubApiError(
                 category="malformed-json",
@@ -104,15 +115,30 @@ class GitHubClient:
     def get_pages(self, endpoint: str, key: str | None = None) -> list[Any]:
         items: list[Any] = []
         page_number = 1
+        paged_endpoint = self._with_paging(endpoint, page_number)
 
-        while True:
-            paged_endpoint = self._with_paging(endpoint, page_number)
-            payload = self.get(paged_endpoint)
+        for _ in range(self._max_pages):
+            payload, response = self._get_json_response(paged_endpoint)
             page_items = self._extract_page_items(paged_endpoint, payload, key)
             items.extend(page_items)
+            next_endpoint = self._next_link_endpoint(response.headers)
+            if next_endpoint is not None:
+                paged_endpoint = next_endpoint
+                continue
             if len(page_items) < 100:
                 return items
             page_number += 1
+            paged_endpoint = self._with_paging(endpoint, page_number)
+
+        raise GitHubApiError(
+            category="pagination-limit",
+            endpoint=paged_endpoint,
+            status=0,
+            headers={},
+            retryable=False,
+            attempts=1,
+            sanitized_stderr="",
+        )
 
     def get_text(self, endpoint: str, max_bytes: int = 200000) -> GitHubTextResponse:
         for attempt in range(1, self._max_attempts + 1):
@@ -351,6 +377,25 @@ class GitHubClient:
         query_items.append(("page", str(page_number)))
         return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query_items), split.fragment))
 
+    def _next_link_endpoint(self, headers: dict[str, str]) -> str | None:
+        match = _NEXT_LINK_RE.search(headers.get("link", ""))
+        if match is None:
+            return None
+
+        split = urlsplit(match.group("url"))
+        if split.scheme != "https" or split.netloc != "api.github.com":
+            raise GitHubApiError(
+                category="invalid-pagination-link",
+                endpoint=match.group("url"),
+                status=0,
+                headers=headers,
+                retryable=False,
+                attempts=1,
+                sanitized_stderr="",
+            )
+
+        return urlunsplit(("", "", split.path, split.query, split.fragment))
+
     def _extract_page_items(self, endpoint: str, payload: Any, key: str | None) -> list[Any]:
         if isinstance(payload, list):
             return payload
@@ -467,11 +512,8 @@ class GitHubClient:
             "status": status,
             "attemptedAt": _iso_now(self._now()),
         }
-        data = json.dumps(record, sort_keys=True) + "\n"
-        fd = os.open(self._audit_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(data)
+        with exclusive_jsonl_lock(self._audit_path):
+            append_jsonl_rows(self._audit_path, [record])
 
 
 def _parse_response(raw_output: str) -> _ParsedResponse:

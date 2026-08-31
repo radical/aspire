@@ -13,9 +13,17 @@ from .poc_history import (
     compute_fingerprint,
     read_ledger_rows,
 )
+from .jsonl import append_jsonl_rows, exclusive_jsonl_lock
 
 CaseKey = tuple[str, int, str, str]
-DEFAULT_REASSESSMENT_INTERVAL = timedelta(days=7)
+REVIEW_WAKEUP_REASONS = frozenset(
+    {
+        "closure-without-recurrence",
+        "escalation-reminder",
+        "pending-pr-timeout",
+        "retry-backoff",
+    }
+)
 
 
 def case_key(
@@ -99,48 +107,89 @@ def record_review_events(
         if isinstance(number, int) and not isinstance(number, bool) and number > 0
     ]
     path = state_directory / "ledgers" / "review-events.jsonl"
-    existing = read_ledger_rows(path)
-    seen = {
-        (
-            str(row.get("repository", "")).casefold(),
-            row.get("targetKind"),
-            row.get("targetNumber"),
-            row.get("reviewedAt"),
-        )
-        for row in existing
-    }
-    appended = [
-        row
-        for row in rows
-        if (
-            repository.casefold(),
-            row["targetKind"],
-            row["targetNumber"],
-            row["reviewedAt"],
-        )
-        not in seen
-    ]
-    if appended:
+    if state_directory.is_symlink():
+        raise ValueError("Review state directory must not be a symlink.")
+    with exclusive_jsonl_lock(path):
+        existing = read_ledger_rows(path)
+        seen = {
+            (
+                str(row.get("repository", "")).casefold(),
+                row.get("targetKind"),
+                row.get("targetNumber"),
+                row.get("reviewedAt"),
+            )
+            for row in existing
+        }
+        appended = [
+            row
+            for row in rows
+            if (
+                repository.casefold(),
+                row["targetKind"],
+                row["targetNumber"],
+                row["reviewedAt"],
+            )
+            not in seen
+        ]
         if state_directory.is_symlink():
             raise ValueError("Review state directory must not be a symlink.")
-        state_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(state_directory, 0o700)
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(path.parent, 0o700)
-        needs_separator = False
-        if path.exists() and path.stat().st_size > 0:
-            with path.open("rb") as existing_stream:
-                existing_stream.seek(-1, os.SEEK_END)
-                needs_separator = existing_stream.read(1) != b"\n"
-        with path.open("a", encoding="utf-8") as stream:
-            if needs_separator:
-                stream.write("\n")
-            for row in appended:
-                stream.write(json.dumps(row, sort_keys=True) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(path, 0o600)
-    return appended
+        append_jsonl_rows(path, appended)
+        return appended
+
+
+def record_review_wakeup(
+    state_directory: Path,
+    repository: str,
+    *,
+    target_kind: str,
+    target_number: int,
+    evaluate_at: str,
+    reason: str,
+) -> dict[str, Any]:
+    if not isinstance(repository, str) or not repository.strip():
+        raise ValueError("Wakeup repository must be a nonempty string.")
+    if target_kind not in {"issue", "pull-request"}:
+        raise ValueError("Wakeup target kind must be issue or pull-request.")
+    if (
+        not isinstance(target_number, int)
+        or isinstance(target_number, bool)
+        or target_number < 1
+    ):
+        raise ValueError("Wakeup target number must be a positive integer.")
+    if reason not in REVIEW_WAKEUP_REASONS:
+        raise ValueError(f"Unsupported review wakeup reason: {reason}.")
+    evaluate_instant = _parse_timestamp(evaluate_at, "evaluateAt")
+    row = {
+        "schemaVersion": 1,
+        "repository": repository,
+        "targetKind": target_kind,
+        "targetNumber": target_number,
+        "evaluateAt": _format_timestamp(evaluate_instant),
+        "reason": reason,
+    }
+    path = state_directory / "ledgers" / "review-wakeups.jsonl"
+    identity = (
+        repository.casefold(),
+        target_kind,
+        target_number,
+        row["evaluateAt"],
+        reason,
+    )
+    with exclusive_jsonl_lock(path):
+        if any(
+            (
+                str(existing.get("repository", "")).casefold(),
+                existing.get("targetKind"),
+                existing.get("targetNumber"),
+                existing.get("evaluateAt"),
+                existing.get("reason"),
+            )
+            == identity
+            for existing in read_ledger_rows(path)
+        ):
+            return row
+        append_jsonl_rows(path, [row])
+    return row
 
 
 def load_review_schedule(
@@ -150,10 +199,7 @@ def load_review_schedule(
     *,
     issue_numbers: list[int],
     pull_request_numbers: list[int],
-    reassessment_interval: timedelta = DEFAULT_REASSESSMENT_INTERVAL,
 ) -> dict[str, Any]:
-    if reassessment_interval <= timedelta(0):
-        raise ValueError("Reassessment interval must be positive.")
     observed_instant = _parse_timestamp(observed_at, "observedAt")
     current_targets = {
         ("issue", number)
@@ -184,21 +230,50 @@ def load_review_schedule(
         "issues": {},
         "pullRequests": {},
     }
+    pending_wakeups: dict[tuple[str, int], tuple[datetime, str]] = {}
+    for row in read_ledger_rows(
+        state_directory / "ledgers" / "review-wakeups.jsonl"
+    ):
+        if str(row.get("repository", "")).casefold() != repository.casefold():
+            continue
+        key = (row.get("targetKind"), row.get("targetNumber"))
+        if key not in current_targets or row.get("reason") not in REVIEW_WAKEUP_REASONS:
+            continue
+        try:
+            evaluate_at = _parse_timestamp(row.get("evaluateAt"), "evaluateAt")
+        except ValueError:
+            continue
+        reviewed_at = latest.get(key)
+        if reviewed_at is not None and evaluate_at <= reviewed_at:
+            continue
+        candidate = (evaluate_at, str(row["reason"]))
+        if candidate < pending_wakeups.get(
+            key,
+            (datetime.max.replace(tzinfo=UTC), ""),
+        ):
+            pending_wakeups[key] = candidate
+
     due_issues: list[int] = []
     due_pull_requests: list[int] = []
-    for (target_kind, number), reviewed in sorted(latest.items()):
-        reassess_at = reviewed + reassessment_interval
-        context = {
-            "lastReviewedAt": _format_timestamp(reviewed),
-            "reassessAt": _format_timestamp(reassess_at),
-        }
+    for target_kind, number in sorted(current_targets):
+        reviewed = latest.get((target_kind, number))
+        wakeup = pending_wakeups.get((target_kind, number))
+        context = {}
+        if reviewed is not None:
+            context["lastReviewedAt"] = _format_timestamp(reviewed)
+        if wakeup is not None:
+            evaluate_at, reason = wakeup
+            context["reassessAt"] = _format_timestamp(evaluate_at)
+            context["wakeReason"] = reason
+        if not context:
+            continue
         if target_kind == "issue":
             contexts["issues"][str(number)] = context
-            if observed_instant >= reassess_at:
+            if wakeup is not None and observed_instant >= wakeup[0]:
                 due_issues.append(number)
         else:
             contexts["pullRequests"][str(number)] = context
-            if observed_instant >= reassess_at:
+            if wakeup is not None and observed_instant >= wakeup[0]:
                 due_pull_requests.append(number)
     return {
         "schemaVersion": 1,
@@ -340,49 +415,35 @@ def _append_case_events(
     path: Path,
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    existing = read_ledger_rows(path)
-    latest = {
-        _case_identity(row): row
-        for row in existing
-    }
-    bootstrap = not existing
-    appended: list[dict[str, Any]] = []
-    for row in rows:
-        identity = _case_identity(row)
-        previous = latest.get(identity)
-        if previous is not None and _case_state(previous) == _case_state(row):
-            continue
-        event = dict(row)
-        if bootstrap:
-            event["eventKind"] = "bootstrap"
-        elif previous is None:
-            event["eventKind"] = "created"
-        elif (
-            previous.get("sourceEvidenceFingerprint")
-            == row.get("sourceEvidenceFingerprint")
-        ):
-            event["eventKind"] = "convergence"
-            event["previousDisposition"] = previous.get("disposition")
-        else:
-            event["eventKind"] = "transition"
-            event["previousDisposition"] = previous.get("disposition")
-        appended.append(event)
-        latest[identity] = event
+    with exclusive_jsonl_lock(path):
+        existing = read_ledger_rows(path)
+        latest = {
+            _case_identity(row): row
+            for row in existing
+        }
+        bootstrap = not existing
+        appended: list[dict[str, Any]] = []
+        for row in rows:
+            identity = _case_identity(row)
+            previous = latest.get(identity)
+            if previous is not None and _case_state(previous) == _case_state(row):
+                continue
+            event = dict(row)
+            if bootstrap:
+                event["eventKind"] = "bootstrap"
+            elif previous is None:
+                event["eventKind"] = "created"
+            elif (
+                previous.get("sourceEvidenceFingerprint")
+                == row.get("sourceEvidenceFingerprint")
+            ):
+                event["eventKind"] = "convergence"
+                event["previousDisposition"] = previous.get("disposition")
+            else:
+                event["eventKind"] = "transition"
+                event["previousDisposition"] = previous.get("disposition")
+            appended.append(event)
+            latest[identity] = event
 
-    if appended:
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(path.parent, 0o700)
-        needs_separator = False
-        if path.exists() and path.stat().st_size > 0:
-            with path.open("rb") as existing_stream:
-                existing_stream.seek(-1, os.SEEK_END)
-                needs_separator = existing_stream.read(1) != b"\n"
-        with path.open("a", encoding="utf-8") as stream:
-            if needs_separator:
-                stream.write("\n")
-            for row in appended:
-                stream.write(json.dumps(row, sort_keys=True) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(path, 0o600)
-    return appended
+        append_jsonl_rows(path, appended)
+        return appended

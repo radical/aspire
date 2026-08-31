@@ -21,6 +21,10 @@ _OUTCOMES = frozenset(
     }
 )
 _SESSION_STATUSES = frozenset({"started", "completed", "failed"})
+_SESSION_FAILURE_CATEGORIES = frozenset(
+    {"worker-error", "invalid-result", "out-of-scope-evidence"}
+)
+_MAX_INVESTIGATION_ATTEMPTS = 2
 
 
 def _fingerprint(value: object) -> str:
@@ -48,14 +52,18 @@ def _source_evidence_fingerprint(issue: Mapping[str, Any]) -> str:
 
 
 def _worker_prompt(request: Mapping[str, Any]) -> str:
+    allowed_urls = request.get("allowedEvidenceUrls", [])
     return (
         f"Investigate {request['issueUrl']} for the CI shepherd.\n\n"
-        "Use the issue-investigation skill and any more specific CI/test skill it "
-        "routes to. This is a read-only, issue-focused investigation: do not edit "
-        "code, post comments, assign anyone, or open a pull request.\n\n"
+        "Do not invoke issue-investigation or discover additional evidence. Use "
+        "only the evidence IDs and exact URLs assigned below; do not follow links, "
+        "search GitHub, or query repository history. If those inputs are "
+        "insufficient, return needs-evidence. Do not edit code, post comments, "
+        "assign anyone, or open a pull request.\n\n"
         f"Target: {request['target']['kind']}:{request['target']['value']}\n"
         f"Question: {request['question']}\n"
         f"Evidence already checked: {', '.join(request['evidenceIds'])}\n"
+        f"Allowed evidence URLs: {', '.join(allowed_urls) or 'none'}\n"
         f"Missing evidence: {', '.join(request['missingEvidence']) or 'none'}\n"
         f"Stop condition: {request['stopCondition']}\n\n"
         "Decide whether this is fixable, recovered, a duplicate, blocked on more "
@@ -112,6 +120,7 @@ def build_investigation_plan(
         and str(result.get("repository", "")).casefold() == repository.casefold()
     }
     latest_session_by_id: dict[str, Mapping[str, Any]] = {}
+    attempt_count_by_id: dict[str, int] = {}
     for event in session_events or []:
         if str(event.get("repository", "")).casefold() != repository.casefold():
             continue
@@ -124,6 +133,10 @@ def build_investigation_plan(
                 f"Unsupported investigation session status for {investigation_id}: {status}"
             )
         latest_session_by_id[investigation_id] = event
+        if status == "started":
+            attempt_count_by_id[investigation_id] = (
+                attempt_count_by_id.get(investigation_id, 0) + 1
+            )
     active_ids = {
         investigation_id
         for investigation_id, event in latest_session_by_id.items()
@@ -132,6 +145,7 @@ def build_investigation_plan(
     requests: list[dict[str, object]] = []
     reused: list[str] = []
     active: list[str] = []
+    exhausted: list[dict[str, object]] = []
     for issue in judgments.get("issues", []):
         if not isinstance(issue, Mapping):
             continue
@@ -182,6 +196,32 @@ def build_investigation_plan(
             if investigation_id in active_ids:
                 active.append(investigation_id)
                 continue
+            attempt = attempt_count_by_id.get(investigation_id, 0) + 1
+            if attempt > _MAX_INVESTIGATION_ATTEMPTS:
+                exhausted.append(
+                    {
+                        "investigationId": investigation_id,
+                        "issueNumber": issue_number,
+                        "target": dict(target),
+                        "reason": "investigation-attempt-limit",
+                    }
+                )
+                continue
+            allowed_evidence_urls = sorted(
+                {
+                    str(record["url"])
+                    for record in prepared_issue.get("evidenceBundle", [])
+                    if isinstance(record, Mapping)
+                    and record.get("id") in evidence_ids
+                    and isinstance(record.get("url"), str)
+                    and record["url"]
+                }
+                | (
+                    {issue_url}
+                    if f"issue:{issue_number}" in evidence_ids
+                    else set()
+                )
+            )
             request: dict[str, object] = {
                 "schemaVersion": 1,
                 "repository": repository,
@@ -193,8 +233,11 @@ def build_investigation_plan(
                 "sourceEvidenceFingerprint": evidence_fingerprint,
                 "question": str(recommendation.get("summary") or ""),
                 "evidenceIds": sorted(set(evidence_ids)),
+                "allowedEvidenceUrls": allowed_evidence_urls,
                 "missingEvidence": list(missing_evidence),
                 "stopCondition": str(recommendation.get("reassessWhen") or ""),
+                "attempt": attempt,
+                "maxAttempts": _MAX_INVESTIGATION_ATTEMPTS,
             }
             request["workerPrompt"] = _worker_prompt(request)
             requests.append(request)
@@ -206,7 +249,7 @@ def build_investigation_plan(
             json.dumps(item["target"].get("value"), sort_keys=True),
         )
     )
-    deferred = [
+    deferred = exhausted + [
         {
             "investigationId": request["investigationId"],
             "issueNumber": request["issueNumber"],
@@ -318,6 +361,7 @@ def _session_event(
     recorded_at: str,
     session_id: str,
     failure_reason: str | None = None,
+    failure_category: str | None = None,
 ) -> dict[str, object]:
     if status not in _SESSION_STATUSES:
         raise ValueError(f"Unsupported investigation session status: {status}")
@@ -328,8 +372,15 @@ def _session_event(
     if status == "failed":
         if not isinstance(failure_reason, str) or not failure_reason:
             raise ValueError("A failed investigation session requires a failure reason.")
-    elif failure_reason is not None:
-        raise ValueError("failureReason is valid only for failed sessions.")
+        failure_category = failure_category or "worker-error"
+        if failure_category not in _SESSION_FAILURE_CATEGORIES:
+            raise ValueError(
+                f"Unsupported investigation failure category: {failure_category}"
+            )
+    elif failure_reason is not None or failure_category is not None:
+        raise ValueError(
+            "failureReason and failureCategory are valid only for failed sessions."
+        )
     event: dict[str, object] = {
         "schemaVersion": 1,
         "repository": repository,
@@ -345,6 +396,7 @@ def _session_event(
         event["request"] = dict(request)
     if failure_reason is not None:
         event["failureReason"] = failure_reason
+        event["failureCategory"] = failure_category
     return event
 
 
@@ -396,6 +448,7 @@ def record_investigation_session_event(
     recorded_at: str,
     session_id: str,
     failure_reason: str | None = None,
+    failure_category: str | None = None,
 ) -> dict[str, object]:
     event = _session_event(
         request,
@@ -403,6 +456,7 @@ def record_investigation_session_event(
         recorded_at=recorded_at,
         session_id=session_id,
         failure_reason=failure_reason,
+        failure_category=failure_category,
     )
     investigation_id = str(event["investigationId"])
     repository = str(event["repository"])

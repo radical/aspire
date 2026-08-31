@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import stat
@@ -201,6 +202,27 @@ class LedgerAppendTests(unittest.TestCase):
 
             self.assertEqual([row], first)
             self.assertEqual([], second)
+            self.assertEqual([row], read_ledger_rows(path))
+
+    def test_concurrent_appends_do_not_duplicate_the_same_row(self) -> None:
+        with TemporaryDirectory() as scratch:
+            path = Path(scratch) / "fingerprints.jsonl"
+            row = {
+                "fingerprint": "test:namespace.type.test",
+                "issueNumber": 101,
+                "runId": 1001,
+                "attempt": 1,
+                "date": "2026-08-17",
+                "job": "Tests / Linux",
+                "testName": "Namespace.Type.Test",
+            }
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                appended = list(
+                    executor.map(lambda _: append_new_rows(path, [row]), range(32))
+                )
+
+            self.assertEqual(1, sum(len(rows) for rows in appended))
             self.assertEqual([row], read_ledger_rows(path))
 
     def test_distinguishes_rows_by_full_identity_tuple(self) -> None:

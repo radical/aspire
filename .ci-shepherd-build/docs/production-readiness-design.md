@@ -41,12 +41,14 @@ Production remains denied by default at three independent boundaries. The
 action grant generator and loader accept `microsoft/aspire` only when their
 callers explicitly enable the production comment pilot. The exact grant then
 records that capability and is constrained to one dependency-free
-`create-comment` or `edit-comment` action, no suppression override, and a
-maximum 15-minute lifetime. Execution requires the same explicit confirmation.
-Finally, `github_actor.py` permits only the fixed issue-comment POST and PATCH
-endpoints for a separately configured protected comment repository; closure
-and every other mutation remain denied. `quarantine_authorization.py` still
-hard-denies `microsoft/aspire` without exception.
+`edit-comment` action against an existing shepherd-owned comment, no suppression
+override, and a round-one expanded snapshot collected less than 15 minutes
+earlier. The grant expires no later than 15 minutes after that collection.
+Execution requires the same explicit confirmation. Finally, `github_actor.py`
+permits only the fixed issue-comment PATCH endpoint for a separately configured
+protected comment repository; closure and every other mutation remain denied.
+`quarantine_authorization.py` still hard-denies `microsoft/aspire` without
+exception.
 
 Two facts from the recorded production dry run shaped the initial design.
 

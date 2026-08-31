@@ -603,6 +603,26 @@ Intermittent failure.
         cases = (
             ("fenced error log", "```\nFailure while processing #4242\n```", []),
             ("inline code", "The error was `Failure while processing #4242`.", []),
+            (
+                "template examples",
+                'Examples: "Exclude PR #1234", "Merge PRs #1234 and #5678".',
+                [],
+            ),
+            (
+                "template HTML instructions",
+                "<!-- Examples: Merge PRs #1234 and #5678. -->\nRelated to #4242.",
+                [4242],
+            ),
+            (
+                "template example section",
+                "## Examples\nMerge PRs #1234 and #5678.\n## Failure\nRelated to #4242.",
+                [4242],
+            ),
+            (
+                "quoted prior content",
+                "> A previous report said related to #1234.\nRelated to #4242.",
+                [4242],
+            ),
             ("prose", "Related to #4242.", [4242]),
         )
 

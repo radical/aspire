@@ -125,6 +125,23 @@ class TrxTests(unittest.TestCase):
             parse(stream.getvalue()),
         )
 
+    def test_accepts_aspire_scale_aggregate_archive(self) -> None:
+        source = trx_archive(
+            ("Namespace.Type.Flaky", "Failed", "Namespace.Type.Flaky")
+        )
+        with ZipFile(BytesIO(source)) as archive:
+            payload = archive.read(archive.namelist()[0])
+
+        stream = BytesIO()
+        with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
+            for index in range(390):
+                archive.writestr(
+                    f"windows-latest/testresults/Hosting-{index}_net10.0_now.trx",
+                    payload,
+                )
+
+        self.assertEqual(390, len(parse(stream.getvalue())))
+
     def test_rejects_xml_entities(self) -> None:
         stream = BytesIO()
         with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
@@ -144,7 +161,7 @@ class TrxTests(unittest.TestCase):
         with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
             archive.writestr("readme.txt", "no results")
 
-        with self.assertRaisesRegex(ValueError, "TRX file count"):
+        with self.assertRaisesRegex(ValueError, "no TRX files"):
             parse(stream.getvalue())
 
     def test_rejects_trx_files_outside_the_repository_convention(self) -> None:

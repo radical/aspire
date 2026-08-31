@@ -249,6 +249,63 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(100, result[100]["id"])
         self.assertEqual(200, result[-1]["id"])
 
+    def test_get_pages_follows_the_response_next_link(self) -> None:
+        next_url = (
+            "https://api.github.com/repositories/123/actions/runs"
+            "?per_page=100&after=opaque-cursor"
+        )
+        runner = FakeRunner(
+            [
+                FakeCompletedProcess(
+                    0,
+                    build_response(
+                        200,
+                        [1],
+                        headers={"Link": f'<{next_url}>; rel="next"'},
+                    ),
+                ),
+                FakeCompletedProcess(0, build_response(200, [2])),
+            ]
+        )
+        client = self.make_client(runner)
+
+        result = client.get_pages("/repos/owner/repo/actions/runs")
+
+        self.assertEqual([1, 2], result)
+        self.assertEqual(
+            "/repositories/123/actions/runs?per_page=100&after=opaque-cursor",
+            runner.calls[1][0][-1],
+        )
+
+    def test_get_pages_fails_when_the_page_limit_is_reached(self) -> None:
+        runner = FakeRunner(
+            [
+                FakeCompletedProcess(
+                    0,
+                    build_response(
+                        200,
+                        [1],
+                        headers={
+                            "Link": (
+                                '<https://api.github.com/repositories/123/issues'
+                                '?per_page=100&page=2>; rel="next"'
+                            )
+                        },
+                    ),
+                )
+            ]
+        )
+        client = GitHubClient(
+            runner=runner,
+            popen_factory=FakePopenFactory([]),
+            sleep=FakeSleep(),
+            now=FakeClock(0.0),
+            max_pages=1,
+        )
+
+        with self.assertRaisesRegex(GitHubApiError, "pagination-limit"):
+            client.get_pages("/repos/owner/repo/issues")
+
     def test_get_pages_preserves_existing_query_parameters_without_duplication(self) -> None:
         runner = FakeRunner(
             [

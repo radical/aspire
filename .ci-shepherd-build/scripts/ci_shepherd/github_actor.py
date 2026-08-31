@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
-from typing import Any, Collection
+from typing import Any, Callable, Collection
+
+from .jsonl import append_jsonl_rows, exclusive_jsonl_lock
 
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -20,6 +23,7 @@ _EDIT_COMMENT_ENDPOINT_RE = re.compile(
     r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*$"
 )
 _PROTECTED_REPOSITORIES = frozenset({"microsoft/aspire"})
+_HTTP_STATUS_RE = re.compile(r"(?m)^HTTP/\S+\s+(?P<status>[1-5][0-9]{2})\b")
 
 
 class MutationRepositoryError(ValueError):
@@ -34,6 +38,8 @@ class GitHubActorClient:
         protected_comment_repositories: Collection[str] = (),
         runner: Any = subprocess.run,
         request_timeout_seconds: float = 60,
+        audit_path: Path | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         if request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive.")
@@ -54,6 +60,8 @@ class GitHubActorClient:
             )
         self._runner = runner
         self._request_timeout_seconds = request_timeout_seconds
+        self._audit_path = audit_path
+        self._now = now or (lambda: datetime.now(UTC))
 
     def get_authenticated_login(self) -> str:
         payload = self._request("GET", "user")
@@ -185,17 +193,11 @@ class GitHubActorClient:
                         f"Mutation repository is protected: {repository}"
                     )
                 if not (
-                    (
-                        method == "POST"
-                        and _CREATE_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
-                    )
-                    or (
-                        method == "PATCH"
-                        and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
-                    )
+                    method == "PATCH"
+                    and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
                 ):
                     raise MutationRepositoryError(
-                        "Protected repository pilot permits comment mutations only."
+                        "Protected repository pilot permits existing comment edits only."
                     )
             if normalized_repository not in self._allowed_repositories:
                 raise MutationRepositoryError(
@@ -213,8 +215,11 @@ class GitHubActorClient:
             "Accept: application/vnd.github+json",
             "-H",
             "X-GitHub-Api-Version: 2022-11-28",
+            "--include",
         ]
         temporary_path: Path | None = None
+        request_attempted = False
+        response_status: int | None = None
         try:
             if payload is not None:
                 descriptor, temporary_name = tempfile.mkstemp(
@@ -229,6 +234,7 @@ class GitHubActorClient:
                 command.extend(["--input", str(temporary_path)])
             command.append(endpoint)
             try:
+                request_attempted = True
                 completed = self._runner(
                     command,
                     env=self._environment(),
@@ -243,17 +249,42 @@ class GitHubActorClient:
                     f"GitHub API {method} timed out after "
                     f"{self._request_timeout_seconds} seconds."
                 ) from exc
+            response_status, response_body = _response_status_and_body(
+                completed.stdout,
+            )
             if completed.returncode != 0:
                 raise RuntimeError(
                     f"GitHub API {method} failed: {completed.stderr.strip()}"
                 )
             try:
-                return json.loads(completed.stdout)
+                return json.loads(response_body)
             except json.JSONDecodeError as exc:
                 raise RuntimeError("GitHub returned malformed JSON.") from exc
         finally:
+            if request_attempted:
+                self._append_audit(method, endpoint, response_status)
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+    def _append_audit(
+        self,
+        method: str,
+        endpoint: str,
+        status: int | None,
+    ) -> None:
+        if self._audit_path is None:
+            return
+        record = {
+            "method": method,
+            "endpoint": endpoint,
+            "status": status,
+            "attemptedAt": self._now().astimezone(UTC).isoformat().replace(
+                "+00:00",
+                "Z",
+            ),
+        }
+        with exclusive_jsonl_lock(self._audit_path):
+            append_jsonl_rows(self._audit_path, [record])
 
     @staticmethod
     def _environment() -> dict[str, str]:
@@ -282,3 +313,17 @@ class GitHubActorClient:
         if not isinstance(payload, dict):
             raise RuntimeError("GitHub returned a non-object response.")
         return payload
+
+
+def _response_status_and_body(
+    stdout: str,
+) -> tuple[int | None, str]:
+    matches = list(_HTTP_STATUS_RE.finditer(stdout))
+    if not matches:
+        return None, stdout
+    status = int(matches[-1].group("status"))
+    header_end = max(stdout.rfind("\r\n\r\n"), stdout.rfind("\n\n"))
+    if header_end < 0:
+        return status, stdout
+    separator_length = 4 if stdout.startswith("\r\n", header_end) else 2
+    return status, stdout[header_end + separator_length :]

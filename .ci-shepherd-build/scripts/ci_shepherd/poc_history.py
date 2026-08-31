@@ -14,10 +14,11 @@ already derived by the prepare stage.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from .jsonl import append_jsonl_rows, exclusive_jsonl_lock
 
 
 def compute_fingerprint(identity: Mapping[str, Any]) -> str | None:
@@ -150,44 +151,20 @@ def append_new_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> list[dict[
     Returns the rows that were actually appended (empty if all were already
     present), so recording the same prepared snapshot twice is a no-op.
     """
-    existing = read_ledger_rows(path)
-    seen = {_row_identity(row) for row in existing}
+    with exclusive_jsonl_lock(path):
+        existing = read_ledger_rows(path)
+        seen = {_row_identity(row) for row in existing}
 
-    new_rows: list[dict[str, Any]] = []
-    for row in rows:
-        identity_tuple = _row_identity(row)
-        if identity_tuple in seen:
-            continue
-        seen.add(identity_tuple)
-        new_rows.append(dict(row))
+        new_rows: list[dict[str, Any]] = []
+        for row in rows:
+            identity_tuple = _row_identity(row)
+            if identity_tuple in seen:
+                continue
+            seen.add(identity_tuple)
+            new_rows.append(dict(row))
 
-    if new_rows:
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(path.parent, 0o700)
-
-        # An existing nonempty ledger that doesn't end with a newline (e.g. a
-        # prior truncated write) would otherwise concatenate our first row
-        # onto its last line. Insert a separating newline first so appends
-        # never corrupt an existing line -- the merged line is then just one
-        # more malformed line for read_ledger_rows to skip.
-        needs_separator = False
-        if path.exists() and path.stat().st_size > 0:
-            with path.open("rb") as existing_stream:
-                existing_stream.seek(-1, os.SEEK_END)
-                needs_separator = existing_stream.read(1) != b"\n"
-
-        with path.open("a", encoding="utf-8") as stream:
-            if needs_separator:
-                stream.write("\n")
-            for row in new_rows:
-                # Write the encoded row and its newline as a single string so
-                # one row is always one append, never split across writes.
-                stream.write(json.dumps(row, sort_keys=True) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(path, 0o600)
-
-    return new_rows
+        append_jsonl_rows(path, new_rows)
+        return new_rows
 
 
 def group_rows_by_fingerprint(

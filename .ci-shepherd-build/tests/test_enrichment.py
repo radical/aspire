@@ -602,7 +602,7 @@ class GitHubEnrichmentTests(unittest.TestCase):
                 (
                     "get_bytes",
                     f"/repos/{REPOSITORY}/actions/artifacts/3002/zip",
-                    25 * 1024 * 1024,
+                    64 * 1024 * 1024,
                 )
             ],
             client.byte_calls,
@@ -862,6 +862,10 @@ class GitHubEnrichmentTests(unittest.TestCase):
         self.assertIn(
             "digest does not match",
             enriched.collection_errors[-1].message,
+        )
+        self.assertEqual(
+            {"kind": "issue", "issueNumbers": [11]},
+            enriched.collection_errors[-1].scope,
         )
 
     def test_minimal_run_enrichment_can_collect_one_bounded_history_request(self) -> None:
@@ -1637,6 +1641,10 @@ class GitHubEnrichmentTests(unittest.TestCase):
         self.assertEqual(
             [(error.stage, error.effect) for error in enriched.collection_errors],
             [("workflow-log", "workflow-log evidence unavailable")],
+        )
+        self.assertEqual(
+            {"kind": "issue", "issueNumbers": [11]},
+            enriched.collection_errors[0].scope,
         )
         validate_snapshot(snapshot_from_result(enriched))
 

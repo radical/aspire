@@ -99,6 +99,14 @@ class InvestigationLifecycleTests(unittest.TestCase):
         request = first_plan["requests"][0]
         self.assertIn('"outcome": "fixable | recovered | duplicate', request["workerPrompt"])
         self.assertIn('"fixHandoff": null', request["workerPrompt"])
+        self.assertIn(
+            "Do not invoke issue-investigation or discover additional evidence",
+            request["workerPrompt"],
+        )
+        self.assertEqual(
+            ["https://github.com/owner/repo/issues/21"],
+            request["allowedEvidenceUrls"],
+        )
 
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
@@ -374,6 +382,37 @@ class InvestigationLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(1, len(retry["requests"]))
             self.assertEqual([], retry["activeInvestigationIds"])
+            self.assertEqual(2, retry["requests"][0]["attempt"])
+
+            record_investigation_session_event(
+                state,
+                retry["requests"][0],
+                status="started",
+                recorded_at="2026-08-28T20:40:00Z",
+                session_id="investigation-session-2",
+            )
+            rejected = record_investigation_session_event(
+                state,
+                retry["requests"][0],
+                status="failed",
+                recorded_at="2026-08-28T20:45:00Z",
+                session_id="investigation-session-2",
+                failure_reason="The replacement result cited outside evidence.",
+                failure_category="out-of-scope-evidence",
+            )
+
+            exhausted = build_investigation_plan(
+                prepared,
+                judgments,
+                [],
+                read_investigation_session_events(state),
+            )
+            self.assertEqual("out-of-scope-evidence", rejected["failureCategory"])
+            self.assertEqual([], exhausted["requests"])
+            self.assertEqual(
+                "investigation-attempt-limit",
+                exhausted["deferredRequests"][0]["reason"],
+            )
 
     def test_active_investigation_can_be_recovered_from_a_later_plan(self) -> None:
         prepared = _prepared()

@@ -647,6 +647,11 @@ def _build_compact_issue(
     missing_prerequisites = _copy_string_list(issue.get("missingPrerequisites"), "missingPrerequisites")
     resolution_evidence = _require_mapping(issue.get("resolutionEvidence"), "prepared issue resolutionEvidence")
     evidence_bundle = _require_list(issue, "evidenceBundle")
+    already_quarantined = _has_issue_label(
+        evidence_bundle,
+        issue_number,
+        "quarantined-test",
+    )
     human_context = _build_human_context(evidence_bundle)
     automation_context = _build_automation_context(issue_number, evidence_bundle)
 
@@ -692,6 +697,7 @@ def _build_compact_issue(
         autoclose=autoclose,
         candidate_state=candidate_state,
         candidate_action=candidate_action,
+        already_quarantined=already_quarantined,
         identity=identity,
         occurrence_summary=effective_occurrence_summary,
         blockers=blockers,
@@ -729,6 +735,7 @@ def _build_compact_issue(
         "historyOccurrenceSummary": history_occurrence_summary,
         "identity": dict(identity),
         "relatedIssues": related_issues,
+        "alreadyQuarantined": already_quarantined,
         "reviewRequired": review_required,
         "watchReason": watch_reason,
         "humanContext": human_context,
@@ -1536,6 +1543,31 @@ def _build_human_context(
     return None
 
 
+def _has_issue_label(
+    evidence_bundle: Sequence[Any],
+    issue_number: int,
+    expected_label: str,
+) -> bool:
+    expected = expected_label.casefold()
+    primary_evidence_id = f"issue:{issue_number}"
+    for raw_evidence in evidence_bundle:
+        evidence = _require_mapping(raw_evidence, "prepared evidence")
+        if (
+            evidence.get("id") != primary_evidence_id
+            or evidence.get("kind") != "issue-event"
+        ):
+            continue
+        payload = _require_mapping(evidence.get("payload"), "prepared evidence payload")
+        labels = payload.get("labels")
+        if not isinstance(labels, list):
+            continue
+        return any(
+            isinstance(label, str) and label.casefold() == expected
+            for label in labels
+        )
+    return False
+
+
 def _issue_body_field(body: str, field: str) -> str | None:
     match = re.search(rf"(?im)^-\s*{re.escape(field)}:\s*(.+)$", body)
     return match.group(1).strip() if match else None
@@ -1890,6 +1922,8 @@ def _review_required(
     recommendations = _require_list(default_judgment, "recommendations")
     recommendation = _require_mapping(recommendations[0], "default recommendation")
     disposition = recommendation.get("disposition")
+    if disposition == "no-action":
+        return False
     category = default_judgment.get("category")
     independent_runs = _require_nonnegative_int(occurrence_summary, "independentRunCount")
     return (
@@ -1924,6 +1958,7 @@ def _build_default_judgment(
     autoclose: bool | None,
     candidate_state: str,
     candidate_action: str,
+    already_quarantined: bool,
     identity: Mapping[str, Any],
     occurrence_summary: Mapping[str, Any],
     blockers: list[str],
@@ -1954,6 +1989,7 @@ def _build_default_judgment(
         autoclose=autoclose,
         candidate_state=candidate_state,
         candidate_action=candidate_action,
+        already_quarantined=already_quarantined,
         has_resolution_evidence=bool(resolution_evidence),
         category=category,
         occurrence_summary=occurrence_summary,
@@ -2188,6 +2224,7 @@ def _default_disposition(
     autoclose: bool | None,
     candidate_state: str,
     candidate_action: str,
+    already_quarantined: bool,
     has_resolution_evidence: bool,
     category: str,
     occurrence_summary: Mapping[str, Any],
@@ -2197,6 +2234,9 @@ def _default_disposition(
     has_blockers: bool = False,
     has_exact_test_name: bool = False,
 ) -> str:
+    if already_quarantined:
+        return "no-action"
+
     if (
         candidate_state == "resolved"
         and candidate_action == "recommend-close"

@@ -26,6 +26,7 @@ FRESHNESS_CLASSES = (
 )
 
 _SCHEMA_VERSION = 1
+_UNSPECIFIED_CURRENT = object()
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REPOSITORY_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$"
@@ -120,6 +121,8 @@ def record_poc_history(
     judgments: object,
     report_markdown: str,
     artifacts: Mapping[str, bytes] | Iterable[tuple[str, bytes]] = (),
+    *,
+    expected_current_run_id: str | None | object = _UNSPECIFIED_CURRENT,
 ) -> CurrentHistory:
     prepared = _validate_poc_inputs(
         repository,
@@ -137,6 +140,7 @@ def record_poc_history(
         snapshot,
         prepared,
         record_kind="poc",
+        expected_current_run_id=expected_current_run_id,
     )
 
 
@@ -148,6 +152,7 @@ def _record_prepared_history(
     prepared: list[tuple[str, bytes]],
     *,
     record_kind: str,
+    expected_current_run_id: str | None | object = _UNSPECIFIED_CURRENT,
 ) -> CurrentHistory:
     state = _validate_state_path(state_directory)
     promoted = False
@@ -156,6 +161,18 @@ def _record_prepared_history(
     try:
         _prepare_layout(state)
         with _history_lock(state):
+            if expected_current_run_id is not _UNSPECIFIED_CURRENT:
+                current_document = _read_current_document(state / "current.json")
+                actual_current_run_id = (
+                    current_document.get("runId")
+                    if current_document is not None
+                    else None
+                )
+                if actual_current_run_id != expected_current_run_id:
+                    raise HistoryError(
+                        "History advanced after this cycle started; refusing to "
+                        "publish a conflicting successor."
+                    )
             runs = state / "runs"
             _reject_symlink(runs, "runs directory")
             _reject_run_aliases(runs, run_id)
@@ -896,6 +913,11 @@ def _freshness_class(
     record: Mapping[str, Any],
     payload: Mapping[str, Any],
 ) -> str:
+    if (
+        record.get("availability") != "available"
+        and payload.get("errorRetryable") is False
+    ):
+        return "immutable"
     if record.get("availability") != "available":
         return "retryable"
     if payload.get("source") == "derived" or payload.get("derived") is True:

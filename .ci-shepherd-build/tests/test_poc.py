@@ -653,6 +653,7 @@ class PocValidationTests(unittest.TestCase):
                 "historyOccurrenceSummary",
                 "identity",
                 "relatedIssues",
+                "alreadyQuarantined",
                 "reviewRequired",
                 "watchReason",
                 "humanContext",
@@ -818,6 +819,107 @@ class PocValidationTests(unittest.TestCase):
             {"kind": "issue", "value": 301},
             recommendation["target"],
         )
+
+    def test_quarantined_test_label_suppresses_repeat_quarantine_review(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    301,
+                    title="Flaky test timeout",
+                    parsed_row_count=2,
+                    ledger_rows=[
+                        {"date": "2026-08-10", "sourceRun": 1001, "job": "Tests"},
+                        {"date": "2026-08-17", "sourceRun": 1002, "job": "Tests"},
+                    ],
+                    tier1_cause_id="test-timeout",
+                    tier2_test_name="namespace.type.flakytest",
+                    tier2_test_name_raw="Namespace.Type.FlakyTest",
+                    candidate_state="actionable",
+                    candidate_action="investigate",
+                    labels=["ci-failure-cause", "quarantined-test", "test-failure"],
+                )
+            ]
+        )
+
+        issue = build_compact_poc_input(prepared)["issues"][0]
+
+        self.assertEqual(
+            ("flaky-test", "no-action"),
+            _category_and_disposition(issue["defaultJudgment"]),
+        )
+        self.assertFalse(issue["reviewRequired"])
+
+    def test_quarantined_test_label_is_read_from_the_primary_issue(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    301,
+                    title="Flaky test timeout",
+                    parsed_row_count=2,
+                    ledger_rows=[
+                        {"date": "2026-08-10", "sourceRun": 1001, "job": "Tests"},
+                        {"date": "2026-08-17", "sourceRun": 1002, "job": "Tests"},
+                    ],
+                    tier1_cause_id="test-timeout",
+                    tier2_test_name="namespace.type.flakytest",
+                    tier2_test_name_raw="Namespace.Type.FlakyTest",
+                    candidate_state="actionable",
+                    candidate_action="investigate",
+                    labels=["ci-failure-cause", "quarantined-test", "test-failure"],
+                )
+            ]
+        )
+        prepared["issues"][0]["evidenceBundle"].insert(
+            0,
+            {
+                "id": "issue:1",
+                "kind": "issue-event",
+                "url": f"https://github.com/{REPOSITORY}/issues/1",
+                "availability": "available",
+                "payload": {"labels": ["area-dashboard"]},
+            },
+        )
+
+        issue = build_compact_poc_input(prepared)["issues"][0]
+
+        self.assertTrue(issue["alreadyQuarantined"])
+        self.assertFalse(issue["reviewRequired"])
+
+    def test_related_quarantined_issue_does_not_suppress_the_primary_issue(self) -> None:
+        prepared = _compact_prepared(
+            [
+                _compact_issue(
+                    301,
+                    title="Flaky test timeout",
+                    parsed_row_count=2,
+                    ledger_rows=[
+                        {"date": "2026-08-10", "sourceRun": 1001, "job": "Tests"},
+                        {"date": "2026-08-17", "sourceRun": 1002, "job": "Tests"},
+                    ],
+                    tier1_cause_id="test-timeout",
+                    tier2_test_name="namespace.type.flakytest",
+                    tier2_test_name_raw="Namespace.Type.FlakyTest",
+                    candidate_state="actionable",
+                    candidate_action="investigate",
+                    labels=["ci-failure-cause", "test-failure"],
+                )
+            ]
+        )
+        prepared["issues"][0]["evidenceBundle"].insert(
+            0,
+            {
+                "id": "issue:1",
+                "kind": "issue-event",
+                "url": f"https://github.com/{REPOSITORY}/issues/1",
+                "availability": "available",
+                "payload": {"labels": ["quarantined-test"]},
+            },
+        )
+
+        issue = build_compact_poc_input(prepared)["issues"][0]
+
+        self.assertFalse(issue["alreadyQuarantined"])
+        self.assertTrue(issue["reviewRequired"])
 
     def test_build_compact_poc_input_applies_safe_deterministic_rules(self) -> None:
         recurring_rows = [

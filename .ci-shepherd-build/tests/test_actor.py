@@ -1457,6 +1457,32 @@ class SequencedRunner(RecordingRunner):
         return super().__call__(command, **kwargs)
 
 
+class HeaderRecordingRunner(RecordingRunner):
+    def __init__(
+        self,
+        payload: object,
+        *,
+        status: int = 202,
+        returncode: int = 0,
+    ) -> None:
+        super().__init__(payload)
+        self.status = status
+        self.returncode = returncode
+
+    def __call__(
+        self,
+        command: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        response = super().__call__(command, **kwargs)
+        return subprocess.CompletedProcess(
+            command,
+            self.returncode,
+            f"HTTP/2 {self.status}\r\ncontent-type: application/json\r\n\r\n{response.stdout}",
+            "request failed" if self.returncode else response.stderr,
+        )
+
+
 class GitHubActorClientTests(unittest.TestCase):
     def test_requests_have_a_bounded_subprocess_timeout(self) -> None:
         runner = RecordingRunner({"number": 21, "state": "open"})
@@ -1525,7 +1551,9 @@ class GitHubActorClientTests(unittest.TestCase):
 
                 self.assertEqual([], runner.calls)
 
-    def test_production_comment_repository_allows_comments_only(self) -> None:
+    def test_production_comment_repository_allows_existing_comment_edits_only(
+        self,
+    ) -> None:
         runner = RecordingRunner({"id": 900, "body": COMMENT_BODY})
         client = GitHubActorClient(
             runner=runner,
@@ -1533,17 +1561,20 @@ class GitHubActorClientTests(unittest.TestCase):
             protected_comment_repositories={"Microsoft/Aspire"},
         )
 
-        client.create_comment("microsoft/aspire", 21, COMMENT_BODY)
+        with self.assertRaisesRegex(
+            MutationRepositoryError,
+            "existing comment edits only",
+        ):
+            client.create_comment("microsoft/aspire", 21, COMMENT_BODY)
         client.edit_comment("microsoft/aspire", 900, COMMENT_BODY)
         with self.assertRaisesRegex(
             MutationRepositoryError,
-            "comment mutations only",
+            "existing comment edits only",
         ):
             client.close_issue("microsoft/aspire", 21, "completed")
 
-        self.assertEqual(2, len(runner.calls))
-        self.assertIn("POST", runner.calls[0][0])
-        self.assertIn("PATCH", runner.calls[1][0])
+        self.assertEqual(1, len(runner.calls))
+        self.assertIn("PATCH", runner.calls[0][0])
 
     def test_production_comment_repository_must_also_be_allowed(self) -> None:
         with self.assertRaisesRegex(ValueError, "explicitly allowed"):
@@ -1567,21 +1598,104 @@ class GitHubActorClientTests(unittest.TestCase):
 
     def test_create_comment_uses_private_json_input(self) -> None:
         runner = RecordingRunner({"id": 900, "body": COMMENT_BODY})
-        client = GitHubActorClient(
-            runner=runner,
-            allowed_repositories={"owner/repo"},
-        )
+        with tempfile.TemporaryDirectory() as scratch:
+            audit_path = Path(scratch) / "api-calls.jsonl"
+            client = GitHubActorClient(
+                runner=runner,
+                allowed_repositories={"owner/repo"},
+                audit_path=audit_path,
+                now=lambda: datetime(2026, 8, 31, 5, 0, tzinfo=UTC),
+            )
 
-        client.create_comment("owner/repo", 21, COMMENT_BODY)
+            client.create_comment("owner/repo", 21, COMMENT_BODY)
 
-        command, request = runner.calls[0]
-        self.assertIn("POST", command)
-        self.assertEqual(
-            "repos/owner/repo/issues/21/comments",
-            command[-1],
+            command, request = runner.calls[0]
+            self.assertIn("POST", command)
+            self.assertEqual(
+                "repos/owner/repo/issues/21/comments",
+                command[-1],
+            )
+            self.assertEqual({"body": COMMENT_BODY}, request)
+            self.assertFalse(Path(command[command.index("--input") + 1]).exists())
+            self.assertEqual(
+                {
+                    "attemptedAt": "2026-08-31T05:00:00Z",
+                    "endpoint": "repos/owner/repo/issues/21/comments",
+                    "method": "POST",
+                    "status": None,
+                },
+                json.loads(audit_path.read_text(encoding="utf-8")),
+            )
+
+    def test_create_comment_parses_included_status_and_json_body(self) -> None:
+        runner = HeaderRecordingRunner({"id": 900, "body": COMMENT_BODY})
+        with tempfile.TemporaryDirectory() as scratch:
+            audit_path = Path(scratch) / "api-calls.jsonl"
+            client = GitHubActorClient(
+                runner=runner,
+                allowed_repositories={"owner/repo"},
+                audit_path=audit_path,
+            )
+
+            result = client.create_comment("owner/repo", 21, COMMENT_BODY)
+
+            self.assertEqual(900, result["id"])
+            self.assertEqual(
+                202,
+                json.loads(audit_path.read_text(encoding="utf-8"))["status"],
+            )
+
+    def test_failed_comment_audits_included_error_status(self) -> None:
+        runner = HeaderRecordingRunner(
+            {"message": "Validation Failed"},
+            status=422,
+            returncode=1,
         )
-        self.assertEqual({"body": COMMENT_BODY}, request)
-        self.assertFalse(Path(command[command.index("--input") + 1]).exists())
+        with tempfile.TemporaryDirectory() as scratch:
+            audit_path = Path(scratch) / "api-calls.jsonl"
+            client = GitHubActorClient(
+                runner=runner,
+                allowed_repositories={"owner/repo"},
+                audit_path=audit_path,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "request failed"):
+                client.create_comment("owner/repo", 21, COMMENT_BODY)
+
+            self.assertEqual(
+                422,
+                json.loads(audit_path.read_text(encoding="utf-8"))["status"],
+            )
+
+    def test_failed_comment_without_response_headers_audits_unknown_status(self) -> None:
+        class FailedRunner(RecordingRunner):
+            def __call__(
+                self,
+                command: list[str],
+                **kwargs: object,
+            ) -> subprocess.CompletedProcess[str]:
+                response = super().__call__(command, **kwargs)
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    response.stdout,
+                    "connection failed",
+                )
+
+        with tempfile.TemporaryDirectory() as scratch:
+            audit_path = Path(scratch) / "api-calls.jsonl"
+            client = GitHubActorClient(
+                runner=FailedRunner({"message": "request failed"}),
+                allowed_repositories={"owner/repo"},
+                audit_path=audit_path,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "connection failed"):
+                client.create_comment("owner/repo", 21, COMMENT_BODY)
+
+            self.assertIsNone(
+                json.loads(audit_path.read_text(encoding="utf-8"))["status"]
+            )
 
     def test_close_issue_uses_state_reason_payload(self) -> None:
         runner = RecordingRunner(

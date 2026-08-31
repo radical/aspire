@@ -7,8 +7,8 @@ cost to reproduce a default the pipeline already computed, and it widens the
 surface an agent can push an unsupported conclusion through.
 
 This module narrows the handoff to cases that need a fresh judgment: every
-first-seen case, every materially changed case, and every case whose periodic
-reassessment is due. Stable previously reviewed cases keep their last validated
+first-seen case, every materially changed case, and every case whose explicit
+typed wakeup is due. Stable previously reviewed cases keep their last validated
 judgment without a model call.
 
 The selection is also the merge contract: each selected case carries the exact
@@ -558,6 +558,8 @@ def _omission_reason(issue: Mapping[str, Any], change_class: str) -> str | None:
         # so selecting one would spend a model call on an override that can only
         # be discarded.
         return _OMISSION_SUPERSEDED
+    if issue.get("alreadyQuarantined") is True:
+        return _OMISSION_NOT_ELIGIBLE
     if change_class in {"first-seen", "new", "changed", "due"}:
         return None
     if not _is_eligible(issue):

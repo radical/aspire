@@ -24,6 +24,8 @@ def record_poc_cycle(
     judgments_path: Path,
     report_path: Path,
     artifact_paths: Sequence[Path],
+    expected_current_run_id: str | None | object = None,
+    enforce_expected_current: bool = False,
 ) -> Path:
     resolved_paths = {
         "input": input_path.resolve(strict=True),
@@ -51,6 +53,11 @@ def record_poc_cycle(
     run_id = _run_id(snapshot)
     repository = str(snapshot.get("repository", ""))
     try:
+        history_options = (
+            {"expected_current_run_id": expected_current_run_id}
+            if enforce_expected_current
+            else {}
+        )
         current = record_poc_history(
             resolved_state,
             repository,
@@ -60,6 +67,7 @@ def record_poc_cycle(
             judgments,
             report_markdown,
             artifacts,
+            **history_options,
         )
         run_directory = current.run_directory
     except HistoryError as error:

@@ -143,6 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         client = GitHubActorClient(
             allowed_repositories={authorized.grant.repository},
             protected_comment_repositories=production_overrides,
+            audit_path=state_dir / "api-calls.jsonl",
         )
         if reservation.mode == "reconcile":
             result = reconcile_action(

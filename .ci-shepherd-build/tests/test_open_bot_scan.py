@@ -68,6 +68,7 @@ def item(
 def bot(number: int, **kwargs: object) -> dict[str, object]:
     kwargs.setdefault("login", "aspire-repo-bot[bot]")
     kwargs.setdefault("user_type", "Bot")
+    kwargs.setdefault("labels", ["test-failure"])
     return item(number, **kwargs)  # type: ignore[arg-type]
 
 

@@ -5,13 +5,14 @@ from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Callable
 from xml.etree import ElementTree
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZipFile, ZipInfo
 
 
 MAX_ARCHIVE_ENTRIES = 500
-MAX_TRX_FILES = 200
+MAX_TRX_FILES = 500
 MAX_TRX_FILE_BYTES = 50 * 1024 * 1024
-MAX_TOTAL_TRX_BYTES = 100 * 1024 * 1024
+MAX_TOTAL_TRX_BYTES = 256 * 1024 * 1024
+
 
 def parse_test_results_archive(
     content: bytes,
@@ -27,29 +28,28 @@ def parse_test_results_archive(
         entries = archive.infolist()
         if len(entries) > MAX_ARCHIVE_ENTRIES:
             raise ValueError("Test-results artifact contains too many entries.")
-        trx_entries = [
-            entry
-            for entry in entries
-            if not entry.is_dir() and entry.filename.lower().endswith(".trx")
-        ]
-        if not trx_entries or len(trx_entries) > MAX_TRX_FILES:
-            raise ValueError("Test-results artifact has an invalid TRX file count.")
-        if any(entry.file_size > MAX_TRX_FILE_BYTES for entry in trx_entries):
-            raise ValueError("Test-results artifact contains an oversized TRX file.")
-        if sum(entry.file_size for entry in trx_entries) > MAX_TOTAL_TRX_BYTES:
-            raise ValueError("Test-results artifact contains too much TRX data.")
-
-        outcomes: dict[tuple[str, str, str], set[str]] = defaultdict(set)
-        matched_trx_count = 0
-        for entry in trx_entries:
-            path = PurePosixPath(entry.filename)
-            identity = identify_trx(path.as_posix())
+        trx_entries: list[tuple[ZipInfo, tuple[str, str]]] = []
+        for entry in entries:
+            if entry.is_dir() or not entry.filename.lower().endswith(".trx"):
+                continue
+            identity = identify_trx(PurePosixPath(entry.filename).as_posix())
             if identity is None:
                 raise ValueError(
                     "Test-results artifact contains a TRX file that does not "
                     "match the repository convention."
                 )
-            matched_trx_count += 1
+            trx_entries.append((entry, identity))
+        if not trx_entries:
+            raise ValueError("Test-results artifact contains no TRX files.")
+        if len(trx_entries) > MAX_TRX_FILES:
+            raise ValueError("Test-results artifact contains too many TRX files.")
+        if any(entry.file_size > MAX_TRX_FILE_BYTES for entry, _ in trx_entries):
+            raise ValueError("Test-results artifact contains an oversized TRX file.")
+        if sum(entry.file_size for entry, _ in trx_entries) > MAX_TOTAL_TRX_BYTES:
+            raise ValueError("Test-results artifact contains too much TRX data.")
+
+        outcomes: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+        for entry, identity in trx_entries:
             try:
                 with archive.open(entry) as stream:
                     payload = stream.read(MAX_TRX_FILE_BYTES + 1)
@@ -89,11 +89,6 @@ def parse_test_results_archive(
                 if outcome not in {"Failed", "Passed"} or test_name is None:
                     continue
                 outcomes[(lane, os_name, test_name)].add(outcome)
-        if matched_trx_count == 0:
-            raise ValueError(
-                "Test-results artifact has no TRX files matching the repository convention."
-            )
-
     return [
         {
             "lane": lane,

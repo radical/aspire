@@ -11,6 +11,7 @@ from ci_shepherd.poc_state import (
     load_review_schedule,
     record_poc_ledgers,
     record_review_events,
+    record_review_wakeup,
 )
 from ci_shepherd.replay import replay_lifecycle_scenario
 
@@ -66,7 +67,7 @@ def judgments(snapshot_id: str, disposition: str) -> dict[str, object]:
 
 
 class PocStateTests(unittest.TestCase):
-    def test_schedules_issue_and_pull_request_reassessment_after_seven_days(self) -> None:
+    def test_schedules_only_explicit_issue_and_pull_request_wakeups(self) -> None:
         with TemporaryDirectory() as scratch:
             state = Path(scratch)
             appended = record_review_events(
@@ -75,6 +76,22 @@ class PocStateTests(unittest.TestCase):
                 "2026-08-20T12:00:00Z",
                 issue_numbers=[1],
                 pull_request_numbers=[2],
+            )
+            record_review_wakeup(
+                state,
+                "owner/repo",
+                target_kind="issue",
+                target_number=1,
+                evaluate_at="2026-08-27T12:00:00Z",
+                reason="closure-without-recurrence",
+            )
+            record_review_wakeup(
+                state,
+                "owner/repo",
+                target_kind="pull-request",
+                target_number=2,
+                evaluate_at="2026-08-27T12:00:00Z",
+                reason="pending-pr-timeout",
             )
 
             before_due = load_review_schedule(
@@ -100,6 +117,10 @@ class PocStateTests(unittest.TestCase):
             self.assertEqual(
                 "2026-08-27T12:00:00Z",
                 due["issues"]["1"]["reassessAt"],
+            )
+            self.assertEqual(
+                "closure-without-recurrence",
+                due["issues"]["1"]["wakeReason"],
             )
 
     def test_preserves_review_events_after_an_interrupted_trailing_newline(self) -> None:

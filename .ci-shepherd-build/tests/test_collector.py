@@ -290,7 +290,7 @@ class CollectorTests(unittest.TestCase):
             result.rejected_candidates,
         )
 
-    def test_collect_includes_open_github_actions_issues_without_target_labels(self) -> None:
+    def test_collect_excludes_open_github_actions_issues_without_target_labels(self) -> None:
         bot_issue = make_issue(22, labels=["agentic-workflows"])
         bot_issue["user"] = {"login": "github-actions[bot]"}
         pages = {
@@ -302,7 +302,6 @@ class CollectorTests(unittest.TestCase):
                 bot_issue
             ],
             f"/repos/{REPOSITORY}/issues/21/comments": [],
-            f"/repos/{REPOSITORY}/issues/22/comments": [],
         }
 
         result = Collector(
@@ -315,8 +314,7 @@ class CollectorTests(unittest.TestCase):
             include_timeline=False,
         )
 
-        self.assertEqual([21, 22], [issue["number"] for issue in result.open_issues])
-        self.assertEqual("github-actions[bot]", result.open_issues[1]["author"])
+        self.assertEqual([21], [issue["number"] for issue in result.open_issues])
 
     def test_collect_recognizes_gh_aw_failure_issue_producer(self) -> None:
         body = """\
@@ -324,7 +322,11 @@ class CollectorTests(unittest.TestCase):
 <!-- gh-aw-failure-issue: true, workflow_id: milestone-changelog, branch: main, failure_categories: agent_failure -->
 <!-- gh-aw-expires: 2026-08-24T00:00:00Z -->
 """
-        bot_issue = make_issue(22, labels=["agentic-workflows"], body=body)
+        bot_issue = make_issue(
+            22,
+            labels=["agentic-workflows", "automation-broken"],
+            body=body,
+        )
         bot_issue["user"] = {"login": "github-actions[bot]"}
         pages = {
             f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
@@ -355,7 +357,7 @@ class CollectorTests(unittest.TestCase):
         bot_issue = make_issue(
             22,
             title="[aw] Failed jobs: Analyze CI Failure",
-            labels=["agentic-workflows"],
+            labels=["agentic-workflows", "automation-broken"],
             body=body,
         )
         bot_issue["user"] = {"login": "github-actions[bot]"}
@@ -385,7 +387,11 @@ class CollectorTests(unittest.TestCase):
             "<!-- gh-aw-failure-issue: true, workflow_id: milestone-changelog, "
             "branch: main, failure_categories: agent_failure -->"
         )
-        open_issue = make_issue(22, labels=["agentic-workflows"], body=failure_marker)
+        open_issue = make_issue(
+            22,
+            labels=["agentic-workflows", "automation-broken"],
+            body=failure_marker,
+        )
         open_issue["user"] = {"login": "github-actions[bot]"}
         closed_issue = make_issue(
             23,
@@ -418,13 +424,14 @@ class CollectorTests(unittest.TestCase):
         ).collect(
             include_supporting=True,
             include_timeline=False,
+            include_closed_discovery=True,
         )
 
         self.assertEqual([23], [issue["number"] for issue in result.supporting_issues])
 
     def collect(self, client, **kwargs):
         collector = Collector(client, REPOSITORY, NOW, **kwargs)
-        return collector.collect()
+        return collector.collect(include_closed_discovery=True)
 
     def test_minimal_run_budget_preserves_reused_runs_outside_cap(self) -> None:
         source_url = f"https://github.com/{REPOSITORY}/issues/1"
@@ -899,9 +906,65 @@ Deployment tests are failing.
             if call[1] not in {open_cause, open_automation, history_endpoint}
         ]
         self.assertGreaterEqual(len(first_expensive_calls), 3)
-        self.assertLessEqual(
-            len(second_expensive_calls),
-            len(first_expensive_calls) * 0.2,
+        self.assertLessEqual(len(second_expensive_calls), 1)
+
+        second_snapshot = {
+            **snapshot,
+            "openIssues": [1],
+            "issues": second.open_issues,
+            "supportingIssues": second.supporting_issues,
+            "evidence": second.evidence,
+            "references": {"1": second.references[1]},
+        }
+        stale_pages = copy.deepcopy(pages)
+        stale_pages[open_cause] = [
+            make_issue(
+                1,
+                labels=["ci-failure-cause"],
+                body=body,
+                updated_at="2026-08-12T00:00:00Z",
+            )
+        ]
+        stale_client = ScriptedClient(
+            pages=stale_pages,
+            singles={
+                run: singles[run],
+                history_endpoint: {
+                    "total_count": 1,
+                    "workflow_runs": [
+                        {
+                            "id": 98,
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "created_at": "2026-08-09T00:00:00Z",
+                            "updated_at": "2026-08-09T01:00:00Z",
+                            "html_url": (
+                                f"https://github.com/{REPOSITORY}/actions/runs/98"
+                            ),
+                        }
+                    ],
+                }
+            }
+        )
+        stale_collector = Collector(stale_client, REPOSITORY, NOW)
+        third = stale_collector.collect_incremental(
+            second_snapshot,
+            current.document,
+            include_supporting=True,
+            include_timeline=False,
+        )
+        third = stale_collector.enrich_github_evidence(
+            third,
+            minimal_run_evidence=True,
+            include_run_history=True,
+        )
+
+        self.assertEqual(
+            [100, 99],
+            [
+                item["runId"]
+                for item in third.evidence["run:99"]["payload"]["recentHistory"]
+            ][:2],
         )
 
     def test_incremental_refreshes_changed_supporting_issue_and_its_run(self) -> None:
@@ -1184,6 +1247,7 @@ Deployment tests are failing.
             second_history,
             include_supporting=True,
             include_timeline=False,
+            include_closed_discovery=True,
         )
         second = second_collector.enrich_github_evidence(second)
         completed = complete_refresh_plan(second.refresh_plan, second.evidence)
@@ -1225,6 +1289,7 @@ Deployment tests are failing.
             second_history,
             include_supporting=True,
             include_timeline=False,
+            include_closed_discovery=True,
         )
         failed = failed_collector.enrich_github_evidence(failed)
         failed_completion = complete_refresh_plan(failed.refresh_plan, failed.evidence)
@@ -1237,7 +1302,7 @@ Deployment tests are failing.
         self.assertIn(edited_comment_id, failed_completion.retry)
         self.assertIn(deleted_comment_id, failed_completion.retry)
         self.assertEqual(
-            {"kind": "issue", "issueNumbers": [1, 2]},
+            {"kind": "issue", "issueNumbers": [1]},
             failed.collection_errors[0].scope,
         )
 
@@ -1489,11 +1554,10 @@ System.TimeoutException : Timed out.
                 make_issue(21, labels=["ci-failure-cause"])
             ],
             f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
-            f"/repos/{REPOSITORY}/issues?state=closed&labels=ci-failure-cause&since={CUTOFF}&per_page=100": [],
-            f"/repos/{REPOSITORY}/issues?state=closed&labels=automation-broken&since={CUTOFF}&per_page=100": [],
             f"/repos/{REPOSITORY}/issues/21/comments": [],
         }
-        result = Collector(ScriptedClient(pages=pages), REPOSITORY, NOW).collect(
+        client = ScriptedClient(pages=pages)
+        result = Collector(client, REPOSITORY, NOW).collect(
             include_timeline=False,
         )
         expected = {
@@ -1504,6 +1568,7 @@ System.TimeoutException : Timed out.
 
         self.assertEqual(expected, result.open_issues[0].get("supportingSearch"))
         self.assertEqual(expected, result.evidence["issue:21"]["payload"].get("supportingSearch"))
+        self.assertFalse(any("state=closed" in endpoint for _, endpoint in client.calls))
 
     def test_supporting_search_is_incomplete_when_closed_inventory_fails(self) -> None:
         pages = {
@@ -1519,6 +1584,7 @@ System.TimeoutException : Timed out.
         }
         result = Collector(ScriptedClient(pages=pages), REPOSITORY, NOW).collect(
             include_timeline=False,
+            include_closed_discovery=True,
         )
 
         self.assertEqual(
@@ -1963,7 +2029,10 @@ System.TimeoutException : Timed out.
         client = ScriptedClient(pages=pages, singles=singles)
         collector = Collector(client, REPOSITORY, NOW)
 
-        result = collector.collect(include_timeline=False)
+        result = collector.collect(
+            include_timeline=False,
+            include_closed_discovery=True,
+        )
         enriched = collector.enrich_github_evidence(result)
 
         self.assertEqual([401, 402], result.open_issues[0]["supportingIssueNumbers"])
@@ -2048,7 +2117,10 @@ System.TimeoutException : Timed out.
         }
         collector = Collector(ScriptedClient(pages=pages), REPOSITORY, NOW)
 
-        result = collector.collect(include_timeline=False)
+        result = collector.collect(
+            include_timeline=False,
+            include_closed_discovery=True,
+        )
         enriched = collector.enrich_github_evidence(result)
 
         self.assertEqual("available", enriched.evidence["issue:403"]["availability"])
@@ -2125,7 +2197,10 @@ System.TimeoutException : Timed out.
             budgets={"max_supporting_closed": 2},
         )
 
-        result = collector.collect(include_timeline=False)
+        result = collector.collect(
+            include_timeline=False,
+            include_closed_discovery=True,
+        )
         enriched = collector.enrich_github_evidence(result)
 
         self.assertEqual("available", enriched.evidence["issue:403"]["availability"])
@@ -2223,7 +2298,10 @@ System.TimeoutException : Timed out.
             budgets={"max_supporting_closed": 2},
         )
 
-        result = collector.collect(include_timeline=False)
+        result = collector.collect(
+            include_timeline=False,
+            include_closed_discovery=True,
+        )
         enriched = collector.enrich_github_evidence(result)
 
         self.assertEqual([401, 402], result.open_issues[0]["supportingIssueNumbers"])
@@ -2341,6 +2419,7 @@ System.TimeoutException : Timed out.
 
         result = Collector(ScriptedClient(pages=pages), REPOSITORY, NOW).collect(
             include_timeline=False,
+            include_closed_discovery=True,
         )
 
         self.assertEqual(
@@ -2501,6 +2580,7 @@ System.TimeoutException : Timed out.
 
         result = Collector(ScriptedClient(pages=pages), REPOSITORY, NOW).collect(
             include_timeline=False,
+            include_closed_discovery=True,
         )
 
         self.assertEqual(
