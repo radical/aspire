@@ -516,6 +516,10 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         )
         self.proposals = json.loads(serialized)
         self.proposals["snapshotId"] += ":r1"
+        self.proposals["productionPilotCapability"] = {
+            "schemaVersion": 1,
+            "evidenceRound": 1,
+        }
         for proposal in self.proposals["proposals"]:
             if proposal["operation"] == "create-comment":
                 proposal["operation"] = "edit-comment"
@@ -863,6 +867,26 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertTrue(authorized.grant.production_comment_pilot)
         self.assertEqual(self.comment_action_id, authorized.proposal["actionId"])
 
+    def test_production_comment_pilot_accepts_finalized_round_zero_snapshot(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        self.proposals["snapshotId"] = self.proposals["snapshotId"].removesuffix(
+            ":r1"
+        )
+        self.proposals["productionPilotCapability"] = {
+            "schemaVersion": 1,
+            "evidenceRound": 0,
+        }
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+
+        self.assertEqual(self.proposals["snapshotId"], grant["snapshotId"])
+
     def test_production_comment_pilot_rejects_multiple_actions(
         self,
     ) -> None:
@@ -893,7 +917,28 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 allow_production_comment_pilot=True,
             )
 
-    def test_production_comment_pilot_requires_expanded_snapshot(self) -> None:
+    def test_production_comment_pilot_requires_finalized_cycle_capability(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        self.proposals["snapshotId"] = self.proposals["snapshotId"].removesuffix(
+            ":r1"
+        )
+        self.proposals.pop("productionPilotCapability")
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "finalized-cycle capability",
+        ):
+            self._generate(
+                action_ids=[self.comment_action_id],
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_pilot_rejects_capability_snapshot_round_mismatch(
+        self,
+    ) -> None:
         self._use_production_repository()
         self.proposals["snapshotId"] = self.proposals["snapshotId"].removesuffix(
             ":r1"
@@ -902,11 +947,56 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             AuthorizationError,
-            "freshly expanded snapshot",
+            "does not match its snapshot round",
         ):
             self._generate(
                 action_ids=[self.comment_action_id],
                 allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_pilot_rejects_round_zero_capability_for_round_one(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        self.proposals["productionPilotCapability"]["evidenceRound"] = 0
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "does not match its snapshot round",
+        ):
+            self._generate(
+                action_ids=[self.comment_action_id],
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_execution_revalidates_finalized_cycle_capability(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+        self.proposals.pop("productionPilotCapability")
+        proposal_bytes = self._write_proposals()
+        grant["proposalsDigest"] = (
+            f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "finalized-cycle capability",
+        ):
+            load_authorized_execution(
+                self.proposals_path,
+                self.output_path,
+                state_dir=self.state_dir,
+                action_id=self.comment_action_id,
+                allow_production_comment_pilot=True,
+                now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
             )
 
     def test_production_comment_pilot_rejects_stale_expanded_snapshot(self) -> None:

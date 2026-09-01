@@ -382,6 +382,13 @@ class CycleTests(unittest.TestCase):
                 self.assertTrue(
                     (work / "action-proposals.pre-expansion.json").is_file()
                 )
+                provisional_proposals = json.loads(
+                    (work / "action-proposals.json").read_text(encoding="utf-8")
+                )
+                self.assertNotIn(
+                    "productionPilotCapability",
+                    provisional_proposals,
+                )
                 self.assertEqual(0, restarted["pullRequestReviewCount"])
                 restarted_pull_requests = json.loads(
                     (work / "pull-request-review.json").read_text(encoding="utf-8")
@@ -407,6 +414,13 @@ class CycleTests(unittest.TestCase):
 
             self.assertEqual("completed", completed["stage"])
             self.assertEqual(1, expansion_calls)
+            completed_proposals = json.loads(
+                (work / "action-proposals.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                {"schemaVersion": 1, "evidenceRound": 1},
+                completed_proposals["productionPilotCapability"],
+            )
             self.assertTrue(
                 (Path(completed["runDirectory"]) / "evidence-requests.json").is_file()
             )
@@ -1221,6 +1235,13 @@ class CycleTests(unittest.TestCase):
             self.assertEqual("completed", completed["stage"])
             self.assertTrue((first_work / "report.md").is_file())
             self.assertTrue((first_work / "action-proposals.json").is_file())
+            proposals = json.loads(
+                (first_work / "action-proposals.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                {"schemaVersion": 1, "evidenceRound": 0},
+                proposals["productionPilotCapability"],
+            )
             self.assertEqual(1, len(list((state / "runs").iterdir())))
 
             second_work = root / "work-2"

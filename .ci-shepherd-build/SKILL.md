@@ -539,9 +539,11 @@ the sole exception: it requires `--production-comment-pilot` at both grant
 creation and execution, and the generated grant records
 `productionCommentPilot: true`. Such a grant must name exactly one
 `edit-comment` action against an existing shepherd-owned comment, have no
-dependency or suppression override, and come from a round-one expanded snapshot
-collected less than 15 minutes earlier. The grant expires no later than 15
-minutes after that collection. The final actor boundary allows only the
+dependency or suppression override, and come from a finalized round-zero or
+round-one snapshot collected less than 15 minutes earlier. Finalized proposal
+documents carry a digest-bound production capability; provisional round-zero
+proposals written before expansion planning do not. The grant expires no later
+than 15 minutes after collection. The final actor boundary allows only the
 corresponding comment PATCH; issue closure remains denied there even if an
 invalid caller bypasses authorization validation.
 

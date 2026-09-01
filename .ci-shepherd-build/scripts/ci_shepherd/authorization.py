@@ -220,6 +220,7 @@ def load_authorized_execution(
             action_id=action_id,
             operation=operation,
             proposals=proposals,
+            capability=proposal_document.get("productionPilotCapability"),
         )
 
     return AuthorizedExecution(
@@ -409,6 +410,7 @@ def generate_authorization_grant(
         )
         production_freshness_deadline = _production_freshness_deadline(
             snapshot_id,
+            capability=proposal_document.get("productionPilotCapability"),
             repository=repository,
             issued_at=issued_at,
         )
@@ -457,16 +459,47 @@ def _generate_grant_id() -> str:
 def _production_freshness_deadline(
     snapshot_id: str,
     *,
+    capability: object,
     repository: str,
     issued_at: datetime,
 ) -> datetime:
     prefix = f"snapshot:{repository}:"
-    suffix = ":r1"
-    if not snapshot_id.startswith(prefix) or not snapshot_id.endswith(suffix):
+    if (
+        not isinstance(capability, Mapping)
+        or set(capability) != {"schemaVersion", "evidenceRound"}
+        or capability.get("schemaVersion") != 1
+    ):
         raise AuthorizationError(
-            "Production comment pilot grants require a freshly expanded snapshot."
+            "Production comment pilot grants require a finalized-cycle capability."
         )
-    collected_at_text = snapshot_id[len(prefix) : -len(suffix)]
+    evidence_round = capability.get("evidenceRound")
+    if (
+        not isinstance(evidence_round, int)
+        or isinstance(evidence_round, bool)
+        or evidence_round not in {0, 1}
+    ):
+        raise AuthorizationError(
+            "Production comment pilot capability must identify round 0 or 1."
+        )
+    if not snapshot_id.startswith(prefix):
+        raise AuthorizationError(
+            "Production comment pilot snapshot does not match its repository."
+        )
+    collected_at_text = snapshot_id[len(prefix) :]
+    if evidence_round == 1:
+        if not collected_at_text.endswith(":r1"):
+            raise AuthorizationError(
+                "Production comment pilot capability does not match its snapshot round."
+            )
+        collected_at_text = collected_at_text.removesuffix(":r1")
+    elif ":r" in collected_at_text:
+        raise AuthorizationError(
+            "Production comment pilot capability does not match its snapshot round."
+        )
+    if not collected_at_text or ":r" in collected_at_text:
+        raise AuthorizationError(
+            "Production comment pilot snapshot time is invalid."
+        )
     try:
         collected_at = datetime.fromisoformat(
             collected_at_text.replace("Z", "+00:00")
@@ -535,6 +568,7 @@ def _validate_production_comment_grant(
     action_id: str,
     operation: str,
     proposals: Sequence[Mapping[str, Any]],
+    capability: object,
 ) -> None:
     if grant.repository.casefold() != PRODUCTION_REPOSITORY:
         raise AuthorizationError(
@@ -550,6 +584,7 @@ def _validate_production_comment_grant(
         )
     freshness_deadline = _production_freshness_deadline(
         grant.snapshot_id,
+        capability=capability,
         repository=grant.repository,
         issued_at=grant.issued_at,
     )

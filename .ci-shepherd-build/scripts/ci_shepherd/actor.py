@@ -518,11 +518,26 @@ def validate_action_proposals(document: object) -> dict[str, object]:
         }
         if "blockedRecommendations" in document:
             expected_fields.add("blockedRecommendations")
+        if "productionPilotCapability" in document:
+            expected_fields.add("productionPilotCapability")
         if set(document) != expected_fields:
             raise ValueError(
                 "Executable action proposals must contain exactly the "
                 "supported document fields."
             )
+        if "productionPilotCapability" in document:
+            capability = document["productionPilotCapability"]
+            if (
+                not isinstance(capability, dict)
+                or set(capability) != {"schemaVersion", "evidenceRound"}
+                or capability.get("schemaVersion") != 1
+                or capability.get("evidenceRound") not in {0, 1}
+                or isinstance(capability.get("evidenceRound"), bool)
+            ):
+                raise ValueError(
+                    "productionPilotCapability must identify a finalized "
+                    "round-0 or round-1 proposal document."
+                )
         blocked_recommendations = document.get("blockedRecommendations", [])
         if not isinstance(blocked_recommendations, list):
             raise TypeError("blockedRecommendations must be a list.")

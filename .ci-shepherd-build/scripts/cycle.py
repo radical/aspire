@@ -737,6 +737,23 @@ def finish_cycle(
     )
     if restarted is not None:
         return restarted
+    # action-proposals.json is written before expansion planning so the planner can
+    # inspect it. Add this capability only after the planner has confirmed that no
+    # restart is needed; authorization can then distinguish a finalized round-0
+    # document from provisional proposals that will be superseded by round 1.
+    evidence_round = manifest.get("evidenceExpansionRound")
+    if evidence_round is None:
+        evidence_round = 0
+    if evidence_round not in {0, 1}:
+        raise ValueError("Completed cycle has an unsupported evidence round.")
+    proposals = {
+        **proposals,
+        "productionPilotCapability": {
+            "schemaVersion": 1,
+            "evidenceRound": evidence_round,
+        },
+    }
+    _write_private_json(paths["proposals"], proposals)
     review_selection = _load_json(paths["selection"], "review selection")
     visible_issue_numbers = {
         int(entry["issueNumber"])

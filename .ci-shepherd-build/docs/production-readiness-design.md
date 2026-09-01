@@ -42,11 +42,13 @@ action grant generator and loader accept `microsoft/aspire` only when their
 callers explicitly enable the production comment pilot. The exact grant then
 records that capability and is constrained to one dependency-free
 `edit-comment` action against an existing shepherd-owned comment, no suppression
-override, and a round-one expanded snapshot collected less than 15 minutes
-earlier. The grant expires no later than 15 minutes after that collection.
-Execution requires the same explicit confirmation. Finally, `github_actor.py`
-permits only the fixed issue-comment PATCH endpoint for a separately configured
-protected comment repository; closure and every other mutation remain denied.
+override, and a finalized round-zero or round-one snapshot collected less than
+15 minutes earlier. The cycle adds a digest-bound production capability only
+after expansion planning confirms that the proposal document is final;
+provisional round-zero proposals never carry it. Execution requires the same
+explicit confirmation. Finally, `github_actor.py` permits only the fixed
+issue-comment PATCH endpoint for a separately configured protected comment
+repository; closure and every other mutation remain denied.
 `quarantine_authorization.py` still hard-denies `microsoft/aspire` without
 exception.
 
