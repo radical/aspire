@@ -101,6 +101,51 @@ def _clean_checkout(root: Path) -> Path:
 
 
 class InvestigationLifecycleTests(unittest.TestCase):
+    def test_plan_embeds_only_assigned_evidence_payloads(self) -> None:
+        prepared = _prepared()
+        prepared["issues"][0]["evidenceBundle"] = [
+            {
+                "id": "issue:21",
+                "kind": "issue-event",
+                "url": "https://github.com/owner/repo/issues/21",
+                "availability": "available",
+                "payload": {
+                    "title": "Unknown CI failure",
+                    "body": "issue-details-marker",
+                },
+            },
+            {
+                "id": "run:210",
+                "kind": "workflow-run",
+                "url": "https://github.com/owner/repo/actions/runs/210",
+                "availability": "available",
+                "payload": {
+                    "conclusion": "failure",
+                    "diagnostic": "run-details-marker",
+                },
+            },
+            {
+                "id": "run:211",
+                "kind": "workflow-run",
+                "url": "https://github.com/owner/repo/actions/runs/211",
+                "availability": "available",
+                "payload": {
+                    "conclusion": "failure",
+                    "diagnostic": "out-of-scope-marker",
+                },
+            },
+        ]
+
+        request = build_investigation_plan(prepared, _judgments(), [])["requests"][0]
+
+        self.assertEqual(
+            ["issue:21", "run:210"],
+            [record["id"] for record in request["allowedEvidence"]],
+        )
+        self.assertIn("issue-details-marker", request["workerPrompt"])
+        self.assertIn("run-details-marker", request["workerPrompt"])
+        self.assertNotIn("out-of-scope-marker", request["workerPrompt"])
+
     def test_record_rejects_invalid_recorded_at_timestamp(self) -> None:
         request = build_investigation_plan(_prepared(), _judgments(), [])[
             "requests"

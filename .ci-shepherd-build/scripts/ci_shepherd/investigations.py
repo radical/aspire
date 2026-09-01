@@ -62,11 +62,19 @@ def _source_evidence_fingerprint(issue: Mapping[str, Any]) -> str:
 
 def _worker_prompt(request: Mapping[str, Any]) -> str:
     allowed_urls = request.get("allowedEvidenceUrls", [])
+    allowed_evidence = request.get("allowedEvidence", [])
+    serialized_evidence = json.dumps(
+        allowed_evidence,
+        ensure_ascii=True,
+        indent=2,
+        sort_keys=True,
+    )
     return (
         f"Investigate {request['issueUrl']} for the CI shepherd.\n\n"
         "Do not invoke issue-investigation or discover additional evidence. Use "
-        "only the evidence IDs and exact URLs assigned below; do not follow links, "
-        "search GitHub, or query repository history. If those inputs are "
+        "only the evidence records embedded below. You may fetch only their exact "
+        "URLs when an embedded payload is partial or unavailable; do not follow "
+        "links, search GitHub, or query repository history. If those inputs are "
         "insufficient, return needs-evidence. Do not edit code, post comments, "
         "assign anyone, or open a pull request.\n\n"
         f"Target: {request['target']['kind']}:{request['target']['value']}\n"
@@ -75,6 +83,8 @@ def _worker_prompt(request: Mapping[str, Any]) -> str:
         f"Allowed evidence URLs: {', '.join(allowed_urls) or 'none'}\n"
         f"Missing evidence: {', '.join(request['missingEvidence']) or 'none'}\n"
         f"Stop condition: {request['stopCondition']}\n\n"
+        "Allowed evidence records:\n"
+        f"{serialized_evidence}\n\n"
         "Decide whether this is fixable, recovered, a duplicate, blocked on more "
         "evidence or human input, not actionable, or still inconclusive. Return "
         "only JSON with this shape:\n"
@@ -231,6 +241,14 @@ def build_investigation_plan(
                     else set()
                 )
             )
+            allowed_evidence = sorted(
+                [
+                    copy.deepcopy(dict(record))
+                    for record in prepared_issue.get("evidenceBundle", [])
+                    if isinstance(record, Mapping) and record.get("id") in evidence_ids
+                ],
+                key=lambda record: str(record["id"]),
+            )
             request: dict[str, object] = {
                 "schemaVersion": 1,
                 "repository": repository,
@@ -242,6 +260,7 @@ def build_investigation_plan(
                 "sourceEvidenceFingerprint": evidence_fingerprint,
                 "question": str(recommendation.get("summary") or ""),
                 "evidenceIds": sorted(set(evidence_ids)),
+                "allowedEvidence": allowed_evidence,
                 "allowedEvidenceUrls": allowed_evidence_urls,
                 "missingEvidence": list(missing_evidence),
                 "stopCondition": str(recommendation.get("reassessWhen") or ""),

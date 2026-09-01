@@ -110,6 +110,7 @@ files, or a live read-only GET. None require reading private helpers.
 | I12 | `quarantine-session.json` contains no already-quarantined, nonexistent, or non-method-shaped target | proposal document |
 | I13 | Shepherd-authored comments never appear in `allowedEvidence` or any `evidenceIds` | `assessment-input.json`, proposals |
 | I14 | `investigation-plan.json` holds at most five requests, overflow in `deferredRequests` | plan document |
+| I14a | Every investigation request embeds payloads for only its assigned evidence IDs | plan document and worker prompt |
 | I15 | Action grants deny `microsoft/aspire` by default and quarantine grants always deny it; the comment pilot requires matching grant-creation and execution confirmations | non-zero exit or exact bounded grant |
 | I16 | Every posted body begins with `[automated] ` | rendered body, live comment |
 | I17 | A surviving `intent` or `indeterminate` event permits reconciliation only | ledger plus rerun |
@@ -247,6 +248,7 @@ passes.
 | G4 | A started session whose worker died | Record `failed` with a reason | The same request becomes proposable again | The request reappears in a later plan | none | A permanently stuck investigation slot | L |
 | G5 | A completed result | Source-evidence fingerprint changes | The stale result is withheld and a new request is created | The stale conclusion is absent from the agent input | none | Stale conclusions poisoning judgment | L |
 | G6 | A `fixable` result | none | No code change, assignment, or pull request is proposed | Proposal set is unchanged by the result | none | `fixable` escalating into autonomous code changes | L |
+| G7 | Assigned and unassigned evidence payloads exist | Build an investigation request | Only assigned payloads are embedded in the exact worker prompt | Embedded IDs equal `evidenceIds`; unassigned marker absent (I14a) | none | Workers failing for evidence already collected or receiving out-of-scope context | L |
 
 ### 4.8 Suite H — Quarantine candidate validation (P0)
 

@@ -213,8 +213,8 @@ current `investigate` recommendations whose issue, target, or source evidence
 has not already been investigated. Additional requests remain visible under
 `deferredRequests` and become eligible after earlier requests are recorded.
 Each request has a deterministic `investigationId`, the issue URL, evidence
-IDs, exact allowed evidence URLs, missing evidence, stop condition, attempt
-limit, and an exact `workerPrompt`.
+IDs, the already-collected payloads and exact URLs for only those evidence IDs,
+missing evidence, stop condition, attempt limit, and an exact `workerPrompt`.
 
 Create each new request in a fresh read-only agent, then record its `started`
 session before sending the exact worker prompt:
@@ -231,10 +231,11 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
 ```
 
 The worker must not invoke the issue-investigation workflow, search GitHub,
-follow links, or otherwise expand evidence. It may read only the IDs and exact
-URLs in the request. Insufficient assigned evidence must produce
-`needs-evidence`, not a live search. The worker must not edit code or write to
-GitHub, and must return the required JSON result. Validate and record it with:
+follow links, or otherwise expand evidence. It must use the assigned embedded
+payloads first and may fetch only their exact URLs when a payload is partial or
+unavailable. Insufficient assigned evidence must produce `needs-evidence`, not
+a live search. The worker must not edit code or write to GitHub, and must return
+the required JSON result. Validate and record it with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
