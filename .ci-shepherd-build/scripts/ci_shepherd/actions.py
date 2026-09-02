@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Mapping
 
 from ci_shepherd.eligibility import executable_ci_labels
+from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
 
 
@@ -483,7 +485,14 @@ def _execution_eligibility(
     *,
     issue_number: int,
     evidence_ids: list[object],
+    evidence_basis: str,
 ) -> dict[str, object]:
+    if evidence_basis not in {
+        "ci-occurrence",
+        "source-reconciliation",
+        "delegation-state",
+    }:
+        raise ValueError(f"Unsupported action evidence basis: {evidence_basis}.")
     evidence = snapshot.get("evidence")
     if not isinstance(evidence, dict):
         raise TypeError("Validated snapshot evidence must be an object.")
@@ -550,10 +559,11 @@ def _execution_eligibility(
 
     blocking_reasons: list[str] = []
     ci_labels = sorted(executable_ci_labels(raw_labels))
-    if not ci_labels:
-        blocking_reasons.append("missing-ci-label")
-    if occurrence_count <= 0:
-        blocking_reasons.append("no-parsed-occurrences")
+    if evidence_basis == "ci-occurrence":
+        if not ci_labels:
+            blocking_reasons.append("missing-ci-label")
+        if occurrence_count <= 0:
+            blocking_reasons.append("no-parsed-occurrences")
     if relevant_collection_errors:
         blocking_reasons.append("incomplete-collection")
     if unavailable_evidence_ids:
@@ -563,6 +573,7 @@ def _execution_eligibility(
 
     return {
         "eligible": not blocking_reasons,
+        "evidenceBasis": evidence_basis,
         "ciLabels": ci_labels,
         "occurrenceCount": occurrence_count,
         "collectionComplete": not relevant_collection_errors,
@@ -594,10 +605,14 @@ def _finalize_execution_metadata(
         evidence_ids = proposal.get("evidenceIds")
         if not isinstance(evidence_ids, list):
             raise TypeError("Action proposal evidenceIds must be a list.")
+        evidence_basis = proposal.setdefault("evidenceBasis", "ci-occurrence")
+        if not isinstance(evidence_basis, str):
+            raise TypeError("Action proposal evidenceBasis must be a string.")
         eligibility = _execution_eligibility(
             snapshot,
             issue_number=issue_number,
             evidence_ids=evidence_ids,
+            evidence_basis=evidence_basis,
         )
         proposal["executionEligibility"] = eligibility
         evidence = snapshot.get("evidence")
@@ -620,9 +635,13 @@ def _finalize_execution_metadata(
             raise ValueError(
                 f"Issue {issue_number} evidence must include updatedAt."
             )
-        proposal["sourceEvidenceFingerprint"] = {
-            "issueUpdatedAt": issue_updated_at,
-        }
+        fingerprint = proposal.get("sourceEvidenceFingerprint")
+        if fingerprint is None:
+            fingerprint = {}
+        if not isinstance(fingerprint, dict):
+            raise TypeError("Action sourceEvidenceFingerprint must be an object.")
+        fingerprint["issueUpdatedAt"] = issue_updated_at
+        proposal["sourceEvidenceFingerprint"] = fingerprint
         if proposal.get("operation") == "edit-comment":
             comment_id = proposal.get("commentId")
             if not isinstance(comment_id, int) or isinstance(comment_id, bool):
@@ -926,6 +945,7 @@ def _render_quarantine_reconciliation_body(
     issue_number: int,
     finding: dict[str, Any],
     source_revision: str,
+    finding_digest: str,
 ) -> str:
     leads = {
         "label-without-attribute": (
@@ -981,6 +1001,7 @@ def _render_quarantine_reconciliation_body(
             ),
             "",
             _status_markers(issue_number),
+            f"<!-- ci-shepherd:finding-digest={finding_digest} -->",
         ]
     )
 
@@ -1000,9 +1021,20 @@ def _quarantine_reconciliation_findings(
     if not findings:
         return {}, ""
     source_revision = document.get("sourceRevision")
-    if not isinstance(source_revision, str) or not source_revision:
+    if (
+        not isinstance(source_revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+    ):
         raise ValueError(
-            "Quarantine reconciliation findings require a pinned sourceRevision."
+            "Quarantine reconciliation findings require a pinned 40-hex sourceRevision."
+        )
+    source_tree_digest = document.get("sourceTreeDigest")
+    if (
+        not isinstance(source_tree_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest) is None
+    ):
+        raise ValueError(
+            "Quarantine reconciliation findings require a pinned sourceTreeDigest."
         )
     by_issue: dict[int, dict[str, Any]] = {}
     for finding in findings:
@@ -1021,6 +1053,67 @@ def _quarantine_reconciliation_findings(
             )
         by_issue[issue_number] = finding
     return by_issue, source_revision
+
+
+def _verified_quarantine_issues(
+    document: object | None,
+) -> dict[int, dict[str, Any]]:
+    if document is None:
+        return {}
+    if not isinstance(document, dict):
+        raise TypeError("Quarantine reconciliation must be an object.")
+    verified = document.get("verifiedIssues", [])
+    if not isinstance(verified, list):
+        raise TypeError("Quarantine reconciliation verifiedIssues must be a list.")
+    by_issue: dict[int, dict[str, Any]] = {}
+    for entry in verified:
+        if not isinstance(entry, dict):
+            raise TypeError("Verified quarantine issue must be an object.")
+        issue_number = entry.get("issueNumber")
+        tests = entry.get("tests")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+            or not isinstance(tests, list)
+            or not tests
+        ):
+            raise ValueError("Verified quarantine issue is malformed.")
+        if issue_number in by_issue:
+            raise ValueError(
+                f"Issue {issue_number} has multiple verified quarantine records."
+            )
+        by_issue[issue_number] = entry
+    return by_issue
+
+
+def _machine_actionability(
+    prepared_issue: Mapping[str, Any],
+    evidence_ids: list[object],
+) -> Mapping[str, Any] | None:
+    actionability = prepared_issue.get("machineActionability")
+    if not isinstance(actionability, Mapping):
+        return None
+    if (
+        actionability.get("status") != "verified"
+        or actionability.get("kind")
+        not in {"deterministic-failure", "quarantined-test"}
+        or not isinstance(actionability.get("fingerprint"), str)
+        or not actionability["fingerprint"]
+    ):
+        return None
+    verified_evidence_ids = actionability.get("evidenceIds")
+    if (
+        not isinstance(verified_evidence_ids, list)
+        or not verified_evidence_ids
+        or not all(
+            isinstance(evidence_id, str) and evidence_id
+            for evidence_id in verified_evidence_ids
+        )
+        or not set(verified_evidence_ids).issubset(set(evidence_ids))
+    ):
+        return None
+    return actionability
 
 
 def _delegation_handoffs(
@@ -1216,11 +1309,44 @@ def _delegation_base_branch(prepared: Mapping[str, object]) -> str:
     return base_ref
 
 
-def _delegation_instructions(issue_number: int) -> str:
+def _delegation_instructions(
+    issue_number: int,
+    verified_tests: object | None = None,
+) -> str:
+    verified_context = ""
+    if isinstance(verified_tests, list) and verified_tests:
+        rendered_tests = []
+        for test in verified_tests:
+            if not isinstance(test, Mapping):
+                raise ValueError("Verified quarantine test must be an object.")
+            test_name = test.get("testName")
+            file = test.get("file")
+            line = test.get("line")
+            if (
+                not isinstance(test_name, str)
+                or not test_name
+                or not isinstance(file, str)
+                or not file
+                or not isinstance(line, int)
+                or isinstance(line, bool)
+                or line <= 0
+            ):
+                raise ValueError(
+                    "Verified quarantine test identity is incomplete."
+                )
+            rendered_tests.append(f"`{test_name}` at `tests/{file}:{line}`")
+        verified_context = (
+            " Source reconciliation confirmed the quarantined target"
+            f"{'s' if len(rendered_tests) != 1 else ''}: "
+            + ", ".join(rendered_tests)
+            + ". Do not modify or remove the `[QuarantinedTest]` attribute; "
+            "unquarantine is a separately authorized change."
+        )
     return (
         f"Investigate and fix issue #{issue_number}. Make the smallest complete "
         "change that addresses the reported failure, add focused regression "
-        "coverage that would fail without the fix, and avoid unrelated changes. "
+        "coverage that would fail without the fix, and avoid unrelated changes."
+        f"{verified_context} "
         f"Open a draft pull request whose body includes `Fixes #{issue_number}`. "
         "If the issue cannot be fixed from the available evidence, keep the pull "
         "request in draft and clearly record the missing evidence or human "
@@ -1245,6 +1371,9 @@ def build_action_proposals(
     )
     reconciliation_findings, reconciliation_revision = (
         _quarantine_reconciliation_findings(quarantine_reconciliation)
+    )
+    verified_quarantines = _verified_quarantine_issues(
+        quarantine_reconciliation
     )
     delegation_handoffs = _delegation_handoffs(snapshot)
     reconciliation_issue_numbers = frozenset(reconciliation_findings)
@@ -1301,6 +1430,21 @@ def build_action_proposals(
             continue
         if issue_number in delegation_handoffs:
             continue
+        if delegation_recommendation is not None and _machine_actionability(
+            prepared_issues[issue_number],
+            list(delegation_recommendation["evidenceIds"]),
+        ) is None:
+            blocked_recommendations.append(
+                {
+                    "issueNumber": issue_number,
+                    "disposition": "delegate-copilot",
+                    "blockingReasons": ["machine-actionability-not-verified"],
+                    "evidenceIds": list(
+                        delegation_recommendation["evidenceIds"]
+                    ),
+                }
+            )
+            delegation_recommendation = None
         if delegation_recommendation is not None:
             proposals.append(
                 {
@@ -1516,15 +1660,79 @@ def build_action_proposals(
             close["dependsOn"] = comment_action_id
         proposals.append(close)
 
+    if verified_quarantines:
+        if not isinstance(quarantine_reconciliation, dict):
+            raise TypeError("Quarantine reconciliation must be an object.")
+        source_revision = quarantine_reconciliation.get("sourceRevision")
+        source_tree_digest = quarantine_reconciliation.get("sourceTreeDigest")
+        if (
+            not isinstance(source_revision, str)
+            or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+            or not isinstance(source_tree_digest, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest) is None
+        ):
+            raise ValueError(
+                "Verified quarantine issues require pinned source evidence."
+            )
+        proposed_issue_numbers = {
+            int(proposal["issueNumber"])
+            for proposal in proposals
+            if isinstance(proposal, dict)
+            and proposal.get("operation") == "assign-copilot"
+        }
+        for issue_number, verified in sorted(verified_quarantines.items()):
+            if (
+                issue_number not in open_issue_numbers
+                or issue_number in delegation_handoffs
+                or issue_number in proposed_issue_numbers
+            ):
+                continue
+            finding_digest = "sha256:" + hashlib.sha256(
+                stable_json(verified).encode("utf-8")
+            ).hexdigest()
+            proposals.append(
+                {
+                    "actionId": (
+                        f"{prepared['snapshotId']}:issue:{issue_number}:"
+                        "assign-copilot"
+                    ),
+                    "issueNumber": issue_number,
+                    "issueUrl": prepared_issues[issue_number]["issueUrl"],
+                    "operation": "assign-copilot",
+                    "idempotencyKey": (
+                        f"issue:{issue_number}:copilot-assignment"
+                    ),
+                    "evidenceIds": [f"issue:{issue_number}"],
+                    "evidenceBasis": "source-reconciliation",
+                    "expectedIssueState": "open",
+                    "targetRepository": snapshot["repository"],
+                    "baseBranch": _delegation_base_branch(prepared),
+                    "customInstructions": _delegation_instructions(
+                        issue_number,
+                        verified.get("tests"),
+                    ),
+                    "model": "",
+                    "sourceEvidenceFingerprint": {
+                        "sourceRevision": source_revision,
+                        "sourceTreeDigest": source_tree_digest,
+                        "findingDigest": finding_digest,
+                    },
+                }
+            )
+
     for issue_number, finding in sorted(reconciliation_findings.items()):
         prepared_issue = prepared_issues.get(issue_number)
         if not isinstance(prepared_issue, dict):
             continue
         key = f"issue:{issue_number}:status"
+        finding_digest = "sha256:" + hashlib.sha256(
+            stable_json(finding).encode("utf-8")
+        ).hexdigest()
         body = _render_quarantine_reconciliation_body(
             issue_number,
             finding,
             reconciliation_revision,
+            finding_digest,
         )
         existing = _owned_status_comments(snapshot, issue_number, key)
         if len(existing) > 1:
@@ -1534,7 +1742,10 @@ def build_action_proposals(
         existing_body = (
             str(existing[0].get("body") or "").strip() if existing else ""
         )
-        if existing and existing_body == body.strip():
+        if existing and (
+            existing_body == body.strip()
+            or f"ci-shepherd:finding-digest={finding_digest}" in existing_body
+        ):
             unchanged = result["unchangedIssueNumbers"]
             if isinstance(unchanged, list) and issue_number not in unchanged:
                 unchanged.append(issue_number)
@@ -1547,10 +1758,16 @@ def build_action_proposals(
             "issueNumber": issue_number,
             "issueUrl": prepared_issue["issueUrl"],
             "operation": "edit-comment" if existing else "create-comment",
+            "evidenceBasis": "source-reconciliation",
             "idempotencyKey": key,
             "body": body,
             "evidenceIds": [f"issue:{issue_number}"],
             "expectedIssueState": "open",
+            "sourceEvidenceFingerprint": {
+                "sourceRevision": reconciliation_revision,
+                "sourceTreeDigest": quarantine_reconciliation["sourceTreeDigest"],
+                "findingDigest": finding_digest,
+            },
         }
         if existing:
             proposal["commentId"] = existing[0]["id"]
@@ -1589,6 +1806,7 @@ def build_action_proposals(
                 f"https://github.com/{repository}/issues/{issue_number}"
             ),
             "operation": "edit-comment" if existing else "create-comment",
+            "evidenceBasis": "delegation-state",
             "idempotencyKey": key,
             "body": body,
             "evidenceIds": [f"issue:{issue_number}"],

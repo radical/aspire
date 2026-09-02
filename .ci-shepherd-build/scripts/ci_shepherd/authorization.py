@@ -8,9 +8,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 from typing import Any, Mapping, Sequence
 
+from .capacity_policy import (
+    DEFAULT_PRODUCTION_DELEGATION_POLICY_PATH,
+    ProductionDelegationPolicy,
+    load_production_delegation_policy,
+)
 from .timeutils import format_utc_z
 
 
@@ -26,14 +32,15 @@ DEFAULT_GRANT_TTL_MINUTES = 15
 MAX_GRANT_TTL_MINUTES = 60
 AUTHORIZATION_SCHEMA_VERSION = 2
 PRODUCTION_REPOSITORY = "microsoft/aspire"
-PRODUCTION_COMMENT_OPERATIONS = frozenset({"edit-comment"})
+PRODUCTION_COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
 MAX_PRODUCTION_COMMENT_ACTIONS = 1
 PRODUCTION_DELEGATION_OPERATIONS = frozenset({"assign-copilot"})
 MAX_PRODUCTION_DELEGATION_ACTIONS = 1
-MAX_PRODUCTION_SNAPSHOT_AGE = timedelta(minutes=15)
+MAX_PRODUCTION_SNAPSHOT_AGE = timedelta(minutes=45)
 DEFAULT_MAX_RUNNING_COPILOT_TASKS = 2
 DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H = 3
 DEFAULT_MAX_OPEN_DELEGATED_PRS = 5
+DEFAULT_MAX_REPOSITORY_RUNNING_COPILOT_TASKS = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +52,9 @@ class AuthorizationBudget:
         DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H
     )
     max_open_delegated_prs: int = DEFAULT_MAX_OPEN_DELEGATED_PRS
+    max_repository_running_copilot_tasks: int = (
+        DEFAULT_MAX_REPOSITORY_RUNNING_COPILOT_TASKS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +74,8 @@ class AuthorizationGrant:
     budget: AuthorizationBudget
     production_comment_pilot: bool
     production_delegation_pilot: bool = False
+    production_delegation_steady_state: bool = False
+    capacity_policy_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +107,15 @@ _GRANT_KEYS = frozenset(
     }
 )
 _PRODUCTION_DELEGATION_GRANT_KEY = "productionDelegationPilot"
+_PRODUCTION_DELEGATION_STEADY_STATE_KEY = "productionDelegationSteadyState"
+_CAPACITY_POLICY_DIGEST_KEY = "capacityPolicyDigest"
+_CURRENT_CAPABILITY_KEYS = frozenset(
+    {
+        _PRODUCTION_DELEGATION_GRANT_KEY,
+        _PRODUCTION_DELEGATION_STEADY_STATE_KEY,
+        _CAPACITY_POLICY_DIGEST_KEY,
+    }
+)
 _BUDGET_KEYS = frozenset(
     {
         "maxMutationAttempts",
@@ -102,6 +123,7 @@ _BUDGET_KEYS = frozenset(
         "maxRunningCopilotTasks",
         "maxCopilotStartsPerRolling24h",
         "maxOpenDelegatedPullRequests",
+        "maxRepositoryRunningCopilotTasks",
     }
 )
 _TARGET_KEYS = frozenset({"kind", "number"})
@@ -115,6 +137,10 @@ def load_authorized_execution(
     action_id: str,
     allow_production_comment_pilot: bool = False,
     allow_production_delegation_pilot: bool = False,
+    allow_production_delegation_steady_state: bool = False,
+    production_delegation_policy_path: Path = (
+        DEFAULT_PRODUCTION_DELEGATION_POLICY_PATH
+    ),
     now: datetime | None = None,
 ) -> AuthorizedExecution:
     """Read once and validate the exact proposal document and authorization grant."""
@@ -127,9 +153,19 @@ def load_authorized_execution(
         raise AuthorizationError(
             "allow_production_delegation_pilot must be a boolean."
         )
-    if allow_production_comment_pilot and allow_production_delegation_pilot:
+    if not isinstance(allow_production_delegation_steady_state, bool):
         raise AuthorizationError(
-            "Production comment and delegation pilots are mutually exclusive."
+            "allow_production_delegation_steady_state must be a boolean."
+        )
+    if sum(
+        (
+            allow_production_comment_pilot,
+            allow_production_delegation_pilot,
+            allow_production_delegation_steady_state,
+        )
+    ) > 1:
+        raise AuthorizationError(
+            "Production mutation capabilities are mutually exclusive."
         )
     proposal_bytes, proposal_document = _read_and_validate_proposal_document(
         proposals_path
@@ -173,7 +209,9 @@ def load_authorized_execution(
     snapshot_id = _require_string(proposal_document, "snapshotId")
     is_production = repository.casefold() == PRODUCTION_REPOSITORY
     production_pilot_enabled = (
-        allow_production_comment_pilot or allow_production_delegation_pilot
+        allow_production_comment_pilot
+        or allow_production_delegation_pilot
+        or allow_production_delegation_steady_state
     )
     if is_production and not production_pilot_enabled:
         raise AuthorizationError(
@@ -195,6 +233,13 @@ def load_authorized_execution(
     ):
         raise AuthorizationError(
             "Production delegation pilot confirmation does not match the grant."
+        )
+    if (
+        grant.production_delegation_steady_state
+        != allow_production_delegation_steady_state
+    ):
+        raise AuthorizationError(
+            "Production delegation steady-state confirmation does not match the grant."
         )
     if repository != grant.repository:
         raise AuthorizationError(
@@ -262,13 +307,23 @@ def load_authorized_execution(
                 proposals=proposals,
                 capability=proposal_document.get("productionPilotCapability"),
             )
-        else:
+        elif allow_production_delegation_pilot:
             _validate_production_delegation_grant(
                 grant,
                 action_id=action_id,
                 operation=operation,
                 proposals=proposals,
                 capability=proposal_document.get("productionPilotCapability"),
+            )
+        else:
+            policy = _load_capacity_policy(production_delegation_policy_path)
+            _validate_production_delegation_steady_state_grant(
+                grant,
+                action_id=action_id,
+                operation=operation,
+                proposals=proposals,
+                capability=proposal_document.get("productionPilotCapability"),
+                policy=policy,
             )
 
     return AuthorizedExecution(
@@ -316,9 +371,16 @@ def generate_authorization_grant(
         DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H
     ),
     max_open_delegated_prs: int = DEFAULT_MAX_OPEN_DELEGATED_PRS,
+    max_repository_running_copilot_tasks: int = (
+        DEFAULT_MAX_REPOSITORY_RUNNING_COPILOT_TASKS
+    ),
     override_suppression_for_action_ids: Sequence[str] = (),
     allow_production_comment_pilot: bool = False,
     allow_production_delegation_pilot: bool = False,
+    allow_production_delegation_steady_state: bool = False,
+    production_delegation_policy_path: Path = (
+        DEFAULT_PRODUCTION_DELEGATION_POLICY_PATH
+    ),
     now: datetime | None = None,
     grant_id: str | None = None,
 ) -> dict[str, Any]:
@@ -346,9 +408,19 @@ def generate_authorization_grant(
         raise AuthorizationError(
             "allow_production_delegation_pilot must be a boolean."
         )
-    if allow_production_comment_pilot and allow_production_delegation_pilot:
+    if not isinstance(allow_production_delegation_steady_state, bool):
         raise AuthorizationError(
-            "Production comment and delegation pilots are mutually exclusive."
+            "allow_production_delegation_steady_state must be a boolean."
+        )
+    if sum(
+        (
+            allow_production_comment_pilot,
+            allow_production_delegation_pilot,
+            allow_production_delegation_steady_state,
+        )
+    ) > 1:
+        raise AuthorizationError(
+            "Production mutation capabilities are mutually exclusive."
         )
     if not isinstance(ttl_minutes, int) or isinstance(ttl_minutes, bool):
         raise AuthorizationError("Grant TTL must be an integer number of minutes.")
@@ -363,6 +435,10 @@ def generate_authorization_grant(
             max_copilot_starts_per_rolling_24h,
         ),
         ("max_open_delegated_prs", max_open_delegated_prs),
+        (
+            "max_repository_running_copilot_tasks",
+            max_repository_running_copilot_tasks,
+        ),
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise AuthorizationError(f"{name} must be a nonnegative integer.")
@@ -374,7 +450,9 @@ def generate_authorization_grant(
     repository = _require_repository(proposal_document, "repository")
     is_production = repository.casefold() == PRODUCTION_REPOSITORY
     production_pilot_enabled = (
-        allow_production_comment_pilot or allow_production_delegation_pilot
+        allow_production_comment_pilot
+        or allow_production_delegation_pilot
+        or allow_production_delegation_steady_state
     )
     if is_production and not production_pilot_enabled:
         raise AuthorizationError(
@@ -485,7 +563,7 @@ def generate_authorization_grant(
                 ttl_minutes=ttl_minutes,
                 override_ids=override_ids,
             )
-        else:
+        elif allow_production_delegation_pilot:
             _validate_production_delegation_selection(
                 selected_proposals,
                 ttl_minutes=ttl_minutes,
@@ -495,6 +573,25 @@ def generate_authorization_grant(
                     max_copilot_starts_per_rolling_24h
                 ),
                 max_open_delegated_prs=max_open_delegated_prs,
+                max_repository_running_copilot_tasks=(
+                    max_repository_running_copilot_tasks
+                ),
+            )
+        else:
+            policy = _load_capacity_policy(production_delegation_policy_path)
+            _validate_production_delegation_steady_state_selection(
+                selected_proposals,
+                ttl_minutes=ttl_minutes,
+                override_ids=override_ids,
+                max_running_copilot_tasks=max_running_copilot_tasks,
+                max_copilot_starts_per_rolling_24h=(
+                    max_copilot_starts_per_rolling_24h
+                ),
+                max_open_delegated_prs=max_open_delegated_prs,
+                max_repository_running_copilot_tasks=(
+                    max_repository_running_copilot_tasks
+                ),
+                policy=policy,
             )
         production_freshness_deadline = _production_freshness_deadline(
             snapshot_id,
@@ -540,9 +637,20 @@ def generate_authorization_grant(
                 max_copilot_starts_per_rolling_24h
             ),
             "maxOpenDelegatedPullRequests": max_open_delegated_prs,
+            "maxRepositoryRunningCopilotTasks": (
+                max_repository_running_copilot_tasks
+            ),
         },
         "productionCommentPilot": allow_production_comment_pilot,
         "productionDelegationPilot": allow_production_delegation_pilot,
+        "productionDelegationSteadyState": (
+            allow_production_delegation_steady_state
+        ),
+        "capacityPolicyDigest": (
+            policy.digest
+            if is_production and allow_production_delegation_steady_state
+            else None
+        ),
     }
 
 
@@ -613,8 +721,10 @@ def _production_freshness_deadline(
             "Production comment pilot snapshot is not active yet."
         )
     if issued_at >= freshness_deadline:
+        max_age_minutes = int(MAX_PRODUCTION_SNAPSHOT_AGE.total_seconds() // 60)
         raise AuthorizationError(
-            "Production comment pilot snapshots must be less than 15 minutes old."
+            "Production comment pilot snapshots must be less than "
+            f"{max_age_minutes} minutes old."
         )
     return freshness_deadline
 
@@ -634,7 +744,7 @@ def _validate_production_comment_selection(
         operation = _require_string(proposal, "operation")
         if operation not in PRODUCTION_COMMENT_OPERATIONS:
             raise AuthorizationError(
-                "Production comment pilot grants allow existing comment edits only."
+                "Production comment pilot grants allow comment creation or editing only."
             )
         if proposal.get("dependsOn") is not None:
             raise AuthorizationError(
@@ -664,6 +774,7 @@ def _validate_production_delegation_selection(
     max_running_copilot_tasks: int,
     max_copilot_starts_per_rolling_24h: int,
     max_open_delegated_prs: int,
+    max_repository_running_copilot_tasks: int,
 ) -> None:
     if len(proposals) != MAX_PRODUCTION_DELEGATION_ACTIONS:
         raise AuthorizationError(
@@ -693,6 +804,155 @@ def _validate_production_delegation_selection(
     ) != (1, 1, 1):
         raise AuthorizationError(
             "Production delegation pilot capacity limits must all equal one."
+        )
+    if max_repository_running_copilot_tasks < 1:
+        raise AuthorizationError(
+            "Production delegation pilot repository-wide capacity ceiling "
+            "must be positive."
+        )
+
+
+def _load_capacity_policy(path: Path) -> ProductionDelegationPolicy:
+    try:
+        return load_production_delegation_policy(path)
+    except ValueError as exc:
+        raise AuthorizationError(str(exc)) from exc
+
+
+def _validate_production_delegation_steady_state_selection(
+    proposals: Sequence[Mapping[str, Any]],
+    *,
+    ttl_minutes: int,
+    override_ids: set[str],
+    max_running_copilot_tasks: int,
+    max_copilot_starts_per_rolling_24h: int,
+    max_open_delegated_prs: int,
+    max_repository_running_copilot_tasks: int,
+    policy: ProductionDelegationPolicy,
+) -> None:
+    if not (1 <= len(proposals) <= policy.max_actions_per_grant):
+        raise AuthorizationError(
+            "Production delegation steady-state grants exceed the policy action limit."
+        )
+    if any(
+        _require_string(proposal, "operation")
+        not in PRODUCTION_DELEGATION_OPERATIONS
+        for proposal in proposals
+    ):
+        raise AuthorizationError(
+            "Production delegation steady-state grants allow Copilot assignment only."
+        )
+    if any(proposal.get("dependsOn") is not None for proposal in proposals):
+        raise AuthorizationError(
+            "Production delegation steady-state actions must be independent."
+        )
+    if ttl_minutes > DEFAULT_GRANT_TTL_MINUTES:
+        raise AuthorizationError(
+            "Production delegation steady-state grants may live for at most 15 minutes."
+        )
+    if override_ids:
+        raise AuthorizationError(
+            "Production delegation steady-state grants cannot override suppression."
+        )
+    requested = (
+        max_running_copilot_tasks,
+        max_copilot_starts_per_rolling_24h,
+        max_open_delegated_prs,
+        max_repository_running_copilot_tasks,
+    )
+    maxima = (
+        policy.max_running_copilot_tasks,
+        policy.max_copilot_starts_per_rolling_24h,
+        policy.max_open_delegated_prs,
+        policy.max_repository_running_copilot_tasks,
+    )
+    if any(value < 1 for value in requested) or any(
+        value > maximum for value, maximum in zip(requested, maxima, strict=True)
+    ):
+        raise AuthorizationError(
+            "Production delegation steady-state capacity exceeds its pinned policy."
+        )
+
+
+def _validate_production_delegation_steady_state_grant(
+    grant: AuthorizationGrant,
+    *,
+    action_id: str,
+    operation: str,
+    proposals: Sequence[Mapping[str, Any]],
+    capability: object,
+    policy: ProductionDelegationPolicy,
+) -> None:
+    if not grant.production_delegation_steady_state:
+        raise AuthorizationError(
+            "Authorization grant does not carry the production steady-state capability."
+        )
+    if grant.capacity_policy_digest != policy.digest:
+        raise AuthorizationError(
+            "Production delegation capacity policy changed after grant creation."
+        )
+    selected = [
+        proposal
+        for proposal in proposals
+        if isinstance(proposal, Mapping)
+        and proposal.get("actionId") in grant.allowed_action_ids
+    ]
+    _validate_production_delegation_steady_state_selection(
+        selected,
+        ttl_minutes=int(
+            (grant.expires_at - grant.issued_at).total_seconds() // 60
+        ),
+        override_ids=set(grant.override_suppression_for_action_ids),
+        max_running_copilot_tasks=grant.budget.max_running_copilot_tasks,
+        max_copilot_starts_per_rolling_24h=(
+            grant.budget.max_copilot_starts_per_rolling_24h
+        ),
+        max_open_delegated_prs=grant.budget.max_open_delegated_prs,
+        max_repository_running_copilot_tasks=(
+            grant.budget.max_repository_running_copilot_tasks
+        ),
+        policy=policy,
+    )
+    if (
+        operation not in PRODUCTION_DELEGATION_OPERATIONS
+        or grant.allowed_operations != PRODUCTION_DELEGATION_OPERATIONS
+    ):
+        raise AuthorizationError(
+            "Production delegation steady-state grant must allow assignment only."
+        )
+    if len(selected) != len(grant.allowed_action_ids):
+        raise AuthorizationError(
+            "Production delegation steady-state grant references an unknown action."
+        )
+    expected_targets = frozenset(
+        ("issue", _require_positive_int(proposal, "issueNumber"))
+        for proposal in selected
+    )
+    if grant.allowed_targets != expected_targets:
+        raise AuthorizationError(
+            "Production delegation steady-state grant targets do not match proposals."
+        )
+    if grant.allowed_chain_roots != grant.allowed_action_ids:
+        raise AuthorizationError(
+            "Production delegation steady-state actions must be independent roots."
+        )
+    action_count = len(grant.allowed_action_ids)
+    if (
+        grant.budget.max_mutation_attempts != action_count
+        or grant.budget.max_chains != action_count
+    ):
+        raise AuthorizationError(
+            "Production delegation steady-state budget must match its action count."
+        )
+    freshness_deadline = _production_freshness_deadline(
+        grant.snapshot_id,
+        capability=capability,
+        repository=grant.repository,
+        issued_at=grant.issued_at,
+    )
+    if grant.expires_at > freshness_deadline:
+        raise AuthorizationError(
+            "Production delegation steady-state grant outlives its source snapshot."
         )
 
 
@@ -752,7 +1012,7 @@ def _validate_production_comment_grant(
         or grant.allowed_operations != selected_operations
     ):
         raise AuthorizationError(
-            "Production comment pilot grant must allow existing comment edits only."
+            "Production comment pilot grant must allow comment creation or editing only."
         )
     if any(proposal.get("dependsOn") is not None for proposal in selected_proposals):
         raise AuthorizationError(
@@ -875,16 +1135,21 @@ def _validate_production_delegation_grant(
         raise AuthorizationError(
             "Production delegation pilot grant cannot override suppression."
         )
-    if grant.budget != AuthorizationBudget(
-        max_mutation_attempts=1,
-        max_chains=1,
-        max_running_copilot_tasks=1,
-        max_copilot_starts_per_rolling_24h=1,
-        max_open_delegated_prs=1,
-    ):
+    if (
+        grant.budget.max_mutation_attempts,
+        grant.budget.max_chains,
+        grant.budget.max_running_copilot_tasks,
+        grant.budget.max_copilot_starts_per_rolling_24h,
+        grant.budget.max_open_delegated_prs,
+    ) != (1, 1, 1, 1, 1):
         raise AuthorizationError(
             "Production delegation pilot budget must bind one assignment and "
             "1/1/1 capacity."
+        )
+    if grant.budget.max_repository_running_copilot_tasks < 1:
+        raise AuthorizationError(
+            "Production delegation pilot repository-wide capacity ceiling "
+            "must be positive."
         )
     if (
         grant.expires_at - grant.issued_at
@@ -985,6 +1250,7 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
     if document_keys not in {
         _GRANT_KEYS,
         _GRANT_KEYS | {_PRODUCTION_DELEGATION_GRANT_KEY},
+        _GRANT_KEYS | _CURRENT_CAPABILITY_KEYS,
     }:
         raise AuthorizationError(
             "Authorization grant must contain exactly the supported fields."
@@ -1106,9 +1372,13 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
             budget_document,
             "maxOpenDelegatedPullRequests",
         ),
+        max_repository_running_copilot_tasks=_require_nonnegative_int(
+            budget_document,
+            "maxRepositoryRunningCopilotTasks",
+        ),
     )
 
-    return AuthorizationGrant(
+    grant = AuthorizationGrant(
         grant_id=grant_id,
         repository=repository,
         state_directory=state_directory,
@@ -1131,7 +1401,36 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
             if _PRODUCTION_DELEGATION_GRANT_KEY in document
             else False
         ),
+        production_delegation_steady_state=(
+            _require_bool(document, _PRODUCTION_DELEGATION_STEADY_STATE_KEY)
+            if _PRODUCTION_DELEGATION_STEADY_STATE_KEY in document
+            else False
+        ),
+        capacity_policy_digest=(
+            _require_optional_digest(document, _CAPACITY_POLICY_DIGEST_KEY)
+            if _CAPACITY_POLICY_DIGEST_KEY in document
+            else None
+        ),
     )
+    if sum(
+        (
+            grant.production_comment_pilot,
+            grant.production_delegation_pilot,
+            grant.production_delegation_steady_state,
+        )
+    ) > 1:
+        raise AuthorizationError(
+            "Authorization grant production capabilities are mutually exclusive."
+        )
+    if (
+        grant.production_delegation_steady_state
+        != (grant.capacity_policy_digest is not None)
+    ):
+        raise AuthorizationError(
+            "Authorization grant capacityPolicyDigest must exactly match "
+            "the steady-state capability."
+        )
+    return grant
 
 
 def _require_string(document: Mapping[str, Any], key: str) -> str:
@@ -1145,6 +1444,21 @@ def _require_bool(document: Mapping[str, Any], key: str) -> bool:
     value = document.get(key)
     if not isinstance(value, bool):
         raise AuthorizationError(f"{key} must be a boolean.")
+    return value
+
+
+def _require_optional_digest(
+    document: Mapping[str, Any],
+    key: str,
+) -> str | None:
+    value = document.get(key)
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+    ):
+        raise AuthorizationError(f"{key} must be null or a SHA-256 digest.")
     return value
 
 

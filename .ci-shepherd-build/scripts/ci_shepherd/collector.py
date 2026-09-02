@@ -23,7 +23,13 @@ if TYPE_CHECKING:
     from .refresh import RefreshPlan
 
 
-TARGET_LABELS = ("ci-failure-cause", "automation-broken")
+TARGET_LABELS = (
+    "ci-failure-cause",
+    "automation-broken",
+    "test-failure",
+    "failing-test",
+    "quarantined-test",
+)
 BOT_AUTHORS = ("github-actions[bot]",)
 COPILOT_ASSIGNEES = frozenset(
     {
@@ -2395,7 +2401,14 @@ class Collector:
                     try:
                         raw_issue = self._client.get(endpoint)
                     except Exception as exc:
-                        self._collection_errors.append(CollectionError("reference", endpoint, str(exc)))
+                        self._collection_errors.append(
+                            CollectionError(
+                                "reference",
+                                endpoint,
+                                str(exc),
+                                scope=_issue_error_scope(active_roots),
+                            )
+                        )
                         traversal.failed_issue_numbers.add(target_number)
                         self._record_supporting_disposition(
                             traversal,

@@ -43,6 +43,7 @@ EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
     - {"requiresSeparateApproval"}
     | {
         "executionEligibility",
+        "evidenceBasis",
         "sourceCommentFingerprint",
         "sourceEvidenceFingerprint",
     }
@@ -50,6 +51,7 @@ EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
 EXECUTION_ELIGIBILITY_FIELDS = frozenset(
     {
         "eligible",
+        "evidenceBasis",
         "ciLabels",
         "occurrenceCount",
         "collectionComplete",
@@ -244,9 +246,14 @@ def _validate_proposal(
         if proposal.get("requiresSeparateApproval") is not True:
             raise ValueError(f"{action_id} must require separate approval.")
     else:
+        evidence_basis = _required_string(
+            proposal.get("evidenceBasis"),
+            field=f"{action_id}.evidenceBasis",
+        )
         eligibility = _validate_execution_eligibility(
             proposal.get("executionEligibility"),
             action_id=action_id,
+            evidence_basis=evidence_basis,
         )
         if (
             "source-comment-unavailable" in eligibility["blockingReasons"]
@@ -344,15 +351,49 @@ def _validate_source_evidence_fingerprint(
     *,
     action_id: str,
 ) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != {"issueUpdatedAt"}:
+    if not isinstance(value, dict) or frozenset(value) not in {
+        frozenset({"issueUpdatedAt"}),
+        frozenset(
+            {
+                "issueUpdatedAt",
+                "sourceRevision",
+                "sourceTreeDigest",
+                "findingDigest",
+            }
+        ),
+    }:
         raise ValueError(
-            f"{action_id}.sourceEvidenceFingerprint must contain exactly "
-            "issueUpdatedAt."
+            f"{action_id}.sourceEvidenceFingerprint has unsupported fields."
         )
     _required_string(
         value.get("issueUpdatedAt"),
         field=f"{action_id}.sourceEvidenceFingerprint.issueUpdatedAt",
     )
+    if "sourceRevision" in value:
+        source_revision = _required_string(
+            value.get("sourceRevision"),
+            field=f"{action_id}.sourceEvidenceFingerprint.sourceRevision",
+        )
+        source_tree_digest = _required_string(
+            value.get("sourceTreeDigest"),
+            field=f"{action_id}.sourceEvidenceFingerprint.sourceTreeDigest",
+        )
+        finding_digest = _required_string(
+            value.get("findingDigest"),
+            field=f"{action_id}.sourceEvidenceFingerprint.findingDigest",
+        )
+        if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+            raise ValueError(
+                f"{action_id}.sourceEvidenceFingerprint.sourceRevision is invalid."
+            )
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest) is None:
+            raise ValueError(
+                f"{action_id}.sourceEvidenceFingerprint.sourceTreeDigest is invalid."
+            )
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", finding_digest) is None:
+            raise ValueError(
+                f"{action_id}.sourceEvidenceFingerprint.findingDigest is invalid."
+            )
     return value
 
 
@@ -360,6 +401,7 @@ def _validate_execution_eligibility(
     value: object,
     *,
     action_id: str,
+    evidence_basis: str,
 ) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != EXECUTION_ELIGIBILITY_FIELDS:
         raise ValueError(
@@ -367,6 +409,7 @@ def _validate_execution_eligibility(
             "supported fields."
         )
     eligible = value.get("eligible")
+    recorded_evidence_basis = value.get("evidenceBasis")
     ci_labels = value.get("ciLabels")
     occurrence_count = value.get("occurrenceCount")
     collection_complete = value.get("collectionComplete")
@@ -377,6 +420,14 @@ def _validate_execution_eligibility(
     blocking_reasons = value.get("blockingReasons")
     if not isinstance(eligible, bool):
         raise ValueError(f"{action_id}.executionEligibility.eligible must be boolean.")
+    if (
+        evidence_basis
+        not in {"ci-occurrence", "source-reconciliation", "delegation-state"}
+        or recorded_evidence_basis != evidence_basis
+    ):
+        raise ValueError(
+            f"{action_id}.executionEligibility.evidenceBasis is invalid."
+        )
     if (
         not isinstance(ci_labels, list)
         or not all(
@@ -435,10 +486,11 @@ def _validate_execution_eligibility(
         )
 
     derived_reasons: list[str] = []
-    if not ci_labels:
-        derived_reasons.append("missing-ci-label")
-    if occurrence_count <= 0:
-        derived_reasons.append("no-parsed-occurrences")
+    if evidence_basis == "ci-occurrence":
+        if not ci_labels:
+            derived_reasons.append("missing-ci-label")
+        if occurrence_count <= 0:
+            derived_reasons.append("no-parsed-occurrences")
     if not collection_complete:
         derived_reasons.append("incomplete-collection")
     if unavailable_evidence_ids:
@@ -479,6 +531,10 @@ def _validate_document_execution_eligibility(
         eligibility = _validate_execution_eligibility(
             proposal.get("executionEligibility"),
             action_id=action_id,
+            evidence_basis=_required_string(
+                proposal.get("evidenceBasis"),
+                field=f"{action_id}.evidenceBasis",
+            ),
         )
         if eligibility["eligible"] is not True:
             derived_violations.append(
@@ -940,6 +996,10 @@ def execute_action(
         eligibility = _validate_execution_eligibility(
             proposal.get("executionEligibility"),
             action_id=action_id,
+            evidence_basis=_required_string(
+                proposal.get("evidenceBasis"),
+                field=f"{action_id}.evidenceBasis",
+            ),
         )
         if eligibility["eligible"] is not True:
             raise ValueError(f"{action_id} is not eligible for execution.")
@@ -965,7 +1025,7 @@ def execute_action(
         )
 
     if (
-        proposal["operation"] == "create-comment"
+        proposal["operation"] in {"create-comment", "assign-copilot"}
         and not override_suppression
         and any(
             result.get("outcome") == "executed"
@@ -1040,6 +1100,7 @@ def execute_action(
             )
         if (
             validated["schemaVersion"] == 2
+            and proposal.get("evidenceBasis") == "ci-occurrence"
             and not live_labels & EXECUTABLE_CI_LABELS
         ):
             return _terminal_result(
@@ -1047,6 +1108,18 @@ def execute_action(
                 attempted_at=attempted_at,
                 outcome="stale",
                 reason="missing-ci-label",
+                preflight=preflight,
+            )
+        if (
+            validated["schemaVersion"] == 2
+            and proposal.get("evidenceBasis") == "source-reconciliation"
+            and "quarantined-test" not in live_labels
+        ):
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="stale",
+                reason="source-reconciliation-label-removed",
                 preflight=preflight,
             )
         if issue_state != expected_state:

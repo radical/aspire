@@ -8,6 +8,9 @@ from typing import Any
 from urllib.parse import unquote
 
 
+COLLECTION_VERSION = 2
+
+
 _ISSUE_EVIDENCE_ID_RE = re.compile(
     r"^issue:(?:(?P<repository>[^:]+/[^:]+):)?(?P<number>[1-9][0-9]*)"
     r"(?::(?P<child_kind>comment|event):(?P<child_id>[1-9][0-9]*))?$"
@@ -72,8 +75,11 @@ def plan_refresh(
     new_issues = live_numbers - previous_numbers
     source_schema_matches = (
         previous_snapshot.get("schemaVersion") == 1
+        and previous_snapshot.get("collectionVersion") == COLLECTION_VERSION
         and current_history.get("schemaVersion") == 1
         and _mapping(current_history.get("sourceSchemaVersions")).get("snapshot") == 1
+        and _mapping(current_history.get("sourceSchemaVersions")).get("collection")
+        == COLLECTION_VERSION
     )
 
     changed_issues: set[int] = set()

@@ -78,6 +78,11 @@ class EnrichmentClient:
 
     def get_pages(self, endpoint: str, key: str | None = None) -> object:
         self.calls.append(("get_pages", endpoint))
+        if endpoint not in self._pages and any(
+            f"labels={label}" in endpoint
+            for label in ("test-failure", "failing-test", "quarantined-test")
+        ):
+            return []
         response = self._pages[endpoint]
         if isinstance(response, Exception):
             raise response
@@ -121,7 +126,7 @@ def load_fixture(name: str) -> object:
     return json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
 
 
-def test_results_archive(test_name: str, outcome: str) -> bytes:
+def results_archive(test_name: str, outcome: str) -> bytes:
     class_name, method_name = test_name.rsplit(".", 1)
     trx = f"""<?xml version="1.0" encoding="utf-8"?>
 <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
@@ -402,7 +407,7 @@ class GitHubEnrichmentTests(unittest.TestCase):
         final_job["name"] = "Tests / Final Test Results"
         final_job["started_at"] = "2026-08-17T20:20:01Z"
         final_job["completed_at"] = "2026-08-17T20:21:00Z"
-        failed_results = test_results_archive(
+        failed_results = results_archive(
             "QuarantineTools.Tests.Sample.Flaky",
             "Failed",
         )
@@ -471,11 +476,11 @@ class GitHubEnrichmentTests(unittest.TestCase):
         successful_job = self.make_job(2001, conclusion="success")
         successful_job["run_attempt"] = 2
         successful_job["name"] = job_name
-        failed_results = test_results_archive(
+        failed_results = results_archive(
             "QuarantineTools.Tests.Sample.Flaky",
             "Failed",
         )
-        passed_results = test_results_archive(
+        passed_results = results_archive(
             "QuarantineTools.Tests.Sample.Flaky",
             "Passed",
         )
@@ -645,11 +650,11 @@ class GitHubEnrichmentTests(unittest.TestCase):
         successful_job = self.make_job(2001, conclusion="success")
         successful_job["run_attempt"] = 2
         successful_job["name"] = job_name
-        failed_results = test_results_archive(
+        failed_results = results_archive(
             "Widget.Tests.Sample.Flaky",
             "Failed",
         )
-        passed_results = test_results_archive(
+        passed_results = results_archive(
             "Widget.Tests.Sample.Flaky",
             "Passed",
         )
@@ -801,7 +806,7 @@ class GitHubEnrichmentTests(unittest.TestCase):
         final_job["name"] = "Final Test Results"
         final_job["started_at"] = "2026-08-17T20:20:01Z"
         final_job["completed_at"] = "2026-08-17T20:21:00Z"
-        archive = test_results_archive(
+        archive = results_archive(
             "Tests.Sample.Flaky",
             "Failed",
         )
@@ -1715,6 +1720,28 @@ class GitHubEnrichmentTests(unittest.TestCase):
         self.assertNotIn("pr:88", enriched.evidence)
         self.assertEqual("closed", enriched.evidence["issue:88"]["payload"]["state"])
         validate_snapshot(snapshot_from_result(enriched))
+
+    def test_missing_supporting_issue_error_is_scoped_to_referring_issue(
+        self,
+    ) -> None:
+        endpoint = f"/repos/{REPOSITORY}/issues/88"
+        client = EnrichmentClient(
+            singles={endpoint: FakeApiError("not-found", status=404)}
+        )
+        inventory = self.build_inventory(client, body="Related issue #88.")
+
+        enriched = Collector(client, REPOSITORY, NOW).enrich_github_evidence(
+            inventory
+        )
+
+        error = next(
+            item for item in enriched.collection_errors
+            if item.endpoint == endpoint
+        )
+        self.assertEqual(
+            {"kind": "issue", "issueNumbers": [11]},
+            error.scope,
+        )
 
     def test_enrich_github_evidence_preserves_existing_issue_detail_when_referenced_issue_is_already_collected(self) -> None:
         pages = {

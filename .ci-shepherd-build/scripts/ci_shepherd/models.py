@@ -434,7 +434,7 @@ def _validate_delegation_status(value: object) -> None:
     status = _require_mapping(value, "delegationStatus")
     _require_only_fields(
         status,
-        {"status", "records", "problem"},
+        {"status", "records", "problem", "capacity"},
         "delegationStatus",
     )
     status_value = _require_nonempty_string(status, "status")
@@ -517,6 +517,55 @@ def _validate_delegation_status(value: object) -> None:
             _require_nonempty_string(pull, "state")
             if not isinstance(pull.get("isDraft"), bool):
                 raise ValidationError(f"{pull_field}.isDraft must be a boolean.")
+    capacity_value = status.get("capacity")
+    if capacity_value is not None:
+        capacity = _require_mapping(
+            capacity_value,
+            "delegationStatus.capacity",
+        )
+        _require_only_fields(
+            capacity,
+            {
+                "runningTasks",
+                "startsInRolling24h",
+                "openDelegatedPullRequests",
+                "repositoryRunningTasks",
+                "complete",
+                "problems",
+                "warnings",
+            },
+            "delegationStatus.capacity",
+        )
+        for field_name in (
+            "runningTasks",
+            "startsInRolling24h",
+            "openDelegatedPullRequests",
+            "repositoryRunningTasks",
+        ):
+            count = capacity.get(field_name)
+            if (
+                not isinstance(count, int)
+                or isinstance(count, bool)
+                or count < 0
+            ):
+                raise ValidationError(
+                    f"delegationStatus.capacity.{field_name} must be "
+                    "a nonnegative integer."
+                )
+        if not isinstance(capacity.get("complete"), bool):
+            raise ValidationError(
+                "delegationStatus.capacity.complete must be a boolean."
+            )
+        for field_name in ("problems", "warnings"):
+            values = _require_list(capacity, field_name)
+            if any(
+                not isinstance(value, str) or not value
+                for value in values
+            ):
+                raise ValidationError(
+                    f"delegationStatus.capacity.{field_name} must contain "
+                    "nonempty strings."
+                )
     problem = status.get("problem")
     if status_value == "incomplete":
         if not isinstance(problem, str) or not problem:

@@ -745,9 +745,15 @@ def _extract_references(
         )
 
     masked_text = _mask_spans(text, masked_spans)
+    referenced_run_ids = {
+        reference["runId"]
+        for reference in references
+        if reference.get("targetType") == "workflow-run"
+        and isinstance(reference.get("runId"), int)
+    }
     for match in _LOCAL_ISSUE_RE.finditer(masked_text):
         number = _parse_github_id(match.group("number"))
-        if number is None:
+        if number is None or number in referenced_run_ids:
             continue
         references.append(
             {

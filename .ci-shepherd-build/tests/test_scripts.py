@@ -14,10 +14,11 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from ci_shepherd.authorization import AuthorizationBudget, AuthorizationGrant
 from ci_shepherd.collector import CollectionError, InventoryResult
+from ci_shepherd.delegations import CapacityEvidence, normalize_agent_task
 from ci_shepherd.execution_state import ExecutionBudgetError
 from ci_shepherd.history import HistoryError
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
@@ -649,6 +650,60 @@ class PrototypeScriptTests(unittest.TestCase):
             status,
         )
 
+    def test_bootstrap_shadow_observes_repository_delegation_capacity(
+        self,
+    ) -> None:
+        collect_script = load_script("collect")
+        repository_task = normalize_agent_task(
+            {
+                "id": "foreign-task",
+                "state": "in_progress",
+                "created_at": "2026-09-02T18:00:00Z",
+                "artifacts": [],
+            }
+        )
+        observation = SimpleNamespace(
+            tasks=(repository_task,),
+            pull_requests=(),
+            issues=(),
+            evidence=CapacityEvidence(),
+        )
+
+        with patch.object(
+            collect_script,
+            "observe_delegations",
+            return_value=observation,
+        ) as observe:
+            status, retired_task_ids = (
+                collect_script.observe_delegation_status(
+                    object(),
+                    "owner/repo",
+                    events=[],
+                    now=datetime(2026, 9, 2, 19, tzinfo=UTC),
+                )
+            )
+
+        observe.assert_called_once_with(
+            ANY,
+            "owner/repo",
+            owned_task_ids=set(),
+            owned_issue_numbers=set(),
+        )
+        self.assertEqual((), retired_task_ids)
+        self.assertEqual([], status["records"])
+        self.assertEqual(
+            {
+                "runningTasks": 0,
+                "startsInRolling24h": 0,
+                "openDelegatedPullRequests": 0,
+                "repositoryRunningTasks": 1,
+                "complete": True,
+                "problems": [],
+                "warnings": [],
+            },
+            status["capacity"],
+        )
+
     def test_tracked_delegations_stay_out_of_general_assessment_lanes(self) -> None:
         collect_script = load_script("collect")
         inventory = InventoryResult(
@@ -754,7 +809,17 @@ class PrototypeScriptTests(unittest.TestCase):
                 pass
 
             def events(self, *, repository):
-                return [{"eventType": "delegation-baseline"}]
+                return [
+                    {
+                        "eventType": "delegation-baseline",
+                        "operation": "assign-copilot",
+                        "actionId": "action:75",
+                        "recordedAt": "2026-08-31T00:00:00Z",
+                        "repository": "owner/repo",
+                        "target": {"kind": "issue", "number": 75},
+                        "taskIdsBefore": [],
+                    }
+                ]
 
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
         state_dir = scratch / "state"
@@ -771,7 +836,12 @@ class PrototypeScriptTests(unittest.TestCase):
                 patch.object(
                     collect_script,
                     "observe_delegations",
-                    return_value=SimpleNamespace(tasks=(), pull_requests=()),
+                    return_value=SimpleNamespace(
+                        tasks=(),
+                        pull_requests=(),
+                        issues=(),
+                        evidence=CapacityEvidence(),
+                    ),
                 ),
                 patch.object(
                     collect_script,
@@ -919,7 +989,7 @@ class PrototypeScriptTests(unittest.TestCase):
             "Process selected issues in batches of at most 10",
             "load each input file only once.",
             "Write only `agent-judgments.json`.",
-            "A `watch` recommendation must name its `watchReason` and the exact evidence event that ends the watch.",
+            "A `watch` recommendation must follow the issue's deterministic `watchReason` and name the exact evidence event that ends the watch in `reassessWhen`.",
             "every first-seen issue, every direct or derived material change, and every due typed wakeup.",
             "`review-events.jsonl` records only cases actually handed to the assessment agent.",
             "Aggregate `clusterOccurrenceSummary` only when the listed relationship and failure symptoms are compatible.",
@@ -969,15 +1039,16 @@ class PrototypeScriptTests(unittest.TestCase):
         normalized_skill = " ".join(SKILL_PATH.read_text().split())
 
         for phrase in (
-            "evidence-requests.round-1.json",
-            "input.round-1.json",
-            "assessment-input.round-1.json",
-            "agent-input.round-1.json",
+            "evidence-requests.json",
+            "input.expanded.json",
+            "assessment-input.json",
+            "agent-input.json",
+            "review-selection.json",
             "one expansion round",
             "`issue-reference` and `workflow-run` only",
             "Do not include preliminary judgments in verifier input.",
             "Do not investigate root cause.",
-            "The request-planning agent emits no judgments.",
+            "The planner emits no judgments.",
             "at most 25 requests",
             "`partial` or `not-enriched`",
             'Use exactly this document shape; do not add `snapshotId`',
@@ -985,6 +1056,9 @@ class PrototypeScriptTests(unittest.TestCase):
             "EVIDENCE_REQUEST_DECISION_GATES",
             "merged-fix recovery post-fix-green no-newer-matching-failure no-recent-matching-failure canonical-issue canonical-search-complete obsolete-surface current-failing-run prior-resolved-episode",
             "The fresh assessment agent receives no preliminary judgments",
+            "`allowedDispositions`",
+            "Do not emit a `watchReason` field",
+            "`target.value` is the positive JSON integer matching `issueNumber`",
             "Emit a bounded investigation handoff",
         ):
             with self.subTest(phrase=phrase):
@@ -1060,8 +1134,8 @@ class PrototypeScriptTests(unittest.TestCase):
         self.assertIn(
             'python3 "$CI_SHEPHERD_ROOT/scripts/record_poc.py" \\\n'
             '  --state-dir "$STATE" \\\n'
-            '  --input "$SCRATCH/input.round-1.json" \\\n'
-            '  --prepared "$SCRATCH/assessment-input.round-1.json" \\\n'
+            '  --input "$SCRATCH/input.json" \\\n'
+            '  --prepared "$SCRATCH/assessment-input.json" \\\n'
             '  --judgments "$SCRATCH/judgments.json" \\\n'
             '  --report "$SCRATCH/report.md" \\\n'
             '  --artifacts "$SCRATCH"',
@@ -1220,9 +1294,11 @@ class PrototypeScriptTests(unittest.TestCase):
                         "<!-- ci-shepherd:idempotency-key=issue:21:watch -->"
                     ),
                     "evidenceIds": ["issue:21"],
+                    "evidenceBasis": "ci-occurrence",
                     "expectedIssueState": "open",
                     "executionEligibility": {
                         "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
                         "ciLabels": ["ci-failure-cause"],
                         "occurrenceCount": 1,
                         "collectionComplete": True,
@@ -1243,9 +1319,11 @@ class PrototypeScriptTests(unittest.TestCase):
                     "idempotencyKey": "issue:21:close",
                     "closeReason": "not_planned",
                     "evidenceIds": ["issue:21"],
+                    "evidenceBasis": "ci-occurrence",
                     "expectedIssueState": "open",
                     "executionEligibility": {
                         "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
                         "ciLabels": ["ci-failure-cause"],
                         "occurrenceCount": 1,
                         "collectionComplete": True,
@@ -2353,9 +2431,11 @@ class PrototypeScriptTests(unittest.TestCase):
             "idempotencyKey": idempotency_key,
             "body": body,
             "evidenceIds": ["issue:1", "run:1"],
+            "evidenceBasis": "ci-occurrence",
             "expectedIssueState": "open",
             "executionEligibility": {
                 "eligible": True,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": ["ci-failure-cause"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
@@ -2540,9 +2620,11 @@ class PrototypeScriptTests(unittest.TestCase):
                         f"issue:{index}:status -->"
                     ),
                     "evidenceIds": [f"issue:{index}"],
+                    "evidenceBasis": "ci-occurrence",
                     "expectedIssueState": "open",
                     "executionEligibility": {
                         "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
                         "ciLabels": ["ci-failure-cause"],
                         "occurrenceCount": 1,
                         "collectionComplete": True,
@@ -2593,6 +2675,7 @@ class PrototypeScriptTests(unittest.TestCase):
                         "maxRunningCopilotTasks": 2,
                         "maxCopilotStartsPerRolling24h": 3,
                         "maxOpenDelegatedPullRequests": 5,
+                        "maxRepositoryRunningCopilotTasks": 100,
                     },
                     "productionCommentPilot": False,
                 }

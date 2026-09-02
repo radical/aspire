@@ -635,6 +635,44 @@ class ActionEventStore:
             if event.get("repository") == repository
         ]
 
+    def append_delegation_retirements(
+        self,
+        *,
+        repository: str,
+        task_ids: tuple[str, ...],
+        at: datetime,
+    ) -> None:
+        if not repository or "/" not in repository:
+            raise ExecutionStateError("Delegation retirement repository is invalid.")
+        if at.tzinfo is None:
+            raise ExecutionStateError("Delegation retirement time must be aware.")
+        normalized = tuple(sorted(set(task_ids)))
+        if len(normalized) != len(task_ids) or not all(normalized):
+            raise ExecutionStateError(
+                "Delegation retirement task ids must be unique and nonempty."
+            )
+        with self._locked():
+            existing = {
+                event.get("taskId")
+                for event in self._load_events()
+                if event.get("repository") == repository
+                and event.get("eventType") == "delegation-retired"
+            }
+            for task_id in normalized:
+                if task_id in existing:
+                    continue
+                self._append_event(
+                    {
+                        "schemaVersion": 1,
+                        "eventType": "delegation-retired",
+                        "recordedAt": at.astimezone(UTC)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "repository": repository,
+                        "taskId": task_id,
+                    }
+                )
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
         self._ensure_state_directory()

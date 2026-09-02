@@ -50,6 +50,14 @@ def _parser() -> argparse.ArgumentParser:
             "Permit an authorized one-assignment pilot on microsoft/aspire."
         ),
     )
+    parser.add_argument(
+        "--production-delegation-steady-state",
+        action="store_true",
+        help=(
+            "Permit an authorized policy-bounded assignment batch on "
+            "microsoft/aspire."
+        ),
+    )
     return parser
 
 
@@ -103,6 +111,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         action_id=args.action_id,
         allow_production_comment_pilot=args.production_comment_pilot,
         allow_production_delegation_pilot=args.production_delegation_pilot,
+        allow_production_delegation_steady_state=(
+            args.production_delegation_steady_state
+        ),
     )
     proposals = authorized.proposal_document
     proposal = authorized.proposal
@@ -158,7 +169,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         production_delegation_overrides = (
             {authorized.grant.repository}
-            if authorized.grant.production_delegation_pilot
+            if (
+                authorized.grant.production_delegation_pilot
+                or authorized.grant.production_delegation_steady_state
+            )
             else set()
         )
         client = GitHubActorClient(
@@ -196,6 +210,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                     max_open_delegated_prs=(
                         authorized.grant.budget.max_open_delegated_prs
+                    ),
+                    max_repository_running_tasks=(
+                        authorized.grant.budget
+                        .max_repository_running_copilot_tasks
                     ),
                 ),
                 now=datetime.now(UTC),

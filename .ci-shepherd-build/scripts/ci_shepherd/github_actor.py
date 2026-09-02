@@ -256,12 +256,18 @@ class GitHubActorClient:
             if normalized_repository in _PROTECTED_REPOSITORIES:
                 if normalized_repository in self._protected_comment_repositories:
                     if not (
-                        method == "PATCH"
-                        and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
+                        (
+                            method == "POST"
+                            and _CREATE_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
+                        )
+                        or (
+                            method == "PATCH"
+                            and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
+                        )
                     ):
                         raise MutationRepositoryError(
-                            "Protected repository pilot permits existing "
-                            "comment edits only."
+                            "Protected repository pilot permits comment "
+                            "creation or editing only."
                         )
                 elif normalized_repository in self._protected_delegation_repositories:
                     if not (

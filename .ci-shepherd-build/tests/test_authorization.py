@@ -47,6 +47,7 @@ class AuthorizationTests(unittest.TestCase):
                     "issueNumber": 1,
                     "issueUrl": "https://github.com/radical/aspire/issues/1",
                     "operation": "create-comment",
+                    "evidenceBasis": "ci-occurrence",
                     "idempotencyKey": "issue:1:status",
                     "body": (
                         "[automated] Watching.\n\n"
@@ -56,6 +57,7 @@ class AuthorizationTests(unittest.TestCase):
                     "expectedIssueState": "open",
                     "executionEligibility": {
                         "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
                         "ciLabels": ["ci-failure-cause"],
                         "occurrenceCount": 1,
                         "collectionComplete": True,
@@ -105,6 +107,7 @@ class AuthorizationTests(unittest.TestCase):
                 "maxRunningCopilotTasks": 2,
                 "maxCopilotStartsPerRolling24h": 3,
                 "maxOpenDelegatedPullRequests": 5,
+                "maxRepositoryRunningCopilotTasks": 100,
             },
             "productionCommentPilot": False,
         }
@@ -141,6 +144,7 @@ class AuthorizationTests(unittest.TestCase):
                 "issueNumber": 1,
                 "issueUrl": "https://github.com/radical/aspire/issues/1",
                 "operation": "create-comment",
+                "evidenceBasis": "ci-occurrence",
                 "idempotencyKey": "issue:1:blocked",
                 "body": (
                     "[automated] Blocked.\n\n"
@@ -150,6 +154,7 @@ class AuthorizationTests(unittest.TestCase):
                 "expectedIssueState": "open",
                 "executionEligibility": {
                     "eligible": False,
+                    "evidenceBasis": "ci-occurrence",
                     "ciLabels": ["ci-failure-cause"],
                     "occurrenceCount": 1,
                     "collectionComplete": True,
@@ -270,6 +275,7 @@ class AuthorizationTests(unittest.TestCase):
         sibling["evidenceIds"] = ["missing:1"]
         sibling["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -446,6 +452,8 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                     "issueNumber": 1,
                     "issueUrl": "https://github.com/radical/aspire/issues/1",
                     "operation": "create-comment",
+                    "evidenceBasis": "ci-occurrence",
+                    "evidenceBasis": "ci-occurrence",
                     "idempotencyKey": "issue:1:status",
                     "body": (
                         "[automated] Watching.\n\n"
@@ -455,6 +463,8 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                     "expectedIssueState": "open",
                     "executionEligibility": {
                         "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
+                        "evidenceBasis": "ci-occurrence",
                         "ciLabels": ["ci-failure-cause"],
                         "occurrenceCount": 1,
                         "collectionComplete": True,
@@ -472,12 +482,14 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                     "issueNumber": 1,
                     "issueUrl": "https://github.com/radical/aspire/issues/1",
                     "operation": "close-issue",
+                    "evidenceBasis": "ci-occurrence",
                     "idempotencyKey": "issue:1:close",
                     "closeReason": "not_planned",
                     "evidenceIds": ["issue:1"],
                     "expectedIssueState": "open",
                     "executionEligibility": {
                         "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
                         "ciLabels": ["ci-failure-cause"],
                         "occurrenceCount": 1,
                         "collectionComplete": True,
@@ -600,6 +612,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "maxRunningCopilotTasks": 2,
                 "maxCopilotStartsPerRolling24h": 3,
                 "maxOpenDelegatedPullRequests": 5,
+                "maxRepositoryRunningCopilotTasks": 100,
             },
             grant["budget"],
         )
@@ -704,6 +717,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "issueNumber": 2,
                 "issueUrl": "https://github.com/radical/aspire/issues/2",
                 "operation": "create-comment",
+                "evidenceBasis": "ci-occurrence",
                 "idempotencyKey": "issue:2:relabel",
                 "body": (
                     "[automated] Relabeled.\n\n"
@@ -713,6 +727,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "expectedIssueState": "closed",
                 "executionEligibility": {
                     "eligible": True,
+                    "evidenceBasis": "ci-occurrence",
                     "ciLabels": ["ci-failure-cause"],
                     "occurrenceCount": 1,
                     "collectionComplete": True,
@@ -825,6 +840,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         assert isinstance(close_proposal, dict)
         comment_proposal["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": [],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -834,6 +850,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         }
         close_proposal["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -869,6 +886,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         assert isinstance(close_proposal, dict)
         close_proposal["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": False,
@@ -922,6 +940,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "maxRunningCopilotTasks": 2,
                 "maxCopilotStartsPerRolling24h": 3,
                 "maxOpenDelegatedPullRequests": 5,
+                "maxRepositoryRunningCopilotTasks": 100,
             },
             grant["budget"],
         )
@@ -1001,6 +1020,107 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 allow_production_delegation_pilot=True,
             )
 
+    def test_production_delegation_steady_state_uses_policy_capacity(self) -> None:
+        self._use_production_repository()
+        proposal = self.proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.update(
+            {
+                "operation": "assign-copilot",
+                "targetRepository": "microsoft/aspire",
+                "baseBranch": "main",
+                "customInstructions": "Fix issue #1 and open a draft PR.",
+                "model": "",
+            }
+        )
+        proposal.pop("body")
+        proposal.pop("commentId")
+        proposal.pop("sourceCommentFingerprint")
+        self.proposals["proposals"] = [proposal]
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            max_running_copilot_tasks=10,
+            max_copilot_starts_per_rolling_24h=5,
+            max_open_delegated_prs=10,
+            max_repository_running_copilot_tasks=100,
+            allow_production_delegation_steady_state=True,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        authorized = load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=self.comment_action_id,
+            allow_production_delegation_steady_state=True,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertTrue(grant["productionDelegationSteadyState"])
+        self.assertIsNotNone(grant["capacityPolicyDigest"])
+        self.assertTrue(authorized.grant.production_delegation_steady_state)
+        self.assertEqual(10, authorized.grant.budget.max_running_copilot_tasks)
+        self.assertEqual(
+            5,
+            authorized.grant.budget.max_copilot_starts_per_rolling_24h,
+        )
+
+    def test_production_delegation_steady_state_rejects_policy_drift(self) -> None:
+        self._use_production_repository()
+        proposal = self.proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.update(
+            {
+                "operation": "assign-copilot",
+                "targetRepository": "microsoft/aspire",
+                "baseBranch": "main",
+                "customInstructions": "Fix issue #1 and open a draft PR.",
+                "model": "",
+            }
+        )
+        proposal.pop("body")
+        proposal.pop("commentId")
+        proposal.pop("sourceCommentFingerprint")
+        self.proposals["proposals"] = [proposal]
+        self._write_proposals()
+        policy_path = self.scratch / "policy.json"
+        policy = {
+            "schemaVersion": 1,
+            "repository": "microsoft/aspire",
+            "maxActionsPerGrant": 5,
+            "capacity": {
+                "maxRunningCopilotTasks": 10,
+                "maxCopilotStartsPerRolling24h": 5,
+                "maxOpenDelegatedPullRequests": 10,
+                "maxRepositoryRunningCopilotTasks": 100,
+            },
+        }
+        policy_path.write_text(json.dumps(policy), encoding="utf-8")
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            max_running_copilot_tasks=10,
+            max_copilot_starts_per_rolling_24h=5,
+            max_open_delegated_prs=10,
+            max_repository_running_copilot_tasks=100,
+            allow_production_delegation_steady_state=True,
+            production_delegation_policy_path=policy_path,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        policy["capacity"]["maxRunningCopilotTasks"] = 9
+        policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+        with self.assertRaisesRegex(AuthorizationError, "changed after grant"):
+            load_authorized_execution(
+                self.proposals_path,
+                self.output_path,
+                state_dir=self.state_dir,
+                action_id=self.comment_action_id,
+                allow_production_delegation_steady_state=True,
+                production_delegation_policy_path=policy_path,
+                now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+            )
+
     def test_production_comment_pilot_accepts_finalized_round_zero_snapshot(
         self,
     ) -> None:
@@ -1034,7 +1154,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 allow_production_comment_pilot=True,
             )
 
-    def test_production_comment_pilot_rejects_comment_creation(self) -> None:
+    def test_production_comment_pilot_allows_one_comment_creation(self) -> None:
         self._use_production_repository()
         proposal = self.proposals["proposals"][0]
         proposal["operation"] = "create-comment"
@@ -1042,14 +1162,22 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         proposal.pop("sourceCommentFingerprint")
         self._write_proposals()
 
-        with self.assertRaisesRegex(
-            AuthorizationError,
-            "existing comment edits only",
-        ):
-            self._generate(
-                action_ids=[self.comment_action_id],
-                allow_production_comment_pilot=True,
-            )
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        authorized = load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=self.comment_action_id,
+            allow_production_comment_pilot=True,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertEqual(["create-comment"], grant["allowedOperations"])
+        self.assertEqual("create-comment", authorized.proposal["operation"])
 
     def test_production_comment_pilot_requires_finalized_cycle_capability(
         self,
@@ -1133,20 +1261,37 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
             )
 
+    def test_production_comment_pilot_allows_time_for_collection_and_review(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+
+        grant = generate_authorization_grant(
+            self.proposals_path,
+            action_ids=[self.comment_action_id],
+            state_dir=self.state_dir,
+            allow_production_comment_pilot=True,
+            now=datetime(2026, 8, 29, 20, 30, tzinfo=UTC),
+            grant_id="grant:test",
+        )
+
+        self.assertEqual("2026-08-29T20:45:00Z", grant["expiresAtUtc"])
+
     def test_production_comment_pilot_rejects_stale_expanded_snapshot(self) -> None:
         self._use_production_repository()
         self._write_proposals()
 
         with self.assertRaisesRegex(
             AuthorizationError,
-            "less than 15 minutes old",
+            "less than 45 minutes old",
         ):
             generate_authorization_grant(
                 self.proposals_path,
                 action_ids=[self.comment_action_id],
                 state_dir=self.state_dir,
                 allow_production_comment_pilot=True,
-                now=datetime(2026, 8, 29, 20, 16, tzinfo=UTC),
+                now=datetime(2026, 8, 29, 20, 46, tzinfo=UTC),
                 grant_id="grant:test",
             )
 
@@ -1160,11 +1305,11 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             state_dir=self.state_dir,
             ttl_minutes=15,
             allow_production_comment_pilot=True,
-            now=datetime(2026, 8, 29, 20, 10, tzinfo=UTC),
+            now=datetime(2026, 8, 29, 20, 40, tzinfo=UTC),
             grant_id="grant:test",
         )
 
-        self.assertEqual("2026-08-29T20:15:00Z", grant["expiresAtUtc"])
+        self.assertEqual("2026-08-29T20:45:00Z", grant["expiresAtUtc"])
 
     def test_production_pilot_grant_requires_execution_confirmation(self) -> None:
         self._use_production_repository()
@@ -1199,7 +1344,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "closure",
                 [self.comment_action_id],
                 {"operation": "close-issue"},
-                "existing comment edits only",
+                "comment creation or editing only",
             ),
             (
                 "long lifetime",
@@ -1259,7 +1404,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "operation",
                 "allowedOperations",
                 ["edit-comment", "create-comment"],
-                "existing comment edits only",
+                "comment creation or editing only",
             ),
             (
                 "target",
@@ -1285,13 +1430,14 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                     "maxRunningCopilotTasks": 2,
                     "maxCopilotStartsPerRolling24h": 3,
                     "maxOpenDelegatedPullRequests": 5,
+                    "maxRepositoryRunningCopilotTasks": 100,
                 },
                 "exact action count",
             ),
             (
                 "lifetime",
                 "expiresAtUtc",
-                "2026-08-29T20:16:00Z",
+                "2026-08-29T20:46:00Z",
                 "outlives its source snapshot",
             ),
         ]

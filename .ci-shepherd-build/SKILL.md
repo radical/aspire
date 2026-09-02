@@ -23,6 +23,7 @@ export GITHUB_LOGIN="$(gh api user --jq .login)"
 export CI_SHEPHERD_ROOT="$CHECKOUT/.ci-shepherd-build"
 export STATE="$HOME/.copilot/ci-shepherd/state"
 export SCRATCH="$HOME/.copilot/ci-shepherd/runs/manual-$(date -u +%Y%m%dT%H%M%SZ)"
+install -d -m 700 "$STATE" "$SCRATCH"
 
 python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" start \
   --repository microsoft/aspire \
@@ -114,9 +115,10 @@ never read as a clean one.
   grant enumerates action IDs, targets, operations, expiry, proposal identity,
   and a persistent mutation budget. Prose, labels, disposition names, and
   sequential invocation are never authorization.
-- Executable proposals are limited to issue comments, issue-comment edits, and
-  issue closure. Pull-request findings and all other high-risk actions remain
-  advisory and never enter the executable proposal document.
+- Executable proposals are limited to issue comments, issue-comment edits,
+  issue closure, and separately capability-gated Copilot assignment.
+  Pull-request findings and all other high-risk actions remain advisory and
+  never enter the executable proposal document.
 
 ### Pull-request assessment
 
@@ -539,9 +541,9 @@ proposal rendering converts those judgments into exact effects:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/propose_actions.py" \
-  --snapshot "$SCRATCH/input.round-1.json" \
-  --prepared "$SCRATCH/assessment-input.round-1.json" \
-  --agent-input "$SCRATCH/agent-input.round-1.json" \
+  --snapshot "$SCRATCH/input.json" \
+  --prepared "$SCRATCH/assessment-input.json" \
+  --agent-input "$SCRATCH/agent-input.json" \
   --judgments "$SCRATCH/judgments.json" \
   --shepherd-author "$SHEPHERD_AUTHOR" \
   --output "$SCRATCH/action-proposals.json"
@@ -614,14 +616,15 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
 requires `--production-comment-pilot` at both grant
 creation and execution, and the generated grant records
 `productionCommentPilot: true`. Such a grant must name exactly one
-`edit-comment` action against an existing shepherd-owned comment, have no
-dependency or suppression override, and come from a finalized round-zero or
-round-one snapshot collected less than 15 minutes earlier. Finalized proposal
-documents carry a digest-bound production capability; provisional round-zero
-proposals written before expansion planning do not. The grant expires no later
-than 15 minutes after collection. The final actor boundary allows only the
-corresponding comment PATCH; issue closure remains denied there even if an
-invalid caller bypasses authorization validation.
+`create-comment` or `edit-comment` action, have no dependency or suppression
+override, and come from a finalized round-zero or round-one snapshot collected
+less than 45 minutes earlier. An edit must target an existing shepherd-owned
+comment. Finalized proposal documents carry a digest-bound production
+capability; provisional round-zero proposals written before expansion planning
+do not. The grant lives for at most 15 minutes and expires no later than 45
+minutes after collection. The final actor boundary allows only the corresponding
+comment POST or PATCH; issue closure remains denied there even if an invalid
+caller bypasses authorization validation.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
@@ -779,9 +782,10 @@ no case event when the deterministic pipeline and agent override input produce
 the same material case state.
 The POC state directory has one recorder at a time; concurrent lifecycle
 recorders against the same state directory are unsupported.
-The `round-1` artifacts are one bounded evidence-planning and expansion pass:
-the request document, immutable expanded snapshot, regenerated prepared input,
-fresh compact verifier input, and fresh verifier judgments.
+The one-round artifacts are one bounded evidence-planning and expansion pass:
+`evidence-requests.json`, immutable `input.expanded.json`, regenerated current
+assessment inputs, and fresh verifier judgments. Pre-expansion artifacts use
+the `.pre-expansion.json` suffix.
 `review-selection.json` sends every first-seen issue, every materially changed
 issue, and every issue whose explicit typed wakeup is due to the model.
 `agent-input.json` is filtered to that same set. Stable reviewed cases are
@@ -873,8 +877,8 @@ expanded judgments cannot claim the same evidence set.
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/record_poc.py" \
   --state-dir "$STATE" \
-  --input "$SCRATCH/input.round-1.json" \
-  --prepared "$SCRATCH/assessment-input.round-1.json" \
+  --input "$SCRATCH/input.json" \
+  --prepared "$SCRATCH/assessment-input.json" \
   --judgments "$SCRATCH/judgments.json" \
   --report "$SCRATCH/report.md" \
   --artifacts "$SCRATCH"
@@ -922,46 +926,19 @@ Use this artifact flow:
 input.json
   -> prepare.py writes assessment-input.json
   -> compact.py writes agent-input.json
-  -> request-planning agent writes evidence-requests.round-1.json
-  -> validate_requests.py validates the request document
-  -> expand.py writes input.round-1.json
-  -> prepare.py writes assessment-input.round-1.json
-  -> compact.py writes agent-input.round-1.json
-  -> fresh assessment agent writes agent-judgments.round-1.json
-  -> finalize.py / validate.py / render.py
+  -> cycle.py finish derives and validates evidence-requests.json
+  -> expand.py writes input.expanded.json and evidence-expansion-errors.json
+  -> input.json, assessment-input.json, agent-input.json,
+     review-selection.json, and pull-request-review.json are regenerated in place
+  -> fresh assessment agent writes agent-judgments.json
+  -> cycle.py finish validates, renders, and records the round
 ```
 
-The coordinator runs:
-
-```bash
-python3 "$CI_SHEPHERD_ROOT/scripts/compact.py" \
-  --prepared "$SCRATCH/assessment-input.json" \
-  --related-issues "$FIXTURE/related-issues.json" \
-  --fingerprints "$STATE/ledgers/fingerprints.jsonl" \
-  --output "$SCRATCH/agent-input.json"
-
-python3 "$CI_SHEPHERD_ROOT/scripts/validate_requests.py" \
-  --input "$SCRATCH/input.json" \
-  --requests "$SCRATCH/evidence-requests.round-1.json"
-
-python3 "$CI_SHEPHERD_ROOT/scripts/expand.py" \
-  --input "$SCRATCH/input.json" \
-  --requests "$SCRATCH/evidence-requests.round-1.json" \
-  --output "$SCRATCH/input.round-1.json" \
-  --errors "$SCRATCH/expansion-errors.round-1.json" \
-  --audit "$SCRATCH/api-calls.jsonl"
-
-python3 "$CI_SHEPHERD_ROOT/scripts/prepare.py" \
-  --input "$SCRATCH/input.round-1.json" \
-  --output "$SCRATCH/assessment-input.round-1.json" \
-  --max-bundle-records 25
-
-python3 "$CI_SHEPHERD_ROOT/scripts/compact.py" \
-  --prepared "$SCRATCH/assessment-input.round-1.json" \
-  --related-issues "$FIXTURE/related-issues.json" \
-  --fingerprints "$STATE/ledgers/fingerprints.jsonl" \
-  --output "$SCRATCH/agent-input.round-1.json"
-```
+The supported `cycle.py finish` command performs that pipeline. Before
+overwriting the current files, it preserves `input.pre-expansion.json`,
+`action-proposals.pre-expansion.json`, `review-selection.pre-expansion.json`,
+and `pull-request-review.pre-expansion.json`. Do not run the individual stages
+or invent round-suffixed filenames during a supported cycle.
 
 `compact.py` treats an absent fingerprint ledger as empty history. Only
 `record_poc.py` appends fingerprints after the finalized cycle has been
@@ -969,8 +946,8 @@ validated and immutably recorded.
 
 ### Request-planning agent contract
 
-The request-planning agent reads only `agent-input.json` and writes only
-`evidence-requests.round-1.json`. The request-planning agent emits no
+The request planner reads only `agent-input.json` and writes only
+`evidence-requests.json`. The planner emits no
 judgments. It may make at most 25 requests and may request
 `issue-reference` and `workflow-run` only. Every request must:
 
@@ -1031,9 +1008,10 @@ silently rewritten.
 
 Do not include preliminary judgments in verifier input. The fresh assessment
 agent receives no preliminary judgments, planner reasoning, or prior agent
-analysis. It receives only this skill, `agent-input.round-1.json`, and the
-validated list of source issue numbers from
-`evidence-requests.round-1.json`. Regenerating the compact input after
+analysis. It receives only this skill, regenerated `agent-input.json` and
+`review-selection.json`, plus the validated list of source issue
+numbers from `evidence-requests.json`. The selection document is authoritative
+for each issue's `allowedDispositions`. Regenerating the compact input after
 expansion is mandatory; never append evidence to an earlier agent prompt.
 
 The fresh agent copies all deterministic defaults. It spends substantive
@@ -1221,8 +1199,9 @@ defaults and avoid contradicting safe queues:
    Missing machine-fetchable evidence is `investigate`, not `ping-human`.
    `ping-human` is reserved for a decision, permission, ownership, or access
    question only a person can answer.
-6. A `watch` recommendation must name its `watchReason` and the exact evidence
-   event that ends the watch. `single-test-occurrence` waits for another
+   6. A `watch` recommendation must follow the issue's deterministic `watchReason`
+   and name the exact evidence event that ends the watch in `reassessWhen`. Do not
+   emit a `watchReason` field in the recommendation. `single-test-occurrence` waits for another
    independent failure on a different day. `single-infrastructure-occurrence`
    waits for recurrence or positive recovery. A generic exit code with
    unavailable logs is an investigation, not a watch. Choose `investigate`
@@ -1336,5 +1315,9 @@ authorize assignment.
 
 Allowed target kinds are `issue`, `test`, `failure-fingerprint`, and
 `workflow-run`.
+
+For an `issue` target, `target.value` is the positive JSON integer matching
+`issueNumber`. For every other target kind, `target.value` is a nonempty JSON
+string.
 
 Confidence is `high`, `medium`, or `low`.

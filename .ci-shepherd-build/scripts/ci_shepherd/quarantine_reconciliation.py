@@ -75,21 +75,56 @@ def reconcile_quarantine_source(
             "sourceRevision": None,
             "sourceTreeDigest": None,
             "findings": [],
+            "verifiedIssues": [],
             "unverifiableIssueNumbers": [issue["issueNumber"] for issue in labeled],
         }
 
     findings: list[dict[str, object]] = []
+    verified_issues: list[dict[str, object]] = []
     for issue in labeled:
         finding = _reconcile_labeled_issue(issue, pinned, session_events)
-        if finding is not None:
+        if finding is None:
+            linked = pinned["quarantinesByIssueUrl"].get(
+                _normalized_issue_url(issue["issueUrl"]),
+                [],
+            )
+            claimed = issue["testName"]
+            matching = [
+                entry
+                for entry in linked
+                if claimed is None
+                or (
+                    entry["testName"] == claimed
+                    if issue["hasRawTestName"]
+                    else entry["testName"].casefold() == claimed.casefold()
+                )
+            ]
+            if matching:
+                verified_issues.append(
+                    {
+                        "issueNumber": issue["issueNumber"],
+                        "issueUrl": issue["issueUrl"],
+                        "tests": [
+                            {
+                                "testName": entry["testName"],
+                                "file": entry["file"],
+                                "line": entry["line"],
+                            }
+                            for entry in matching
+                        ],
+                    }
+                )
+        else:
             findings.append(finding)
     findings.sort(key=lambda item: int(item["issueNumber"]))
+    verified_issues.sort(key=lambda item: int(item["issueNumber"]))
     return {
         "schemaVersion": 1,
         "repository": repository,
         "sourceRevision": pinned["sourceRevision"],
         "sourceTreeDigest": pinned["sourceTreeDigest"],
         "findings": findings,
+        "verifiedIssues": verified_issues,
         "unverifiableIssueNumbers": [],
     }
 

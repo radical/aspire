@@ -108,6 +108,7 @@ def _assignment_proposals() -> dict[str, object]:
                 "issueNumber": 21,
                 "issueUrl": "https://github.com/owner/repo/issues/21",
                 "operation": "assign-copilot",
+                "evidenceBasis": "ci-occurrence",
                 "idempotencyKey": "issue:21:copilot-assignment",
                 "evidenceIds": ["issue:21", "test:Example.Tests.Fails"],
                 "expectedIssueState": "open",
@@ -119,6 +120,7 @@ def _assignment_proposals() -> dict[str, object]:
                 "model": "",
                 "executionEligibility": {
                     "eligible": True,
+                    "evidenceBasis": "ci-occurrence",
                     "ciLabels": ["test-failure"],
                     "occurrenceCount": 1,
                     "collectionComplete": True,
@@ -368,6 +370,42 @@ class ActorTests(unittest.TestCase):
         self.assertEqual("issue-already-assigned", result["reason"])
         self.assertNotIn("assign_copilot", [call[0] for call in client.calls])
 
+    def test_source_reconciled_assignment_aborts_when_label_is_removed(self) -> None:
+        proposals = _assignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        action["evidenceBasis"] = "source-reconciliation"
+        eligibility = action["executionEligibility"]
+        assert isinstance(eligibility, dict)
+        eligibility["evidenceBasis"] = "source-reconciliation"
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "test-failure"}],
+                    "assignees": [],
+                }
+            ]
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=str(action["actionId"]),
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual(
+            "source-reconciliation-label-removed",
+            result["reason"],
+        )
+        self.assertNotIn("assign_copilot", [call[0] for call in client.calls])
+
     def test_reconcile_assignment_adopts_the_live_copilot_assignee(self) -> None:
         proposals = _assignment_proposals()
         action = proposals["proposals"][0]
@@ -512,8 +550,10 @@ class ActorTests(unittest.TestCase):
         for proposal in proposals["proposals"]:
             assert isinstance(proposal, dict)
             proposal.pop("requiresSeparateApproval")
+            proposal["evidenceBasis"] = "ci-occurrence"
             proposal["executionEligibility"] = {
                 "eligible": False,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": [],
                 "occurrenceCount": 0,
                 "collectionComplete": True,
@@ -561,11 +601,13 @@ class ActorTests(unittest.TestCase):
         actions = proposals["proposals"]
         for action in actions:
             action.pop("requiresSeparateApproval")
+            action["evidenceBasis"] = "ci-occurrence"
             action["sourceEvidenceFingerprint"] = {
                 "issueUpdatedAt": "2026-08-21T19:54:00Z"
             }
             action["executionEligibility"] = {
                 "eligible": True,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": ["test-failure"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
@@ -575,6 +617,7 @@ class ActorTests(unittest.TestCase):
             }
         actions[1]["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["test-failure"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -589,6 +632,69 @@ class ActorTests(unittest.TestCase):
                     "state": "open",
                     "updated_at": "2026-08-21T19:54:00Z",
                     "labels": [{"name": "Test-Failure"}],
+                },
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T20:00:01Z",
+                },
+            ],
+            comments=[[]],
+            single_comments=[
+                {"id": 900, "body": COMMENT_BODY, "user": {"login": "ankj"}}
+            ],
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertIn("create_comment", [call[0] for call in client.calls])
+
+    def test_source_reconciliation_executes_without_a_ci_label(self) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {"status": "eligible", "violations": []},
+            }
+        )
+        proposal = proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.pop("requiresSeparateApproval")
+        proposal["evidenceBasis"] = "source-reconciliation"
+        proposal["sourceEvidenceFingerprint"] = {
+            "issueUpdatedAt": "2026-08-21T19:54:00Z",
+            "sourceRevision": "a" * 40,
+            "sourceTreeDigest": "sha256:" + "b" * 64,
+            "findingDigest": "sha256:" + "c" * 64,
+        }
+        proposal["executionEligibility"] = {
+            "eligible": True,
+            "evidenceBasis": "source-reconciliation",
+            "ciLabels": [],
+            "occurrenceCount": 0,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": [],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": [],
+        }
+        proposals["proposals"] = [proposal]
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "quarantined-test"}],
                 },
                 {
                     "number": 21,
@@ -637,11 +743,13 @@ class ActorTests(unittest.TestCase):
         actions = proposals["proposals"]
         for action in actions:
             action.pop("requiresSeparateApproval")
+            action["evidenceBasis"] = "ci-occurrence"
             action["sourceEvidenceFingerprint"] = {
                 "issueUpdatedAt": "2026-08-21T19:54:00Z"
             }
             action["executionEligibility"] = {
                 "eligible": True,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": ["ci-failure-cause"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
@@ -651,6 +759,7 @@ class ActorTests(unittest.TestCase):
             }
         actions[1]["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -685,8 +794,10 @@ class ActorTests(unittest.TestCase):
         proposal = proposals["proposals"][0]
         assert isinstance(proposal, dict)
         proposal.pop("requiresSeparateApproval")
+        proposal["evidenceBasis"] = "ci-occurrence"
         proposal["executionEligibility"] = {
             "eligible": True,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -735,8 +846,10 @@ class ActorTests(unittest.TestCase):
         proposal = proposals["proposals"][0]
         assert isinstance(proposal, dict)
         proposal.pop("requiresSeparateApproval")
+        proposal["evidenceBasis"] = "ci-occurrence"
         proposal["executionEligibility"] = {
             "eligible": True,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -785,10 +898,12 @@ class ActorTests(unittest.TestCase):
         proposal = proposals["proposals"][0]
         assert isinstance(proposal, dict)
         proposal.pop("requiresSeparateApproval")
+        proposal["evidenceBasis"] = "ci-occurrence"
         proposal["operation"] = "edit-comment"
         proposal["commentId"] = 900
         proposal["executionEligibility"] = {
             "eligible": True,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -848,8 +963,10 @@ class ActorTests(unittest.TestCase):
         for proposal in proposals["proposals"]:
             assert isinstance(proposal, dict)
             proposal.pop("requiresSeparateApproval")
+            proposal["evidenceBasis"] = "ci-occurrence"
             proposal["executionEligibility"] = {
                 "eligible": True,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": ["ci-failure-cause"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
@@ -931,8 +1048,10 @@ class ActorTests(unittest.TestCase):
         for proposal in proposals["proposals"]:
             assert isinstance(proposal, dict)
             proposal.pop("requiresSeparateApproval")
+            proposal["evidenceBasis"] = "ci-occurrence"
             proposal["executionEligibility"] = {
                 "eligible": True,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": ["ci-failure-cause"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
@@ -998,6 +1117,41 @@ class ActorTests(unittest.TestCase):
 
         self.assertEqual("stale", result["outcome"])
         self.assertEqual("stable-idempotency-key-already-executed", result["reason"])
+        self.assertEqual([], client.calls)
+
+    def test_executed_assignment_identity_suppresses_a_successor_snapshot(
+        self,
+    ) -> None:
+        proposals = _assignment_proposals()
+        proposal = proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal["actionId"] = (
+            "snapshot:owner/repo:2:issue:21:assign-copilot"
+        )
+        client = ScriptedActorClient()
+
+        result = execute_action(
+            proposals,
+            action_id=str(proposal["actionId"]),
+            prior_results=_results(
+                {
+                    "actionId": (
+                        "snapshot:owner/repo:1:issue:21:assign-copilot"
+                    ),
+                    "outcome": "executed",
+                    "idempotencyKey": "issue:21:copilot-assignment",
+                    "target": {"kind": "issue", "number": 21},
+                }
+            ),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual(
+            "stable-idempotency-key-already-executed",
+            result["reason"],
+        )
         self.assertEqual([], client.calls)
 
     def test_nonterminal_intent_does_not_trigger_already_attempted_guard(self) -> None:
@@ -1277,11 +1431,13 @@ class ActorTests(unittest.TestCase):
         for action in actions:
             assert isinstance(action, dict)
             action.pop("requiresSeparateApproval")
+            action["evidenceBasis"] = "ci-occurrence"
             action["sourceEvidenceFingerprint"] = {
                 "issueUpdatedAt": "2026-08-21T19:54:00Z"
             }
             action["executionEligibility"] = {
                 "eligible": True,
+                "evidenceBasis": "ci-occurrence",
                 "ciLabels": ["ci-failure-cause"],
                 "occurrenceCount": 1,
                 "collectionComplete": True,
@@ -1293,6 +1449,7 @@ class ActorTests(unittest.TestCase):
         assert isinstance(blocked_action, dict)
         blocked_action["executionEligibility"] = {
             "eligible": False,
+            "evidenceBasis": "ci-occurrence",
             "ciLabels": ["ci-failure-cause"],
             "occurrenceCount": 1,
             "collectionComplete": True,
@@ -1901,7 +2058,7 @@ class GitHubActorClientTests(unittest.TestCase):
 
                 self.assertEqual([], runner.calls)
 
-    def test_production_comment_repository_allows_existing_comment_edits_only(
+    def test_production_comment_repository_allows_comment_writes_only(
         self,
     ) -> None:
         runner = RecordingRunner({"id": 900, "body": COMMENT_BODY})
@@ -1911,20 +2068,17 @@ class GitHubActorClientTests(unittest.TestCase):
             protected_comment_repositories={"Microsoft/Aspire"},
         )
 
-        with self.assertRaisesRegex(
-            MutationRepositoryError,
-            "existing comment edits only",
-        ):
-            client.create_comment("microsoft/aspire", 21, COMMENT_BODY)
+        client.create_comment("microsoft/aspire", 21, COMMENT_BODY)
         client.edit_comment("microsoft/aspire", 900, COMMENT_BODY)
         with self.assertRaisesRegex(
             MutationRepositoryError,
-            "existing comment edits only",
+            "comment creation or editing only",
         ):
             client.close_issue("microsoft/aspire", 21, "completed")
 
-        self.assertEqual(1, len(runner.calls))
-        self.assertIn("PATCH", runner.calls[0][0])
+        self.assertEqual(2, len(runner.calls))
+        self.assertIn("POST", runner.calls[0][0])
+        self.assertIn("PATCH", runner.calls[1][0])
 
     def test_production_comment_repository_must_also_be_allowed(self) -> None:
         with self.assertRaisesRegex(ValueError, "explicitly allowed"):

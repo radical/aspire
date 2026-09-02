@@ -33,6 +33,14 @@ class GitHubTextResponse:
     headers: dict[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class PagedInventory:
+    items: tuple[Any, ...]
+    pages: int
+    complete: bool
+    next_endpoint: str | None
+
+
 @dataclass(slots=True)
 class _ParsedResponse:
     status: int
@@ -113,32 +121,63 @@ class GitHubClient:
             ) from exc
 
     def get_pages(self, endpoint: str, key: str | None = None) -> list[Any]:
-        items: list[Any] = []
-        page_number = 1
-        paged_endpoint = self._with_paging(endpoint, page_number)
-
-        for _ in range(self._max_pages):
-            payload, response = self._get_json_response(paged_endpoint)
-            page_items = self._extract_page_items(paged_endpoint, payload, key)
-            items.extend(page_items)
-            next_endpoint = self._next_link_endpoint(response.headers)
-            if next_endpoint is not None:
-                paged_endpoint = next_endpoint
-                continue
-            if len(page_items) < 100:
-                return items
-            page_number += 1
-            paged_endpoint = self._with_paging(endpoint, page_number)
-
+        inventory = self.get_paged_inventory(endpoint, key)
+        if inventory.complete:
+            return list(inventory.items)
         raise GitHubApiError(
             category="pagination-limit",
-            endpoint=paged_endpoint,
+            endpoint=inventory.next_endpoint or endpoint,
             status=0,
             headers={},
             retryable=False,
             attempts=1,
             sanitized_stderr="",
         )
+
+    def get_paged_inventory(
+        self,
+        endpoint: str,
+        key: str | None = None,
+    ) -> PagedInventory:
+        items: list[Any] = []
+        page_number = 1
+        paged_endpoint = self._with_paging(endpoint, page_number)
+
+        for page_count in range(1, self._max_pages + 1):
+            payload, response = self._get_json_response(paged_endpoint)
+            page_items = self._extract_page_items(paged_endpoint, payload, key)
+            items.extend(page_items)
+            next_endpoint = self._next_link_endpoint(
+                response.headers,
+                original_endpoint=endpoint,
+            )
+            if next_endpoint is not None:
+                if page_count == self._max_pages:
+                    return PagedInventory(
+                        items=tuple(items),
+                        pages=page_count,
+                        complete=False,
+                        next_endpoint=next_endpoint,
+                    )
+                paged_endpoint = next_endpoint
+                continue
+            if len(page_items) < 100:
+                return PagedInventory(
+                    items=tuple(items),
+                    pages=page_count,
+                    complete=True,
+                    next_endpoint=None,
+                )
+            if page_count == self._max_pages:
+                return PagedInventory(
+                    items=tuple(items),
+                    pages=page_count,
+                    complete=False,
+                    next_endpoint=self._with_paging(endpoint, page_number + 1),
+                )
+            page_number += 1
+            paged_endpoint = self._with_paging(endpoint, page_number)
+        raise AssertionError("unreachable")
 
     def get_text(self, endpoint: str, max_bytes: int = 200000) -> GitHubTextResponse:
         for attempt in range(1, self._max_attempts + 1):
@@ -377,7 +416,12 @@ class GitHubClient:
         query_items.append(("page", str(page_number)))
         return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query_items), split.fragment))
 
-    def _next_link_endpoint(self, headers: dict[str, str]) -> str | None:
+    def _next_link_endpoint(
+        self,
+        headers: dict[str, str],
+        *,
+        original_endpoint: str,
+    ) -> str | None:
         match = _NEXT_LINK_RE.search(headers.get("link", ""))
         if match is None:
             return None
@@ -393,6 +437,18 @@ class GitHubClient:
                 attempts=1,
                 sanitized_stderr="",
             )
+
+        original_query = {
+            (name, value)
+            for name, value in parse_qsl(
+                urlsplit(original_endpoint).query,
+                keep_blank_values=True,
+            )
+            if name not in {"page", "per_page"}
+        }
+        next_query = set(parse_qsl(split.query, keep_blank_values=True))
+        if not original_query.issubset(next_query):
+            return None
 
         return urlunsplit(("", "", split.path, split.query, split.fragment))
 

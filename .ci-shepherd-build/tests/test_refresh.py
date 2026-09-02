@@ -4,6 +4,7 @@ import copy
 import unittest
 
 from ci_shepherd.refresh import (
+    COLLECTION_VERSION,
     RefreshError,
     RefreshPlan,
     complete_refresh_plan,
@@ -107,6 +108,7 @@ def prior_snapshot() -> dict[str, object]:
     ]
     return {
         "schemaVersion": 1,
+        "collectionVersion": COLLECTION_VERSION,
         "repository": REPOSITORY,
         "collectedAt": COLLECTED_AT,
         "openIssues": [1],
@@ -199,7 +201,11 @@ def current_history(snapshot: dict[str, object] | None = None) -> dict[str, obje
     return {
         "schemaVersion": 1,
         "repository": REPOSITORY,
-        "sourceSchemaVersions": {"snapshot": 1, "report": 1},
+        "sourceSchemaVersions": {
+            "snapshot": 1,
+            "collection": COLLECTION_VERSION,
+            "report": 1,
+        },
         "evidence": history_evidence,
     }
 
@@ -331,6 +337,24 @@ class RefreshPlanTests(unittest.TestCase):
         wrong_schema["sourceSchemaVersions"]["snapshot"] = 2
 
         plan = plan_refresh(REPOSITORY, [issue_summary(1)], snapshot, wrong_schema)
+
+        self.assertEqual((), plan.reuse)
+        self.assertIn("issue:1", plan.refresh)
+
+    def test_collection_version_change_rejects_cached_reference_reuse(
+        self,
+    ) -> None:
+        snapshot = prior_snapshot()
+        snapshot["collectionVersion"] = COLLECTION_VERSION - 1
+        history = current_history(snapshot)
+        history["sourceSchemaVersions"]["collection"] = COLLECTION_VERSION - 1
+
+        plan = plan_refresh(
+            REPOSITORY,
+            [issue_summary(1)],
+            snapshot,
+            history,
+        )
 
         self.assertEqual((), plan.reuse)
         self.assertIn("issue:1", plan.refresh)

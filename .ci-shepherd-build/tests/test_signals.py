@@ -36,6 +36,27 @@ def occurrence_table(rows: tuple[tuple[str, int, str, int], ...]) -> str:
 
 
 class IssueSignalTests(unittest.TestCase):
+    def test_key_run_labels_are_not_treated_as_issue_references(self) -> None:
+        signals = extract(
+            "#### Key runs\n"
+            "| | Date | OS | Build |\n"
+            "| --- | --- | --- | --- |\n"
+            "| ❌ | [May 02](https://github.com/microsoft/aspire/actions/runs/25238995458) "
+            "| linux | #25238995458 |\n"
+            "\nRelated issue #19400.\n"
+        )
+
+        self.assertEqual(
+            [("issue", 19400), ("workflow-run", 25238995458)],
+            [
+                (
+                    reference["targetType"],
+                    reference.get("runId", reference.get("targetNumber")),
+                )
+                for reference in signals.references
+            ],
+        )
+
     def test_explicit_resolution_run_precedes_full_occurrence_run_budget(self) -> None:
         rows = tuple(
             (

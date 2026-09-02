@@ -859,6 +859,7 @@ def _current_document(run: Mapping[str, Any]) -> dict[str, Any]:
         decisions = judgments.get("issues")
         source_schema_versions = {
             "snapshot": snapshot["schemaVersion"],
+            "collection": snapshot.get("collectionVersion", 0),
             "judgments": judgments["schemaVersion"],
         }
     else:
@@ -866,6 +867,7 @@ def _current_document(run: Mapping[str, Any]) -> dict[str, Any]:
         decisions = report.get("decisions")
         source_schema_versions = {
             "snapshot": snapshot["schemaVersion"],
+            "collection": snapshot.get("collectionVersion", 0),
             "report": report["schemaVersion"],
         }
     if not isinstance(decisions, list):

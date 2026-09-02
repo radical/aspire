@@ -193,6 +193,25 @@ class ActionEventStoreTests(unittest.TestCase):
             ],
         )
 
+    def test_delegation_retirement_is_persisted_once(self) -> None:
+        at = datetime(2026, 8, 29, 20, 10, tzinfo=UTC)
+
+        self.store.append_delegation_retirements(
+            repository="radical/aspire",
+            task_ids=("task-1",),
+            at=at,
+        )
+        self.store.append_delegation_retirements(
+            repository="radical/aspire",
+            task_ids=("task-1",),
+            at=at,
+        )
+
+        events = self.store.events(repository="radical/aspire")
+        self.assertEqual(1, len(events))
+        self.assertEqual("delegation-retired", events[0]["eventType"])
+        self.assertEqual("task-1", events[0]["taskId"])
+
     def test_assignment_intent_without_baseline_retries_capacity_reservation(
         self,
     ) -> None:

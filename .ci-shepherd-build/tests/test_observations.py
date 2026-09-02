@@ -177,7 +177,7 @@ def log_payload(
     return payload
 
 
-def test_results_payload(
+def results_payload(
     issue_number: int,
     *,
     run_id: int,
@@ -512,7 +512,7 @@ class ObservationTests(unittest.TestCase):
                 evidence(
                     failed_log_id,
                     "workflow-test-results",
-                    test_results_payload(
+                    results_payload(
                         issue_number,
                         run_id=200,
                         attempt=1,
@@ -540,7 +540,7 @@ class ObservationTests(unittest.TestCase):
                 evidence(
                     passed_log_id,
                     "workflow-test-results",
-                    test_results_payload(
+                    results_payload(
                         issue_number,
                         run_id=200,
                         attempt=2,
@@ -600,7 +600,7 @@ class ObservationTests(unittest.TestCase):
                 evidence(
                     result_id,
                     "workflow-test-results",
-                    test_results_payload(
+                    results_payload(
                         issue_number,
                         run_id=100,
                         attempt=1,

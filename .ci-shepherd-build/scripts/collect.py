@@ -12,13 +12,18 @@ import time
 
 from ci_shepherd.collector import BOT_AUTHORS, Collector, InventoryResult
 from ci_shepherd.delegation_observer import observe_delegations
-from ci_shepherd.delegations import derive_delegation_tracking
+from ci_shepherd.delegations import (
+    active_owned_task_ids_from_events,
+    delegation_starts_from_events,
+    derive_capacity_usage,
+    derive_delegation_tracking,
+)
 from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.github import GitHubClient
 from ci_shepherd.history import load_current
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.progress import ProgressTracker
-from ci_shepherd.refresh import RefreshPlan, complete_refresh_plan
+from ci_shepherd.refresh import COLLECTION_VERSION, RefreshPlan, complete_refresh_plan
 from ci_shepherd.repository_policy import (
     RepositoryPolicy,
     load_repository_policy,
@@ -51,6 +56,7 @@ def build_snapshot(
 ) -> dict[str, object]:
     snapshot: dict[str, object] = {
         "schemaVersion": 1,
+        "collectionVersion": COLLECTION_VERSION,
         "repository": repository,
         "collectedAt": collected_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "openIssues": [int(issue["number"]) for issue in inventory.open_issues],
@@ -120,6 +126,81 @@ def build_incomplete_delegation_status(
         "records": previous_records,
         "problem": str(problem),
     }
+
+
+def observe_delegation_status(
+    client: object,
+    repository: str,
+    *,
+    events: list[dict[str, object]],
+    now: datetime,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    starts = delegation_starts_from_events(events)
+    active_task_ids = set(active_owned_task_ids_from_events(events))
+    retired_task_ids = frozenset(
+        start.task_id
+        for start in starts
+        if start.task_id is not None
+        and start.task_id not in active_task_ids
+    )
+    observation = observe_delegations(
+        client,
+        repository,
+        owned_task_ids=active_task_ids,
+        owned_issue_numbers={
+            start.issue_number
+            for start in starts
+            if start.issue_number is not None
+            and start.task_id in active_task_ids
+        },
+    )
+    usage = derive_capacity_usage(
+        tasks=observation.tasks,
+        starts=starts,
+        pull_requests=observation.pull_requests,
+        evidence=observation.evidence,
+        now=now,
+        issues=observation.issues,
+        retired_task_ids=retired_task_ids,
+    )
+    tracking_records = [
+        record
+        for record in derive_delegation_tracking(
+            events=events,
+            tasks=observation.tasks,
+            pull_requests=observation.pull_requests,
+            issues=observation.issues,
+        )
+        if record.get("taskId") in active_task_ids
+        or record.get("taskId") is None
+    ]
+    status: dict[str, object] = {
+        "status": "complete",
+        "records": tracking_records,
+        "capacity": {
+            "runningTasks": usage.running_tasks,
+            "startsInRolling24h": usage.starts_in_rolling_24h,
+            "openDelegatedPullRequests": usage.open_delegated_prs,
+            "repositoryRunningTasks": usage.repository_running_tasks,
+            "complete": usage.complete,
+            "problems": list(usage.problems),
+            "warnings": list(usage.warnings),
+        },
+    }
+    newly_retired_task_ids = tuple(
+        sorted(
+            str(record["taskId"])
+            for record in tracking_records
+            if record.get("lifecycle") == "completed"
+            and isinstance(record.get("taskId"), str)
+            and all(
+                pull.get("state") not in {"open", "unknown"}
+                for pull in record.get("pullRequests", [])
+                if isinstance(pull, dict)
+            )
+        )
+    )
+    return status, newly_retired_task_ids
 
 
 def retain_tracked_delegations(
@@ -262,28 +343,28 @@ def collect(
             "records": [],
         }
         if state_dir is not None and state_dir.exists():
-            events = ActionEventStore(state_dir).events(repository=repository)
-            if any(
-                event.get("eventType") == "delegation-baseline"
-                for event in events
-            ):
-                try:
-                    observation = observe_delegations(client, repository)
-                    delegation_status = {
-                        "status": "complete",
-                        "records": list(
-                            derive_delegation_tracking(
-                                events=events,
-                                tasks=observation.tasks,
-                                pull_requests=observation.pull_requests,
-                            )
-                        ),
-                    }
-                except Exception as exc:
-                    delegation_status = build_incomplete_delegation_status(
-                        previous_snapshot,
-                        exc,
+            event_store = ActionEventStore(state_dir)
+            events = event_store.events(repository=repository)
+            try:
+                delegation_status, retired_task_ids = (
+                    observe_delegation_status(
+                        client,
+                        repository,
+                        events=events,
+                        now=now,
                     )
+                )
+                if retired_task_ids:
+                    event_store.append_delegation_retirements(
+                        repository=repository,
+                        task_ids=retired_task_ids,
+                        at=now,
+                    )
+            except Exception as exc:
+                delegation_status = build_incomplete_delegation_status(
+                    previous_snapshot,
+                    exc,
+                )
         released_delegation_issue_numbers = tuple(
             sorted(
                 int(record["issueNumber"])

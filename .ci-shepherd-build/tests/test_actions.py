@@ -340,6 +340,12 @@ class WatchActionTests(unittest.TestCase):
         prepared["repositoryPolicy"] = {
             "quarantinePullRequest": {"baseRef": "main"},
         }
+        prepared["issues"][0]["machineActionability"] = {
+            "status": "verified",
+            "kind": "deterministic-failure",
+            "fingerprint": "test:Demo.Tests.Broken",
+            "evidenceIds": ["issue:21", "run:777"],
+        }
 
         proposals = build_action_proposals(
             _snapshot(),
@@ -354,11 +360,62 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual("main", proposal["baseBranch"])
         self.assertEqual("", proposal["model"])
         self.assertIn("Fixes #21", proposal["customInstructions"])
+        self.assertNotIn("Demo.Tests.Flaky", proposal["customInstructions"])
+        self.assertNotIn("[QuarantinedTest]", proposal["customInstructions"])
         self.assertEqual(
             "issue:21:copilot-assignment",
             proposal["idempotencyKey"],
         )
         build_dry_run(proposals, action_id=str(proposal["actionId"]))
+
+    def test_model_only_delegation_recommendation_is_blocked(self) -> None:
+        prepared = _prepared()
+        prepared["repositoryPolicy"] = {
+            "quarantinePullRequest": {"baseRef": "main"},
+        }
+
+        proposals = build_action_proposals(
+            _snapshot(),
+            prepared,
+            _delegate_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], proposals["proposals"])
+        self.assertEqual(
+            ["machine-actionability-not-verified"],
+            proposals["blockedRecommendations"][0]["blockingReasons"],
+        )
+
+    def test_verified_quarantine_proposes_copilot_assignment(self) -> None:
+        prepared = _prepared()
+        prepared["repositoryPolicy"] = {
+            "quarantinePullRequest": {"baseRef": "main"},
+        }
+
+        proposals = build_action_proposals(
+            _snapshot(),
+            prepared,
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=_verified_reconciliation(),
+        )
+
+        assignment = next(
+            proposal
+            for proposal in proposals["proposals"]
+            if proposal["operation"] == "assign-copilot"
+        )
+        self.assertEqual("source-reconciliation", assignment["evidenceBasis"])
+        self.assertTrue(assignment["executionEligibility"]["eligible"])
+        self.assertIn(
+            "`Demo.Tests.Flaky` at `tests/Demo.Tests/Tests.cs:31`",
+            assignment["customInstructions"],
+        )
+        self.assertIn(
+            "Do not modify or remove the `[QuarantinedTest]` attribute",
+            assignment["customInstructions"],
+        )
 
     def test_delegate_copilot_rejects_flake_classification(self) -> None:
         judgments = _delegate_judgments()
@@ -1197,6 +1254,52 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
 
 class QuarantineSourceReconciliationActionTests(unittest.TestCase):
+    def test_source_reconciliation_comment_does_not_require_ci_occurrences(
+        self,
+    ) -> None:
+        snapshot = _snapshot()
+        issue = snapshot["evidence"]["issue:21"]["payload"]
+        assert isinstance(issue, dict)
+        issue["labels"] = [{"name": "quarantined-test"}]
+        issue["occurrences"] = []
+
+        result = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=_reconciliation(),
+        )
+
+        proposal = result["proposals"][0]
+        self.assertEqual("source-reconciliation", proposal["evidenceBasis"])
+        self.assertTrue(proposal["executionEligibility"]["eligible"])
+        self.assertEqual([], proposal["executionEligibility"]["blockingReasons"])
+        self.assertEqual(
+            {
+                "issueUpdatedAt": "2026-08-21T15:59:00Z",
+                "sourceRevision": "a" * 40,
+                "sourceTreeDigest": "sha256:" + "b" * 64,
+                "findingDigest": proposal["sourceEvidenceFingerprint"][
+                    "findingDigest"
+                ],
+            },
+            proposal["sourceEvidenceFingerprint"],
+        )
+
+    def test_source_reconciliation_requires_a_pinned_source_tree(self) -> None:
+        reconciliation = _reconciliation()
+        reconciliation["sourceTreeDigest"] = "sha256:not-a-digest"
+
+        with self.assertRaisesRegex(ValueError, "sourceTreeDigest"):
+            build_action_proposals(
+                _snapshot(),
+                _prepared(),
+                _judgments(),
+                "ankj",
+                quarantine_reconciliation=reconciliation,
+            )
+
     def test_label_without_attribute_uses_the_canonical_status_comment(self) -> None:
         result = build_action_proposals(
             _snapshot(),
@@ -1252,6 +1355,32 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
             _judgments(),
             "ankj",
             quarantine_reconciliation=_reconciliation(),
+        )
+
+        self.assertEqual([], result["proposals"])
+        self.assertEqual([21], result["unchangedIssueNumbers"])
+
+    def test_unchanged_reconciliation_finding_is_not_reproposed_for_new_revision(
+        self,
+    ) -> None:
+        first = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=_reconciliation(),
+        )
+        body = first["proposals"][0]["body"]
+        assert isinstance(body, str)
+        reconciliation = _reconciliation()
+        reconciliation["sourceRevision"] = "e" * 40
+
+        result = build_action_proposals(
+            _with_owned_comment(_snapshot(), body),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=reconciliation,
         )
 
         self.assertEqual([], result["proposals"])
@@ -1337,6 +1466,25 @@ def _reconciliation() -> dict[str, object]:
             ],
         },
     )
+
+
+def _verified_reconciliation() -> dict[str, object]:
+    reconciliation = _reconciliation()
+    reconciliation["findings"] = []
+    reconciliation["verifiedIssues"] = [
+        {
+            "issueNumber": 21,
+            "issueUrl": "https://github.com/owner/repo/issues/21",
+            "tests": [
+                {
+                    "testName": "Demo.Tests.Flaky",
+                    "file": "Demo.Tests/Tests.cs",
+                    "line": 31,
+                }
+            ],
+        }
+    ]
+    return reconciliation
 
 
 if __name__ == "__main__":

@@ -1103,6 +1103,24 @@ class ModelsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "actionId"):
             validate_snapshot(snapshot)
 
+    def test_delegation_status_accepts_observed_capacity(self) -> None:
+        snapshot = minimal_snapshot()
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [],
+            "capacity": {
+                "runningTasks": 0,
+                "startsInRolling24h": 1,
+                "openDelegatedPullRequests": 0,
+                "repositoryRunningTasks": 3,
+                "complete": True,
+                "problems": [],
+                "warnings": ["repository capacity below ceiling"],
+            },
+        }
+
+        self.assertIsNone(validate_snapshot(snapshot))
+
     def test_collection_error_scope_is_validated(self) -> None:
         snapshot = minimal_snapshot()
         snapshot["collectionErrors"] = [

@@ -1001,6 +1001,22 @@ class QuarantineSourceReconciliationTests(unittest.TestCase):
         )
 
         self.assertEqual([], result["findings"])
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "issueUrl": "https://github.com/owner/repo/issues/22",
+                    "tests": [
+                        {
+                            "testName": "Demo.Tests.Flaky",
+                            "file": "Demo.Tests/Tests.cs",
+                            "line": 31,
+                        }
+                    ],
+                }
+            ],
+            result["verifiedIssues"],
+        )
 
     def test_ambiguous_source_match_requires_human_review(self) -> None:
         result = reconcile_quarantine_source(

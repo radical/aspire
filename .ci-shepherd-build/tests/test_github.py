@@ -277,6 +277,36 @@ class GitHubClientTests(unittest.TestCase):
             runner.calls[1][0][-1],
         )
 
+    def test_get_pages_preserves_filters_dropped_by_a_next_link(self) -> None:
+        next_url = (
+            "https://api.github.com/agents/repos/owner/repo/tasks"
+            "?page=2&per_page=100"
+        )
+        runner = FakeRunner(
+            [
+                FakeCompletedProcess(
+                    0,
+                    build_response(
+                        200,
+                        {"tasks": [{"id": task_id} for task_id in range(100)]},
+                        headers={"Link": f'<{next_url}>; rel="next"'},
+                    ),
+                ),
+                FakeCompletedProcess(0, build_response(200, {"tasks": []})),
+            ]
+        )
+        client = self.make_client(runner)
+
+        client.get_pages(
+            "/agents/repos/owner/repo/tasks?state=idle",
+            key="tasks",
+        )
+
+        self.assertEqual(
+            "/agents/repos/owner/repo/tasks?state=idle&per_page=100&page=2",
+            runner.calls[1][0][-1],
+        )
+
     def test_get_pages_fails_when_the_page_limit_is_reached(self) -> None:
         runner = FakeRunner(
             [
@@ -305,6 +335,39 @@ class GitHubClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(GitHubApiError, "pagination-limit"):
             client.get_pages("/repos/owner/repo/issues")
+
+    def test_get_paged_inventory_reports_bounded_incompleteness(self) -> None:
+        runner = FakeRunner(
+            [
+                FakeCompletedProcess(
+                    0,
+                    build_response(
+                        200,
+                        [1],
+                        headers={
+                            "Link": (
+                                '<https://api.github.com/repositories/123/issues'
+                                '?per_page=100&page=2>; rel="next"'
+                            )
+                        },
+                    ),
+                )
+            ]
+        )
+        client = GitHubClient(
+            runner=runner,
+            popen_factory=FakePopenFactory([]),
+            sleep=FakeSleep(),
+            now=FakeClock(0.0),
+            max_pages=1,
+        )
+
+        inventory = client.get_paged_inventory("/repos/owner/repo/issues")
+
+        self.assertEqual((1,), inventory.items)
+        self.assertEqual(1, inventory.pages)
+        self.assertFalse(inventory.complete)
+        self.assertIn("page=2", inventory.next_endpoint)
 
     def test_get_pages_preserves_existing_query_parameters_without_duplication(self) -> None:
         runner = FakeRunner(

@@ -21,13 +21,14 @@ from ci_shepherd.collector import (
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
 from ci_shepherd.history import record_history
 from ci_shepherd.lifecycle import prepare_assessment
-from ci_shepherd.refresh import RefreshPlan, complete_refresh_plan
+from ci_shepherd.refresh import COLLECTION_VERSION, RefreshPlan, complete_refresh_plan
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
 REPOSITORY = "owner/repo"
 NOW = datetime(2026, 8, 17, 22, 0, tzinfo=UTC)
 CUTOFF = "2026-05-19T22:00:00Z"
+ADDITIONAL_TARGET_LABELS = ("test-failure", "failing-test", "quarantined-test")
 
 
 class FixtureClient:
@@ -38,6 +39,10 @@ class FixtureClient:
 
     def get_pages(self, endpoint: str, key: str | None = None) -> object:
         self.calls.append(("get_pages", endpoint))
+        if endpoint not in self._api_map and any(
+            f"labels={label}" in endpoint for label in ADDITIONAL_TARGET_LABELS
+        ):
+            return []
         return self._load(endpoint)
 
     def get(self, endpoint: str) -> object:
@@ -84,6 +89,10 @@ class ScriptedClient:
 
     def get_pages(self, endpoint: str, key: str | None = None) -> object:
         self.calls.append(("get_pages", endpoint))
+        if endpoint not in self._pages and any(
+            f"labels={label}" in endpoint for label in ADDITIONAL_TARGET_LABELS
+        ):
+            return []
         response = self._pages[endpoint]
         if isinstance(response, Exception):
             raise response
@@ -194,6 +203,46 @@ def mixed_root_report(high_risk_issue_number: int) -> dict[str, object]:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_collect_queries_all_actionable_test_issue_labels(self) -> None:
+        labels = (
+            "ci-failure-cause",
+            "automation-broken",
+            "test-failure",
+            "failing-test",
+            "quarantined-test",
+        )
+        pages = {
+            f"/repos/{REPOSITORY}/issues?state=open&labels={label}&per_page=100": []
+            for label in labels
+        }
+        pages[
+            f"/repos/{REPOSITORY}/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100"
+        ] = []
+        client = ScriptedClient(pages=pages)
+
+        Collector(
+            client,
+            REPOSITORY,
+            NOW,
+            bot_authors=("github-actions[bot]",),
+        ).collect(
+            include_supporting=False,
+            include_timeline=False,
+        )
+
+        requested_endpoints = {
+            endpoint
+            for call, endpoint in client.calls
+            if call == "get_pages" and "state=open&labels=" in endpoint
+        }
+        self.assertEqual(
+            {
+                f"/repos/{REPOSITORY}/issues?state=open&labels={label}&per_page=100"
+                for label in labels
+            },
+            requested_endpoints,
+        )
+
     def test_enriches_primary_pull_request_inventory_as_evidence(self) -> None:
         issue_payload = make_issue(23, is_pull_request=True)
         issue_payload["html_url"] = f"https://github.com/{REPOSITORY}/pull/23"
@@ -921,6 +970,7 @@ Deployment tests are failing.
         )
         snapshot = {
             "schemaVersion": 1,
+            "collectionVersion": COLLECTION_VERSION,
             "repository": REPOSITORY,
             "collectedAt": NOW.isoformat().replace("+00:00", "Z"),
             "openIssues": [1],
@@ -1004,6 +1054,18 @@ Deployment tests are failing.
             [
                 ("get_pages", open_cause),
                 ("get_pages", open_automation),
+                (
+                    "get_pages",
+                    f"/repos/{REPOSITORY}/issues?state=open&labels=test-failure&per_page=100",
+                ),
+                (
+                    "get_pages",
+                    f"/repos/{REPOSITORY}/issues?state=open&labels=failing-test&per_page=100",
+                ),
+                (
+                    "get_pages",
+                    f"/repos/{REPOSITORY}/issues?state=open&labels=quarantined-test&per_page=100",
+                ),
                 ("get", open_bot_scan_page_1),
                 ("get", history_endpoint),
             ],
@@ -1021,12 +1083,30 @@ Deployment tests are failing.
         first_expensive_calls = [
             call
             for call in first_client.calls
-            if call[1] not in {open_cause, open_automation, history_endpoint}
+            if call[1]
+            not in {
+                open_cause,
+                open_automation,
+                history_endpoint,
+                *{
+                    f"/repos/{REPOSITORY}/issues?state=open&labels={label}&per_page=100"
+                    for label in ADDITIONAL_TARGET_LABELS
+                },
+            }
         ]
         second_expensive_calls = [
             call
             for call in second_client.calls
-            if call[1] not in {open_cause, open_automation, history_endpoint}
+            if call[1]
+            not in {
+                open_cause,
+                open_automation,
+                history_endpoint,
+                *{
+                    f"/repos/{REPOSITORY}/issues?state=open&labels={label}&per_page=100"
+                    for label in ADDITIONAL_TARGET_LABELS
+                },
+            }
         ]
         self.assertGreaterEqual(len(first_expensive_calls), 3)
         self.assertLessEqual(len(second_expensive_calls), 1)
@@ -1154,6 +1234,7 @@ Deployment tests are failing.
         )
         snapshot = {
             "schemaVersion": 1,
+            "collectionVersion": COLLECTION_VERSION,
             "repository": REPOSITORY,
             "collectedAt": NOW.isoformat().replace("+00:00", "Z"),
             "openIssues": [1],
@@ -1301,6 +1382,7 @@ Deployment tests are failing.
         first = first_collector.collect(include_supporting=True, include_timeline=False)
         snapshot = {
             "schemaVersion": 1,
+            "collectionVersion": COLLECTION_VERSION,
             "repository": REPOSITORY,
             "collectedAt": NOW.isoformat().replace("+00:00", "Z"),
             "openIssues": [1, 2],
@@ -1485,6 +1567,7 @@ Deployment tests are failing.
         first = first_collector.enrich_github_evidence(first)
         snapshot = {
             "schemaVersion": 1,
+            "collectionVersion": COLLECTION_VERSION,
             "repository": REPOSITORY,
             "collectedAt": NOW.isoformat().replace("+00:00", "Z"),
             "openIssues": [1],
@@ -1548,8 +1631,20 @@ Deployment tests are failing.
         self.assertEqual(first.evidence[foreign_pull_id], second.evidence[foreign_pull_id])
         self.assertIn(foreign_commit_id, second.refresh_plan.reuse)
         self.assertIn(foreign_pull_id, second.refresh_plan.reuse)
-        first_expensive = [call for call in first_client.calls if call[1] not in {open_cause, open_automation}]
-        second_expensive = [call for call in second_client.calls if call[1] not in {open_cause, open_automation}]
+        target_label_endpoints = {
+            open_cause,
+            open_automation,
+            *{
+                f"/repos/{REPOSITORY}/issues?state=open&labels={label}&per_page=100"
+                for label in ADDITIONAL_TARGET_LABELS
+            },
+        }
+        first_expensive = [
+            call for call in first_client.calls if call[1] not in target_label_endpoints
+        ]
+        second_expensive = [
+            call for call in second_client.calls if call[1] not in target_label_endpoints
+        ]
         self.assertGreaterEqual(len(first_expensive), 4)
         self.assertLessEqual(len(second_expensive), len(first_expensive) * 0.2)
 
