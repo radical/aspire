@@ -28,13 +28,23 @@ AUTHORIZATION_SCHEMA_VERSION = 2
 PRODUCTION_REPOSITORY = "microsoft/aspire"
 PRODUCTION_COMMENT_OPERATIONS = frozenset({"edit-comment"})
 MAX_PRODUCTION_COMMENT_ACTIONS = 1
+PRODUCTION_DELEGATION_OPERATIONS = frozenset({"assign-copilot"})
+MAX_PRODUCTION_DELEGATION_ACTIONS = 1
 MAX_PRODUCTION_SNAPSHOT_AGE = timedelta(minutes=15)
+DEFAULT_MAX_RUNNING_COPILOT_TASKS = 2
+DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H = 3
+DEFAULT_MAX_OPEN_DELEGATED_PRS = 5
 
 
 @dataclass(frozen=True, slots=True)
 class AuthorizationBudget:
     max_mutation_attempts: int
     max_chains: int
+    max_running_copilot_tasks: int = DEFAULT_MAX_RUNNING_COPILOT_TASKS
+    max_copilot_starts_per_rolling_24h: int = (
+        DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H
+    )
+    max_open_delegated_prs: int = DEFAULT_MAX_OPEN_DELEGATED_PRS
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +63,7 @@ class AuthorizationGrant:
     override_suppression_for_action_ids: frozenset[str]
     budget: AuthorizationBudget
     production_comment_pilot: bool
+    production_delegation_pilot: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +94,16 @@ _GRANT_KEYS = frozenset(
         "productionCommentPilot",
     }
 )
-_BUDGET_KEYS = frozenset({"maxMutationAttempts", "maxChains"})
+_PRODUCTION_DELEGATION_GRANT_KEY = "productionDelegationPilot"
+_BUDGET_KEYS = frozenset(
+    {
+        "maxMutationAttempts",
+        "maxChains",
+        "maxRunningCopilotTasks",
+        "maxCopilotStartsPerRolling24h",
+        "maxOpenDelegatedPullRequests",
+    }
+)
 _TARGET_KEYS = frozenset({"kind", "number"})
 
 
@@ -94,6 +114,7 @@ def load_authorized_execution(
     state_dir: Path,
     action_id: str,
     allow_production_comment_pilot: bool = False,
+    allow_production_delegation_pilot: bool = False,
     now: datetime | None = None,
 ) -> AuthorizedExecution:
     """Read once and validate the exact proposal document and authorization grant."""
@@ -101,6 +122,14 @@ def load_authorized_execution(
     if not isinstance(allow_production_comment_pilot, bool):
         raise AuthorizationError(
             "allow_production_comment_pilot must be a boolean."
+        )
+    if not isinstance(allow_production_delegation_pilot, bool):
+        raise AuthorizationError(
+            "allow_production_delegation_pilot must be a boolean."
+        )
+    if allow_production_comment_pilot and allow_production_delegation_pilot:
+        raise AuthorizationError(
+            "Production comment and delegation pilots are mutually exclusive."
         )
     proposal_bytes, proposal_document = _read_and_validate_proposal_document(
         proposals_path
@@ -143,19 +172,29 @@ def load_authorized_execution(
     repository = _require_string(proposal_document, "repository")
     snapshot_id = _require_string(proposal_document, "snapshotId")
     is_production = repository.casefold() == PRODUCTION_REPOSITORY
-    if is_production and not allow_production_comment_pilot:
+    production_pilot_enabled = (
+        allow_production_comment_pilot or allow_production_delegation_pilot
+    )
+    if is_production and not production_pilot_enabled:
         raise AuthorizationError(
             "Mutation repository is protected during remediation: "
             "microsoft/aspire"
         )
-    if allow_production_comment_pilot and not is_production:
+    if production_pilot_enabled and not is_production:
         raise AuthorizationError(
-            "Production comment pilot authorization is only valid for "
+            "Production pilot authorization is only valid for "
             "microsoft/aspire."
         )
     if grant.production_comment_pilot != allow_production_comment_pilot:
         raise AuthorizationError(
             "Production comment pilot confirmation does not match the grant."
+        )
+    if (
+        grant.production_delegation_pilot
+        != allow_production_delegation_pilot
+    ):
+        raise AuthorizationError(
+            "Production delegation pilot confirmation does not match the grant."
         )
     if repository != grant.repository:
         raise AuthorizationError(
@@ -215,13 +254,22 @@ def load_authorized_execution(
             "Authorization grant chain roots must also be allowedActionIds."
         )
     if is_production:
-        _validate_production_comment_grant(
-            grant,
-            action_id=action_id,
-            operation=operation,
-            proposals=proposals,
-            capability=proposal_document.get("productionPilotCapability"),
-        )
+        if allow_production_comment_pilot:
+            _validate_production_comment_grant(
+                grant,
+                action_id=action_id,
+                operation=operation,
+                proposals=proposals,
+                capability=proposal_document.get("productionPilotCapability"),
+            )
+        else:
+            _validate_production_delegation_grant(
+                grant,
+                action_id=action_id,
+                operation=operation,
+                proposals=proposals,
+                capability=proposal_document.get("productionPilotCapability"),
+            )
 
     return AuthorizedExecution(
         proposal_document=proposal_document,
@@ -263,8 +311,14 @@ def generate_authorization_grant(
     action_ids: Sequence[str],
     state_dir: Path,
     ttl_minutes: int = DEFAULT_GRANT_TTL_MINUTES,
+    max_running_copilot_tasks: int = DEFAULT_MAX_RUNNING_COPILOT_TASKS,
+    max_copilot_starts_per_rolling_24h: int = (
+        DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H
+    ),
+    max_open_delegated_prs: int = DEFAULT_MAX_OPEN_DELEGATED_PRS,
     override_suppression_for_action_ids: Sequence[str] = (),
     allow_production_comment_pilot: bool = False,
+    allow_production_delegation_pilot: bool = False,
     now: datetime | None = None,
     grant_id: str | None = None,
 ) -> dict[str, Any]:
@@ -275,8 +329,9 @@ def generate_authorization_grant(
     is inferred: a selected action whose ``dependsOn`` is not itself selected
     is rejected rather than silently pulled in, so approving one action can
     never authorize another effect a human did not see. The mutation and
-    chain budgets are likewise derived counts of the exact selection, not a
-    caller-supplied number.
+    chain budgets are likewise derived counts of the exact selection. Copilot
+    task and pull-request capacity limits are explicit grant inputs so the
+    executor cannot raise them independently after approval.
 
     ``now`` and ``grant_id`` exist so tests can pin the clock and identifier;
     the public CLI never exposes either, always using the real clock and a
@@ -287,12 +342,30 @@ def generate_authorization_grant(
         raise AuthorizationError(
             "allow_production_comment_pilot must be a boolean."
         )
+    if not isinstance(allow_production_delegation_pilot, bool):
+        raise AuthorizationError(
+            "allow_production_delegation_pilot must be a boolean."
+        )
+    if allow_production_comment_pilot and allow_production_delegation_pilot:
+        raise AuthorizationError(
+            "Production comment and delegation pilots are mutually exclusive."
+        )
     if not isinstance(ttl_minutes, int) or isinstance(ttl_minutes, bool):
         raise AuthorizationError("Grant TTL must be an integer number of minutes.")
     if not (1 <= ttl_minutes <= MAX_GRANT_TTL_MINUTES):
         raise AuthorizationError(
             f"Grant TTL must be between 1 and {MAX_GRANT_TTL_MINUTES} minutes."
         )
+    for name, value in (
+        ("max_running_copilot_tasks", max_running_copilot_tasks),
+        (
+            "max_copilot_starts_per_rolling_24h",
+            max_copilot_starts_per_rolling_24h,
+        ),
+        ("max_open_delegated_prs", max_open_delegated_prs),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise AuthorizationError(f"{name} must be a nonnegative integer.")
 
     proposal_bytes, proposal_document = _read_and_validate_proposal_document(
         proposals_path
@@ -300,14 +373,17 @@ def generate_authorization_grant(
 
     repository = _require_repository(proposal_document, "repository")
     is_production = repository.casefold() == PRODUCTION_REPOSITORY
-    if is_production and not allow_production_comment_pilot:
+    production_pilot_enabled = (
+        allow_production_comment_pilot or allow_production_delegation_pilot
+    )
+    if is_production and not production_pilot_enabled:
         raise AuthorizationError(
             "Mutation repository is protected during remediation: "
             "microsoft/aspire"
         )
-    if allow_production_comment_pilot and not is_production:
+    if production_pilot_enabled and not is_production:
         raise AuthorizationError(
-            "Production comment pilot authorization is only valid for "
+            "Production pilot authorization is only valid for "
             "microsoft/aspire."
         )
     snapshot_id = _require_string(proposal_document, "snapshotId")
@@ -403,11 +479,23 @@ def generate_authorization_grant(
                 f"{override_id}"
             )
     if is_production:
-        _validate_production_comment_selection(
-            selected_proposals,
-            ttl_minutes=ttl_minutes,
-            override_ids=override_ids,
-        )
+        if allow_production_comment_pilot:
+            _validate_production_comment_selection(
+                selected_proposals,
+                ttl_minutes=ttl_minutes,
+                override_ids=override_ids,
+            )
+        else:
+            _validate_production_delegation_selection(
+                selected_proposals,
+                ttl_minutes=ttl_minutes,
+                override_ids=override_ids,
+                max_running_copilot_tasks=max_running_copilot_tasks,
+                max_copilot_starts_per_rolling_24h=(
+                    max_copilot_starts_per_rolling_24h
+                ),
+                max_open_delegated_prs=max_open_delegated_prs,
+            )
         production_freshness_deadline = _production_freshness_deadline(
             snapshot_id,
             capability=proposal_document.get("productionPilotCapability"),
@@ -447,8 +535,14 @@ def generate_authorization_grant(
         "budget": {
             "maxMutationAttempts": len(selected_ids),
             "maxChains": len(chain_roots),
+            "maxRunningCopilotTasks": max_running_copilot_tasks,
+            "maxCopilotStartsPerRolling24h": (
+                max_copilot_starts_per_rolling_24h
+            ),
+            "maxOpenDelegatedPullRequests": max_open_delegated_prs,
         },
-        "productionCommentPilot": is_production,
+        "productionCommentPilot": allow_production_comment_pilot,
+        "productionDelegationPilot": allow_production_delegation_pilot,
     }
 
 
@@ -562,6 +656,46 @@ def _validate_production_comment_selection(
         )
 
 
+def _validate_production_delegation_selection(
+    proposals: Sequence[Mapping[str, Any]],
+    *,
+    ttl_minutes: int,
+    override_ids: set[str],
+    max_running_copilot_tasks: int,
+    max_copilot_starts_per_rolling_24h: int,
+    max_open_delegated_prs: int,
+) -> None:
+    if len(proposals) != MAX_PRODUCTION_DELEGATION_ACTIONS:
+        raise AuthorizationError(
+            "Production delegation pilot grants must authorize exactly one action."
+        )
+    proposal = proposals[0]
+    if _require_string(proposal, "operation") not in PRODUCTION_DELEGATION_OPERATIONS:
+        raise AuthorizationError(
+            "Production delegation pilot grants allow Copilot assignment only."
+        )
+    if proposal.get("dependsOn") is not None:
+        raise AuthorizationError(
+            "Production delegation pilot actions must be independent."
+        )
+    if ttl_minutes > DEFAULT_GRANT_TTL_MINUTES:
+        raise AuthorizationError(
+            "Production delegation pilot grants may live for at most 15 minutes."
+        )
+    if override_ids:
+        raise AuthorizationError(
+            "Production delegation pilot grants cannot override suppression."
+        )
+    if (
+        max_running_copilot_tasks,
+        max_copilot_starts_per_rolling_24h,
+        max_open_delegated_prs,
+    ) != (1, 1, 1):
+        raise AuthorizationError(
+            "Production delegation pilot capacity limits must all equal one."
+        )
+
+
 def _validate_production_comment_grant(
     grant: AuthorizationGrant,
     *,
@@ -660,6 +794,107 @@ def _validate_production_comment_grant(
         )
 
 
+def _validate_production_delegation_grant(
+    grant: AuthorizationGrant,
+    *,
+    action_id: str,
+    operation: str,
+    proposals: Sequence[Mapping[str, Any]],
+    capability: object,
+) -> None:
+    if grant.repository.casefold() != PRODUCTION_REPOSITORY:
+        raise AuthorizationError(
+            "Production delegation pilot grant repository must be microsoft/aspire."
+        )
+    if not grant.production_delegation_pilot:
+        raise AuthorizationError(
+            "Authorization grant does not carry the production delegation capability."
+        )
+    if len(grant.allowed_action_ids) != MAX_PRODUCTION_DELEGATION_ACTIONS:
+        raise AuthorizationError(
+            "Production delegation pilot grant has an invalid action count."
+        )
+    freshness_deadline = _production_freshness_deadline(
+        grant.snapshot_id,
+        capability=capability,
+        repository=grant.repository,
+        issued_at=grant.issued_at,
+    )
+    if grant.expires_at > freshness_deadline:
+        raise AuthorizationError(
+            "Production delegation pilot grant outlives its source snapshot."
+        )
+    by_action_id = {
+        proposal.get("actionId"): proposal
+        for proposal in proposals
+        if isinstance(proposal, Mapping)
+    }
+    selected = [
+        by_action_id.get(allowed_action_id)
+        for allowed_action_id in grant.allowed_action_ids
+    ]
+    if any(proposal is None for proposal in selected):
+        raise AuthorizationError(
+            "Production delegation pilot grant references an unknown action."
+        )
+    selected_proposals = [
+        proposal for proposal in selected if proposal is not None
+    ]
+    selected_operations = frozenset(
+        _require_string(proposal, "operation")
+        for proposal in selected_proposals
+    )
+    if (
+        operation not in PRODUCTION_DELEGATION_OPERATIONS
+        or not selected_operations.issubset(PRODUCTION_DELEGATION_OPERATIONS)
+        or grant.allowed_operations != selected_operations
+    ):
+        raise AuthorizationError(
+            "Production delegation pilot grant must allow Copilot assignment only."
+        )
+    if any(proposal.get("dependsOn") is not None for proposal in selected_proposals):
+        raise AuthorizationError(
+            "Production delegation pilot grant actions must be independent."
+        )
+    selected_targets = frozenset(
+        ("issue", _require_positive_int(proposal, "issueNumber"))
+        for proposal in selected_proposals
+    )
+    if (
+        len(selected_targets) != len(selected_proposals)
+        or grant.allowed_targets != selected_targets
+    ):
+        raise AuthorizationError(
+            "Production delegation pilot grant must bind one issue target."
+        )
+    if grant.allowed_chain_roots != grant.allowed_action_ids:
+        raise AuthorizationError(
+            "Production delegation pilot grant must bind its action as the root."
+        )
+    if grant.override_suppression_for_action_ids:
+        raise AuthorizationError(
+            "Production delegation pilot grant cannot override suppression."
+        )
+    if grant.budget != AuthorizationBudget(
+        max_mutation_attempts=1,
+        max_chains=1,
+        max_running_copilot_tasks=1,
+        max_copilot_starts_per_rolling_24h=1,
+        max_open_delegated_prs=1,
+    ):
+        raise AuthorizationError(
+            "Production delegation pilot budget must bind one assignment and "
+            "1/1/1 capacity."
+        )
+    if (
+        grant.expires_at - grant.issued_at
+        > timedelta(minutes=DEFAULT_GRANT_TTL_MINUTES)
+    ):
+        raise AuthorizationError(
+            "Production delegation pilot grant lifetime must not exceed 15 minutes."
+        )
+
+
 def write_authorization_grant(grant: Mapping[str, Any], output_path: Path) -> Path:
     """Atomically write a generated grant as an owner-only JSON file.
 
@@ -746,7 +981,11 @@ def _load_json_bytes(payload: bytes, description: str) -> dict[str, Any]:
 
 def _load_grant(payload: bytes) -> AuthorizationGrant:
     document = _load_json_bytes(payload, "authorization grant")
-    if set(document) != _GRANT_KEYS:
+    document_keys = set(document)
+    if document_keys not in {
+        _GRANT_KEYS,
+        _GRANT_KEYS | {_PRODUCTION_DELEGATION_GRANT_KEY},
+    }:
         raise AuthorizationError(
             "Authorization grant must contain exactly the supported fields."
         )
@@ -796,9 +1035,11 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
         _require_unique_strings(document, "allowedOperations")
     )
     unsupported_operations = allowed_operations - {
+        "assign-copilot",
         "create-comment",
         "edit-comment",
         "close-issue",
+        "unassign-copilot",
     }
     if unsupported_operations:
         raise AuthorizationError(
@@ -853,6 +1094,18 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
             budget_document, "maxMutationAttempts"
         ),
         max_chains=_require_positive_int(budget_document, "maxChains"),
+        max_running_copilot_tasks=_require_nonnegative_int(
+            budget_document,
+            "maxRunningCopilotTasks",
+        ),
+        max_copilot_starts_per_rolling_24h=_require_nonnegative_int(
+            budget_document,
+            "maxCopilotStartsPerRolling24h",
+        ),
+        max_open_delegated_prs=_require_nonnegative_int(
+            budget_document,
+            "maxOpenDelegatedPullRequests",
+        ),
     )
 
     return AuthorizationGrant(
@@ -873,6 +1126,11 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
             document,
             "productionCommentPilot",
         ),
+        production_delegation_pilot=(
+            _require_bool(document, _PRODUCTION_DELEGATION_GRANT_KEY)
+            if _PRODUCTION_DELEGATION_GRANT_KEY in document
+            else False
+        ),
     )
 
 
@@ -887,6 +1145,13 @@ def _require_bool(document: Mapping[str, Any], key: str) -> bool:
     value = document.get(key)
     if not isinstance(value, bool):
         raise AuthorizationError(f"{key} must be a boolean.")
+    return value
+
+
+def _require_nonnegative_int(document: Mapping[str, Any], key: str) -> int:
+    value = document.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise AuthorizationError(f"{key} must be a nonnegative integer.")
     return value
 
 

@@ -1068,9 +1068,11 @@ class ModelsTests(unittest.TestCase):
         self.assertEqual(
             frozenset(
                 {
+                    "assign-copilot",
                     "create-comment",
                     "edit-comment",
                     "close-issue",
+                    "unassign-copilot",
                 }
             ),
             EXECUTOR_CAPABILITIES,
@@ -1078,6 +1080,28 @@ class ModelsTests(unittest.TestCase):
 
     def test_minimal_snapshot_passes(self) -> None:
         self.assertIsNone(validate_snapshot(minimal_snapshot()))
+
+    def test_delegated_inventory_must_be_disjoint_and_match_details(self) -> None:
+        snapshot = minimal_snapshot()
+        snapshot["delegatedIssues"] = [21]
+        snapshot["delegatedIssueDetails"] = [{"number": 21}]
+        snapshot["delegatedPullRequests"] = [22]
+        snapshot["delegatedPullRequestDetails"] = [{"number": 22}]
+        self.assertIsNone(validate_snapshot(snapshot))
+
+        snapshot["delegatedIssues"] = list(snapshot["openIssues"])
+        with self.assertRaisesRegex(ValidationError, "delegatedIssues.*openIssues"):
+            validate_snapshot(snapshot)
+
+    def test_delegation_status_rejects_incomplete_records(self) -> None:
+        snapshot = minimal_snapshot()
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [{"issueNumber": 21}],
+        }
+
+        with self.assertRaisesRegex(ValidationError, "actionId"):
+            validate_snapshot(snapshot)
 
     def test_collection_error_scope_is_validated(self) -> None:
         snapshot = minimal_snapshot()

@@ -74,6 +74,10 @@ class RetrospectiveTests(unittest.TestCase):
             self.assertIn("Do not access GitHub", request["workerPrompt"])
             self.assertIn("Do not edit code", request["workerPrompt"])
             self.assertIn("Return only JSON", request["workerPrompt"])
+            self.assertIn(
+                "cite each evidence path exactly as the bare filename listed",
+                request["workerPrompt"],
+            )
 
     def test_rejects_run_that_has_not_completed_post_action_reconciliation(
         self,

@@ -25,6 +25,7 @@ CATEGORIES = frozenset(
 DISPOSITIONS = frozenset(
     {
         "investigate",
+        "delegate-copilot",
         "watch",
         "ping-human",
         "review-quarantine",
@@ -103,7 +104,12 @@ def validate_poc_judgments(prepared: object, judgments: object) -> None:
         evidence_bundle_ids = prepared_issue["evidenceBundle"]
         recommendation_targets: set[tuple[str, object]] = set()
         for recommendation in recommendations:
-            target = _validate_recommendation(recommendation, issue_number, evidence_bundle_ids)
+            target = _validate_recommendation(
+                recommendation,
+                issue_number,
+                evidence_bundle_ids,
+                category=category,
+            )
             if target in recommendation_targets:
                 raise ValidationError(
                     f"Duplicate recommendation target for issue {issue_number}: {target[0]}:{target[1]}."
@@ -288,6 +294,8 @@ def _validate_recommendation(
     recommendation: object,
     issue_number: int,
     bundle: Mapping[str, Any],
+    *,
+    category: str,
 ) -> tuple[str, object]:
     recommendation_mapping = _require_mapping(recommendation, "recommendation")
     _require_only_fields(
@@ -329,6 +337,20 @@ def _validate_recommendation(
     confidence = _require_nonempty_string(recommendation_mapping, "confidence")
     if confidence not in CONFIDENCE:
         raise ValidationError(f"Unsupported confidence: {confidence}.")
+    if disposition == "delegate-copilot":
+        if target_kind != "issue":
+            raise ValidationError(
+                "delegate-copilot recommendations must target the issue."
+            )
+        if category not in {"blocking-build", "product-or-tooling"}:
+            raise ValidationError(
+                "delegate-copilot requires a blocking-build or "
+                "product-or-tooling category."
+            )
+        if confidence == "low":
+            raise ValidationError(
+                "delegate-copilot recommendations require medium or high confidence."
+            )
 
     _require_nonempty_string(recommendation_mapping, "summary")
     _require_nonempty_string(recommendation_mapping, "reassessWhen")

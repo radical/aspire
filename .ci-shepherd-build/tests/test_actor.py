@@ -91,6 +91,68 @@ def _pull_proposals() -> dict[str, object]:
     }
 
 
+def _assignment_proposals() -> dict[str, object]:
+    action_id = "snapshot:owner/repo:1:issue:21:assign-copilot"
+    return {
+        "schemaVersion": 2,
+        "repository": "owner/repo",
+        "snapshotId": "snapshot:owner/repo:1",
+        "shepherdAuthor": "ankj",
+        "generatedAtUtc": "2026-08-21T19:55:00Z",
+        "proposalTtlHours": 24,
+        "maxProposalsPerIssue": 2,
+        "executionEligibility": {"status": "eligible", "violations": []},
+        "proposals": [
+            {
+                "actionId": action_id,
+                "issueNumber": 21,
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+                "operation": "assign-copilot",
+                "idempotencyKey": "issue:21:copilot-assignment",
+                "evidenceIds": ["issue:21", "test:Example.Tests.Fails"],
+                "expectedIssueState": "open",
+                "targetRepository": "owner/repo",
+                "baseBranch": "main",
+                "customInstructions": (
+                    "Fix Example.Tests.Fails and add regression coverage."
+                ),
+                "model": "",
+                "executionEligibility": {
+                    "eligible": True,
+                    "ciLabels": ["test-failure"],
+                    "occurrenceCount": 1,
+                    "collectionComplete": True,
+                    "unavailableEvidenceIds": [],
+                    "untrustedReferenceEvidenceIds": [],
+                    "blockingReasons": [],
+                },
+                "sourceEvidenceFingerprint": {
+                    "issueUpdatedAt": "2026-08-21T19:54:00Z",
+                },
+            }
+        ],
+        "unchangedIssueNumbers": [],
+    }
+
+
+def _unassignment_proposals() -> dict[str, object]:
+    proposals = _assignment_proposals()
+    proposal = proposals["proposals"][0]
+    assert isinstance(proposal, dict)
+    proposal["actionId"] = "snapshot:owner/repo:1:issue:21:unassign-copilot"
+    proposal["operation"] = "unassign-copilot"
+    proposal["idempotencyKey"] = "issue:21:copilot-unassignment"
+    for field in (
+        "targetRepository",
+        "baseBranch",
+        "customInstructions",
+        "model",
+    ):
+        proposal.pop(field)
+
+    return proposals
+
+
 class ScriptedActorClient:
     def __init__(
         self,
@@ -153,6 +215,41 @@ class ScriptedActorClient:
         self.calls.append(("close_issue", issue_number, reason))
         return {"number": issue_number, "state": "closed", "state_reason": reason}
 
+    def assign_copilot(
+        self,
+        repository: str,
+        issue_number: int,
+        *,
+        target_repository: str,
+        base_branch: str,
+        custom_instructions: str,
+        model: str,
+    ) -> dict[str, object]:
+        self.calls.append(
+            (
+                "assign_copilot",
+                issue_number,
+                target_repository,
+                base_branch,
+                custom_instructions,
+                model,
+            )
+        )
+        return {
+            "number": issue_number,
+            "state": "open",
+            "updated_at": "2026-08-21T20:00:01Z",
+            "assignees": [{"login": "Copilot"}],
+        }
+
+    def unassign_copilot(
+        self,
+        repository: str,
+        issue_number: int,
+    ) -> dict[str, object]:
+        self.calls.append(("unassign_copilot", issue_number))
+        return {"number": issue_number, "state": "open", "assignees": []}
+
 
 class ActorTests(unittest.TestCase):
     def test_actor_identity_must_match_authorized_proposal_author(self) -> None:
@@ -172,6 +269,216 @@ class ActorTests(unittest.TestCase):
         self.assertEqual("stale", result["outcome"])
         self.assertEqual("actor-identity-changed", result["reason"])
         self.assertNotIn("create_comment", [call[0] for call in client.calls])
+
+    def test_assign_copilot_executes_and_verifies_live_assignment(self) -> None:
+        proposals = _assignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [
+                        {"name": "quarantined-test"},
+                        {"name": "test-failure"},
+                    ],
+                    "assignees": [],
+                },
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "assignees": [{"login": "Copilot"}],
+                },
+            ]
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=str(action["actionId"]),
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertEqual(
+            {
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+                "copilotAssigned": True,
+                "targetRepository": "owner/repo",
+                "baseBranch": "main",
+                "assignmentObservedAt": "2026-08-21T20:00:01Z",
+            },
+            result["result"],
+        )
+        self.assertIn(
+            (
+                "assign_copilot",
+                21,
+                "owner/repo",
+                "main",
+                "Fix Example.Tests.Fails and add regression coverage.",
+                "",
+            ),
+            client.calls,
+        )
+
+    def test_assign_copilot_rejects_cross_repository_execution(self) -> None:
+        proposals = _assignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        action["targetRepository"] = "owner/other-repo"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "targetRepository must match the issue repository",
+        ):
+            build_dry_run(proposals, action_id=str(action["actionId"]))
+
+    def test_assign_copilot_aborts_when_issue_has_an_existing_assignee(self) -> None:
+        proposals = _assignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "test-failure"}],
+                    "assignees": [{"login": "human-owner", "type": "User"}],
+                }
+            ]
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=str(action["actionId"]),
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("issue-already-assigned", result["reason"])
+        self.assertNotIn("assign_copilot", [call[0] for call in client.calls])
+
+    def test_reconcile_assignment_adopts_the_live_copilot_assignee(self) -> None:
+        proposals = _assignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "assignees": [{"login": "Copilot"}],
+                }
+            ]
+        )
+
+        result = reconcile_action(
+            proposals,
+            action_id=str(action["actionId"]),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertEqual(
+            {
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+                "copilotAssigned": True,
+                "targetRepository": "owner/repo",
+                "baseBranch": "main",
+                "reconciledAfterInterruption": True,
+            },
+            result["result"],
+        )
+        self.assertNotIn("assign_copilot", [call[0] for call in client.calls])
+
+    def test_unassign_copilot_executes_without_removing_human_assignees(self) -> None:
+        proposals = _unassignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [{"name": "test-failure"}],
+                    "assignees": [
+                        {"login": "human-owner", "type": "User"},
+                        {"login": "Copilot", "type": "Bot"},
+                    ],
+                },
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "assignees": [{"login": "human-owner", "type": "User"}],
+                },
+            ]
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=str(action["actionId"]),
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertEqual(
+            {
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+                "copilotAssigned": False,
+            },
+            result["result"],
+        )
+        self.assertIn(("unassign_copilot", 21), client.calls)
+
+    def test_reconcile_unassignment_adopts_the_live_absence(self) -> None:
+        proposals = _unassignment_proposals()
+        action = proposals["proposals"][0]
+        assert isinstance(action, dict)
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "html_url": "https://github.com/owner/repo/issues/21",
+                    "assignees": [{"login": "human-owner", "type": "User"}],
+                }
+            ]
+        )
+
+        result = reconcile_action(
+            proposals,
+            action_id=str(action["actionId"]),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertEqual(
+            {
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+                "copilotAssigned": False,
+                "reconciledAfterInterruption": True,
+            },
+            result["result"],
+        )
+        self.assertNotIn("unassign_copilot", [call[0] for call in client.calls])
 
     def test_v2_execution_rejects_ineligible_proposal_before_client_calls(self) -> None:
         proposals = _proposals()
@@ -1626,6 +1933,32 @@ class GitHubActorClientTests(unittest.TestCase):
                 protected_comment_repositories={"microsoft/aspire"},
             )
 
+    def test_production_delegation_repository_allows_assignment_only(self) -> None:
+        runner = RecordingRunner({"number": 21, "state": "open"})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_delegation_repositories={"Microsoft/Aspire"},
+        )
+
+        with self.assertRaisesRegex(
+            MutationRepositoryError,
+            "Copilot assignment only",
+        ):
+            client.edit_comment("microsoft/aspire", 900, COMMENT_BODY)
+        client.assign_copilot(
+            "microsoft/aspire",
+            21,
+            target_repository="microsoft/aspire",
+            base_branch="main",
+            custom_instructions="Fix issue #21.",
+            model="",
+        )
+
+        self.assertEqual(1, len(runner.calls))
+        self.assertIn("POST", runner.calls[0][0])
+        self.assertIn("issues/21/assignees", " ".join(runner.calls[0][0]))
+
     def test_uses_fixed_get_issue_endpoint(self) -> None:
         runner = RecordingRunner({"number": 21, "state": "open"})
         client = GitHubActorClient(runner=runner)
@@ -1669,6 +2002,81 @@ class GitHubActorClientTests(unittest.TestCase):
                 },
                 json.loads(audit_path.read_text(encoding="utf-8")),
             )
+
+    def test_assign_copilot_adds_assignee_with_exact_task_configuration(self) -> None:
+        runner = RecordingRunner(
+            {
+                "number": 21,
+                "state": "open",
+                "assignees": [
+                    {"login": "human-owner"},
+                    {"login": "Copilot"},
+                ],
+            }
+        )
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"owner/repo"},
+        )
+
+        issue = client.assign_copilot(
+            "owner/repo",
+            21,
+            target_repository="owner/repo",
+            base_branch="main",
+            custom_instructions="Fix the exact failing test and add regression coverage.",
+            model="",
+        )
+
+        command, request = runner.calls[0]
+        self.assertEqual("open", issue["state"])
+        self.assertIn("POST", command)
+        self.assertEqual(
+            "repos/owner/repo/issues/21/assignees",
+            command[-1],
+        )
+        self.assertEqual(
+            {
+                "assignees": ["copilot-swe-agent[bot]"],
+                "agent_assignment": {
+                    "target_repo": "owner/repo",
+                    "base_branch": "main",
+                    "custom_instructions": (
+                        "Fix the exact failing test and add regression coverage."
+                    ),
+                    "custom_agent": "",
+                    "model": "",
+                },
+            },
+            request,
+        )
+
+    def test_unassign_copilot_removes_only_the_copilot_assignee(self) -> None:
+        runner = RecordingRunner(
+            {
+                "number": 21,
+                "state": "open",
+                "assignees": [{"login": "human-owner"}],
+            }
+        )
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"owner/repo"},
+        )
+
+        issue = client.unassign_copilot("owner/repo", 21)
+
+        command, request = runner.calls[0]
+        self.assertEqual([{"login": "human-owner"}], issue["assignees"])
+        self.assertIn("DELETE", command)
+        self.assertEqual(
+            "repos/owner/repo/issues/21/assignees",
+            command[-1],
+        )
+        self.assertEqual(
+            {"assignees": ["copilot-swe-agent[bot]"]},
+            request,
+        )
 
     def test_create_comment_parses_included_status_and_json_body(self) -> None:
         runner = HeaderRecordingRunner({"id": 900, "body": COMMENT_BODY})

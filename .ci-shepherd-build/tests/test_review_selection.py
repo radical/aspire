@@ -301,6 +301,7 @@ class ReviewSelectionTests(unittest.TestCase):
 
         self.assertNotIn("review-close", allowed)
         self.assertNotIn("ping-human", allowed)
+        self.assertIn("delegate-copilot", allowed)
         self.assertIn("investigate", allowed)
         self.assertIn("watch", allowed)
 

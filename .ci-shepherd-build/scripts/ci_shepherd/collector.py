@@ -124,6 +124,8 @@ class InventoryResult:
     open_pull_requests: list[dict[str, Any]] = field(default_factory=list)
     rejected_candidates: list[dict[str, Any]] = field(default_factory=list)
     open_bot_scan: dict[str, Any] | None = None
+    delegated_issues: list[dict[str, Any]] = field(default_factory=list)
+    delegated_pull_requests: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -192,6 +194,7 @@ class Collector:
         bot_authors: tuple[str, ...] = (),
         shepherd_author: str | None = None,
         repository_policy: RepositoryPolicy | None = None,
+        released_delegation_issue_numbers: Iterable[int] = (),
     ) -> None:
         self._client = client
         self._repository = repository
@@ -206,6 +209,9 @@ class Collector:
         self._now = now.astimezone(UTC)
         self._lookback_days = lookback_days
         self._bot_authors = bot_authors
+        self._released_delegation_issue_numbers = frozenset(
+            released_delegation_issue_numbers
+        )
         self._shepherd_author = (
             shepherd_author.casefold()
             if isinstance(shepherd_author, str) and shepherd_author.strip()
@@ -232,6 +238,8 @@ class Collector:
         self._supporting_comment_failed_issue_numbers: set[int] = set()
         self._open_pull_requests: dict[int, dict[str, Any]] = {}
         self._rejected_candidates: dict[tuple[str, int], dict[str, Any]] = {}
+        self._delegated_issues: dict[int, dict[str, Any]] = {}
+        self._delegated_pull_requests: dict[int, dict[str, Any]] = {}
         self._open_bot_scan: dict[str, Any] | None = None
 
     def collect(
@@ -325,6 +333,8 @@ class Collector:
                 ],
                 rejected_candidates=list(self._rejected_candidates.values()),
                 open_bot_scan=copy.deepcopy(self._open_bot_scan),
+                delegated_issues=self._delegated_issue_inventory(),
+                delegated_pull_requests=self._delegated_pull_request_inventory(),
             )
 
         recent_closed_candidates = self._load_candidate_issues(recent_closed_seed)
@@ -397,6 +407,8 @@ class Collector:
             ],
             rejected_candidates=list(self._rejected_candidates.values()),
             open_bot_scan=copy.deepcopy(self._open_bot_scan),
+            delegated_issues=self._delegated_issue_inventory(),
+            delegated_pull_requests=self._delegated_pull_request_inventory(),
         )
 
     def collect_incremental(
@@ -446,6 +458,8 @@ class Collector:
                 ],
                 rejected_candidates=list(self._rejected_candidates.values()),
                 open_bot_scan=copy.deepcopy(self._open_bot_scan),
+                delegated_issues=self._delegated_issue_inventory(),
+                delegated_pull_requests=self._delegated_pull_request_inventory(),
             )
 
         inventory = self.collect(
@@ -855,6 +869,8 @@ class Collector:
             open_pull_requests=copy.deepcopy(inventory.open_pull_requests),
             rejected_candidates=copy.deepcopy(inventory.rejected_candidates),
             open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
+            delegated_issues=copy.deepcopy(inventory.delegated_issues),
+            delegated_pull_requests=copy.deepcopy(inventory.delegated_pull_requests),
         )
 
     def _restore_supporting_roots_from_evidence(
@@ -1150,6 +1166,10 @@ class Collector:
                         inventory.rejected_candidates
                     ),
                     open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
+                    delegated_issues=copy.deepcopy(inventory.delegated_issues),
+                    delegated_pull_requests=copy.deepcopy(
+                        inventory.delegated_pull_requests
+                    ),
                 )
 
         codeowners_document: ownership.CodeownersDocument | None = None
@@ -1180,6 +1200,10 @@ class Collector:
                         inventory.rejected_candidates
                     ),
                     open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
+                    delegated_issues=copy.deepcopy(inventory.delegated_issues),
+                    delegated_pull_requests=copy.deepcopy(
+                        inventory.delegated_pull_requests
+                    ),
                 )
 
             try:
@@ -1251,11 +1275,15 @@ class Collector:
             open_pull_requests=copy.deepcopy(inventory.open_pull_requests),
             rejected_candidates=copy.deepcopy(inventory.rejected_candidates),
             open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
+            delegated_issues=copy.deepcopy(inventory.delegated_issues),
+            delegated_pull_requests=copy.deepcopy(inventory.delegated_pull_requests),
         )
 
     def _fetch_open_inventory(self) -> dict[int, dict[str, Any]]:
         self._open_pull_requests.clear()
         self._rejected_candidates.clear()
+        self._delegated_issues.clear()
+        self._delegated_pull_requests.clear()
         self._open_bot_scan = None
         open_seed: dict[int, dict[str, Any]] = {}
         for label in TARGET_LABELS:
@@ -1434,15 +1462,20 @@ class Collector:
             if not isinstance(number, int):
                 continue
             is_pull_request = bool(raw_issue.get("pull_request"))
-            if self._is_assigned_to_copilot(raw_issue):
-                target_kind = "pull-request" if is_pull_request else "issue"
-                self._rejected_candidates[(target_kind, number)] = {
-                    "number": number,
-                    "targetKind": target_kind,
-                    "reason": "assigned-to-copilot",
-                }
+            released_handoff = (
+                not is_pull_request
+                and number in self._released_delegation_issue_numbers
+            )
+            if self._is_assigned_to_copilot(raw_issue) and not released_handoff:
+                if is_pull_request:
+                    self._open_pull_requests.pop(number, None)
+                    self._delegated_pull_requests[number] = copy.deepcopy(raw_issue)
+                else:
+                    destination.pop(number, None)
+                    self._delegated_issues[number] = copy.deepcopy(raw_issue)
                 continue
             if is_pull_request:
+                self._delegated_pull_requests.pop(number, None)
                 if (
                     not require_recently_closed
                     and raw_issue.get("state") == "open"
@@ -1451,6 +1484,7 @@ class Collector:
                         raw_issue, label, selection_reason=selection_reason
                     )
                 continue
+            self._delegated_issues.pop(number, None)
             if require_recently_closed and not self._is_recently_closed(raw_issue):
                 continue
 
@@ -1476,6 +1510,18 @@ class Collector:
             and assignee["login"].casefold() in COPILOT_ASSIGNEES
             for assignee in assignees
         )
+
+    def _delegated_issue_inventory(self) -> list[dict[str, Any]]:
+        return [
+            copy.deepcopy(issue)
+            for _, issue in sorted(self._delegated_issues.items())
+        ]
+
+    def _delegated_pull_request_inventory(self) -> list[dict[str, Any]]:
+        return [
+            copy.deepcopy(pull_request)
+            for _, pull_request in sorted(self._delegated_pull_requests.items())
+        ]
 
     def _merge_pull_request_inventory(
         self,

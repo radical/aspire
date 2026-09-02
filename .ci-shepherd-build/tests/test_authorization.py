@@ -102,6 +102,9 @@ class AuthorizationTests(unittest.TestCase):
             "budget": {
                 "maxMutationAttempts": 1,
                 "maxChains": 1,
+                "maxRunningCopilotTasks": 2,
+                "maxCopilotStartsPerRolling24h": 3,
+                "maxOpenDelegatedPullRequests": 5,
             },
             "productionCommentPilot": False,
         }
@@ -591,7 +594,14 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertEqual([self.comment_action_id], grant["allowedChainRoots"])
         self.assertEqual([], grant["overrideSuppressionForActionIds"])
         self.assertEqual(
-            {"maxMutationAttempts": 2, "maxChains": 1}, grant["budget"]
+            {
+                "maxMutationAttempts": 2,
+                "maxChains": 1,
+                "maxRunningCopilotTasks": 2,
+                "maxCopilotStartsPerRolling24h": 3,
+                "maxOpenDelegatedPullRequests": 5,
+            },
+            grant["budget"],
         )
         self.assertFalse(grant["productionCommentPilot"])
         self.assertEqual(
@@ -611,6 +621,62 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             )
             self.assertEqual(action_id, authorized.proposal["actionId"])
             self.assertEqual(self.comment_action_id, authorized.chain_root)
+
+    def test_copilot_capacity_limits_round_trip_as_signed_grant_data(self) -> None:
+        self._write_proposals()
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            max_running_copilot_tasks=10,
+            max_copilot_starts_per_rolling_24h=5,
+            max_open_delegated_prs=12,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        authorized = load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=self.comment_action_id,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertEqual(10, authorized.grant.budget.max_running_copilot_tasks)
+        self.assertEqual(
+            5,
+            authorized.grant.budget.max_copilot_starts_per_rolling_24h,
+        )
+        self.assertEqual(12, authorized.grant.budget.max_open_delegated_prs)
+
+    def test_fork_grant_authorizes_exact_copilot_assignment(self) -> None:
+        proposal = self.proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.pop("body")
+        proposal.update(
+            {
+                "operation": "assign-copilot",
+                "targetRepository": "radical/aspire",
+                "baseBranch": "main",
+                "customInstructions": (
+                    "Fix the exact quarantined test and add regression coverage."
+                ),
+                "model": "",
+            }
+        )
+        self.proposals["proposals"] = [proposal]
+        self._write_proposals()
+
+        grant = self._generate(action_ids=[self.comment_action_id])
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        authorized = load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=self.comment_action_id,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertEqual(["assign-copilot"], grant["allowedOperations"])
+        self.assertEqual("assign-copilot", authorized.proposal["operation"])
 
     def test_omitted_dependency_is_rejected(self) -> None:
         self._write_proposals()
@@ -850,7 +916,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         )
         self.assertTrue(grant["productionCommentPilot"])
         self.assertEqual(
-            {"maxMutationAttempts": 1, "maxChains": 1},
+            {
+                "maxMutationAttempts": 1,
+                "maxChains": 1,
+                "maxRunningCopilotTasks": 2,
+                "maxCopilotStartsPerRolling24h": 3,
+                "maxOpenDelegatedPullRequests": 5,
+            },
             grant["budget"],
         )
         self.output_path.write_text(json.dumps(grant), encoding="utf-8")
@@ -866,6 +938,68 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         self.assertTrue(authorized.grant.production_comment_pilot)
         self.assertEqual(self.comment_action_id, authorized.proposal["actionId"])
+
+    def test_production_delegation_pilot_allows_one_capped_assignment(self) -> None:
+        self._use_production_repository()
+        proposal = self.proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal["operation"] = "assign-copilot"
+        proposal["targetRepository"] = "microsoft/aspire"
+        proposal["baseBranch"] = "main"
+        proposal["customInstructions"] = "Fix issue #1 and open a draft PR."
+        proposal["model"] = ""
+        proposal.pop("body")
+        proposal.pop("commentId")
+        proposal.pop("sourceCommentFingerprint")
+        self.proposals["proposals"] = [proposal]
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            max_running_copilot_tasks=1,
+            max_copilot_starts_per_rolling_24h=1,
+            max_open_delegated_prs=1,
+            allow_production_delegation_pilot=True,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        authorized = load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=self.comment_action_id,
+            allow_production_delegation_pilot=True,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertFalse(grant["productionCommentPilot"])
+        self.assertTrue(grant["productionDelegationPilot"])
+        self.assertEqual(["assign-copilot"], grant["allowedOperations"])
+        self.assertTrue(authorized.grant.production_delegation_pilot)
+
+    def test_production_delegation_pilot_rejects_broader_capacity(self) -> None:
+        self._use_production_repository()
+        proposal = self.proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.update(
+            {
+                "operation": "assign-copilot",
+                "targetRepository": "microsoft/aspire",
+                "baseBranch": "main",
+                "customInstructions": "Fix issue #1 and open a draft PR.",
+                "model": "",
+            }
+        )
+        proposal.pop("body")
+        proposal.pop("commentId")
+        proposal.pop("sourceCommentFingerprint")
+        self.proposals["proposals"] = [proposal]
+        self._write_proposals()
+
+        with self.assertRaisesRegex(AuthorizationError, "must all equal one"):
+            self._generate(
+                action_ids=[self.comment_action_id],
+                allow_production_delegation_pilot=True,
+            )
 
     def test_production_comment_pilot_accepts_finalized_round_zero_snapshot(
         self,
@@ -1145,7 +1279,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             (
                 "budget",
                 "budget",
-                {"maxMutationAttempts": 2, "maxChains": 1},
+                {
+                    "maxMutationAttempts": 2,
+                    "maxChains": 1,
+                    "maxRunningCopilotTasks": 2,
+                    "maxCopilotStartsPerRolling24h": 3,
+                    "maxOpenDelegatedPullRequests": 5,
+                },
                 "exact action count",
             ),
             (

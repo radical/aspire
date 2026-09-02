@@ -5,11 +5,19 @@ from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import time
 from typing import Sequence
 
 from ci_shepherd.actor import build_dry_run, execute_action, reconcile_action
 from ci_shepherd.authorization import load_authorized_execution
+from ci_shepherd.delegation_execution import (
+    finalize_delegation_result,
+    reserve_delegation_start,
+)
+from ci_shepherd.delegations import CapacityLimits
 from ci_shepherd.execution_state import ActionEventStore
+from ci_shepherd.github import GitHubClient
 from ci_shepherd.github_actor import GitHubActorClient
 
 
@@ -33,6 +41,13 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Permit an authorized one-action comment pilot on microsoft/aspire."
+        ),
+    )
+    parser.add_argument(
+        "--production-delegation-pilot",
+        action="store_true",
+        help=(
+            "Permit an authorized one-assignment pilot on microsoft/aspire."
         ),
     )
     return parser
@@ -87,6 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         state_dir=args.state_dir,
         action_id=args.action_id,
         allow_production_comment_pilot=args.production_comment_pilot,
+        allow_production_delegation_pilot=args.production_delegation_pilot,
     )
     proposals = authorized.proposal_document
     proposal = authorized.proposal
@@ -135,16 +151,75 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(result)
             return 0
 
-        production_overrides = (
+        production_comment_overrides = (
             {authorized.grant.repository}
             if authorized.grant.production_comment_pilot
             else set()
         )
+        production_delegation_overrides = (
+            {authorized.grant.repository}
+            if authorized.grant.production_delegation_pilot
+            else set()
+        )
         client = GitHubActorClient(
             allowed_repositories={authorized.grant.repository},
-            protected_comment_repositories=production_overrides,
+            protected_comment_repositories=production_comment_overrides,
+            protected_delegation_repositories=production_delegation_overrides,
             audit_path=state_dir / "api-calls.jsonl",
         )
+        operation = str(proposal["operation"])
+        delegation_reader = (
+            GitHubClient(
+                runner=subprocess.run,
+                popen_factory=subprocess.Popen,
+                sleep=time.sleep,
+                now=lambda: datetime.now(UTC),
+                audit_path=state_dir / "api-calls.jsonl",
+            )
+            if operation == "assign-copilot"
+            else None
+        )
+        delegation_baseline: tuple[str, ...] | None = None
+        if operation == "assign-copilot" and reservation.mode == "execute":
+            assert delegation_reader is not None
+            capacity = reserve_delegation_start(
+                execution=execution,
+                client=delegation_reader,
+                repository=authorized.grant.repository,
+                limits=CapacityLimits(
+                    max_running_tasks=(
+                        authorized.grant.budget.max_running_copilot_tasks
+                    ),
+                    max_starts_per_rolling_24h=(
+                        authorized.grant.budget
+                        .max_copilot_starts_per_rolling_24h
+                    ),
+                    max_open_delegated_prs=(
+                        authorized.grant.budget.max_open_delegated_prs
+                    ),
+                ),
+                now=datetime.now(UTC),
+            )
+            if not capacity.permitted:
+                result = {
+                    "actionId": args.action_id,
+                    "attemptedAt": datetime.now(UTC)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "outcome": "deferred",
+                    "reason": "delegation-capacity-blocked",
+                    "blockedBy": list(capacity.blocked_by),
+                }
+                _print_json(result)
+                return 0
+            delegation_baseline = capacity.task_ids_before
+        elif operation == "assign-copilot":
+            delegation_baseline = execution.delegation_baseline_task_ids()
+            if delegation_baseline is None:
+                raise RuntimeError(
+                    "Assignment reconciliation requires a persisted task baseline."
+                )
+
         if reservation.mode == "reconcile":
             result = reconcile_action(
                 proposals,
@@ -165,6 +240,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.action_id
                     in authorized.grant.override_suppression_for_action_ids
                 ),
+            )
+        if operation == "assign-copilot":
+            assert delegation_reader is not None
+            assert delegation_baseline is not None
+            assignment_started_at = execution.delegation_baseline_recorded_at()
+            if assignment_started_at is None:
+                raise RuntimeError(
+                    "Assignment finalization requires a persisted baseline timestamp."
+                )
+            result = finalize_delegation_result(
+                result=result,
+                task_ids_before=delegation_baseline,
+                client=delegation_reader,
+                repository=authorized.grant.repository,
+                assignment_started_at=assignment_started_at,
             )
         execution.append_terminal(
             result=result,

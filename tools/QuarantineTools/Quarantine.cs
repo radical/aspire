@@ -52,6 +52,7 @@ public partial class Program
         var optQuarantine = new Option<bool>("--quarantine", "-q") { Description = "Quarantine the specified test(s)." };
         var optUnquarantine = new Option<bool>("--unquarantine", "-u") { Description = "Unquarantine the specified test(s)." };
         var optInspect = new Option<bool>("--inspect") { Description = "Inspect the specified test(s) without modifying source files and write JSON to standard output." };
+        var optInventory = new Option<bool>("--inventory") { Description = "List every [QuarantinedTest] attribute under the tests root as JSON on standard output." };
         var optUrl = new Option<string?>("--url", "-i") { Description = "Issue URL required for quarantining (http/https)." };
         var optRoot = new Option<string?>("--root", "-r") { Description = "Tests root to scan (defaults to '<repo>/tests')." };
         var optAttribute = new Option<string?>("--attribute", "-a") { Description = "Fully-qualified attribute type to add/remove. If not specified, defaults based on --mode." };
@@ -63,6 +64,7 @@ public partial class Program
         rootCommand.Options.Add(optQuarantine);
         rootCommand.Options.Add(optUnquarantine);
         rootCommand.Options.Add(optInspect);
+        rootCommand.Options.Add(optInventory);
         rootCommand.Options.Add(optUrl);
         rootCommand.Options.Add(optRoot);
         rootCommand.Options.Add(optAttribute);
@@ -74,14 +76,33 @@ public partial class Program
             var quarantine = parseResult.GetValue<bool>("--quarantine");
             var unquarantine = parseResult.GetValue<bool>("--unquarantine");
             var inspect = parseResult.GetValue<bool>("--inspect");
+            var inventory = parseResult.GetValue<bool>("--inventory");
 
-            if ((quarantine ? 1 : 0) + (unquarantine ? 1 : 0) + (inspect ? 1 : 0) != 1)
+            if ((quarantine ? 1 : 0) + (unquarantine ? 1 : 0) + (inspect ? 1 : 0) + (inventory ? 1 : 0) != 1)
             {
-                Console.Error.WriteLine("Specify exactly one of -q/--quarantine, -u/--unquarantine, or --inspect.");
+                Console.Error.WriteLine("Specify exactly one of -q/--quarantine, -u/--unquarantine, --inspect, or --inventory.");
                 return Task.FromResult(1);
             }
 
             var tests = parseResult.GetValue<string[]?>("tests") ?? [];
+
+            if (inventory)
+            {
+                if (tests.Length != 0)
+                {
+                    Console.Error.WriteLine("--inventory does not accept test names.");
+                    return Task.FromResult(1);
+                }
+
+                if (!string.IsNullOrWhiteSpace(parseResult.GetValue<string?>("--url"))
+                    || !string.IsNullOrWhiteSpace(parseResult.GetValue<string?>("--attribute")))
+                {
+                    Console.Error.WriteLine("--inventory does not accept --url or --attribute.");
+                    return Task.FromResult(1);
+                }
+
+                return InventoryAsync(parseResult.GetValue<string?>("--root"), token);
+            }
 
             if (tests.Length == 0)
             {
@@ -145,6 +166,61 @@ public partial class Program
         });
 
         return rootCommand.Parse(args).InvokeAsync();
+    }
+
+    /// <summary>
+    /// Lists every <c>[QuarantinedTest]</c> attribute under the tests root with the method's current
+    /// fully-qualified name. Consumers reconcile issue metadata against source, so the current name is
+    /// the answer they need even when the issue that the attribute links still claims an older name.
+    /// </summary>
+    private static async Task<int> InventoryAsync(string? scanRootOverride, CancellationToken cancellationToken)
+    {
+        var repoRoot = FindRepoRoot(Directory.GetCurrentDirectory()) ?? Directory.GetCurrentDirectory();
+        var testsRoot = ResolveTestsRoot(repoRoot, scanRootOverride);
+
+        if (!Directory.Exists(testsRoot))
+        {
+            Console.Error.WriteLine($"Tests folder not found at: {testsRoot}");
+            return 2;
+        }
+
+        var entries = new List<InventoryEntry>();
+        foreach (var file in EnumerateCsFiles(testsRoot, ignoreInaccessible: false).OrderBy(path => path, StringComparer.Ordinal))
+        {
+            var text = await File.ReadAllTextAsync(file, cancellationToken).ConfigureAwait(false);
+            if (!text.Contains("QuarantinedTest", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var tree = CSharpSyntaxTree.ParseText(text, cancellationToken: cancellationToken);
+            var root = tree.GetCompilationUnitRoot(cancellationToken);
+            var isQuarantineAttribute = CreateAttributeMatcher(root, DefaultQuarantinedTestAttributeFullName);
+            var relativePath = Path.GetRelativePath(testsRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                foreach (var attribute in method.AttributeLists.SelectMany(list => list.Attributes).Where(isQuarantineAttribute))
+                {
+                    entries.Add(
+                        new InventoryEntry(
+                            GetFullMethodName(method),
+                            GetIssueUrl(attribute),
+                            relativePath,
+                            method.Identifier.GetLocation().GetLineSpan().StartLinePosition.Line + 1));
+                }
+            }
+        }
+
+        var document = new InventoryDocument(
+            1,
+            entries
+                .OrderBy(entry => entry.File, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Line)
+                .ThenBy(entry => entry.TestName, StringComparer.Ordinal)
+                .ToList());
+        Console.WriteLine(JsonSerializer.Serialize(document, InspectionJsonContext.Default.InventoryDocument));
+
+        return 0;
     }
 
     private static async Task<int> InspectAsync(IReadOnlyList<string> fullMethodNames, string? scanRootOverride, CancellationToken cancellationToken)
@@ -1123,7 +1199,12 @@ public partial class Program
 
     private sealed record FileQuarantine(string TestName, string? IssueUrl);
 
+    private sealed record InventoryDocument(int SchemaVersion, IReadOnlyList<InventoryEntry> Quarantines);
+
+    private sealed record InventoryEntry(string TestName, string? IssueUrl, string File, int Line);
+
     [JsonSerializable(typeof(InspectionDocument))]
+    [JsonSerializable(typeof(InventoryDocument))]
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
     private sealed partial class InspectionJsonContext : JsonSerializerContext;
 }

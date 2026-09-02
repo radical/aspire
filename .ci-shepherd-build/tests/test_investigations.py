@@ -179,6 +179,14 @@ class InvestigationLifecycleTests(unittest.TestCase):
         self.assertIn('"outcome": "fixable | recovered | duplicate', request["workerPrompt"])
         self.assertIn('"fixHandoff": null', request["workerPrompt"])
         self.assertIn(
+            '"likelyPaths": ["repo-relative path"],',
+            request["workerPrompt"],
+        )
+        self.assertIn(
+            '"validation": ["specific validation command or test"]',
+            request["workerPrompt"],
+        )
+        self.assertIn(
             "Do not invoke issue-investigation or discover additional evidence",
             request["workerPrompt"],
         )

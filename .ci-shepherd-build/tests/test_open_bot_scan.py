@@ -132,7 +132,7 @@ class OpenBotScanTests(unittest.TestCase):
             ],
         )
 
-    def test_copilot_assigned_bot_items_are_rejected_not_inventoried(self) -> None:
+    def test_copilot_assigned_bot_items_use_delegated_inventories(self) -> None:
         result, _ = collect(
             {
                 scan_page(1): [
@@ -145,16 +145,14 @@ class OpenBotScanTests(unittest.TestCase):
         self.assertEqual([], result.open_issues)
         self.assertEqual([], result.open_pull_requests)
         self.assertEqual(
-            [
-                {"number": 31, "targetKind": "issue", "reason": "assigned-to-copilot"},
-                {
-                    "number": 32,
-                    "targetKind": "pull-request",
-                    "reason": "assigned-to-copilot",
-                },
-            ],
-            sorted(result.rejected_candidates, key=lambda entry: entry["number"]),
+            [31],
+            [issue["number"] for issue in result.delegated_issues],
         )
+        self.assertEqual(
+            [32],
+            [pull["number"] for pull in result.delegated_pull_requests],
+        )
+        self.assertEqual([], result.rejected_candidates)
 
     def test_short_final_page_reports_a_complete_scan(self) -> None:
         result, client = collect(

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
 from .timeutils import parse_aware_iso8601
@@ -708,6 +708,144 @@ def apply_quarantine_source_inspection(
         "blockedTargets": blocked,
     }
     return _request_for_tests(inspected_request, eligible)
+
+
+def collect_quarantine_source_state(
+    checkout: Path | None,
+    claimed_test_names: Sequence[str],
+    *,
+    timeout_seconds: int = 300,
+) -> dict[str, object] | None:
+    """Collect the repository-wide quarantine truth for one pinned checkout.
+
+    Returns the complete ``[QuarantinedTest]`` inventory plus per-name
+    inspection results for the test names issue metadata claims, all pinned to
+    one revision, tree digest, and inspector digest. Returns ``None`` when the
+    checkout cannot be read or changes mid-scan: every consumer quotes exact
+    file and line evidence, so an unpinned answer must make no claim at all.
+    """
+    if checkout is None:
+        return None
+    try:
+        checkout = checkout.expanduser().resolve(strict=True)
+        tool_project = checkout / "tools" / "QuarantineTools"
+        tests_root = checkout / "tests"
+        if not tool_project.is_dir() or not tests_root.is_dir():
+            raise ValueError("Checkout does not contain QuarantineTools and tests.")
+
+        source_revision = _source_revision(checkout)
+        source_tree_digest = _source_tree_digest(checkout)
+        inspector_tree_digest = quarantine_tool_tree_digest(tool_project)
+
+        names = sorted(
+            {
+                name
+                for name in claimed_test_names
+                if isinstance(name, str) and name
+            }
+        )
+        inventory = _run_quarantine_tool(
+            checkout,
+            tool_project,
+            ["--inventory", "--root", str(tests_root)],
+            timeout_seconds=timeout_seconds,
+        )
+        if (
+            not isinstance(inventory, Mapping)
+            or inventory.get("schemaVersion") != 1
+            or not isinstance(inventory.get("quarantines"), list)
+        ):
+            raise ValueError("Quarantine inventory returned an invalid document.")
+
+        tests: list[Any] = []
+        if names:
+            inspection = _run_quarantine_tool(
+                checkout,
+                tool_project,
+                ["--inspect", "--root", str(tests_root), *names],
+                timeout_seconds=timeout_seconds,
+            )
+            if (
+                not isinstance(inspection, Mapping)
+                or inspection.get("schemaVersion") != 1
+                or not isinstance(inspection.get("tests"), list)
+            ):
+                raise ValueError("Quarantine inspection returned an invalid document.")
+            tests = list(inspection["tests"])
+            inspected_names = [
+                result.get("testName")
+                for result in tests
+                if isinstance(result, Mapping)
+                and isinstance(result.get("testName"), str)
+                and result.get("testName")
+            ]
+            if len(tests) != len(names) or sorted(inspected_names) != names:
+                raise ValueError(
+                    "Quarantine inspection did not return exactly one result "
+                    "for every requested test."
+                )
+
+        if (
+            _source_revision(checkout) != source_revision
+            or _source_tree_digest(checkout) != source_tree_digest
+        ):
+            raise ValueError("Checkout changed during quarantine source collection.")
+        return {
+            "schemaVersion": 1,
+            "sourceRevision": source_revision,
+            "sourceTreeDigest": source_tree_digest,
+            "inspectorTreeDigest": inspector_tree_digest,
+            "quarantines": list(inventory["quarantines"]),
+            "tests": tests,
+        }
+    except (
+        FileNotFoundError,
+        NotADirectoryError,
+        OSError,
+        subprocess.TimeoutExpired,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return None
+
+
+def _run_quarantine_tool(
+    checkout: Path,
+    tool_project: Path,
+    arguments: list[str],
+    *,
+    timeout_seconds: int,
+) -> object:
+    completed = subprocess.run(
+        [
+            "dotnet",
+            "run",
+            "--project",
+            str(tool_project),
+            "--no-restore",
+            "--verbosity",
+            "quiet",
+            "--",
+            *arguments,
+        ],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+        env={
+            **os.environ,
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_CLI_UI_LANGUAGE": "en-US",
+            "DOTNET_NOLOGO": "1",
+            "DOTNET_ROLL_FORWARD": "Major",
+            "MSBUILDTERMINALLOGGER": "false",
+        },
+    )
+    if completed.returncode != 0:
+        raise ValueError("Quarantine source tool failed.")
+    return json.loads(completed.stdout)
 
 
 def inspect_quarantine_session_request(

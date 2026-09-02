@@ -747,6 +747,51 @@ class CycleTests(unittest.TestCase):
                 selection["omitted"],
             )
 
+    def test_unverifiable_source_makes_no_quarantine_reconciliation_claim(
+        self,
+    ) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            input_path = root / "input.json"
+            input_snapshot = snapshot(
+                "2026-08-28T20:00:00Z",
+                title="Flaky test Demo.Tests.Flaky",
+            )
+            input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = [
+                "quarantined-test"
+            ]
+            input_path.write_text(json.dumps(input_snapshot), encoding="utf-8")
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=root / "state",
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+
+            reconciliation = json.loads(
+                (work / "quarantine-reconciliation.json").read_text(encoding="utf-8")
+            )
+            proposals = json.loads(
+                (work / "action-proposals.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual([], reconciliation["findings"])
+            self.assertEqual([1], reconciliation["unverifiableIssueNumbers"])
+            self.assertEqual([], proposals["proposals"])
+            self.assertIn(
+                "## Quarantine source reconciliation",
+                (work / "report.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "could not be verified against source: #1",
+                (work / "report.md").read_text(encoding="utf-8"),
+            )
+
     def test_fails_closed_when_quarantine_source_inspection_is_unavailable(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)

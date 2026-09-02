@@ -11,6 +11,9 @@ import subprocess
 import time
 
 from ci_shepherd.collector import BOT_AUTHORS, Collector, InventoryResult
+from ci_shepherd.delegation_observer import observe_delegations
+from ci_shepherd.delegations import derive_delegation_tracking
+from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.github import GitHubClient
 from ci_shepherd.history import load_current
 from ci_shepherd.models import stable_json, validate_snapshot
@@ -44,6 +47,7 @@ def build_snapshot(
     inventory: InventoryResult,
     *,
     repository_policy: RepositoryPolicy | None = None,
+    delegation_status: dict[str, object] | None = None,
 ) -> dict[str, object]:
     snapshot: dict[str, object] = {
         "schemaVersion": 1,
@@ -56,6 +60,15 @@ def build_snapshot(
             for pull_request in inventory.open_pull_requests
         ],
         "pullRequests": inventory.open_pull_requests,
+        "delegatedIssues": [
+            int(issue["number"]) for issue in inventory.delegated_issues
+        ],
+        "delegatedIssueDetails": inventory.delegated_issues,
+        "delegatedPullRequests": [
+            int(pull_request["number"])
+            for pull_request in inventory.delegated_pull_requests
+        ],
+        "delegatedPullRequestDetails": inventory.delegated_pull_requests,
         "rejectedCandidates": inventory.rejected_candidates,
         "supportingIssues": inventory.supporting_issues,
         "evidence": inventory.evidence,
@@ -67,6 +80,8 @@ def build_snapshot(
             for number, refs in inventory.references.items()
             if refs
         },
+        "delegationStatus": delegation_status
+        or {"status": "complete", "records": []},
     }
     if inventory.refresh_plan is not None:
         plan = inventory.refresh_plan
@@ -84,6 +99,98 @@ def build_snapshot(
             "digest": repository_policy.digest,
         }
     return snapshot
+
+
+def build_incomplete_delegation_status(
+    previous_snapshot: dict[str, object] | None,
+    problem: Exception,
+) -> dict[str, object]:
+    previous_delegation_status = (
+        previous_snapshot.get("delegationStatus")
+        if previous_snapshot is not None
+        else None
+    )
+    previous_records = (
+        previous_delegation_status.get("records", [])
+        if isinstance(previous_delegation_status, dict)
+        else []
+    )
+    return {
+        "status": "incomplete",
+        "records": previous_records,
+        "problem": str(problem),
+    }
+
+
+def retain_tracked_delegations(
+    inventory: InventoryResult,
+    records: list[dict[str, object]],
+) -> InventoryResult:
+    issue_numbers = {
+        record["issueNumber"]
+        for record in records
+        if isinstance(record.get("issueNumber"), int)
+        and not isinstance(record.get("issueNumber"), bool)
+        and record.get("requiresHuman") is not True
+    }
+    handoff_issue_numbers = {
+        record["issueNumber"]
+        for record in records
+        if isinstance(record.get("issueNumber"), int)
+        and not isinstance(record.get("issueNumber"), bool)
+        and record.get("requiresHuman") is True
+    }
+    pull_request_numbers = {
+        pull_request["number"]
+        for record in records
+        for pull_request in (
+            record.get("pullRequests")
+            if isinstance(record.get("pullRequests"), list)
+            else []
+        )
+        if isinstance(pull_request, dict)
+        and isinstance(pull_request.get("number"), int)
+        and not isinstance(pull_request.get("number"), bool)
+    }
+    delegated_issues = {
+        int(issue["number"]): issue
+        for issue in inventory.delegated_issues
+        if int(issue["number"]) not in handoff_issue_numbers
+    }
+    open_issues = {
+        int(issue["number"]): issue
+        for issue in inventory.delegated_issues
+        if int(issue["number"]) in handoff_issue_numbers
+    }
+    for issue in inventory.open_issues:
+        number = int(issue["number"])
+        if number in issue_numbers:
+            delegated_issues[number] = issue
+        else:
+            open_issues[number] = issue
+    delegated_pull_requests = {
+        int(pull_request["number"]): pull_request
+        for pull_request in inventory.delegated_pull_requests
+    }
+    open_pull_requests: list[dict[str, object]] = []
+    for pull_request in inventory.open_pull_requests:
+        number = int(pull_request["number"])
+        if number in pull_request_numbers:
+            delegated_pull_requests[number] = pull_request
+        else:
+            open_pull_requests.append(pull_request)
+    return replace(
+        inventory,
+        open_issues=[open_issues[number] for number in sorted(open_issues)],
+        delegated_issues=[
+            delegated_issues[number] for number in sorted(delegated_issues)
+        ],
+        open_pull_requests=open_pull_requests,
+        delegated_pull_requests=[
+            delegated_pull_requests[number]
+            for number in sorted(delegated_pull_requests)
+        ],
+    )
 
 
 def write_private(path: Path, content: str) -> None:
@@ -142,13 +249,61 @@ def collect(
         )
         if repository_policy is not None:
             collector_options["repository_policy"] = repository_policy
+        current = load_current(state_dir, repository) if state_dir is not None else None
+        previous_snapshot: dict[str, object] | None = None
+        if current is not None:
+            previous_snapshot = json.loads(
+                (current.run_directory / "snapshot.json").read_text(encoding="utf-8")
+            )
+            validate_snapshot(previous_snapshot)
+
+        delegation_status: dict[str, object] = {
+            "status": "complete",
+            "records": [],
+        }
+        if state_dir is not None and state_dir.exists():
+            events = ActionEventStore(state_dir).events(repository=repository)
+            if any(
+                event.get("eventType") == "delegation-baseline"
+                for event in events
+            ):
+                try:
+                    observation = observe_delegations(client, repository)
+                    delegation_status = {
+                        "status": "complete",
+                        "records": list(
+                            derive_delegation_tracking(
+                                events=events,
+                                tasks=observation.tasks,
+                                pull_requests=observation.pull_requests,
+                            )
+                        ),
+                    }
+                except Exception as exc:
+                    delegation_status = build_incomplete_delegation_status(
+                        previous_snapshot,
+                        exc,
+                    )
+        released_delegation_issue_numbers = tuple(
+            sorted(
+                int(record["issueNumber"])
+                for record in delegation_status["records"]
+                if isinstance(record, dict)
+                and record.get("requiresHuman") is True
+                and isinstance(record.get("issueNumber"), int)
+                and not isinstance(record.get("issueNumber"), bool)
+            )
+        )
+        if released_delegation_issue_numbers:
+            collector_options["released_delegation_issue_numbers"] = (
+                released_delegation_issue_numbers
+            )
         collector = Collector(
             client,
             repository,
             now,
             **collector_options,
         )
-        current = load_current(state_dir, repository) if state_dir is not None else None
 
         current_stage = "inventory"
         progress.update(current_stage, "started", message="Refreshing the open issue inventory.")
@@ -158,10 +313,7 @@ def collect(
                 include_timeline=False,
             )
         else:
-            previous_snapshot = json.loads(
-                (current.run_directory / "snapshot.json").read_text(encoding="utf-8")
-            )
-            validate_snapshot(previous_snapshot)
+            assert previous_snapshot is not None
             inventory = collector.collect_incremental(
                 previous_snapshot,
                 current.document,
@@ -173,6 +325,10 @@ def collect(
             current_stage,
             "completed",
             message=f"Collected {len(inventory.open_issues)} open issues.",
+        )
+        inventory = retain_tracked_delegations(
+            inventory,
+            list(delegation_status["records"]),
         )
 
         current_stage = "github-enrichment"
@@ -222,6 +378,7 @@ def collect(
             now,
             inventory,
             repository_policy=repository_policy,
+            delegation_status=delegation_status,
         )
         validate_snapshot(snapshot)
         write_private(output_dir / "input.json", stable_json(snapshot))

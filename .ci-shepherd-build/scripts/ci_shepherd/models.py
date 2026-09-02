@@ -253,9 +253,11 @@ PROPOSAL_INTENTS = frozenset(
 TARGET_KINDS = frozenset({"issue", "test", "failureFingerprint", "workflowRun", "investigation"})
 EXECUTOR_CAPABILITIES = frozenset(
     {
+        "assign-copilot",
         "create-comment",
         "edit-comment",
         "close-issue",
+        "unassign-copilot",
     }
 )
 
@@ -332,7 +334,8 @@ def validate_snapshot(snapshot: object) -> None:
     _require_exact_int(mapping, "schemaVersion", 1)
     _require_repository(mapping)
     _require_nonempty_string(mapping, "collectedAt")
-    _require_unique_int_list(mapping, "openIssues")
+    open_issues = set(_require_unique_int_list(mapping, "openIssues"))
+    _validate_delegated_inventory(mapping, open_issues=open_issues)
     collection_errors = _require_list(mapping, "collectionErrors")
     for index, collection_error in enumerate(collection_errors):
         _validate_collection_error(collection_error, index=index)
@@ -342,6 +345,188 @@ def validate_snapshot(snapshot: object) -> None:
         _validate_evidence_record(evidence_id, record)
     _validate_repository_policy_identity(mapping)
     _validate_expansion_manifests(mapping)
+    _validate_delegation_status(mapping.get("delegationStatus"))
+
+
+def _validate_delegated_inventory(
+    snapshot: Mapping[str, Any],
+    *,
+    open_issues: set[int],
+) -> None:
+    delegated_issues = set(
+        _require_unique_int_list(snapshot, "delegatedIssues")
+        if "delegatedIssues" in snapshot
+        else []
+    )
+    overlap = delegated_issues & open_issues
+    if overlap:
+        raise ValidationError(
+            "delegatedIssues must be disjoint from openIssues; "
+            f"found {min(overlap)} in both."
+        )
+    _validate_inventory_details(
+        snapshot,
+        numbers_field="delegatedIssues",
+        details_field="delegatedIssueDetails",
+        numbers=delegated_issues,
+    )
+
+    delegated_pull_requests = set(
+        _require_unique_int_list(snapshot, "delegatedPullRequests")
+        if "delegatedPullRequests" in snapshot
+        else []
+    )
+    open_pull_requests = set(
+        _require_unique_int_list(snapshot, "openPullRequests")
+        if "openPullRequests" in snapshot
+        else []
+    )
+    pull_overlap = delegated_pull_requests & open_pull_requests
+    if pull_overlap:
+        raise ValidationError(
+            "delegatedPullRequests must be disjoint from openPullRequests; "
+            f"found {min(pull_overlap)} in both."
+        )
+    _validate_inventory_details(
+        snapshot,
+        numbers_field="delegatedPullRequests",
+        details_field="delegatedPullRequestDetails",
+        numbers=delegated_pull_requests,
+    )
+
+
+def _validate_inventory_details(
+    snapshot: Mapping[str, Any],
+    *,
+    numbers_field: str,
+    details_field: str,
+    numbers: set[int],
+) -> None:
+    if numbers_field not in snapshot and details_field not in snapshot:
+        return
+    details = _require_list(snapshot, details_field)
+    detail_numbers: set[int] = set()
+    for index, detail in enumerate(details):
+        mapping = _require_mapping(detail, f"{details_field}[{index}]")
+        number = mapping.get("number")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number <= 0
+        ):
+            raise ValidationError(
+                f"{details_field}[{index}].number must be a positive integer."
+            )
+        if number in detail_numbers:
+            raise ValidationError(
+                f"{details_field} contains duplicate number {number}."
+            )
+        detail_numbers.add(number)
+    if detail_numbers != numbers:
+        raise ValidationError(
+            f"{details_field} numbers must exactly match {numbers_field}."
+        )
+
+
+def _validate_delegation_status(value: object) -> None:
+    if value is None:
+        return
+    status = _require_mapping(value, "delegationStatus")
+    _require_only_fields(
+        status,
+        {"status", "records", "problem"},
+        "delegationStatus",
+    )
+    status_value = _require_nonempty_string(status, "status")
+    if status_value not in {"complete", "incomplete"}:
+        raise ValidationError(
+            "delegationStatus.status must be complete or incomplete."
+        )
+    records = _require_list(status, "records")
+    for index, record_value in enumerate(records):
+        field = f"delegationStatus.records[{index}]"
+        record = _require_mapping(record_value, field)
+        _require_only_fields(
+            record,
+            {
+                "actionId",
+                "repository",
+                "issueNumber",
+                "startedAt",
+                "taskId",
+                "taskState",
+                "lifecycle",
+                "requiresHuman",
+                "pullRequests",
+            },
+            field,
+        )
+        _require_nonempty_string(record, "actionId")
+        _require_nonempty_string(record, "repository")
+        issue_number = record.get("issueNumber")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+        ):
+            raise ValidationError(f"{field}.issueNumber must be positive.")
+        _require_nonempty_string(record, "startedAt")
+        task_id = record.get("taskId")
+        if task_id is not None and (not isinstance(task_id, str) or not task_id):
+            raise ValidationError(f"{field}.taskId must be null or nonempty.")
+        task_state = record.get("taskState")
+        if task_state is not None and (
+            not isinstance(task_state, str) or not task_state
+        ):
+            raise ValidationError(f"{field}.taskState must be null or nonempty.")
+        _require_nonempty_string(record, "lifecycle")
+        if not isinstance(record.get("requiresHuman"), bool):
+            raise ValidationError(f"{field}.requiresHuman must be a boolean.")
+        pull_requests = _require_list(record, "pullRequests")
+        for pull_index, pull_value in enumerate(pull_requests):
+            pull_field = f"{field}.pullRequests[{pull_index}]"
+            pull = _require_mapping(pull_value, pull_field)
+            _require_only_fields(
+                pull,
+                {"databaseId", "globalId", "number", "state", "isDraft"},
+                pull_field,
+            )
+            database_id = pull.get("databaseId")
+            if (
+                not isinstance(database_id, int)
+                or isinstance(database_id, bool)
+                or database_id <= 0
+            ):
+                raise ValidationError(f"{pull_field}.databaseId must be positive.")
+            global_id = pull.get("globalId")
+            if global_id is not None and (
+                not isinstance(global_id, str) or not global_id
+            ):
+                raise ValidationError(
+                    f"{pull_field}.globalId must be absent or nonempty."
+                )
+            number = pull.get("number")
+            if number is not None and (
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number <= 0
+            ):
+                raise ValidationError(
+                    f"{pull_field}.number must be null or positive."
+                )
+            _require_nonempty_string(pull, "state")
+            if not isinstance(pull.get("isDraft"), bool):
+                raise ValidationError(f"{pull_field}.isDraft must be a boolean.")
+    problem = status.get("problem")
+    if status_value == "incomplete":
+        if not isinstance(problem, str) or not problem:
+            raise ValidationError(
+                "Incomplete delegationStatus requires a problem."
+            )
+    elif problem is not None:
+        raise ValidationError(
+            "Complete delegationStatus cannot contain a problem."
+        )
 
 
 def _validate_repository_policy_identity(snapshot: Mapping[str, Any]) -> None:

@@ -35,6 +35,7 @@ class ActionExecution:
     reservation: ActionReservation
     _store: ActionEventStore
     _grant: AuthorizationGrant
+    _action_id: str
 
     def append_terminal(
         self,
@@ -50,6 +51,32 @@ class ActionExecution:
 
     def prior_results(self, *, repository: str) -> dict[str, object]:
         return self._store._prior_results_locked(repository=repository)
+
+    def append_delegation_baseline(
+        self,
+        *,
+        task_ids: tuple[str, ...],
+        at: datetime,
+    ) -> Mapping[str, Any]:
+        return self._store._append_delegation_baseline_locked(
+            self._grant,
+            action_id=self._action_id,
+            task_ids=task_ids,
+            at=at,
+        )
+
+    def delegation_baseline_task_ids(self) -> tuple[str, ...] | None:
+        return self._store._delegation_baseline_task_ids_locked(self._action_id)
+
+    def delegation_baseline_recorded_at(self) -> str | None:
+        return self._store._delegation_baseline_recorded_at_locked(self._action_id)
+
+    def action_events(self, *, repository: str) -> list[dict[str, Any]]:
+        return [
+            event
+            for event in self._store._load_events()
+            if event.get("repository") == repository
+        ]
 
 
 _TERMINAL_OUTCOMES = frozenset(
@@ -273,7 +300,7 @@ class ActionEventStore:
         )
         with self._locked():
             reservation = self._reserve_locked(grant, intent)
-            yield ActionExecution(reservation, self, grant)
+            yield ActionExecution(reservation, self, grant, action_id)
 
     def _prepare_intent(
         self,
@@ -353,6 +380,16 @@ class ActionEventStore:
                 prior_terminal=prior_terminal,
             )
         if intent_events:
+            has_delegation_baseline = any(
+                event.get("eventType") == "delegation-baseline"
+                and event.get("actionId") == action_id
+                for event in events
+            )
+            if (
+                intent.get("operation") == "assign-copilot"
+                and not has_delegation_baseline
+            ):
+                return ActionReservation(mode="execute")
             return ActionReservation(mode="reconcile")
 
         grant_intents = [
@@ -461,6 +498,109 @@ class ActionEventStore:
                 )
         self._append_event(event)
         return event
+
+    def _append_delegation_baseline_locked(
+        self,
+        grant: AuthorizationGrant,
+        *,
+        action_id: str,
+        task_ids: tuple[str, ...],
+        at: datetime,
+    ) -> Mapping[str, Any]:
+        if any(not isinstance(task_id, str) or not task_id for task_id in task_ids):
+            raise ExecutionStateError(
+                "Delegation baseline task IDs must be nonempty strings."
+            )
+        if len(set(task_ids)) != len(task_ids):
+            raise ExecutionStateError(
+                "Delegation baseline task IDs must be unique."
+            )
+
+        events = self._load_events()
+        intents = [
+            event
+            for event in events
+            if event.get("eventType") == "intent"
+            and event.get("grantId") == grant.grant_id
+            and event.get("actionId") == action_id
+        ]
+        if not intents:
+            raise ExecutionStateError(
+                "Cannot append a delegation baseline without a persisted intent."
+            )
+        intent = intents[-1]
+        baselines = [
+            event
+            for event in events
+            if event.get("eventType") == "delegation-baseline"
+            and event.get("actionId") == action_id
+        ]
+        normalized_task_ids = sorted(task_ids)
+        if baselines:
+            previous = baselines[-1]
+            if previous.get("taskIdsBefore") != normalized_task_ids:
+                raise ExecutionStateError(
+                    "A different delegation baseline already exists for this action."
+                )
+            return previous
+
+        event = {
+            "schemaVersion": 1,
+            "eventType": "delegation-baseline",
+            "recordedAt": _timestamp(at),
+            "grantId": intent["grantId"],
+            "repository": intent["repository"],
+            "snapshotId": intent["snapshotId"],
+            "actionId": action_id,
+            "chainRoot": intent["chainRoot"],
+            "operation": intent["operation"],
+            "target": intent["target"],
+            "idempotencyKey": intent["idempotencyKey"],
+            "taskIdsBefore": normalized_task_ids,
+        }
+        self._append_event(event)
+        return event
+
+    def _delegation_baseline_task_ids_locked(
+        self,
+        action_id: str,
+    ) -> tuple[str, ...] | None:
+        baselines = [
+            event
+            for event in self._load_events()
+            if event.get("eventType") == "delegation-baseline"
+            and event.get("actionId") == action_id
+        ]
+        if not baselines:
+            return None
+        task_ids = baselines[-1].get("taskIdsBefore")
+        if (
+            not isinstance(task_ids, list)
+            or not all(isinstance(task_id, str) and task_id for task_id in task_ids)
+        ):
+            raise ExecutionStateError(
+                "Persisted delegation baseline task IDs are malformed."
+            )
+        return tuple(task_ids)
+
+    def _delegation_baseline_recorded_at_locked(
+        self,
+        action_id: str,
+    ) -> str | None:
+        baselines = [
+            event
+            for event in self._load_events()
+            if event.get("eventType") == "delegation-baseline"
+            and event.get("actionId") == action_id
+        ]
+        if not baselines:
+            return None
+        recorded_at = baselines[-1].get("recordedAt")
+        if not isinstance(recorded_at, str) or not recorded_at:
+            raise ExecutionStateError(
+                "Persisted delegation baseline timestamp is malformed."
+            )
+        return recorded_at
 
     def prior_results(self, *, repository: str) -> dict[str, object]:
         with self._locked():

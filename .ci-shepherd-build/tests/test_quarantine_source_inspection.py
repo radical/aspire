@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from ci_shepherd.quarantine import (
     _source_tree_digest,
+    collect_quarantine_source_state,
     inspect_quarantine_session_request,
 )
 
@@ -600,6 +601,157 @@ public class Tests
         )
         self.assertEqual(0, completed.returncode, completed.stderr)
         return json.loads(completed.stdout)
+
+
+class QuarantineSourceStateTests(unittest.TestCase):
+    def test_source_state_pins_the_repository_wide_quarantine_inventory(
+        self,
+    ) -> None:
+        state = collect_quarantine_source_state(
+            REPOSITORY_ROOT,
+            [
+                "Aspire.Hosting.Tests.SecretsStoreTests."
+                "GetOrSetUserSecret_SavesValueToUserSecrets"
+            ],
+        )
+
+        assert state is not None
+        self.assertEqual(1, state["schemaVersion"])
+        self.assertRegex(state["sourceRevision"], r"^[0-9a-f]{40}$")
+        self.assertRegex(state["sourceTreeDigest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(state["inspectorTreeDigest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(
+            [
+                {
+                    "testName": (
+                        "Aspire.Hosting.Tests.SecretsStoreTests."
+                        "GetOrSetUserSecret_SavesValueToUserSecrets"
+                    ),
+                    "status": "resolved",
+                }
+            ],
+            [
+                {"testName": result["testName"], "status": result["status"]}
+                for result in state["tests"]
+            ],
+        )
+        self.assertIn(
+            {
+                "testName": (
+                    "Aspire.Hosting.Sdk.Tests.AppHostSdkTargetsTests."
+                    "RunAspireCliCommandKillsCommandShimProcessTreeOnTimeout"
+                    "InFullFrameworkMsBuild"
+                ),
+                "issueUrl": "https://github.com/microsoft/aspire/issues/19517",
+            },
+            [
+                {
+                    "testName": entry["testName"],
+                    "issueUrl": entry["issueUrl"],
+                }
+                for entry in state["quarantines"]
+            ],
+        )
+        self.assertTrue(
+            all(
+                entry["file"].endswith(".cs") and entry["line"] >= 1
+                for entry in state["quarantines"]
+            ),
+            state["quarantines"][:3],
+        )
+        self.assertEqual(
+            sorted(
+                state["quarantines"],
+                key=lambda entry: (entry["file"], entry["line"]),
+            ),
+            state["quarantines"],
+        )
+
+    def test_missing_checkout_yields_no_source_state(self) -> None:
+        self.assertIsNone(collect_quarantine_source_state(None, ["Demo.Tests.Flaky"]))
+
+    def test_incomplete_inspection_yields_no_source_state(self) -> None:
+        with patch(
+            "ci_shepherd.quarantine._run_quarantine_tool",
+            side_effect=[
+                {"schemaVersion": 1, "quarantines": []},
+                {"schemaVersion": 1, "tests": []},
+            ],
+        ):
+            state = collect_quarantine_source_state(
+                REPOSITORY_ROOT,
+                ["Demo.Tests.Flaky"],
+            )
+
+        self.assertIsNone(state)
+
+    def test_inventory_reports_current_names_for_every_quarantine(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            tests_root = Path(temporary_directory)
+            (tests_root / "Tests.cs").write_text(
+                """
+namespace Demo;
+
+public class Outer
+{
+    [QuarantinedTest("https://github.com/owner/repo/issues/22")]
+    public void RenamedFlaky() { }
+
+    public class Inner
+    {
+        [QuarantinedTest]
+        public void NoUrl() { }
+    }
+
+    public void Plain() { }
+}
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    str(REPOSITORY_ROOT / ".dotnet" / "dotnet"),
+                    "run",
+                    "--project",
+                    str(QUARANTINE_TOOL),
+                    "--no-restore",
+                    "--verbosity",
+                    "quiet",
+                    "--",
+                    "--inventory",
+                    "--root",
+                    str(tests_root),
+                ],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env={**os.environ, "DOTNET_ROLL_FORWARD": "Major"},
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual(
+            {
+                "schemaVersion": 1,
+                "quarantines": [
+                    {
+                        "testName": "Demo.Outer.RenamedFlaky",
+                        "issueUrl": "https://github.com/owner/repo/issues/22",
+                        "file": "Tests.cs",
+                        "line": 6,
+                    },
+                    {
+                        "testName": "Demo.Outer+Inner.NoUrl",
+                        "issueUrl": None,
+                        "file": "Tests.cs",
+                        "line": 11,
+                    },
+                ],
+            },
+            json.loads(completed.stdout),
+        )
 
 
 if __name__ == "__main__":

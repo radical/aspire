@@ -9,7 +9,15 @@ from .collector import COPILOT_ASSIGNEES
 from .eligibility import EXECUTABLE_CI_LABELS, label_names
 
 
-KNOWN_OPERATIONS = frozenset({"create-comment", "edit-comment", "close-issue"})
+KNOWN_OPERATIONS = frozenset(
+    {
+        "assign-copilot",
+        "create-comment",
+        "edit-comment",
+        "close-issue",
+        "unassign-copilot",
+    }
+)
 KNOWN_CLOSE_REASONS = frozenset({"completed", "not_planned", "duplicate"})
 KNOWN_ISSUE_STATES = frozenset({"open", "closed"})
 REPOSITORY_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -63,9 +71,18 @@ ELIGIBILITY_REASONS = frozenset(
 MAX_EXECUTABLE_PROPOSAL_TTL_HOURS = 24
 MAX_EXECUTABLE_PROPOSALS_PER_ISSUE = 2
 OPERATION_FIELDS = {
+    "assign-copilot": frozenset(
+        {
+            "baseBranch",
+            "customInstructions",
+            "model",
+            "targetRepository",
+        }
+    ),
     "create-comment": frozenset({"body"}),
     "edit-comment": frozenset({"body", "commentId"}),
     "close-issue": frozenset({"closeReason"}),
+    "unassign-copilot": frozenset(),
 }
 
 
@@ -109,6 +126,23 @@ class ActorClient(Protocol):
         repository: str,
         issue_number: int,
         reason: str,
+    ) -> dict[str, object]: ...
+
+    def assign_copilot(
+        self,
+        repository: str,
+        issue_number: int,
+        *,
+        target_repository: str,
+        base_branch: str,
+        custom_instructions: str,
+        model: str,
+    ) -> dict[str, object]: ...
+
+    def unassign_copilot(
+        self,
+        repository: str,
+        issue_number: int,
     ) -> dict[str, object]: ...
 
 
@@ -261,13 +295,42 @@ def _validate_proposal(
             raise ValueError(
                 f"{action_id}.sourceCommentFingerprint is valid only for edit-comment."
             )
-    else:
+    elif operation == "close-issue":
         close_reason = _required_string(
             proposal.get("closeReason"),
             field=f"{action_id}.closeReason",
         )
         if close_reason not in KNOWN_CLOSE_REASONS:
             raise ValueError(f"{action_id}.closeReason is unsupported.")
+    elif operation == "assign-copilot":
+        target_repository = _required_string(
+            proposal.get("targetRepository"),
+            field=f"{action_id}.targetRepository",
+        )
+        if REPOSITORY_PART_RE.fullmatch(target_repository.split("/", 1)[0]) is None or (
+            "/" not in target_repository
+            or REPOSITORY_PART_RE.fullmatch(target_repository.split("/", 1)[1]) is None
+        ):
+            raise ValueError(f"{action_id}.targetRepository is invalid.")
+        if target_repository.casefold() != repository.casefold():
+            raise ValueError(
+                f"{action_id}.targetRepository must match the issue repository."
+            )
+        _required_string(
+            proposal.get("baseBranch"),
+            field=f"{action_id}.baseBranch",
+        )
+        _required_string(
+            proposal.get("customInstructions"),
+            field=f"{action_id}.customInstructions",
+        )
+        model = proposal.get("model")
+        if not isinstance(model, str):
+            raise ValueError(f"{action_id}.model must be a string.")
+    elif "sourceCommentFingerprint" in proposal:
+        raise ValueError(
+            f"{action_id}.sourceCommentFingerprint is valid only for edit-comment."
+        )
 
     depends_on = proposal.get("dependsOn")
     if depends_on is not None:
@@ -1184,6 +1247,86 @@ def execute_action(
                 },
             )
 
+        if operation == "assign-copilot":
+            if _assigned_to_copilot(issue):
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="stale",
+                    reason="already-assigned-to-copilot",
+                    preflight=preflight,
+                )
+            assignees = issue.get("assignees")
+            if not isinstance(assignees, list):
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="stale",
+                    reason="assignee-evidence-incomplete",
+                    preflight=preflight,
+                )
+            if assignees:
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="stale",
+                    reason="issue-already-assigned",
+                    preflight=preflight,
+                )
+            mutation_attempted = True
+            assigned_issue = client.assign_copilot(
+                repository,
+                target_number,
+                target_repository=str(proposal["targetRepository"]),
+                base_branch=str(proposal["baseBranch"]),
+                custom_instructions=str(proposal["customInstructions"]),
+                model=str(proposal["model"]),
+            )
+            reconciled_issue = client.get_issue(repository, target_number)
+            if not _assigned_to_copilot(reconciled_issue):
+                raise RuntimeError("Copilot assignment did not reconcile.")
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="executed",
+                preflight=preflight,
+                result={
+                    "issueUrl": reconciled_issue.get("html_url"),
+                    "copilotAssigned": True,
+                    "targetRepository": proposal["targetRepository"],
+                    "baseBranch": proposal["baseBranch"],
+                    "assignmentObservedAt": _required_string(
+                        assigned_issue.get("updated_at"),
+                        field=f"{action_id}.assignmentObservedAt",
+                    ),
+                },
+            )
+
+        if operation == "unassign-copilot":
+            if not _assigned_to_copilot(issue):
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="stale",
+                    reason="copilot-not-assigned",
+                    preflight=preflight,
+                )
+            mutation_attempted = True
+            client.unassign_copilot(repository, target_number)
+            reconciled_issue = client.get_issue(repository, target_number)
+            if _assigned_to_copilot(reconciled_issue):
+                raise RuntimeError("Copilot unassignment did not reconcile.")
+            return _terminal_result(
+                action_id=action_id,
+                attempted_at=attempted_at,
+                outcome="executed",
+                preflight=preflight,
+                result={
+                    "issueUrl": reconciled_issue.get("html_url"),
+                    "copilotAssigned": False,
+                },
+            )
+
         close_reason = str(proposal["closeReason"])
         mutation_attempted = True
         client.close_issue(repository, target_number, close_reason)
@@ -1327,6 +1470,34 @@ def reconcile_action(
                     },
                 )
 
+        elif operation == "assign-copilot":
+            issue = client.get_issue(repository, target_number)
+            if target_kind == "issue" and _assigned_to_copilot(issue):
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="executed",
+                    result={
+                        "issueUrl": issue.get("html_url"),
+                        "copilotAssigned": True,
+                        "targetRepository": proposal["targetRepository"],
+                        "baseBranch": proposal["baseBranch"],
+                        "reconciledAfterInterruption": True,
+                    },
+                )
+        elif operation == "unassign-copilot":
+            issue = client.get_issue(repository, target_number)
+            if target_kind == "issue" and not _assigned_to_copilot(issue):
+                return _terminal_result(
+                    action_id=action_id,
+                    attempted_at=attempted_at,
+                    outcome="executed",
+                    result={
+                        "issueUrl": issue.get("html_url"),
+                        "copilotAssigned": False,
+                        "reconciledAfterInterruption": True,
+                    },
+                )
         elif operation == "close-issue":
             issue = client.get_issue(repository, target_number)
             if (

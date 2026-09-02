@@ -457,6 +457,81 @@ is fork-only. After approval:
 This is intentionally a lightweight coordinator protocol, not a scheduler or
 general job engine.
 
+## Copilot delegation lifecycle
+
+`assign-copilot` is an additive issue assignment: it never replaces human
+assignees, and the current implementation rejects an issue that already has
+any assignee. The issue repository and task target repository must match.
+`unassign-copilot` removes only the Copilot assignee.
+
+Before an assignment write, the executor fsyncs the exact action intent and a
+complete active-plus-archived Agent Task inventory. It then associates the
+assignment only when exactly one new task appears. Zero or multiple new tasks
+leave the action indeterminate and block new starts during the rolling
+24-hour window rather than risking a duplicate assignment.
+
+New pull artifacts can expose only their numeric database ID while GitHub is
+still populating the global node ID. Tracking uses the numeric ID in that state
+and verifies both identities once the global ID is available.
+
+Generated assignment proposals use the repository policy's base ref, preserve
+one stable issue-scoped idempotency key, and instruct Copilot to keep the pull
+request in draft when evidence or a human decision is missing.
+
+Three independent limits are signed into the short-lived authorization grant:
+
+- running tasks (`queued` and `in_progress`);
+- task starts in the rolling interval `(now - 24 hours, now]`;
+- open delegated pull requests, including drafts.
+
+Completed, failed, cancelled, timed-out, idle, and waiting tasks release their
+running slot. An open draft or ready pull request continues to consume the
+separate pull-request slot. Capacity counts every observed repository Agent
+Task, including tasks not started by the current state ledger.
+
+The snapshot keeps delegated issues and pull requests out of general
+assessment lanes while preserving `delegationStatus` records linking each
+shepherd action to its issue, Agent Task, and known pull requests. Failed or
+paused work is marked for human handoff in `report.md`. A pull artifact absent
+from the complete open-pull inventory is `unknown`, not assumed merged; only
+authoritative merge evidence may resolve the source issue.
+
+## Quarantine source reconciliation
+
+A `quarantined-test` label is a routing hint, not code truth. Each cycle
+reconciles every open labelled issue against the inspected checkout and writes
+`quarantine-reconciliation.json`. Inventory and inspection both run through
+QuarantineTools, pinned to one revision, source tree digest, and inspector tree
+digest; nothing here is model-inferred, and nothing here writes to GitHub.
+
+Four disagreements become one canonical `issue:<number>:status` comment
+proposal each, rendered through the same proposal path, `[automated] ` prefix,
+eligibility gates, and unchanged-body suppression as every other status
+comment:
+
+- `label-without-attribute` — the labelled issue's test exists in source with
+  no `[QuarantinedTest]` attribute. The label alone never counts as quarantined.
+- `attribute-name-drift` — an attribute still links the issue, but on a
+  different method than the issue names. The comment quotes the current exact
+  method; the shepherd never edits issue titles or metadata.
+- `ambiguous-inspection` — the claimed test name resolves to multiple current
+  methods. The shepherd lists the candidates and asks a human to identify the
+  canonical method.
+- `removed-test-closure-review` — a session ledger records that the shepherd
+  merged this exact quarantine, the method is now absent, and no attribute
+  links the issue. This is a closure *recommendation* for a human; the
+  reconciler never proposes `close-issue`.
+- `ambiguous-absence` — the method is absent but removal and rename cannot be
+  told apart, either because no completed session proves the attribute existed
+  or because a same-leaf-name quarantine still exists elsewhere.
+
+Reconciliation owns the canonical status slot for an affected issue. A model
+status recommendation for the same issue is recorded under
+`blockedRecommendations` with reason
+`superseded-by-quarantine-source-reconciliation` rather than dropped. If the
+source state cannot be pinned, the reconciler makes no claim at all and lists
+the issues under `unverifiableIssueNumbers`.
+
 ## Dry-run action actor
 
 `judgments.json` is the only validated decision authority. Deterministic
@@ -535,8 +610,8 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
   --output "$SCRATCH/authorization-grant.json"
 ```
 
-`microsoft/aspire` remains denied by default. The production comment pilot is
-the sole exception: it requires `--production-comment-pilot` at both grant
+`microsoft/aspire` remains denied by default. The production comment pilot
+requires `--production-comment-pilot` at both grant
 creation and execution, and the generated grant records
 `productionCommentPilot: true`. Such a grant must name exactly one
 `edit-comment` action against an existing shepherd-owned comment, have no
@@ -565,6 +640,33 @@ python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --production-comment-pilot
 ```
 
+The separate production delegation pilot requires
+`--production-delegation-pilot` at both grant creation and execution. It
+authorizes exactly one independent `assign-copilot` action from the same
+fresh finalized-cycle capability, records `productionDelegationPilot: true`,
+forbids suppression overrides, and requires all three signed capacity limits
+to equal one:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
+  --proposals "$SCRATCH/action-proposals.json" \
+  --action-id "snapshot:...:issue:12345:assign-copilot" \
+  --state-dir "$STATE" \
+  --output "$SCRATCH/authorization-grant.json" \
+  --max-running-copilot-tasks 1 \
+  --max-copilot-starts-per-rolling-24h 1 \
+  --max-open-delegated-prs 1 \
+  --production-delegation-pilot
+
+python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
+  --proposals "$SCRATCH/action-proposals.json" \
+  --authorization "$SCRATCH/authorization-grant.json" \
+  --state-dir "$STATE" \
+  --action-id "snapshot:...:issue:12345:assign-copilot" \
+  --execute \
+  --production-delegation-pilot
+```
+
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
@@ -590,8 +692,8 @@ permits reconciliation only; it never permits another mutation. Reconciliation
 requires the exact idempotency key, body, and authenticated author. The
 executor never treats `--execute` as approval for the whole proposal document,
 never accepts `--results` in execute mode, and denies all
-`microsoft/aspire` mutations except an explicitly grant-bound, separately
-confirmed, one-action comment pilot.
+`microsoft/aspire` mutations except explicitly grant-bound, separately
+confirmed, one-action comment-edit or Copilot-assignment pilots.
 
 ## Artifacts
 
@@ -610,6 +712,7 @@ judgments.json
 pull-request-judgments.json
 investigation-plan.json
 quarantine-session.json
+quarantine-reconciliation.json
 report.md
 action-proposals.json
 actor-dry-run.json
@@ -1220,9 +1323,16 @@ For `ping-human`, the recommendation also contains:
 Allowed categories are `flaky-test`, `transient-infrastructure`,
 `blocking-build`, `product-or-tooling`, `automation-tracker`, and `unknown`.
 
-Allowed dispositions are `investigate`, `watch`, `ping-human`,
-`review-quarantine`, `review-retry`, `review-rerun`, `review-close`, and
-`no-action`.
+Allowed dispositions are `investigate`, `delegate-copilot`, `watch`,
+`ping-human`, `review-quarantine`, `review-retry`, `review-rerun`,
+`review-close`, and `no-action`.
+
+Use `delegate-copilot` only for an issue-scoped `blocking-build` or
+`product-or-tooling` defect with medium or high confidence and a concrete code
+change that Copilot can attempt. Do not use it for a likely flake, transient
+infrastructure, unknown failure identity, human-owned decision, or duplicate.
+The disposition creates a grant-eligible assignment proposal; it does not
+authorize assignment.
 
 Allowed target kinds are `issue`, `test`, `failure-fingerprint`, and
 `workflow-run`.

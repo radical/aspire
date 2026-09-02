@@ -157,6 +157,69 @@ class ActionEventStoreTests(unittest.TestCase):
         self.assertEqual(1, len(event_lines))
         self.assertEqual("intent", json.loads(event_lines[0])["eventType"])
 
+    def test_transaction_records_task_inventory_before_delegation_write(
+        self,
+    ) -> None:
+        recorded_at = datetime(2026, 8, 29, 20, 5, 1, tzinfo=UTC)
+
+        with self.store.transaction(
+            self.grant,
+            action_id="action:1",
+            chain_root="action:1",
+            operation="assign-copilot",
+            target_kind="issue",
+            target_number=1,
+            idempotency_key="issue:1:copilot-assignment",
+            body_digest=None,
+            expected_actor_login="radical",
+            at=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        ) as execution:
+            event = execution.append_delegation_baseline(
+                task_ids=("task-existing",),
+                at=recorded_at,
+            )
+            self.assertEqual(
+                ("task-existing",),
+                execution.delegation_baseline_task_ids(),
+            )
+
+        self.assertEqual("delegation-baseline", event["eventType"])
+        self.assertEqual(["task-existing"], event["taskIdsBefore"])
+        self.assertEqual(
+            ["intent", "delegation-baseline"],
+            [
+                item["eventType"]
+                for item in self.store.events(repository="radical/aspire")
+            ],
+        )
+
+    def test_assignment_intent_without_baseline_retries_capacity_reservation(
+        self,
+    ) -> None:
+        arguments = {
+            "action_id": "action:1",
+            "chain_root": "action:1",
+            "operation": "assign-copilot",
+            "target_kind": "issue",
+            "target_number": 1,
+            "idempotency_key": "issue:1:copilot-assignment",
+            "body_digest": None,
+            "expected_actor_login": "radical",
+        }
+        first = self.store.reserve(
+            self.grant,
+            **arguments,
+            at=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+        retry = self.store.reserve(
+            self.grant,
+            **arguments,
+            at=datetime(2026, 8, 29, 20, 6, tzinfo=UTC),
+        )
+
+        self.assertEqual("execute", first.mode)
+        self.assertEqual("execute", retry.mode)
+
     def test_indeterminate_event_requires_reconciliation_on_replay(self) -> None:
         self.store.reserve(
             self.grant,

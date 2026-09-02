@@ -22,6 +22,9 @@ _CREATE_COMMENT_ENDPOINT_RE = re.compile(
 _EDIT_COMMENT_ENDPOINT_RE = re.compile(
     r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*$"
 )
+_ASSIGN_COPILOT_ENDPOINT_RE = re.compile(
+    r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/assignees$"
+)
 _PROTECTED_REPOSITORIES = frozenset({"microsoft/aspire"})
 _HTTP_STATUS_RE = re.compile(r"(?m)^HTTP/\S+\s+(?P<status>[1-5][0-9]{2})\b")
 
@@ -36,6 +39,7 @@ class GitHubActorClient:
         *,
         allowed_repositories: Collection[str] = (),
         protected_comment_repositories: Collection[str] = (),
+        protected_delegation_repositories: Collection[str] = (),
         runner: Any = subprocess.run,
         request_timeout_seconds: float = 60,
         audit_path: Path | None = None,
@@ -51,12 +55,27 @@ class GitHubActorClient:
             self._repository(repository).casefold()
             for repository in protected_comment_repositories
         )
-        if not self._protected_comment_repositories.issubset(
+        self._protected_delegation_repositories = frozenset(
+            self._repository(repository).casefold()
+            for repository in protected_delegation_repositories
+        )
+        protected_overrides = (
+            self._protected_comment_repositories
+            | self._protected_delegation_repositories
+        )
+        if not protected_overrides.issubset(
             _PROTECTED_REPOSITORIES & self._allowed_repositories
         ):
             raise ValueError(
-                "Protected comment repositories must be protected repositories "
+                "Protected pilot repositories must be protected repositories "
                 "that are also explicitly allowed."
+            )
+        if (
+            self._protected_comment_repositories
+            & self._protected_delegation_repositories
+        ):
+            raise ValueError(
+                "Protected comment and delegation repositories must be disjoint."
             )
         self._runner = runner
         self._request_timeout_seconds = request_timeout_seconds
@@ -173,6 +192,53 @@ class GitHubActorClient:
             )
         )
 
+    def assign_copilot(
+        self,
+        repository: str,
+        issue_number: int,
+        *,
+        target_repository: str,
+        base_branch: str,
+        custom_instructions: str,
+        model: str,
+    ) -> dict[str, object]:
+        source_repository = self._repository(repository)
+        return self._object(
+            self._request(
+                "POST",
+                (
+                    f"repos/{source_repository}/issues/"
+                    f"{self._number(issue_number)}/assignees"
+                ),
+                {
+                    "assignees": ["copilot-swe-agent[bot]"],
+                    "agent_assignment": {
+                        "target_repo": self._repository(target_repository),
+                        "base_branch": base_branch,
+                        "custom_instructions": custom_instructions,
+                        "custom_agent": "",
+                        "model": model,
+                    },
+                },
+            )
+        )
+
+    def unassign_copilot(
+        self,
+        repository: str,
+        issue_number: int,
+    ) -> dict[str, object]:
+        return self._object(
+            self._request(
+                "DELETE",
+                (
+                    f"repos/{self._repository(repository)}/issues/"
+                    f"{self._number(issue_number)}/assignees"
+                ),
+                {"assignees": ["copilot-swe-agent[bot]"]},
+            )
+        )
+
     def _request(
         self,
         method: str,
@@ -188,16 +254,27 @@ class GitHubActorClient:
                 )
             normalized_repository = repository.casefold()
             if normalized_repository in _PROTECTED_REPOSITORIES:
-                if normalized_repository not in self._protected_comment_repositories:
+                if normalized_repository in self._protected_comment_repositories:
+                    if not (
+                        method == "PATCH"
+                        and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
+                    ):
+                        raise MutationRepositoryError(
+                            "Protected repository pilot permits existing "
+                            "comment edits only."
+                        )
+                elif normalized_repository in self._protected_delegation_repositories:
+                    if not (
+                        method == "POST"
+                        and _ASSIGN_COPILOT_ENDPOINT_RE.fullmatch(endpoint)
+                    ):
+                        raise MutationRepositoryError(
+                            "Protected repository pilot permits Copilot "
+                            "assignment only."
+                        )
+                else:
                     raise MutationRepositoryError(
                         f"Mutation repository is protected: {repository}"
-                    )
-                if not (
-                    method == "PATCH"
-                    and _EDIT_COMMENT_ENDPOINT_RE.fullmatch(endpoint)
-                ):
-                    raise MutationRepositoryError(
-                        "Protected repository pilot permits existing comment edits only."
                     )
             if normalized_repository not in self._allowed_repositories:
                 raise MutationRepositoryError(

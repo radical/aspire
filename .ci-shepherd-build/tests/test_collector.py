@@ -20,6 +20,7 @@ from ci_shepherd.collector import (
 )
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
 from ci_shepherd.history import record_history
+from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.refresh import RefreshPlan, complete_refresh_plan
 
 
@@ -246,7 +247,7 @@ class CollectorTests(unittest.TestCase):
             client.calls,
         )
 
-    def test_collect_includes_bot_pull_requests_and_excludes_copilot_assigned_work(
+    def test_collect_keeps_copilot_assigned_issues_in_delegated_inventory(
         self,
     ) -> None:
         bot_pull = make_issue(23, labels=["dependencies"])
@@ -280,15 +281,137 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual([], result.open_issues)
         self.assertEqual([23], [pull["number"] for pull in result.open_pull_requests])
         self.assertEqual(
-            [
-                {
-                    "number": 24,
-                    "targetKind": "issue",
-                    "reason": "assigned-to-copilot",
-                }
-            ],
-            result.rejected_candidates,
+            [24],
+            [issue["number"] for issue in result.delegated_issues],
         )
+        self.assertEqual([], result.rejected_candidates)
+
+    def test_collect_releases_copilot_handoff_with_canonical_issue_evidence(
+        self,
+    ) -> None:
+        copilot_issue = make_issue(24, labels=["ci-failure-cause"])
+        copilot_issue["assignees"] = [{"login": "copilot-swe-agent[bot]"}]
+        pages = {
+            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [
+                copilot_issue
+            ],
+            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+            f"/repos/{REPOSITORY}/issues/24/comments": [],
+        }
+
+        result = Collector(
+            ScriptedClient(pages=pages),
+            REPOSITORY,
+            NOW,
+            released_delegation_issue_numbers=(24,),
+        ).collect(
+            include_supporting=False,
+            include_timeline=False,
+        )
+
+        self.assertEqual([24], [issue["number"] for issue in result.open_issues])
+        self.assertEqual([], result.delegated_issues)
+        self.assertEqual(
+            f"https://github.com/{REPOSITORY}/issues/24",
+            result.open_issues[0]["url"],
+        )
+        self.assertIn("issue:24", result.evidence)
+        prepared = prepare_assessment(snapshot_from_result(result))
+        self.assertEqual([24], [issue["issueNumber"] for issue in prepared["issues"]])
+
+    def test_incremental_collection_preserves_current_delegated_inventory(
+        self,
+    ) -> None:
+        copilot_issue = make_issue(24, labels=["ci-failure-cause"])
+        copilot_issue["assignees"] = [{"login": "copilot-swe-agent[bot]"}]
+        pages = {
+            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [
+                copilot_issue
+            ],
+            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+        }
+        previous_snapshot = {
+            "schemaVersion": 1,
+            "repository": REPOSITORY,
+            "openIssues": [],
+            "issues": [],
+            "supportingIssues": [],
+            "evidence": {},
+            "references": {},
+            "delegatedIssues": [24],
+            "delegatedIssueDetails": [copilot_issue],
+        }
+        current_history = {
+            "schemaVersion": 1,
+            "repository": REPOSITORY,
+            "sourceSchemaVersions": {"snapshot": 1},
+            "evidence": {},
+        }
+
+        result = Collector(
+            ScriptedClient(pages=pages),
+            REPOSITORY,
+            NOW,
+        ).collect_incremental(
+            previous_snapshot,
+            current_history,
+            include_supporting=False,
+            include_timeline=False,
+        )
+
+        self.assertEqual([], result.open_issues)
+        self.assertEqual(
+            [24],
+            [issue["number"] for issue in result.delegated_issues],
+        )
+
+    def test_incremental_collection_releases_copilot_handoff_for_assessment(
+        self,
+    ) -> None:
+        copilot_issue = make_issue(24, labels=["ci-failure-cause"])
+        copilot_issue["assignees"] = [{"login": "copilot-swe-agent[bot]"}]
+        pages = {
+            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [
+                copilot_issue
+            ],
+            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+            f"/repos/{REPOSITORY}/issues/24/comments": [],
+        }
+        previous_snapshot = {
+            "schemaVersion": 1,
+            "repository": REPOSITORY,
+            "openIssues": [],
+            "issues": [],
+            "supportingIssues": [],
+            "evidence": {},
+            "references": {},
+            "delegatedIssues": [24],
+            "delegatedIssueDetails": [copilot_issue],
+        }
+        current_history = {
+            "schemaVersion": 1,
+            "repository": REPOSITORY,
+            "sourceSchemaVersions": {"snapshot": 1},
+            "evidence": {},
+        }
+
+        result = Collector(
+            ScriptedClient(pages=pages),
+            REPOSITORY,
+            NOW,
+            released_delegation_issue_numbers=(24,),
+        ).collect_incremental(
+            previous_snapshot,
+            current_history,
+            include_supporting=False,
+            include_timeline=False,
+        )
+
+        self.assertEqual([24], [issue["number"] for issue in result.open_issues])
+        self.assertEqual([], result.delegated_issues)
+        self.assertIn("issue:24", result.evidence)
+        prepared = prepare_assessment(snapshot_from_result(result))
+        self.assertEqual([24], [issue["issueNumber"] for issue in prepared["issues"]])
 
     def test_collect_excludes_open_github_actions_issues_without_target_labels(self) -> None:
         bot_issue = make_issue(22, labels=["agentic-workflows"])

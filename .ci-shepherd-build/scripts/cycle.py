@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import build_dry_run
+from ci_shepherd.delegations import render_delegation_status_section
 from ci_shepherd.evidence_planning import build_proposal_evidence_requests
 from ci_shepherd.history import load_current
 from ci_shepherd.investigations import (
@@ -34,9 +35,15 @@ from ci_shepherd.pull_requests import (
 from ci_shepherd.quarantine import (
     build_quarantine_session_plan,
     build_quarantine_session_request,
+    collect_quarantine_source_state,
     inspect_quarantine_session_request,
     read_quarantine_session_events,
     render_quarantine_session_section,
+)
+from ci_shepherd.quarantine_reconciliation import (
+    quarantine_labeled_test_names,
+    reconcile_quarantine_source,
+    render_quarantine_source_reconciliation_section,
 )
 from ci_shepherd.review_selection import build_review_selection
 from collect import collect
@@ -654,6 +661,7 @@ def finish_cycle(
         "proposals": work_dir / "action-proposals.json",
         "dryRun": work_dir / "actor-dry-run.json",
         "quarantineSession": work_dir / "quarantine-session.json",
+        "quarantineReconciliation": work_dir / "quarantine-reconciliation.json",
         "quarantineEvidence": work_dir / "quarantine-evidence.json",
         "investigationPlan": work_dir / "investigation-plan.json",
     }
@@ -709,6 +717,23 @@ def finish_cycle(
         read_quarantine_session_events(state_dir),
     )
     _write_private_json(paths["quarantineSession"], quarantine_plan)
+    labeled_test_names = quarantine_labeled_test_names(prepared)
+    quarantine_reconciliation = reconcile_quarantine_source(
+        prepared,
+        (
+            collect_quarantine_source_state(
+                Path(checkout_value) if isinstance(checkout_value, str) else None,
+                labeled_test_names,
+            )
+            if labeled_test_names is not None
+            else None
+        ),
+        read_quarantine_session_events(state_dir),
+    )
+    _write_private_json(
+        paths["quarantineReconciliation"],
+        quarantine_reconciliation,
+    )
     investigation_plan = build_investigation_plan(
         prepared,
         final_judgments,
@@ -722,6 +747,7 @@ def finish_cycle(
         final_judgments,
         shepherd_author,
         agent_input=compact,
+        quarantine_reconciliation=quarantine_reconciliation,
     )
     proposals = issue_proposals
     _write_private_json(paths["proposals"], proposals)
@@ -783,6 +809,12 @@ def finish_cycle(
         + render_investigation_section(investigation_plan)
         + "\n"
         + render_quarantine_session_section(quarantine_plan)
+        + "\n"
+        + render_quarantine_source_reconciliation_section(
+            quarantine_reconciliation
+        )
+        + "\n"
+        + render_delegation_status_section(snapshot.get("delegationStatus"))
     )
     _write_private_text(paths["report"], report_markdown)
     dry_run = build_dry_run(proposals, action_id=None)
@@ -803,6 +835,7 @@ def finish_cycle(
             paths["proposals"],
             paths["dryRun"],
             paths["quarantineSession"],
+            paths["quarantineReconciliation"],
             paths["investigationPlan"],
             *[
                 path

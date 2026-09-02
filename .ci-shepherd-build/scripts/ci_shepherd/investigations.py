@@ -97,8 +97,14 @@ def _worker_prompt(request: Mapping[str, Any]) -> str:
         '  "missingEvidence": [],\n'
         '  "fixHandoff": null\n'
         "}\n"
-        "For a fixable result, replace fixHandoff with an object containing "
-        "problem, likelyPaths, and validation. Do not include markdown."
+        "For a fixable result, replace fixHandoff with this object; likelyPaths "
+        "and validation must each be nonempty arrays of strings:\n"
+        "{\n"
+        '  "problem": "specific defect to fix",\n'
+        '  "likelyPaths": ["repo-relative path"],\n'
+        '  "validation": ["specific validation command or test"]\n'
+        "}\n"
+        "Do not include markdown."
     )
 
 

@@ -7,9 +7,10 @@ import json
 import os
 import subprocess
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .quarantine import (
+    _issue_labels,
     quarantine_tool_tree_digest,
     read_quarantine_session_events,
     record_quarantine_session_event,
@@ -40,6 +41,549 @@ class MergedQuarantineSourceVerification:
 
     def __bool__(self) -> bool:
         return self.verified
+
+
+QUARANTINE_LABEL = "quarantined-test"
+_LABEL_HUMAN_ACTION = (
+    "Confirm whether this test should be quarantined. Either quarantine it "
+    f"against this issue or remove the `{QUARANTINE_LABEL}` label."
+)
+
+
+def reconcile_quarantine_source(
+    prepared: Mapping[str, Any],
+    source_state: Mapping[str, Any] | None,
+    session_events: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, object]:
+    """Reconcile ``quarantined-test`` issues against the inspected checkout.
+
+    The label is a routing hint. Only the pinned source inspection decides
+    whether a current ``[QuarantinedTest]`` attribute exists, so a labelled
+    issue with no matching attribute becomes a human question rather than a
+    silent "already quarantined" skip.
+    """
+    repository = prepared.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise ValueError("Prepared repository must be a nonempty string.")
+
+    labeled = _labeled_issues(prepared)
+    pinned = _validated_source_state(source_state)
+    if pinned is None:
+        return {
+            "schemaVersion": 1,
+            "repository": repository,
+            "sourceRevision": None,
+            "sourceTreeDigest": None,
+            "findings": [],
+            "unverifiableIssueNumbers": [issue["issueNumber"] for issue in labeled],
+        }
+
+    findings: list[dict[str, object]] = []
+    for issue in labeled:
+        finding = _reconcile_labeled_issue(issue, pinned, session_events)
+        if finding is not None:
+            findings.append(finding)
+    findings.sort(key=lambda item: int(item["issueNumber"]))
+    return {
+        "schemaVersion": 1,
+        "repository": repository,
+        "sourceRevision": pinned["sourceRevision"],
+        "sourceTreeDigest": pinned["sourceTreeDigest"],
+        "findings": findings,
+        "unverifiableIssueNumbers": [],
+    }
+
+
+def render_quarantine_source_reconciliation_section(
+    document: Mapping[str, Any],
+) -> str:
+    lines = ["## Quarantine source reconciliation", ""]
+    unverifiable = document.get("unverifiableIssueNumbers")
+    findings = document.get("findings")
+    if isinstance(unverifiable, list) and unverifiable:
+        lines.append(
+            "The `quarantined-test` label on these issues could not be verified "
+            "against source: "
+            + ", ".join(f"#{number}" for number in unverifiable)
+            + "."
+        )
+        return "\n".join(lines) + "\n"
+    if not isinstance(findings, list) or not findings:
+        lines.append(
+            "Every `quarantined-test` issue matches a current "
+            "`[QuarantinedTest]` attribute."
+        )
+        return "\n".join(lines) + "\n"
+
+    lines.extend(
+        [
+            (
+                "These issues disagree with the inspected source at revision "
+                f"`{document.get('sourceRevision')}`. Each one is a human "
+                "decision; the shepherd changed no source, label, or issue "
+                "metadata."
+            ),
+            "",
+            "| Issue | Finding | Claimed test | Current source |",
+            "|---|---|---|---|",
+        ]
+    )
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        current = finding.get("currentSource")
+        rendered_source = (
+            ", ".join(
+                f"`{entry.get('testName')}` (`{entry.get('file')}:{entry.get('line')}`)"
+                for entry in current
+                if isinstance(entry, Mapping)
+            )
+            if isinstance(current, list) and current
+            else "absent"
+        )
+        lines.append(
+            f"| [#{finding.get('issueNumber')}]({finding.get('issueUrl')}) "
+            f"| {finding.get('kind')} "
+            f"| `{finding.get('claimedTestName')}` "
+            f"| {rendered_source} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def quarantine_labeled_test_names(
+    prepared: Mapping[str, Any],
+) -> list[str] | None:
+    """Return the test names ``quarantined-test`` issues claim, or ``None``.
+
+    ``None`` means no issue carries the label, so the caller can skip the
+    repository-wide source scan entirely. An empty list still requires the
+    scan: an attribute may cite a labelled issue whose own metadata names no
+    test at all.
+    """
+    labeled = _labeled_issues(prepared)
+    if not labeled:
+        return None
+    return sorted(
+        {
+            issue["testName"]
+            for issue in labeled
+            if isinstance(issue["testName"], str)
+        }
+    )
+
+
+def _reconcile_labeled_issue(
+    issue: Mapping[str, Any],
+    pinned: Mapping[str, Any],
+    session_events: Sequence[Mapping[str, Any]],
+) -> dict[str, object] | None:
+    issue_number = issue["issueNumber"]
+    issue_url = issue["issueUrl"]
+    claimed = issue["testName"]
+    linked = pinned["quarantinesByIssueUrl"].get(_normalized_issue_url(issue_url), [])
+    if linked:
+        if claimed is None or any(
+            (
+                entry["testName"] == claimed
+                if issue["hasRawTestName"]
+                else entry["testName"].casefold() == claimed.casefold()
+            )
+            for entry in linked
+        ):
+            return None
+        current = [
+            {
+                "testName": entry["testName"],
+                "file": entry["file"],
+                "line": entry["line"],
+                "quarantineIssueUrls": [entry["issueUrl"]],
+            }
+            for entry in linked
+        ]
+        locations = ", ".join(
+            f"`{entry['testName']}` at `{entry['file']}:{entry['line']}`"
+            for entry in linked
+        )
+        return {
+            "issueNumber": issue_number,
+            "issueUrl": issue_url,
+            "kind": "attribute-name-drift",
+            "claimedTestName": claimed,
+            "currentSource": current,
+            "summary": (
+                "This issue is still linked from a `[QuarantinedTest]` "
+                f"attribute, but the quarantined method is now {locations} "
+                f"rather than the `{claimed}` this issue names."
+            ),
+            "humanAction": (
+                "Update the issue title and metadata to the current method "
+                "name. The shepherd does not edit issue metadata."
+            ),
+        }
+
+    result = pinned["testsByName"].get(claimed)
+    if result is not None and result["status"] == "ambiguous":
+        current = [
+            {
+                "testName": claimed,
+                "file": match["file"],
+                "line": match["line"],
+                "quarantineIssueUrls": list(match["quarantineIssueUrls"]),
+            }
+            for match in result["matches"]
+        ]
+        return {
+            "issueNumber": issue_number,
+            "issueUrl": issue_url,
+            "kind": "ambiguous-inspection",
+            "claimedTestName": claimed,
+            "currentSource": current,
+            "summary": (
+                f"`{claimed}` resolves to multiple source matches, so the "
+                "shepherd cannot determine which method should carry the "
+                "`[QuarantinedTest]` attribute."
+            ),
+            "humanAction": (
+                "Identify the current canonical test method and update the "
+                "issue metadata or source attribute. The shepherd will not "
+                "infer identity from ambiguous matches."
+            ),
+        }
+    if result is None or result["status"] != "resolved":
+        if claimed is None:
+            # No parseable test name: the repository-wide inventory is still
+            # exact enough to say nothing links this issue.
+            return {
+                "issueNumber": issue_number,
+                "issueUrl": issue_url,
+                "kind": "label-without-attribute",
+                "claimedTestName": None,
+                "currentSource": [],
+                "summary": (
+                    f"The `{QUARANTINE_LABEL}` label is on this issue, but no "
+                    "`[QuarantinedTest]` attribute in the inspected source "
+                    "links it."
+                ),
+                "humanAction": _LABEL_HUMAN_ACTION,
+            }
+        if result is None or result["status"] != "not-found":
+            return None
+        prior = _completed_quarantine(session_events, claimed, issue_url)
+        if prior is None:
+            return {
+                "issueNumber": issue_number,
+                "issueUrl": issue_url,
+                "kind": "ambiguous-absence",
+                "reason": "no-recorded-quarantine",
+                "claimedTestName": claimed,
+                "currentSource": [],
+                "summary": (
+                    f"`{claimed}` is absent from the inspected source and no "
+                    "`[QuarantinedTest]` attribute links this issue, but the "
+                    "shepherd has no record of quarantining it, so removal and "
+                    "rename are indistinguishable."
+                ),
+                "humanAction": (
+                    "Decide whether the test was renamed or removed. The "
+                    "shepherd will not close this issue on absence alone."
+                ),
+            }
+        rename_candidates = [
+            entry
+            for entry in pinned["quarantines"]
+            if entry["testName"].rsplit(".", 1)[-1] == claimed.rsplit(".", 1)[-1]
+        ]
+        if rename_candidates:
+            return {
+                "issueNumber": issue_number,
+                "issueUrl": issue_url,
+                "kind": "ambiguous-absence",
+                "reason": "possible-move-candidate",
+                "claimedTestName": claimed,
+                "currentSource": [
+                    {
+                        "testName": entry["testName"],
+                        "file": entry["file"],
+                        "line": entry["line"],
+                        "quarantineIssueUrls": (
+                            [entry["issueUrl"]]
+                            if entry["issueUrl"] is not None
+                            else []
+                        ),
+                    }
+                    for entry in rename_candidates
+                ],
+                "summary": (
+                    f"`{claimed}` is absent from the inspected source, but a "
+                    "quarantined method with the same leaf name still exists, "
+                    "so removal and a move cannot be distinguished."
+                ),
+                "humanAction": (
+                    "Decide whether the test moved or was removed. The shepherd "
+                    "will not close this issue on absence alone."
+                ),
+            }
+        return {
+            "issueNumber": issue_number,
+            "issueUrl": issue_url,
+            "kind": "removed-test-closure-review",
+            "claimedTestName": claimed,
+            "currentSource": [],
+            "priorQuarantine": prior,
+            "summary": (
+                f"`{claimed}` was quarantined for this issue by "
+                f"{prior['pullRequestUrl']}, and the inspected source now "
+                "contains neither that method nor any `[QuarantinedTest]` "
+                "attribute linking this issue."
+            ),
+            "humanAction": (
+                "Confirm the test was deleted rather than renamed, then close "
+                "this issue. The shepherd does not close issues on absence."
+            ),
+        }
+
+    match = result["matches"][0]
+    matching_issue_url = _normalized_issue_url(issue_url)
+    if any(
+        _normalized_issue_url(url) == matching_issue_url
+        for url in match["quarantineIssueUrls"]
+    ):
+        return None
+    location = f"{match['file']}:{match['line']}"
+    quarantine_issue_urls = list(match["quarantineIssueUrls"])
+    attribute_summary = (
+        "carries no `[QuarantinedTest]` attribute"
+        if not quarantine_issue_urls
+        else "has `[QuarantinedTest]` attributes that link other issues"
+    )
+    return {
+        "issueNumber": issue_number,
+        "issueUrl": issue_url,
+        "kind": "label-without-attribute",
+        "claimedTestName": claimed,
+        "currentSource": [
+            {
+                "testName": claimed,
+                "file": match["file"],
+                "line": match["line"],
+                "quarantineIssueUrls": quarantine_issue_urls,
+            }
+        ],
+        "summary": (
+            f"The `{QUARANTINE_LABEL}` label is on this issue, but "
+            f"`{claimed}` at `{location}` {attribute_summary} in the "
+            "inspected source."
+        ),
+        "humanAction": _LABEL_HUMAN_ACTION,
+    }
+
+
+def _completed_quarantine(
+    session_events: Sequence[Mapping[str, Any]],
+    test_name: str,
+    issue_url: str,
+) -> dict[str, str] | None:
+    """Find proof that the shepherd itself merged this exact quarantine.
+
+    Absence alone never proves removal: a rename also removes the old method.
+    Only a recorded ``completed`` session shows the attribute did exist for
+    this issue, which is what makes "gone entirely" a defensible reading.
+    """
+    normalized_issue_url = _normalized_issue_url(issue_url)
+    for event in reversed(list(session_events)):
+        if not isinstance(event, Mapping) or event.get("status") != "completed":
+            continue
+        pull_request_url = event.get("pullRequestUrl")
+        recorded_at = event.get("recordedAt")
+        if not isinstance(pull_request_url, str) or not isinstance(recorded_at, str):
+            continue
+        for test in event.get("tests", []):
+            if (
+                isinstance(test, Mapping)
+                and test.get("testName") == test_name
+                and isinstance(test.get("issueUrl"), str)
+                and _normalized_issue_url(test["issueUrl"]) == normalized_issue_url
+            ):
+                return {
+                    "pullRequestUrl": pull_request_url,
+                    "recordedAt": recorded_at,
+                }
+    return None
+
+
+def _labeled_issues(prepared: Mapping[str, Any]) -> list[dict[str, Any]]:
+    labeled: list[dict[str, Any]] = []
+    for issue in prepared.get("issues", []):
+        if not isinstance(issue, Mapping):
+            continue
+        issue_number = issue.get("issueNumber")
+        issue_url = issue.get("issueUrl")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or not isinstance(issue_url, str)
+            or not issue_url
+        ):
+            continue
+        labels = _issue_labels(issue)
+        if not isinstance(labels, frozenset) or QUARANTINE_LABEL not in labels:
+            continue
+        identity = issue.get("identity")
+        test_name = identity.get("tier2TestName") if isinstance(identity, Mapping) else None
+        raw_test_name = (
+            identity.get("tier2TestNameRaw")
+            if isinstance(identity, Mapping)
+            else None
+        )
+        has_raw_test_name = (
+            isinstance(raw_test_name, str) and bool(raw_test_name.strip())
+        )
+        claimed_test_name = raw_test_name if has_raw_test_name else test_name
+        labeled.append(
+            {
+                "issueNumber": issue_number,
+                "issueUrl": issue_url,
+                "testName": (
+                    claimed_test_name.strip()
+                    if (
+                        isinstance(claimed_test_name, str)
+                        and claimed_test_name.strip()
+                    )
+                    else None
+                ),
+                "hasRawTestName": has_raw_test_name,
+            }
+        )
+    labeled.sort(key=lambda item: int(item["issueNumber"]))
+    return labeled
+
+
+def _validated_source_state(
+    source_state: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the pinned source state, or ``None`` when it cannot be trusted.
+
+    Every downstream claim quotes exact file and line evidence, so an
+    unpinned or malformed document must produce no claims at all.
+    """
+    if not isinstance(source_state, Mapping):
+        return None
+    revision = source_state.get("sourceRevision")
+    tree_digest = source_state.get("sourceTreeDigest")
+    if (
+        source_state.get("schemaVersion") != 1
+        or not isinstance(revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+        or not isinstance(tree_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", tree_digest) is None
+    ):
+        return None
+
+    tests = source_state.get("tests")
+    if not isinstance(tests, list):
+        return None
+    tests_by_name: dict[str, dict[str, Any]] = {}
+    for result in tests:
+        if not isinstance(result, Mapping):
+            return None
+        test_name = result.get("testName")
+        status = result.get("status")
+        matches = result.get("matches")
+        if (
+            not isinstance(test_name, str)
+            or not test_name
+            or test_name in tests_by_name
+            or status not in {"resolved", "not-found", "ambiguous"}
+            or not isinstance(matches, list)
+        ):
+            return None
+        normalized_matches: list[dict[str, Any]] = []
+        for match in matches:
+            normalized = _normalized_match(match)
+            if normalized is None:
+                return None
+            normalized_matches.append(normalized)
+        if status == "resolved" and len(normalized_matches) != 1:
+            return None
+        tests_by_name[test_name] = {
+            "status": status,
+            "matches": normalized_matches,
+        }
+
+    raw_quarantines = source_state.get("quarantines")
+    if not isinstance(raw_quarantines, list):
+        return None
+    inventory: list[dict[str, Any]] = []
+    quarantines_by_issue_url: dict[str, list[dict[str, Any]]] = {}
+    for entry in raw_quarantines:
+        if not isinstance(entry, Mapping):
+            return None
+        entry_test_name = entry.get("testName")
+        entry_issue_url = entry.get("issueUrl")
+        entry_file = entry.get("file")
+        entry_line = entry.get("line")
+        if (
+            not isinstance(entry_test_name, str)
+            or not entry_test_name
+            or not isinstance(entry_file, str)
+            or not entry_file
+            or not isinstance(entry_line, int)
+            or isinstance(entry_line, bool)
+            or entry_line < 1
+            or (
+                entry_issue_url is not None
+                and (not isinstance(entry_issue_url, str) or not entry_issue_url)
+            )
+        ):
+            return None
+        normalized_entry = {
+            "testName": entry_test_name,
+            "issueUrl": entry_issue_url,
+            "file": entry_file,
+            "line": entry_line,
+        }
+        inventory.append(normalized_entry)
+        if isinstance(entry_issue_url, str):
+            quarantines_by_issue_url.setdefault(
+                _normalized_issue_url(entry_issue_url),
+                [],
+            ).append(normalized_entry)
+    return {
+        "sourceRevision": revision,
+        "sourceTreeDigest": tree_digest,
+        "testsByName": tests_by_name,
+        "quarantinesByIssueUrl": quarantines_by_issue_url,
+        "quarantines": inventory,
+    }
+
+
+def _normalized_issue_url(issue_url: str) -> str:
+    return issue_url.strip().rstrip("/").casefold()
+
+
+def _normalized_match(match: object) -> dict[str, Any] | None:
+    if not isinstance(match, Mapping):
+        return None
+    file = match.get("file")
+    line = match.get("line")
+    attributes = match.get("quarantineAttributes")
+    if (
+        not isinstance(file, str)
+        or not file
+        or not isinstance(line, int)
+        or isinstance(line, bool)
+        or line < 1
+        or not isinstance(attributes, list)
+    ):
+        return None
+    issue_urls: list[str] = []
+    for attribute in attributes:
+        if not isinstance(attribute, Mapping):
+            return None
+        issue_url = attribute.get("issueUrl")
+        if isinstance(issue_url, str) and issue_url:
+            issue_urls.append(issue_url)
+    return {"file": file, "line": line, "quarantineIssueUrls": issue_urls}
 
 
 def reconcile_quarantine_pull_requests(

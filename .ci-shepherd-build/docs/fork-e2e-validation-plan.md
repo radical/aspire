@@ -51,7 +51,7 @@ against real GitHub semantics without risking the production repository.
 | Assessment agent | No GitHub access | Arbitrary judgments, prompt-injectable from issue bodies |
 | Investigation worker | GET only | Can emit `fixable`, can consume budget |
 | Quarantine worker | Local edit, fork push | Can delete tests, touch unrelated files |
-| Executor | Three issue operations, grant-bound | The only path to a production mutation |
+| Executor | Grant-bound issue comments, closure, and Copilot assignment | The only path to a production mutation |
 | Human maintainer | Everything | Concurrent editor, primary source of time-of-check races |
 | Other bots | Comment and label | Can post text carrying shepherd-looking markers |
 | GitHub API | Not controlled | 404, 422, 5xx, eventual consistency, deleted objects |
@@ -88,6 +88,8 @@ against real GitHub semantics without risking the production repository.
   the per-issue cap.
 - **T14 Environment bleed.** Staging fixtures leaking into a production cycle, or
   cleanup failing and leaving debris that changes the next run's inventory.
+- **T15 Delegation runaway.** Completed task sessions freeing execution slots while
+  their open draft pull requests accumulate without a separate backlog limit.
 
 ## 3. Observable invariants
 
@@ -123,6 +125,10 @@ files, or a live read-only GET. None require reading private helpers.
 | I24 | After a quarantine edit, the exact method is absent under the quarantined-trait filter and present without it | discovery output, both filters |
 | I25 | A quarantine session is recorded `completed` only after the attribute is observed on the target branch | session ledger, live GET of the merged tree |
 | I26 | Every initial source resolution runs independently through the same QuarantineTools path used for mutation | invocation log and per-candidate diff |
+| I27 | An assignment baseline is fsynced before the GitHub write and binds the issue to exactly one newly observed Agent Task | `action-events.jsonl`, Agent Tasks GET |
+| I28 | `queued` and `in_progress` tasks consume running capacity; completed, paused, or failed tasks release it | `delegationStatus`, capacity decision |
+| I29 | Open draft and ready pull requests from completed tasks consume the independent delegated-PR limit | `delegationStatus`, capacity decision |
+| I30 | Starts are limited over the rolling 24 hours before each attempt, independent of scheduler cadence | baseline event timestamps |
 
 ## 4. Scenario matrix
 
@@ -157,7 +163,7 @@ Closure additionally requires A4, A5, A6, and A8. Class A quarantine
 additionally requires H1 through H17 where applicable, H22 through H29, I4, and
 M1 through M3. These later gates do not block comment automation. The production
 repository guard remains in place for every capability until its own gate
-passes.
+passes. Production Copilot assignment additionally requires O1 through O8.
 
 ### 4.1 Suite A — Issue lifecycle (P0)
 
@@ -408,6 +414,19 @@ than accidental properties of the generic engine.
 | N3 | Modify any embedded profile field after snapshot creation without updating its digest | none | Snapshot validation fails | Assessment, authorization, and execution do not consume the snapshot | none | Policy tampering after evidence collection | L |
 | N4 | Authorize under profile digest `P1`, then replace the policy with `P2` before mutation | Swap policy after grant creation | Execution refuses before mutation | The adapter is not invoked and the mutation ledger records no success | Reset scratch | A safe evidence policy being swapped for a permissive policy after approval | L+E |
 | N5 | Select an unknown repository adapter ID in an otherwise valid profile | none | Cycle reports an unsupported adapter and blocks repository-specific actions | Generic evidence remains readable, but no source inspection or mutation runs | none | Falling back to Aspire mutation behavior for an unknown repository | L |
+
+### 4.15 Suite O — Copilot delegation lifecycle and capacity (P0)
+
+| ID | Setup | Mutation | Expected observable | Exact safety assertion | Cleanup | Regression caught | Where |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| O1 | Open unassigned fork fixture with one exact `assign-copilot` grant | Execute assignment | One new Agent Task is bound to the issue action | Baseline precedes the assignment call; exactly one task ID is recorded | Unassign Copilot and close any fixture PR | Untracked or ambiguous delegation | L+E |
+| O2 | O1 task is `queued` or `in_progress` and running limit is one | Attempt a second assignment | Attempt is deferred and remains retryable | No second baseline and no assignment write | Complete or cancel first task | Running-capacity race | L+E |
+| O3 | O1 task completes with an open draft PR | Attempt a second assignment with PR limit one | Running slot is free but PR backlog blocks the start | `running_tasks=0`, `open_delegated_prs=1` | Close fixture PR | Completed tasks bypassing reviewer-WIP limits | L+E |
+| O4 | One start exists exactly 24 hours before the attempt and one exists one microsecond later | none | Only the latter counts | Rolling-window count is one without midnight reset | none | Scheduler-cadence or calendar-day burst | L |
+| O5 | Assignment response succeeds before the task appears in the API | Replay after the task appears | Action reconciles to the unique new task | No second assignment write; missing task association blocks other starts meanwhile | Unassign Copilot | Eventual-consistency duplicate start | L+E |
+| O6 | Agent Task is `waiting_for_user`, `idle`, `failed`, `timed_out`, or `cancelled` | none | Running slot is free and a human handoff is exposed | Task remains linked to its issue and PR artifacts | Resolve fixture | Stalled delegation disappearing from tracking | L |
+| O7 | Copilot-created PR is closed without merge while its source issue stays open | none | Issue remains active | No issue closure is inferred from PR closure alone | Reopen or discard fixture | Closed PR incorrectly resolving source issue | L+E |
+| O8 | Task completes and creates an open PR | Run the next collection | Delegated issue, task, and PR remain in passive inventory | General assessment does not comment on Copilot-owned work | Close fixture PR | Self-interference or dropped delegated work | L+E |
 
 ## 5. Local versus live placement
 

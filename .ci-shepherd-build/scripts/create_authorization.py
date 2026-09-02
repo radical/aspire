@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Sequence
 
 from ci_shepherd.authorization import (
+    DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H,
+    DEFAULT_MAX_OPEN_DELEGATED_PRS,
+    DEFAULT_MAX_RUNNING_COPILOT_TASKS,
     DEFAULT_GRANT_TTL_MINUTES,
     generate_authorization_grant,
     write_authorization_grant,
@@ -36,6 +39,21 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         required=True,
         help="Repeatable. Only these exact action ids will be authorized.",
+    )
+    parser.add_argument(
+        "--max-running-copilot-tasks",
+        type=_nonnegative_int,
+        default=DEFAULT_MAX_RUNNING_COPILOT_TASKS,
+    )
+    parser.add_argument(
+        "--max-copilot-starts-per-rolling-24h",
+        type=_nonnegative_int,
+        default=DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H,
+    )
+    parser.add_argument(
+        "--max-open-delegated-prs",
+        type=_nonnegative_int,
+        default=DEFAULT_MAX_OPEN_DELEGATED_PRS,
     )
     parser.add_argument("--state-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -63,7 +81,22 @@ def _parser() -> argparse.ArgumentParser:
             "production pilot limits."
         ),
     )
+    parser.add_argument(
+        "--production-delegation-pilot",
+        action="store_true",
+        help=(
+            "Permit one Copilot assignment on microsoft/aspire under exact "
+            "1/1/1 capacity limits."
+        ),
+    )
     return parser
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("capacity limits must be nonnegative")
+    return parsed
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -83,10 +116,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action_ids=args.action_ids,
         state_dir=state_dir,
         ttl_minutes=args.ttl_minutes,
+        max_running_copilot_tasks=args.max_running_copilot_tasks,
+        max_copilot_starts_per_rolling_24h=(
+            args.max_copilot_starts_per_rolling_24h
+        ),
+        max_open_delegated_prs=args.max_open_delegated_prs,
         override_suppression_for_action_ids=(
             args.override_suppression_for_action_ids
         ),
         allow_production_comment_pilot=args.production_comment_pilot,
+        allow_production_delegation_pilot=args.production_delegation_pilot,
     )
     written_path = write_authorization_grant(grant, output_path)
     print(written_path)

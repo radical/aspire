@@ -5,6 +5,7 @@ Roslyn based utility to add or remove `[QuarantinedTest]` or `[ActiveIssue]` att
 - Quarantine: adds `[QuarantinedTest("<issue url>")]` or `[ActiveIssue("<issue url>")]`
 - Unquarantine: removes any `QuarantinedTest` or `ActiveIssue` attribute from the method
 - Inspect: resolves exact methods and reports existing suppression attributes as JSON without changing source
+- Inventory: lists every `[QuarantinedTest]` attribute under the tests root as JSON without changing source
 
 ## Prerequisites
 
@@ -18,6 +19,9 @@ dotnet run --project tools/QuarantineTools -- --help
 
 # Inspect one or more methods without modifying source
 dotnet run --project tools/QuarantineTools -- --inspect Full.Namespace.Type.Method
+
+# List every quarantined test under the tests root
+dotnet run --project tools/QuarantineTools -- --inventory
 
 # Quarantine a test with QuarantinedTest (default mode)
 dotnet run --project tools/QuarantineTools -- -q -i https://github.com/microsoft/aspire/issues/1234 Full.Namespace.Type.Method
@@ -41,7 +45,8 @@ dotnet run --project tools/QuarantineTools -- -q -a MyCompany.Testing.CustomQuar
 ## Notes on CLI flags
 
 - `-q`/`--quarantine` and `-u`/`--unquarantine` are mutually exclusive (pick one).
-- `--inspect`, `-q`/`--quarantine`, and `-u`/`--unquarantine` are mutually exclusive.
+- `--inspect`, `--inventory`, `-q`/`--quarantine`, and `-u`/`--unquarantine` are mutually exclusive.
+- `--inventory` takes no test names and rejects `-i`/`--url` and `-a`/`--attribute`.
 - `-i`/`--url <issue-url>` is required when using `-q`.
 - `-m`/`--mode <mode>` controls which attribute to add/remove:
   - `quarantine` (default): Uses `Aspire.TestUtilities.QuarantinedTest`
@@ -57,6 +62,13 @@ and their literal issue URLs. Attribute matching recognizes unqualified,
 fully-qualified, `global::`-qualified, and using-alias forms. A valid not-found
 or ambiguous result exits successfully; non-zero exit codes indicate that
 inspection itself failed.
+
+Inventory writes one JSON document to standard output listing every
+`[QuarantinedTest]` attribute found under the tests root, each with the
+method's *current* fully-qualified name, its literal issue URL, and the file
+and line. Entries are ordered by file then line. This is the answer to "which
+test does this issue actually quarantine right now", which an issue title
+cannot answer once a test has been renamed or moved.
 
 ## Notes
 

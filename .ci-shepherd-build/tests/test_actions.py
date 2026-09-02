@@ -6,6 +6,7 @@ import unittest
 
 from ci_shepherd.actions import build_action_proposals, build_watch_proposals
 from ci_shepherd.actor import build_dry_run
+from ci_shepherd.quarantine_reconciliation import reconcile_quarantine_source
 
 
 def _snapshot() -> dict[str, object]:
@@ -149,6 +150,27 @@ def _investigate_judgments() -> dict[str, object]:
             "summary": "Investigate the missing diagnostic identity.",
             "missingEvidence": ["diagnostic logs"],
             "reassessWhen": "After the bounded investigation completes.",
+        }
+    )
+    return judgments
+
+
+def _delegate_judgments() -> dict[str, object]:
+    judgments = _investigate_judgments()
+    issue = judgments["issues"][0]
+    assert isinstance(issue, dict)
+    issue["category"] = "product-or-tooling"
+    recommendations = issue["recommendations"]
+    assert isinstance(recommendations, list)
+    recommendation = recommendations[0]
+    assert isinstance(recommendation, dict)
+    recommendation.update(
+        {
+            "disposition": "delegate-copilot",
+            "confidence": "medium",
+            "summary": "The repository code has an actionable product defect.",
+            "missingEvidence": [],
+            "reassessWhen": "After the delegated task or pull request changes state.",
         }
     )
     return judgments
@@ -313,6 +335,48 @@ def _with_owned_comment(
 
 
 class WatchActionTests(unittest.TestCase):
+    def test_delegate_copilot_recommendation_creates_assignment_proposal(self) -> None:
+        prepared = _prepared()
+        prepared["repositoryPolicy"] = {
+            "quarantinePullRequest": {"baseRef": "main"},
+        }
+
+        proposals = build_action_proposals(
+            _snapshot(),
+            prepared,
+            _delegate_judgments(),
+            "ankj",
+        )
+
+        proposal = proposals["proposals"][0]
+        self.assertEqual("assign-copilot", proposal["operation"])
+        self.assertEqual("owner/repo", proposal["targetRepository"])
+        self.assertEqual("main", proposal["baseBranch"])
+        self.assertEqual("", proposal["model"])
+        self.assertIn("Fixes #21", proposal["customInstructions"])
+        self.assertEqual(
+            "issue:21:copilot-assignment",
+            proposal["idempotencyKey"],
+        )
+        build_dry_run(proposals, action_id=str(proposal["actionId"]))
+
+    def test_delegate_copilot_rejects_flake_classification(self) -> None:
+        judgments = _delegate_judgments()
+        issue = judgments["issues"][0]
+        assert isinstance(issue, dict)
+        issue["category"] = "flaky-test"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "delegate-copilot requires a blocking-build or product-or-tooling",
+        ):
+            build_action_proposals(
+                _snapshot(),
+                _prepared(),
+                judgments,
+                "ankj",
+            )
+
     def test_executable_proposal_carries_source_issue_version(self) -> None:
         proposals = build_action_proposals(
             _snapshot(),
@@ -1009,6 +1073,270 @@ class WatchActionTests(unittest.TestCase):
                 judgments,
                 "ankj",
             )
+
+
+class DelegationHandoffActionTests(unittest.TestCase):
+    def test_handoff_for_issue_outside_open_inventory_does_not_propose_comment(
+        self,
+    ) -> None:
+        snapshot = _snapshot()
+        snapshot["openIssues"] = []
+        snapshot["issues"] = []
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [
+                {
+                    "actionId": "assignment:21",
+                    "repository": "owner/repo",
+                    "issueNumber": 21,
+                    "startedAt": "2026-08-21T15:00:00Z",
+                    "taskId": "task-21",
+                    "taskState": "failed",
+                    "lifecycle": "handoff_required",
+                    "requiresHuman": True,
+                    "pullRequests": [],
+                }
+            ],
+        }
+        prepared = _prepared()
+        prepared["issues"] = []
+        judgments = _judgments()
+        judgments["issues"] = []
+
+        proposals = build_action_proposals(
+            snapshot,
+            prepared,
+            judgments,
+            "ankj",
+        )
+
+        self.assertEqual([], proposals["proposals"])
+
+    def test_terminal_delegation_proposes_one_canonical_human_handoff(self) -> None:
+        snapshot = _snapshot()
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [
+                {
+                    "actionId": "assignment:21",
+                    "repository": "owner/repo",
+                    "issueNumber": 21,
+                    "startedAt": "2026-08-21T15:00:00Z",
+                    "taskId": "task-21",
+                    "taskState": "waiting_for_user",
+                    "lifecycle": "handoff_required",
+                    "requiresHuman": True,
+                    "pullRequests": [
+                        {
+                            "databaseId": 101,
+                            "globalId": "PR_101",
+                            "number": 22,
+                            "state": "open",
+                            "isDraft": True,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(1, len(proposals["proposals"]))
+        proposal = proposals["proposals"][0]
+        self.assertEqual(
+            "snapshot:owner/repo:2026-08-21T16:00:00Z:"
+            "issue:21:delegation-handoff-comment",
+            proposal["actionId"],
+        )
+        self.assertEqual("create-comment", proposal["operation"])
+        self.assertIn("Task `task-21`: waiting_for_user", proposal["body"])
+        self.assertIn("PR #22 (open)", proposal["body"])
+        self.assertNotIn("watch-comment", proposal["actionId"])
+        build_dry_run(proposals, action_id=proposal["actionId"])
+
+    def test_handoff_supersedes_model_status_recommendation(self) -> None:
+        snapshot = _snapshot()
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [
+                {
+                    "actionId": "assignment:21",
+                    "repository": "owner/repo",
+                    "issueNumber": 21,
+                    "startedAt": "2026-08-21T15:00:00Z",
+                    "taskId": "task-21",
+                    "taskState": "failed",
+                    "lifecycle": "handoff_required",
+                    "requiresHuman": True,
+                    "pullRequests": [],
+                }
+            ],
+        }
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual(1, len(proposals["proposals"]))
+        self.assertIn(
+            "delegation-handoff-comment",
+            proposals["proposals"][0]["actionId"],
+        )
+        build_dry_run(
+            proposals,
+            action_id=proposals["proposals"][0]["actionId"],
+        )
+
+
+class QuarantineSourceReconciliationActionTests(unittest.TestCase):
+    def test_label_without_attribute_uses_the_canonical_status_comment(self) -> None:
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=_reconciliation(),
+        )
+
+        self.assertEqual(1, len(result["proposals"]))
+        proposal = result["proposals"][0]
+        self.assertEqual("create-comment", proposal["operation"])
+        self.assertEqual("issue:21:status", proposal["idempotencyKey"])
+        self.assertEqual(["issue:21"], proposal["evidenceIds"])
+        self.assertTrue(proposal["executionEligibility"]["eligible"])
+        self.assertTrue(proposal["body"].startswith("[automated] "))
+        self.assertIn("`Demo.Tests.Flaky`", proposal["body"])
+        self.assertIn("`Demo.Tests/Tests.cs:31`", proposal["body"])
+        self.assertIn("no `[QuarantinedTest]` attribute", proposal["body"])
+        self.assertIn("a" * 40, proposal["body"])
+        self.assertIn(
+            "<!-- ci-shepherd:idempotency-key=issue:21:status -->",
+            proposal["body"],
+        )
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 21,
+                    "disposition": "watch",
+                    "blockingReasons": [
+                        "superseded-by-quarantine-source-reconciliation"
+                    ],
+                    "evidenceIds": ["issue:21", "run:777"],
+                }
+            ],
+            result["blockedRecommendations"],
+        )
+
+    def test_unchanged_reconciliation_comment_is_not_reproposed(self) -> None:
+        first = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=_reconciliation(),
+        )
+        body = first["proposals"][0]["body"]
+        assert isinstance(body, str)
+
+        result = build_action_proposals(
+            _with_owned_comment(_snapshot(), body),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=_reconciliation(),
+        )
+
+        self.assertEqual([], result["proposals"])
+        self.assertEqual([21], result["unchangedIssueNumbers"])
+
+    def test_closure_review_finding_never_proposes_an_issue_close(self) -> None:
+        reconciliation = _reconciliation()
+        finding = reconciliation["findings"][0]
+        assert isinstance(finding, dict)
+        finding.update(
+            {
+                "kind": "removed-test-closure-review",
+                "currentSource": [],
+                "priorQuarantine": {
+                    "pullRequestUrl": "https://github.com/owner/repo/pull/73",
+                    "recordedAt": "2026-08-30T00:03:00Z",
+                },
+                "summary": "The quarantined method is gone.",
+                "humanAction": "Confirm removal and close this issue.",
+            }
+        )
+
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=reconciliation,
+        )
+
+        self.assertEqual(
+            ["create-comment"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
+        self.assertIn(
+            "https://github.com/owner/repo/pull/73",
+            result["proposals"][0]["body"],
+        )
+
+
+def _reconciliation() -> dict[str, object]:
+    return reconcile_quarantine_source(
+        {
+            "schemaVersion": 1,
+            "repository": "owner/repo",
+            "snapshotId": "snapshot:owner/repo:2026-08-21T16:00:00Z",
+            "issues": [
+                {
+                    "issueNumber": 21,
+                    "issueUrl": "https://github.com/owner/repo/issues/21",
+                    "identity": {"tier2TestName": "Demo.Tests.Flaky"},
+                    "evidenceBundle": [
+                        {
+                            "id": "issue:21",
+                            "kind": "issue-event",
+                            "payload": {"labels": ["quarantined-test"]},
+                        }
+                    ],
+                }
+            ],
+        },
+        {
+            "schemaVersion": 1,
+            "sourceRevision": "a" * 40,
+            "sourceTreeDigest": "sha256:" + "b" * 64,
+            "inspectorTreeDigest": "sha256:" + "c" * 64,
+            "quarantines": [],
+            "tests": [
+                {
+                    "testName": "Demo.Tests.Flaky",
+                    "status": "resolved",
+                    "matches": [
+                        {
+                            "file": "Demo.Tests/Tests.cs",
+                            "line": 31,
+                            "quarantineAttributes": [],
+                            "activeIssueAttributes": [],
+                            "fileSemanticDigest": "sha256:" + "d" * 64,
+                            "fileQuarantines": [],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
 
 
 if __name__ == "__main__":

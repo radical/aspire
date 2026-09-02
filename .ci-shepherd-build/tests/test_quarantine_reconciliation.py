@@ -19,6 +19,7 @@ from ci_shepherd.quarantine import (
 from ci_shepherd.quarantine_reconciliation import (
     MergedQuarantineSourceVerification,
     reconcile_quarantine_pull_requests,
+    reconcile_quarantine_source,
     verify_merged_quarantine_source,
 )
 from ci_shepherd.quarantine_mutation import validate_quarantine_post_inspection
@@ -841,6 +842,449 @@ public class Tests
         if completed.returncode != 0:
             raise AssertionError(completed.stderr)
         return json.loads(completed.stdout)
+
+
+class QuarantineSourceReconciliationTests(unittest.TestCase):
+    def test_quarantine_label_without_a_current_attribute_asks_a_human(self) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[],
+                tests=[
+                    _inspection_result(
+                        "Demo.Tests.Flaky",
+                        "resolved",
+                        [_match("Demo.Tests/Tests.cs", 31)],
+                    )
+                ],
+            ),
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "issueUrl": "https://github.com/owner/repo/issues/22",
+                    "kind": "label-without-attribute",
+                    "claimedTestName": "Demo.Tests.Flaky",
+                    "currentSource": [
+                        {
+                            "testName": "Demo.Tests.Flaky",
+                            "file": "Demo.Tests/Tests.cs",
+                            "line": 31,
+                            "quarantineIssueUrls": [],
+                        }
+                    ],
+                    "summary": (
+                        "The `quarantined-test` label is on this issue, but "
+                        "`Demo.Tests.Flaky` at `Demo.Tests/Tests.cs:31` carries no "
+                        "`[QuarantinedTest]` attribute in the inspected source."
+                    ),
+                    "humanAction": (
+                        "Confirm whether this test should be quarantined. Either "
+                        "quarantine it against this issue or remove the "
+                        "`quarantined-test` label."
+                    ),
+                }
+            ],
+            result["findings"],
+        )
+        self.assertEqual("a" * 40, result["sourceRevision"])
+        self.assertEqual("sha256:" + "b" * 64, result["sourceTreeDigest"])
+
+    def test_quarantine_attribute_for_another_issue_does_not_satisfy_label(
+        self,
+    ) -> None:
+        other_issue_url = "https://github.com/owner/repo/issues/99"
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[
+                    {
+                        "testName": "Demo.Tests.Flaky",
+                        "issueUrl": other_issue_url,
+                        "file": "Demo.Tests/Tests.cs",
+                        "line": 31,
+                    }
+                ],
+                tests=[
+                    _inspection_result(
+                        "Demo.Tests.Flaky",
+                        "resolved",
+                        [
+                            _match(
+                                "Demo.Tests/Tests.cs",
+                                31,
+                                quarantine_issue_url=other_issue_url,
+                            )
+                        ],
+                    )
+                ],
+            ),
+        )
+
+        finding = result["findings"][0]
+        self.assertEqual("label-without-attribute", finding["kind"])
+        self.assertEqual([other_issue_url], finding["currentSource"][0]["quarantineIssueUrls"])
+        self.assertIn("link other issues", finding["summary"])
+
+    def test_renamed_method_keeps_the_issue_link_and_asks_for_a_correction(
+        self,
+    ) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[
+                    {
+                        "testName": "Demo.Tests.FlakyRenamed",
+                        "issueUrl": "https://github.com/owner/repo/issues/22",
+                        "file": "Demo.Tests/Tests.cs",
+                        "line": 44,
+                    }
+                ],
+                tests=[
+                    _inspection_result("Demo.Tests.Flaky", "not-found", []),
+                ],
+            ),
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "issueUrl": "https://github.com/owner/repo/issues/22",
+                    "kind": "attribute-name-drift",
+                    "claimedTestName": "Demo.Tests.Flaky",
+                    "currentSource": [
+                        {
+                            "testName": "Demo.Tests.FlakyRenamed",
+                            "file": "Demo.Tests/Tests.cs",
+                            "line": 44,
+                            "quarantineIssueUrls": [
+                                "https://github.com/owner/repo/issues/22"
+                            ],
+                        }
+                    ],
+                    "summary": (
+                        "This issue is still linked from a `[QuarantinedTest]` "
+                        "attribute, but the quarantined method is now "
+                        "`Demo.Tests.FlakyRenamed` at `Demo.Tests/Tests.cs:44` "
+                        "rather than the `Demo.Tests.Flaky` this issue names."
+                    ),
+                    "humanAction": (
+                        "Update the issue title and metadata to the current "
+                        "method name. The shepherd does not edit issue metadata."
+                    ),
+                }
+            ],
+            result["findings"],
+        )
+
+    def test_normalized_claim_matches_linked_source_name_case_insensitively(
+        self,
+    ) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(test_name="demo.tests.flaky"),
+            _source_state(
+                quarantines=[
+                    {
+                        "testName": "Demo.Tests.Flaky",
+                        "issueUrl": "https://github.com/owner/repo/issues/22",
+                        "file": "Demo.Tests/Tests.cs",
+                        "line": 31,
+                    }
+                ],
+                tests=[
+                    _inspection_result("demo.tests.flaky", "not-found", []),
+                ],
+            ),
+        )
+
+        self.assertEqual([], result["findings"])
+
+    def test_ambiguous_source_match_requires_human_review(self) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[],
+                tests=[
+                    _inspection_result(
+                        "Demo.Tests.Flaky",
+                        "ambiguous",
+                        [
+                            _match("Demo.Tests/One.cs", 10),
+                            _match("Demo.Tests/Two.cs", 20),
+                        ],
+                    )
+                ],
+            ),
+        )
+
+        finding = result["findings"][0]
+        self.assertEqual("ambiguous-inspection", finding["kind"])
+        self.assertEqual(
+            ["Demo.Tests/One.cs", "Demo.Tests/Two.cs"],
+            [entry["file"] for entry in finding["currentSource"]],
+        )
+        self.assertIn("multiple source matches", finding["summary"])
+
+    def test_confidently_removed_test_becomes_a_closure_review_candidate(
+        self,
+    ) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[],
+                tests=[_inspection_result("Demo.Tests.Flaky", "not-found", [])],
+            ),
+            _completed_session_events(),
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "issueUrl": "https://github.com/owner/repo/issues/22",
+                    "kind": "removed-test-closure-review",
+                    "claimedTestName": "Demo.Tests.Flaky",
+                    "currentSource": [],
+                    "priorQuarantine": {
+                        "pullRequestUrl": "https://github.com/owner/repo/pull/73",
+                        "recordedAt": "2026-08-30T00:03:00Z",
+                    },
+                    "summary": (
+                        "`Demo.Tests.Flaky` was quarantined for this issue by "
+                        "https://github.com/owner/repo/pull/73, and the inspected "
+                        "source now contains neither that method nor any "
+                        "`[QuarantinedTest]` attribute linking this issue."
+                    ),
+                    "humanAction": (
+                        "Confirm the test was deleted rather than renamed, then "
+                        "close this issue. The shepherd does not close issues on "
+                        "absence."
+                    ),
+                }
+            ],
+            result["findings"],
+        )
+
+    def test_absent_test_without_a_recorded_quarantine_stays_ambiguous(self) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[],
+                tests=[_inspection_result("Demo.Tests.Flaky", "not-found", [])],
+            ),
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "issueUrl": "https://github.com/owner/repo/issues/22",
+                    "kind": "ambiguous-absence",
+                    "reason": "no-recorded-quarantine",
+                    "claimedTestName": "Demo.Tests.Flaky",
+                    "currentSource": [],
+                    "summary": (
+                        "`Demo.Tests.Flaky` is absent from the inspected source "
+                        "and no `[QuarantinedTest]` attribute links this issue, "
+                        "but the shepherd has no record of quarantining it, so "
+                        "removal and rename are indistinguishable."
+                    ),
+                    "humanAction": (
+                        "Decide whether the test was renamed or removed. The "
+                        "shepherd will not close this issue on absence alone."
+                    ),
+                }
+            ],
+            result["findings"],
+        )
+
+    def test_absent_test_with_a_same_leaf_quarantine_stays_ambiguous(self) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(),
+            _source_state(
+                quarantines=[
+                    {
+                        "testName": "Demo.OtherTests.Flaky",
+                        "issueUrl": "https://github.com/owner/repo/issues/99",
+                        "file": "Demo.Tests/OtherTests.cs",
+                        "line": 12,
+                    }
+                ],
+                tests=[_inspection_result("Demo.Tests.Flaky", "not-found", [])],
+            ),
+            _completed_session_events(),
+        )
+
+        finding = result["findings"][0]
+        self.assertEqual("ambiguous-absence", finding["kind"])
+        self.assertEqual("possible-move-candidate", finding["reason"])
+        self.assertEqual(
+            [
+                {
+                    "testName": "Demo.OtherTests.Flaky",
+                    "file": "Demo.Tests/OtherTests.cs",
+                    "line": 12,
+                    "quarantineIssueUrls": [
+                        "https://github.com/owner/repo/issues/99"
+                    ],
+                }
+            ],
+            finding["currentSource"],
+        )
+
+    def test_unnamed_labeled_issue_without_any_linking_attribute_asks_a_human(
+        self,
+    ) -> None:
+        result = reconcile_quarantine_source(
+            _labeled_prepared(test_name=None),
+            _source_state(
+                quarantines=[
+                    {
+                        "testName": "Demo.Tests.Unrelated",
+                        "issueUrl": "https://github.com/owner/repo/issues/99",
+                        "file": "Demo.Tests/Tests.cs",
+                        "line": 12,
+                    }
+                ],
+                tests=[],
+            ),
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 22,
+                    "issueUrl": "https://github.com/owner/repo/issues/22",
+                    "kind": "label-without-attribute",
+                    "claimedTestName": None,
+                    "currentSource": [],
+                    "summary": (
+                        "The `quarantined-test` label is on this issue, but no "
+                        "`[QuarantinedTest]` attribute in the inspected source "
+                        "links it."
+                    ),
+                    "humanAction": (
+                        "Confirm whether this test should be quarantined. Either "
+                        "quarantine it against this issue or remove the "
+                        "`quarantined-test` label."
+                    ),
+                }
+            ],
+            result["findings"],
+        )
+
+    def test_unavailable_source_state_makes_no_claims(self) -> None:
+        result = reconcile_quarantine_source(_labeled_prepared(), None)
+
+        self.assertEqual([], result["findings"])
+        self.assertEqual([22], result["unverifiableIssueNumbers"])
+        self.assertIsNone(result["sourceRevision"])
+
+
+def _labeled_prepared(
+    *,
+    test_name: str | None = "Demo.Tests.Flaky",
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "repository": "owner/repo",
+        "snapshotId": "snapshot:owner/repo:test",
+        "issues": [
+            {
+                "issueNumber": 22,
+                "issueUrl": "https://github.com/owner/repo/issues/22",
+                "identity": {"tier2TestName": test_name},
+                "evidenceBundle": [
+                    {
+                        "id": "issue:22",
+                        "kind": "issue-event",
+                        "payload": {"labels": ["quarantined-test"]},
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _completed_session_events() -> list[dict[str, object]]:
+    request = {
+        "repository": "owner/repo",
+        "snapshotId": "snapshot:owner/repo:test",
+        "batchId": "quarantine:removed",
+        "tests": [
+            {
+                "testName": "Demo.Tests.Flaky",
+                "issueUrl": "https://github.com/owner/repo/issues/22",
+            }
+        ],
+    }
+    with TemporaryDirectory() as scratch:
+        state = Path(scratch)
+        record_quarantine_session_event(
+            state,
+            request,
+            status="started",
+            recorded_at="2026-08-30T00:00:00Z",
+            session_id="session-removed",
+        )
+        record_quarantine_session_event(
+            state,
+            request,
+            status="completed",
+            recorded_at="2026-08-30T00:03:00Z",
+            session_id="session-removed",
+            pull_request_url="https://github.com/owner/repo/pull/73",
+            pull_request_head_sha="a" * 40,
+            completed_test_names=["Demo.Tests.Flaky"],
+        )
+        return read_quarantine_session_events(state)
+
+
+def _source_state(
+    *,
+    quarantines: list[dict[str, object]],
+    tests: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "sourceRevision": "a" * 40,
+        "sourceTreeDigest": "sha256:" + "b" * 64,
+        "inspectorTreeDigest": "sha256:" + "c" * 64,
+        "quarantines": quarantines,
+        "tests": tests,
+    }
+
+
+def _inspection_result(
+    test_name: str,
+    status: str,
+    matches: list[dict[str, object]],
+) -> dict[str, object]:
+    return {"testName": test_name, "status": status, "matches": matches}
+
+
+def _match(
+    file: str,
+    line: int,
+    *,
+    quarantine_issue_url: str | None = None,
+    file_quarantines: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "file": file,
+        "line": line,
+        "quarantineAttributes": (
+            [{"name": "QuarantinedTest", "issueUrl": quarantine_issue_url}]
+            if quarantine_issue_url is not None
+            else []
+        ),
+        "activeIssueAttributes": [],
+        "fileSemanticDigest": "sha256:" + "d" * 64,
+        "fileQuarantines": file_quarantines or [],
+    }
 
 
 if __name__ == "__main__":

@@ -624,6 +624,179 @@ class PrototypeScriptTests(unittest.TestCase):
         )
         validate_snapshot(snapshot)
 
+    def test_delegation_observer_failure_retains_previous_tracking(self) -> None:
+        collect_script = load_script("collect")
+        records = [
+            {
+                "issueNumber": 75,
+                "taskId": "task-1",
+                "taskState": "in_progress",
+                "requiresHuman": False,
+            }
+        ]
+
+        status = collect_script.build_incomplete_delegation_status(
+            {"delegationStatus": {"status": "complete", "records": records}},
+            RuntimeError("Agent Tasks API unavailable"),
+        )
+
+        self.assertEqual(
+            {
+                "status": "incomplete",
+                "records": records,
+                "problem": "Agent Tasks API unavailable",
+            },
+            status,
+        )
+
+    def test_tracked_delegations_stay_out_of_general_assessment_lanes(self) -> None:
+        collect_script = load_script("collect")
+        inventory = InventoryResult(
+            open_issues=[{"number": 75}, {"number": 76}],
+            supporting_issues=[],
+            evidence={},
+            collection_errors=[],
+            warnings=[],
+            references={},
+            open_pull_requests=[{"number": 80}, {"number": 81}],
+        )
+
+        retained = collect_script.retain_tracked_delegations(
+            inventory,
+            [
+                {
+                    "issueNumber": 75,
+                    "pullRequests": [{"number": 80}],
+                }
+            ],
+        )
+
+        self.assertEqual([76], [issue["number"] for issue in retained.open_issues])
+        self.assertEqual(
+            [75],
+            [issue["number"] for issue in retained.delegated_issues],
+        )
+        self.assertEqual(
+            [81],
+            [pull_request["number"] for pull_request in retained.open_pull_requests],
+        )
+        self.assertEqual(
+            [80],
+            [
+                pull_request["number"]
+                for pull_request in retained.delegated_pull_requests
+            ],
+        )
+
+    def test_handoff_delegation_returns_issue_to_general_assessment(self) -> None:
+        collect_script = load_script("collect")
+        inventory = InventoryResult(
+            open_issues=[],
+            supporting_issues=[],
+            evidence={},
+            collection_errors=[],
+            warnings=[],
+            references={},
+            delegated_issues=[{"number": 75}],
+        )
+
+        retained = collect_script.retain_tracked_delegations(
+            inventory,
+            [
+                {
+                    "issueNumber": 75,
+                    "requiresHuman": True,
+                    "pullRequests": [],
+                }
+            ],
+        )
+
+        self.assertEqual([75], [issue["number"] for issue in retained.open_issues])
+        self.assertEqual([], retained.delegated_issues)
+
+    def test_collect_releases_handoff_before_github_enrichment(self) -> None:
+        collect_script = load_script("collect")
+        seen: dict[str, object] = {}
+
+        class FakeCollector:
+            def __init__(self, *args, **kwargs):
+                seen["released"] = kwargs.get(
+                    "released_delegation_issue_numbers"
+                )
+
+            def collect(self, **kwargs):
+                return InventoryResult(
+                    open_issues=[],
+                    supporting_issues=[],
+                    evidence={},
+                    collection_errors=[],
+                    warnings=[],
+                    references={},
+                    delegated_issues=[{"number": 75}],
+                )
+
+            def enrich_github_evidence(self, inventory, **kwargs):
+                seen["open"] = [issue["number"] for issue in inventory.open_issues]
+                return InventoryResult(
+                    open_issues=[],
+                    supporting_issues=[],
+                    evidence={},
+                    collection_errors=[],
+                    warnings=[],
+                    references={},
+                )
+
+            def enrich_ownership_evidence(self, inventory, **kwargs):
+                return inventory
+
+        class FakeEventStore:
+            def __init__(self, state_dir):
+                pass
+
+            def events(self, *, repository):
+                return [{"eventType": "delegation-baseline"}]
+
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        state_dir = scratch / "state"
+        output_dir = scratch / "output"
+        shutil.rmtree(scratch, ignore_errors=True)
+        state_dir.mkdir(parents=True)
+        try:
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=object()),
+                patch.object(collect_script, "Collector", FakeCollector),
+                patch.object(collect_script, "ActionEventStore", FakeEventStore),
+                patch.object(collect_script, "load_current", return_value=None),
+                patch.object(collect_script, "validate_snapshot"),
+                patch.object(
+                    collect_script,
+                    "observe_delegations",
+                    return_value=SimpleNamespace(tasks=(), pull_requests=()),
+                ),
+                patch.object(
+                    collect_script,
+                    "derive_delegation_tracking",
+                    return_value=(
+                        {
+                            "issueNumber": 75,
+                            "requiresHuman": True,
+                            "pullRequests": [],
+                        },
+                    ),
+                ),
+            ):
+                collect_script.collect(
+                    "owner/repo",
+                    output_dir,
+                    None,
+                    state_dir=state_dir,
+                )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+        self.assertEqual([75], seen["open"])
+        self.assertEqual((75,), seen["released"])
+
     def test_snapshot_binds_repository_policy_identity(self) -> None:
         collect_script = load_script("collect")
         inventory = InventoryResult(
@@ -1686,6 +1859,7 @@ class PrototypeScriptTests(unittest.TestCase):
             client_factory.assert_called_once_with(
                 allowed_repositories={"microsoft/aspire"},
                 protected_comment_repositories={"microsoft/aspire"},
+                protected_delegation_repositories=set(),
                 audit_path=state_path / "api-calls.jsonl",
             )
         finally:
@@ -2003,6 +2177,151 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def test_execute_actions_reserves_capacity_and_tracks_created_task(self) -> None:
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        state_path = (scratch / "state").resolve()
+        action_id = "action:assign"
+        proposal = {
+            "actionId": action_id,
+            "issueNumber": 1,
+            "operation": "assign-copilot",
+            "idempotencyKey": "issue:1:copilot-assignment",
+        }
+        proposals = {
+            "schemaVersion": 2,
+            "repository": "owner/repo",
+            "snapshotId": "snapshot:owner/repo:1",
+            "shepherdAuthor": "ankj",
+            "proposals": [proposal],
+        }
+        proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
+        grant = AuthorizationGrant(
+            grant_id="grant:assignment",
+            repository="owner/repo",
+            state_directory=state_path,
+            issued_at=datetime(2026, 8, 21, 19, tzinfo=UTC),
+            expires_at=datetime(2026, 8, 21, 21, tzinfo=UTC),
+            snapshot_id="snapshot:owner/repo:1",
+            proposals_digest="sha256:" + ("0" * 64),
+            allowed_action_ids=(action_id,),
+            allowed_operations=frozenset({"assign-copilot"}),
+            allowed_targets=frozenset({("issue", 1)}),
+            allowed_chain_roots=(action_id,),
+            override_suppression_for_action_ids=frozenset(),
+            budget=AuthorizationBudget(max_mutation_attempts=1, max_chains=1),
+            production_comment_pilot=False,
+        )
+        base_task = {
+            "state": "queued",
+            "created_at": "2026-08-21T19:00:00Z",
+            "updated_at": "2026-08-21T19:00:00Z",
+            "session_count": 1,
+            "artifacts": [],
+        }
+
+        class DelegationReader:
+            def __init__(self) -> None:
+                self.task_reads = 0
+
+            def get_pages(
+                self,
+                endpoint: str,
+                key: str | None = None,
+            ) -> list[object]:
+                if "/pulls?" in endpoint:
+                    return []
+                if "is_archived=true" in endpoint:
+                    return []
+                self.task_reads += 1
+                existing = {"id": "existing", **base_task}
+                if self.task_reads == 1:
+                    return [existing]
+                return [
+                    existing,
+                    {
+                        "id": "created",
+                        **base_task,
+                        "created_at": "2026-08-21T20:00:01Z",
+                        "updated_at": "2026-08-21T20:00:01Z",
+                    },
+                ]
+
+        terminal_result = {
+            "actionId": action_id,
+            "attemptedAt": "2026-08-21T20:00:00Z",
+            "outcome": "executed",
+            "result": {
+                "copilotAssigned": True,
+                "assignmentObservedAt": "2026-08-21T20:00:00Z",
+            },
+        }
+        stdout = io.StringIO()
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "execute_actions.py",
+                        "--proposals",
+                        str(proposals_path),
+                        "--state-dir",
+                        str(state_path),
+                        "--authorization",
+                        str(scratch / "authorization-grant.json"),
+                        "--action-id",
+                        action_id,
+                        "--execute",
+                    ],
+                ),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    return_value=SimpleNamespace(
+                        proposal_document=proposals,
+                        proposal=proposal,
+                        chain_root=action_id,
+                        grant=grant,
+                    ),
+                ),
+                patch.object(
+                    execute_script,
+                    "GitHubActorClient",
+                    return_value=object(),
+                ),
+                patch.object(
+                    execute_script,
+                    "GitHubClient",
+                    return_value=DelegationReader(),
+                ),
+                patch.object(
+                    execute_script,
+                    "execute_action",
+                    return_value=terminal_result,
+                ),
+                contextlib.redirect_stdout(stdout),
+            ):
+                self.assertEqual(0, execute_script.main())
+
+            output = json.loads(stdout.getvalue())
+            self.assertEqual("created", output["result"]["taskId"])
+            events = [
+                json.loads(line)
+                for line in (state_path / "action-events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(
+                ["intent", "delegation-baseline", "terminal"],
+                [event["eventType"] for event in events],
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     def test_execute_actions_comment_tracer_mutates_once_and_replays_terminal_result(
         self,
     ) -> None:
@@ -2271,6 +2590,9 @@ class PrototypeScriptTests(unittest.TestCase):
                     "budget": {
                         "maxMutationAttempts": 2,
                         "maxChains": 1,
+                        "maxRunningCopilotTasks": 2,
+                        "maxCopilotStartsPerRolling24h": 3,
+                        "maxOpenDelegatedPullRequests": 5,
                     },
                     "productionCommentPilot": False,
                 }
@@ -4170,6 +4492,20 @@ class PrototypeScriptTests(unittest.TestCase):
                 "botAuthoredAdopted": 250,
                 "detail": "item budget reached",
             },
+            delegated_issues=[
+                {
+                    "number": 14,
+                    "html_url": "https://github.com/owner/repo/issues/14",
+                    "assignees": [{"login": "Copilot"}],
+                }
+            ],
+            delegated_pull_requests=[
+                {
+                    "number": 15,
+                    "html_url": "https://github.com/owner/repo/pull/15",
+                    "assignees": [{"login": "Copilot"}],
+                }
+            ],
         )
 
         snapshot = collect_script.build_snapshot(
@@ -4189,6 +4525,8 @@ class PrototypeScriptTests(unittest.TestCase):
             snapshot["rejectedCandidates"][0]["reason"],
         )
         self.assertEqual("truncated", snapshot["openBotScan"]["status"])
+        self.assertEqual([14], snapshot["delegatedIssues"])
+        self.assertEqual([15], snapshot["delegatedPullRequests"])
         validate_snapshot(snapshot)
 
     def test_collector_shaped_snapshot_validates_multi_role_close_resolved_end_to_end(self) -> None:
