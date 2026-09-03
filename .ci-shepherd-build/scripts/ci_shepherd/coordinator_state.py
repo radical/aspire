@@ -192,7 +192,8 @@ class CoordinatorStateStore:
             }
 
         exact_decisions: list[dict[str, object]] = []
-        for payload in _latest_decision_payloads(events, repository).values():
+        for event in _latest_decision_events(events, repository).values():
+            payload = event["decision"]
             try:
                 expires_at = parse_aware_iso8601(
                     payload["expiresAtUtc"], "expiresAtUtc"
@@ -203,7 +204,15 @@ class CoordinatorStateStore:
                 continue  # Expired: remains in ledger history, not projection.
             if payload["decision"] == "clear":
                 continue  # Cleared: no effective override remains.
-            exact_decisions.append(dict(payload))
+            # Task 3 needs to identify exactly which ledger event made this
+            # decision effective (it derives `licenseSource =
+            # f"decision:{eventRevision}"` from it), but that identity is a
+            # property of the *event*, not the decision payload -- so it is
+            # derived here as a distinct, non-persisted read-model field
+            # rather than being written into the ledger's `decision` object.
+            enriched = dict(payload)
+            enriched["eventRevision"] = _require_event_revision(event)
+            exact_decisions.append(enriched)
         exact_decisions.sort(key=lambda item: (item["actionId"], item["proposalDigest"]))
 
         return {
@@ -380,12 +389,15 @@ class CoordinatorStateStore:
         # already-cleared, or byte-different-but-otherwise-identical
         # (regenerated) proposals document would silently succeed while
         # leaving the real decision live -- a fail-open bug.
-        effective = _latest_decision_payloads(events, repository).get((digest, action_id))
-        if effective is None:
+        effective_event = _latest_decision_events(events, repository).get(
+            (digest, action_id)
+        )
+        if effective_event is None:
             raise CoordinatorStateError(
                 "No effective decision exists for this exact action digest "
                 "to clear."
             )
+        effective = effective_event["decision"]
         try:
             effective_expires_at = parse_aware_iso8601(
                 effective["expiresAtUtc"], "expiresAtUtc"
@@ -476,10 +488,16 @@ class CoordinatorStateStore:
             _fsync_directory(self._state_dir)
 
     def _load_events(self) -> list[dict[str, Any]]:
-        if not self._events_path.exists():
-            return []
+        # Symlink check MUST precede the existence check: Path.exists()
+        # follows symlinks and reports False for a dangling (target-missing)
+        # symlink, while Path.is_symlink() is a pure lstat that reports True
+        # regardless of target existence. Probing exists() first would
+        # silently treat a dangling ledger symlink as "no ledger yet" --
+        # discarding all prior history -- instead of failing closed.
         if self._events_path.is_symlink():
             raise CoordinatorStateError("Policy-event ledger cannot be a symlink.")
+        if not self._events_path.exists():
+            return []
         descriptor = _open_guarded(
             self._events_path, os.O_RDONLY, 0o600, "Policy-event ledger"
         )
@@ -591,7 +609,13 @@ def make_lock_free_durable_intent_reader(
     def _read_durable_intent(action_id: str) -> bool:
         expanded = action_events_path.expanduser()
         # Leaf-only check (see CoordinatorStateStore.__init__ for rationale),
-        # consistent with the rest of this module's symlink handling.
+        # consistent with the rest of this module's symlink handling. Order
+        # matters here too, and for the same reason as
+        # CoordinatorStateStore._load_events: is_symlink() MUST be probed
+        # before exists(), since exists() follows symlinks and reports False
+        # for a dangling (target-missing) symlink -- probing it first would
+        # silently report "no durable intent" for a ledger that cannot
+        # actually be read, instead of failing closed.
         if expanded.is_symlink():
             raise CoordinatorStateError("Action-event ledger cannot be a symlink.")
         if not expanded.exists():
@@ -702,21 +726,46 @@ def _latest_policy_event(
     return latest
 
 
-def _latest_decision_payloads(
+def _latest_decision_events(
     events: list[dict[str, Any]], repository: str
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    # All events sharing a (proposalDigest, actionId) key necessarily share
-    # the same derived expiresAtUtc (it is fully determined by the raw bytes
-    # hashed into the digest and the proposal document's own TTL fields), so
-    # keeping only the ledger-order-last entry per key is unambiguous.
+    """Return the ledger-order-last *event* (not just its decision payload)
+    for each ``(proposalDigest, actionId)`` key within ``repository``.
+
+    Callers that only need the decision fields read ``event["decision"]``;
+    the projection additionally needs the enclosing event's own
+    ``stateRevision`` (exposed as ``eventRevision`` on each projected exact
+    decision) to give Task 3 an unambiguous ``licenseSource =
+    f"decision:{eventRevision}"`` identity. All events sharing a
+    (proposalDigest, actionId) key necessarily share the same derived
+    expiresAtUtc (it is fully determined by the raw bytes hashed into the
+    digest and the proposal document's own TTL fields), so keeping only the
+    ledger-order-last entry per key is unambiguous.
+    """
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for event in events:
         if event["eventType"] != "decision" or event["repository"] != repository:
             continue
         payload = event["decision"]
         key = (payload["proposalDigest"], payload["actionId"])
-        latest[key] = payload
+        latest[key] = event
     return latest
+
+
+def _require_event_revision(event: Mapping[str, Any]) -> int:
+    # `_validate_event_shape` already enforces that every loaded event's
+    # `stateRevision` is a positive int matching its ledger position, so
+    # this is normally redundant -- but the projection derives a
+    # caller-facing `eventRevision` field from it, so it is validated again
+    # here, at the point of derivation, rather than trusting that upstream
+    # guarantee to still hold for whatever `events` list a future caller of
+    # this helper might pass in.
+    value = event.get("stateRevision")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise CoordinatorStateError(
+            "Decision event stateRevision must be a positive integer."
+        )
+    return value
 
 
 def _validate_event_shape(event: Mapping[str, Any], line_number: int) -> None:

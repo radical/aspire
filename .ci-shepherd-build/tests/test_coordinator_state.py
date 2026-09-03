@@ -591,6 +591,29 @@ class CoordinatorStateStoreTests(unittest.TestCase):
                 document=policy_document(revision=1, replaces=None),
             )
 
+    def test_dangling_ledger_symlink_fails_closed_instead_of_appearing_absent(
+        self,
+    ) -> None:
+        # Path.exists() follows symlinks and reports False for a dangling
+        # (target-missing) symlink, while Path.is_symlink() is a pure lstat
+        # check that reports True regardless of target existence. If
+        # `_load_events` probed `exists()` before `is_symlink()`, a dangling
+        # ledger symlink would be silently treated as "no ledger yet" --
+        # discarding all prior history -- instead of failing closed.
+        coordinator_dir = self.state_dir / "coordinator"
+        coordinator_dir.mkdir(parents=True)
+        missing_target = self.scratch / "missing-target.jsonl"
+        (coordinator_dir / "policy-events.jsonl").symlink_to(missing_target)
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_policy_revision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                document=policy_document(revision=1, replaces=None),
+            )
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
     def test_lock_file_may_not_be_a_symlink(self) -> None:
         coordinator_dir = self.state_dir / "coordinator"
         coordinator_dir.mkdir(parents=True)
@@ -961,6 +984,135 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             2, len(ledger_path.read_text(encoding="utf-8").splitlines())
         )
 
+    def test_projected_exact_decision_contains_its_exact_event_revision(
+        self,
+    ) -> None:
+        # Task 3 receives only `policy_projection` and must emit exact-
+        # decision license sources as `decision:<eventRevision>`. That
+        # identity is impossible to derive from the payload alone (it is a
+        # property of the *ledger event* that made the decision effective,
+        # not of the decision payload itself), so the projection must
+        # enrich each exact decision with the enclosing event's
+        # stateRevision under a distinct `eventRevision` key.
+        self.store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=1,
+            proposals_path=self.proposals_path,
+            action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+
+        projection = self.store.projection(REPOSITORY)
+
+        self.assertEqual(1, len(projection["exactDecisions"]))
+        self.assertEqual(2, projection["exactDecisions"][0]["eventRevision"])
+
+    def test_later_replacement_for_same_key_updates_event_revision(self) -> None:
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+        first = self.store.projection(REPOSITORY)["exactDecisions"][0]
+        self.assertEqual(1, first["eventRevision"])
+
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=1,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="reject-once",
+            actor="github:someone-else",
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )
+        second = self.store.projection(REPOSITORY)["exactDecisions"][0]
+
+        # Same (proposalDigest, actionId) key, but the replacement was
+        # recorded as ledger event 2, so its eventRevision must advance to
+        # match -- it is not frozen at the key's first appearance.
+        self.assertEqual(2, second["eventRevision"])
+        self.assertEqual("reject-once", second["decision"])
+
+    def test_unrelated_ledger_event_advances_state_revision_but_not_event_revision(
+        self,
+    ) -> None:
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+        before = self.store.projection(REPOSITORY)
+        self.assertEqual(1, before["stateRevision"])
+        self.assertEqual(1, before["exactDecisions"][0]["eventRevision"])
+
+        # A global, unrelated policy append (a different repository) still
+        # advances the shared ledger-wide stateRevision counter, but must
+        # not change this decision's own eventRevision: eventRevision is
+        # pinned to the specific ledger event that made *this* key
+        # effective, not to "however many events now exist in total".
+        other_repository = "microsoft/other"
+        self.store.append_policy_revision(
+            repository=other_repository,
+            expected_revision=1,
+            document=policy_document(
+                revision=1, replaces=None, repository=other_repository
+            ),
+        )
+
+        after = self.store.projection(REPOSITORY)
+        self.assertEqual(2, after["stateRevision"])
+        self.assertEqual(1, after["exactDecisions"][0]["eventRevision"])
+
+    def test_clear_remains_absent_from_effective_projection_event_revision(
+        self,
+    ) -> None:
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=1,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="clear",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )
+
+        projection = self.store.projection(REPOSITORY)
+
+        # A clear removes only the *effective* projection entry (and thus
+        # its eventRevision); it never deletes ledger history.
+        self.assertEqual([], projection["exactDecisions"])
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        self.assertEqual(
+            2, len(ledger_path.read_text(encoding="utf-8").splitlines())
+        )
+
     def test_other_repositories_do_not_affect_requested_projection(self) -> None:
         other_repository = "microsoft/other"
         other_proposals = _write_proposals(
@@ -1230,6 +1382,24 @@ class MakeLockFreeDurableIntentReaderTests(unittest.TestCase):
         real_target = self.scratch / "real-action-events.jsonl"
         real_target.write_text("", encoding="utf-8")
         self.action_events_path.symlink_to(real_target)
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        with self.assertRaises(CoordinatorStateError):
+            reader("a1")
+
+    def test_dangling_action_events_symlink_fails_closed_instead_of_absent(
+        self,
+    ) -> None:
+        # Same TOCTOU-adjacent ordering hazard as
+        # test_dangling_ledger_symlink_fails_closed_instead_of_appearing_absent
+        # above: a dangling (target-missing) symlink reports False from
+        # Path.exists() but True from Path.is_symlink(). This reader already
+        # checks is_symlink() before exists() -- unlike the bug this
+        # regression test guards against in _load_events -- so it must keep
+        # raising rather than silently reporting "no durable intent" for a
+        # ledger that cannot actually be read.
+        missing_target = self.scratch / "missing-target.jsonl"
+        self.action_events_path.symlink_to(missing_target)
         reader = make_lock_free_durable_intent_reader(self.action_events_path)
 
         with self.assertRaises(CoordinatorStateError):
