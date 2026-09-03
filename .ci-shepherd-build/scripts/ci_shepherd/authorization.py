@@ -497,6 +497,8 @@ def load_authorized_execution(
                 proposal_digest=digest,
                 repository=repository,
                 proposal=proposal,
+                snapshot_id=snapshot_id,
+                selection_bytes=policy_selection_bytes,
                 state_dir=canonical_state_dir,
                 production_delegation_policy_path=production_delegation_policy_path,
                 capability=proposal_document.get("productionPilotCapability"),
@@ -1628,6 +1630,8 @@ def _validate_autonomous_policy_grant(
     proposal_digest: str,
     repository: str,
     proposal: Mapping[str, Any],
+    snapshot_id: str,
+    selection_bytes: bytes,
     state_dir: Path,
     production_delegation_policy_path: Path,
     capability: object,
@@ -1653,6 +1657,11 @@ def _validate_autonomous_policy_grant(
         raise AuthorizationError(
             "Autonomous policy grants cannot override suppression."
         )
+    if grant.budget.max_mutation_attempts != 1 or grant.budget.max_chains != 1:
+        raise AuthorizationError(
+            "Autonomous policy grant budget must authorize exactly one "
+            "mutation attempt and one chain."
+        )
     if (
         grant.expires_at - grant.issued_at
         > timedelta(minutes=DEFAULT_GRANT_TTL_MINUTES)
@@ -1670,6 +1679,38 @@ def _validate_autonomous_policy_grant(
         raise AuthorizationError(
             "Autonomous policy grant outlives its source snapshot."
         )
+    # Re-derive this action's binding from the frozen selection bytes and
+    # the real (digest-verified) proposal -- never trust the grant's own
+    # self-declared AutonomousPolicyLicense fields. The raw selection-file
+    # digest check (in the caller) only proves the selection *file* was not
+    # modified; it says nothing about whether the grant's declared fields
+    # still describe what that file actually says. Without re-parsing here,
+    # a grant whose JSON was mutated after minting -- retargeted to an
+    # unselected action, relabeled to a different operation class, given a
+    # forged license source, or stripped of a dependent action's
+    # prerequisite binding -- would sail through undetected.
+    bound_license = grant.autonomous_policy_license
+    resolved_selection = _validate_policy_selection(
+        selection_bytes,
+        action_id=action_id,
+        proposal=proposal,
+        repository=repository,
+        snapshot_id=snapshot_id,
+        proposals_digest=proposal_digest,
+    )
+    if (
+        resolved_selection["run_id"] != bound_license.run_id
+        or resolved_selection["operation_class"] != bound_license.operation_class
+        or resolved_selection["license_source"] != bound_license.license_source
+        or resolved_selection["selection_state_revision"]
+        != bound_license.selection_state_revision
+        or resolved_selection["satisfied_prerequisites"]
+        != bound_license.satisfied_prerequisites
+    ):
+        raise AuthorizationError(
+            "Autonomous policy license no longer matches its bound policy "
+            "selection."
+        )
     # Re-check only the exact named policy revision or exact decision this
     # grant is licensed against -- not the coordinator's global state
     # revision -- so unrelated coordinator events never invalidate this
@@ -1677,7 +1718,7 @@ def _validate_autonomous_policy_grant(
     # clearing/rejecting the named decision always does.
     target_key = f"issue:{_require_positive_int(proposal, 'issueNumber')}"
     _resolve_autonomous_license_source(
-        license_source=grant.autonomous_policy_license.license_source,
+        license_source=bound_license.license_source,
         action_id=action_id,
         proposal_digest=proposal_digest,
         target_key=target_key,
@@ -1685,12 +1726,31 @@ def _validate_autonomous_policy_grant(
         state_dir=state_dir,
         now=now,
     )
-    if grant.autonomous_policy_license.operation_class == "delegate-copilot":
+    # Branch on the class just re-derived from the real proposal, never the
+    # grant's self-declared operationClass: a grant could otherwise relabel
+    # an assign-copilot (delegate-copilot class) action as e.g. edit-comment
+    # to skip this entire capacity gate.
+    if resolved_selection["operation_class"] == "delegate-copilot":
         policy = _load_capacity_policy(production_delegation_policy_path)
         if grant.capacity_policy_digest != policy.digest:
             raise AuthorizationError(
                 "Production delegation capacity policy changed after grant creation."
             )
+        # Class caps supplement, never replace, live delegation capacity
+        # controls: re-validate the grant's own bound budget against the
+        # freshly loaded policy at load time too, exactly like at
+        # generation time.
+        _validate_autonomous_delegate_capacity(
+            max_running_copilot_tasks=grant.budget.max_running_copilot_tasks,
+            max_copilot_starts_per_rolling_24h=(
+                grant.budget.max_copilot_starts_per_rolling_24h
+            ),
+            max_open_delegated_prs=grant.budget.max_open_delegated_prs,
+            max_repository_running_copilot_tasks=(
+                grant.budget.max_repository_running_copilot_tasks
+            ),
+            policy=policy,
+        )
 
 
 def _validate_production_comment_grant(

@@ -2763,6 +2763,293 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         with self.assertRaises(AuthorizationError):
             self._load(self.comment_action_id)
 
+    # -- load-time revalidation: the loader must re-derive every semantic --
+    # -- field from the frozen selection bytes and the real proposal, ------
+    # -- never trust a grant's self-declared AutonomousPolicyLicense. ------
+    #
+    # Each test below starts from one previously-minted, previously-valid
+    # grant and mutates a single field of its own JSON in place -- never the
+    # selection artifact, never the ledger -- to prove the loader itself
+    # (not some other layer) is the one closing each gap.
+
+    def test_loader_rejects_grant_retargeted_to_unselected_action(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        # close_action_id's class ("close-issue") is not enabled by the
+        # policy above, so it was never a member of the frozen selection's
+        # selectedActionIds. Retargeting every action-identifying field in
+        # lockstep keeps the grant internally self-consistent -- the attack
+        # only a re-check against the real selection bytes can catch.
+        mutated = copy.deepcopy(grant)
+        mutated["allowedActionIds"] = [self.close_action_id]
+        mutated["allowedChainRoots"] = [self.close_action_id]
+        mutated["allowedOperations"] = ["close-issue"]
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "does not select actionId"
+        ):
+            self._load(self.close_action_id)
+
+    def test_loader_rejects_license_operation_class_mismatch(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        mutated = copy.deepcopy(grant)
+        mutated["autonomousPolicyLicense"]["operationClass"] = "close-issue"
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "no longer matches its bound policy selection",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_license_source_substitution(self) -> None:
+        # policy:1 is active but does NOT enable "edit-comment"; only an
+        # exact approve-once decision licenses this specific action, so the
+        # frozen selection's authoritative licenseSource is "decision:<n>".
+        self._append_policy(revision=1, enabled_classes=frozenset())
+        self._append_decision(
+            action_id=self.comment_action_id, decision="approve-once"
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+        self.assertTrue(
+            grant["autonomousPolicyLicense"]["licenseSource"].startswith(
+                "decision:"
+            )
+        )
+
+        # Substituting "policy:1" as the licenseSource passes
+        # `_resolve_autonomous_license_source`'s standalone effectiveness
+        # check in isolation -- policy:1 really is active right now -- even
+        # though policy:1 never actually licensed this action's operation
+        # class. Only re-deriving licenseSource from the frozen selection
+        # candidate catches this identity substitution.
+        mutated = copy.deepcopy(grant)
+        mutated["autonomousPolicyLicense"]["licenseSource"] = "policy:1"
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "no longer matches its bound policy selection",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_license_selection_state_revision_mismatch(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        mutated = copy.deepcopy(grant)
+        mutated["autonomousPolicyLicense"]["selectionStateRevision"] += 1
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "no longer matches its bound policy selection",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_license_run_id_mismatch(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        mutated = copy.deepcopy(grant)
+        mutated["autonomousPolicyLicense"]["runId"] = "a-different-run"
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "no longer matches its bound policy selection",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_license_satisfied_prerequisites_mismatch(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"close-issue"})
+        )
+        comment_proposal = self.proposals["proposals"][0]
+        body_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                comment_proposal["body"].encode("utf-8")
+            ).hexdigest()
+        )
+        terminal_event = {
+            "eventType": "terminal",
+            "repository": self.repository,
+            "actionId": self.comment_action_id,
+            "operation": "edit-comment",
+            "target": {"kind": "issue", "number": 1},
+            "idempotencyKey": comment_proposal["idempotencyKey"],
+            "snapshotId": self.proposals["snapshotId"],
+            "bodyDigest": body_digest,
+            "runId": "prior-run",
+            "recordedAt": "2026-08-29T19:55:00Z",
+            "outcome": "executed",
+        }
+        self._build_and_write_selection(action_events=[terminal_event])
+        grant = self._mint(self.close_action_id)
+        self.assertEqual(
+            1,
+            len(grant["autonomousPolicyLicense"]["satisfiedPrerequisites"]),
+        )
+
+        # Stripping the dependent action's bound prerequisite lets a
+        # retargeted or replayed close execute as though its prerequisite
+        # had never been proven terminal, even though the frozen selection
+        # bytes (recomputed fresh) still carry the one true digest.
+        mutated = copy.deepcopy(grant)
+        mutated["autonomousPolicyLicense"]["satisfiedPrerequisites"] = []
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "no longer matches its bound policy selection",
+        ):
+            self._load(self.close_action_id)
+
+    def test_loader_rejects_grant_with_inflated_mutation_attempts(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        mutated = copy.deepcopy(grant)
+        mutated["budget"]["maxMutationAttempts"] = 2
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "exactly one mutation attempt and one chain",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_grant_with_inflated_max_chains(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        mutated = copy.deepcopy(grant)
+        mutated["budget"]["maxChains"] = 2
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "exactly one mutation attempt and one chain",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_delegate_grant_relabeled_to_bypass_capacity(
+        self,
+    ) -> None:
+        delegate_action_id = (
+            "snapshot:microsoft/aspire:2026-08-29T20:00:00Z:issue:2:delegate"
+        )
+        self.proposals["proposals"].append(
+            {
+                "actionId": delegate_action_id,
+                "issueNumber": 2,
+                "issueUrl": "https://github.com/microsoft/aspire/issues/2",
+                "operation": "assign-copilot",
+                "targetRepository": "microsoft/aspire",
+                "baseBranch": "main",
+                "customInstructions": "Fix issue #2 and open a draft PR.",
+                "model": "",
+                "evidenceBasis": "ci-occurrence",
+                "idempotencyKey": "issue:2:delegate",
+                "evidenceIds": ["issue:2"],
+                "expectedIssueState": "open",
+                "executionEligibility": {
+                    "eligible": True,
+                    "evidenceBasis": "ci-occurrence",
+                    "ciLabels": ["ci-failure-cause"],
+                    "occurrenceCount": 1,
+                    "collectionComplete": True,
+                    "unavailableEvidenceIds": [],
+                    "untrustedReferenceEvidenceIds": [],
+                    "blockingReasons": [],
+                },
+                "sourceEvidenceFingerprint": {
+                    "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                },
+            }
+        )
+        self._write_proposals()
+        policy_path = self.scratch / "delegation-policy.json"
+        policy_document = {
+            "schemaVersion": 1,
+            "repository": "microsoft/aspire",
+            "maxActionsPerGrant": 5,
+            "capacity": {
+                "maxRunningCopilotTasks": 2,
+                "maxCopilotStartsPerRolling24h": 3,
+                "maxOpenDelegatedPullRequests": 5,
+                "maxRepositoryRunningCopilotTasks": 100,
+            },
+        }
+        policy_path.write_text(json.dumps(policy_document), encoding="utf-8")
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"delegate-copilot"})
+        )
+        self._build_and_write_selection()
+
+        grant = self._mint(
+            delegate_action_id, production_delegation_policy_path=policy_path
+        )
+        self.assertEqual(
+            "delegate-copilot",
+            grant["autonomousPolicyLicense"]["operationClass"],
+        )
+        self.assertIsNotNone(grant["capacityPolicyDigest"])
+
+        # Tighten live capacity below the grant's own bound budget (2)
+        # *after* generation. If the loader still branched on the grant's
+        # self-declared operationClass, relabeling it to "edit-comment" and
+        # dropping capacityPolicyDigest would skip the entire
+        # delegate-copilot capacity gate, even though the *real* proposal
+        # operation ("assign-copilot") is still delegate-copilot and would
+        # fail this tighter policy.
+        policy_document["capacity"]["maxRunningCopilotTasks"] = 1
+        policy_path.write_text(json.dumps(policy_document), encoding="utf-8")
+
+        mutated = copy.deepcopy(grant)
+        mutated["autonomousPolicyLicense"]["operationClass"] = "edit-comment"
+        mutated["capacityPolicyDigest"] = None
+        self.output_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "no longer matches its bound policy selection",
+        ):
+            self._load(
+                delegate_action_id,
+                production_delegation_policy_path=policy_path,
+            )
+
     # -- CLI: --autonomous-policy argparse validation -----------------------
     #
     # create_authorization.py's own `main()` validates --autonomous-policy's
