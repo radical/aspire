@@ -4,13 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from types import MappingProxyType
 import hashlib
-import json
-import os
 import re
-import stat
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .models import stable_json
@@ -29,7 +25,6 @@ __all__ = [
     "OperationPolicyError",
     "OperationPolicyRevision",
     "classify_operation",
-    "load_operation_policy",
     "load_operation_policy_document",
 ]
 
@@ -117,6 +112,7 @@ class OperationPolicyRevision:
     operation_classes: Mapping[str, OperationClassPolicy]
     denied_action_ids: tuple[str, ...]
     denied_targets: tuple[str, ...]
+    _digest: str
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -148,8 +144,7 @@ class OperationPolicyRevision:
 
     @property
     def digest(self) -> str:
-        canonical = stable_json(self.as_public_dict()).encode("utf-8")
-        return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+        return self._digest
 
     def active_at(self, now: datetime) -> bool:
         current = _require_aware_datetime(now, "now").astimezone(UTC)
@@ -166,41 +161,10 @@ def classify_operation(operation: str) -> str | None:
     return OPERATION_CLASS_BY_OPERATION.get(operation)
 
 
-def load_operation_policy(path: Path) -> OperationPolicyRevision:
-    if path.is_symlink():
-        raise OperationPolicyError(f"Operation policy file {path} must not be a symlink.")
-    try:
-        file_stat = path.stat()
-        raw_bytes = path.read_bytes()
-    except OSError as exc:
-        raise OperationPolicyError(f"Unable to read operation policy file {path}.") from exc
-    if not stat.S_ISREG(file_stat.st_mode):
-        raise OperationPolicyError(f"Operation policy file {path} must be a regular file.")
-    if hasattr(os, "geteuid") and file_stat.st_uid != os.geteuid():
-        raise OperationPolicyError(
-            f"Operation policy file {path} must be owned by the current user."
-        )
-    if file_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise OperationPolicyError(
-            f"Operation policy file {path} must not be writable by other users."
-        )
-    try:
-        text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise OperationPolicyError(f"Operation policy file {path} contains invalid UTF-8.") from exc
-    try:
-        document = json.loads(
-            text,
-            object_pairs_hook=lambda pairs: _strict_object_pairs_hook(path, pairs),
-        )
-    except json.JSONDecodeError as exc:
-        raise OperationPolicyError(f"Operation policy file {path} is not valid JSON.") from exc
-    return load_operation_policy_document(document)
-
-
 def load_operation_policy_document(document: object) -> OperationPolicyRevision:
     mapping = _require_mapping(document, "Operation policy")
     _require_exact_keys(mapping, _POLICY_FIELDS, "Operation policy")
+    digest = _digest_policy_document(mapping)
 
     schema_version = _require_exact_int(mapping, "schemaVersion", _SCHEMA_VERSION)
     repository = _require_repository_identity(mapping.get("repository"))
@@ -241,21 +205,8 @@ def load_operation_policy_document(document: object) -> OperationPolicyRevision:
         operation_classes=operation_classes,
         denied_action_ids=denied_action_ids,
         denied_targets=denied_targets,
+        _digest=digest,
     )
-
-
-def _strict_object_pairs_hook(
-    path: Path,
-    pairs: list[tuple[str, Any]],
-) -> dict[str, Any]:
-    mapping: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in mapping:
-            raise OperationPolicyError(
-                f"Operation policy file {path} contains duplicate JSON key: {key}."
-            )
-        mapping[key] = value
-    return mapping
 
 
 def _require_mapping(document: object, label: str) -> dict[str, Any]:
@@ -428,3 +379,8 @@ def _parse_policy_timestamp(value: object, field_name: str) -> datetime:
         return parse_aware_iso8601(value, field_name)
     except ValueError as exc:
         raise OperationPolicyError(str(exc)) from exc
+
+
+def _digest_policy_document(document: Mapping[str, Any]) -> str:
+    canonical = stable_json(document).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"

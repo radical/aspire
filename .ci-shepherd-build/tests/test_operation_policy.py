@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from ci_shepherd.models import stable_json
 from ci_shepherd.operation_policy import (
@@ -17,7 +15,6 @@ from ci_shepherd.operation_policy import (
     OPERATION_CLASSES,
     OperationPolicyError,
     classify_operation,
-    load_operation_policy,
     load_operation_policy_document,
 )
 
@@ -59,12 +56,6 @@ def policy_document(
 
 
 class OperationPolicyTests(unittest.TestCase):
-    def setUp(self) -> None:
-        temp_root = Path(__file__).resolve().parent / ".tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
-        self._temp_dir = tempfile.TemporaryDirectory(dir=temp_root)
-        self.addCleanup(self._temp_dir.cleanup)
-
     def test_loads_complete_active_policy_and_digest(self) -> None:
         document = policy_document()
 
@@ -85,6 +76,23 @@ class OperationPolicyTests(unittest.TestCase):
             + hashlib.sha256(stable_json(document).encode("utf-8")).hexdigest(),
             policy.digest,
         )
+
+    def test_digest_uses_original_non_z_timestamps(self) -> None:
+        document = policy_document()
+        document["createdAtUtc"] = "2026-09-03T12:00:00-04:00"
+        document["expiresAtUtc"] = "2026-10-03T12:00:00-04:00"
+
+        policy = load_operation_policy_document(document)
+        normalized_digest = "sha256:" + hashlib.sha256(
+            stable_json(policy.as_public_dict()).encode("utf-8")
+        ).hexdigest()
+
+        self.assertEqual(
+            "sha256:" + hashlib.sha256(stable_json(document).encode("utf-8")).hexdigest(),
+            policy.digest,
+        )
+        self.assertEqual("2026-09-03T16:00:00Z", policy.as_public_dict()["createdAtUtc"])
+        self.assertNotEqual(normalized_digest, policy.digest)
 
     def test_rejects_total_per_run_caps_above_hard_ceiling(self) -> None:
         document = policy_document()
@@ -161,41 +169,6 @@ class OperationPolicyTests(unittest.TestCase):
         self.assertEqual(300, HARD_MAX_ROLLING_24H)
         self.assertEqual(30, DEFAULT_EXPIRY_DAYS)
         self.assertEqual(90, MAX_EXPIRY_DAYS)
-
-    def test_rejects_duplicate_json_keys(self) -> None:
-        path = self._policy_path()
-        path.write_text(
-            """
-            {
-              "schemaVersion": 1,
-              "repository": "microsoft/aspire",
-              "revisionId": "policy:1",
-              "revision": 1,
-              "status": "active",
-              "createdAtUtc": "2026-09-03T16:00:00Z",
-              "expiresAtUtc": "2026-10-03T16:00:00Z",
-              "actor": "github:radical",
-              "replacesRevisionId": null,
-              "operationClasses": {
-                "create-comment": {"enabled": false, "maxPerRun": 10, "maxRolling24h": 30},
-                "edit-comment": {"enabled": true, "maxPerRun": 10, "maxRolling24h": 30},
-                "close-issue": {"enabled": false, "maxPerRun": 5, "maxRolling24h": 10},
-                "delegate-copilot": {"enabled": false, "maxPerRun": 3, "maxRolling24h": 5},
-                "rerun-or-retry": {"enabled": false, "maxPerRun": 5, "maxRolling24h": 15}
-              },
-              "deniedActionIds": [],
-              "deniedTargets": [],
-              "deniedTargets": []
-            }
-            """.strip(),
-            encoding="utf-8",
-        )
-
-        with self.assertRaisesRegex(
-            OperationPolicyError,
-            "duplicate JSON key: deniedTargets",
-        ):
-            load_operation_policy(path)
 
     def test_rejects_unknown_top_level_field(self) -> None:
         document = policy_document()
@@ -315,6 +288,3 @@ class OperationPolicyTests(unittest.TestCase):
         self.assertFalse(paused.active_at(now))
         self.assertFalse(revoked.active_at(now))
         self.assertFalse(expired.active_at(datetime(2026, 9, 3, 16, 0, 1, tzinfo=UTC)))
-
-    def _policy_path(self) -> Path:
-        return Path(self._temp_dir.name) / "policy.json"
