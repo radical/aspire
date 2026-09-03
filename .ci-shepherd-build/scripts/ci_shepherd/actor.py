@@ -20,6 +20,9 @@ KNOWN_OPERATIONS = frozenset(
 )
 KNOWN_CLOSE_REASONS = frozenset({"completed", "not_planned", "duplicate"})
 KNOWN_ISSUE_STATES = frozenset({"open", "closed"})
+KNOWN_BLOCKED_RECOMMENDATION_DISPOSITIONS = frozenset(
+    {"delegate-copilot", "review-close"}
+)
 REPOSITORY_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 LEGACY_COMMON_PROPOSAL_FIELDS = frozenset(
     {
@@ -600,9 +603,10 @@ def _validate_execution_eligibility(
         )
 
     derived_reasons: list[str] = []
-    if evidence_basis == "ci-occurrence":
+    if evidence_basis in {"ci-occurrence", "issue-state"}:
         if not ci_labels:
             derived_reasons.append("missing-ci-label")
+    if evidence_basis == "ci-occurrence":
         if occurrence_count <= 0:
             derived_reasons.append("no-parsed-occurrences")
     if not collection_complete:
@@ -786,7 +790,10 @@ def validate_action_proposals(document: object) -> dict[str, object]:
             }:
                 raise ValueError(f"{field} contains unsupported fields.")
             _required_int(blocked.get("issueNumber"), field=f"{field}.issueNumber")
-            if blocked.get("disposition") != "review-close":
+            if (
+                blocked.get("disposition")
+                not in KNOWN_BLOCKED_RECOMMENDATION_DISPOSITIONS
+            ):
                 raise ValueError(f"{field}.disposition is unsupported.")
             for list_field in ("blockingReasons", "evidenceIds"):
                 values = blocked.get(list_field)

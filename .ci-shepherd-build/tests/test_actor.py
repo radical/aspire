@@ -1486,7 +1486,13 @@ class ActorTests(unittest.TestCase):
                 "disposition": "review-close",
                 "blockingReasons": ["unsupported-close-action:close-resolved"],
                 "evidenceIds": ["issue:21"],
-            }
+            },
+            {
+                "issueNumber": 22,
+                "disposition": "delegate-copilot",
+                "blockingReasons": ["superseded-by-closure-review"],
+                "evidenceIds": ["issue:22"],
+            },
         ]
 
         rendered = build_dry_run(proposals, action_id=None)
@@ -1504,6 +1510,54 @@ class ActorTests(unittest.TestCase):
         self.assertEqual(
             ["unavailable-evidence"],
             rendered["actions"][1]["blockingReasons"],
+        )
+
+    def test_dry_run_accepts_missing_label_for_issue_state_eligibility(self) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+            }
+        )
+        actions = proposals["proposals"]
+        assert isinstance(actions, list)
+        action = actions[0]
+        assert isinstance(action, dict)
+        proposals["proposals"] = [action]
+        action.pop("requiresSeparateApproval")
+        action["evidenceBasis"] = "issue-state"
+        action["sourceEvidenceFingerprint"] = {
+            "issueUpdatedAt": "2026-08-21T19:54:00Z"
+        }
+        action["executionEligibility"] = {
+            "eligible": False,
+            "evidenceBasis": "issue-state",
+            "ciLabels": [],
+            "occurrenceCount": 0,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": [],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": ["missing-ci-label"],
+        }
+        proposals["executionEligibility"] = {
+            "status": "blocked",
+            "violations": [
+                {
+                    "actionId": COMMENT_ACTION_ID,
+                    "blockingReasons": ["missing-ci-label"],
+                }
+            ],
+        }
+
+        rendered = build_dry_run(proposals, action_id=None)
+
+        self.assertFalse(rendered["actions"][0]["wouldExecute"])
+        self.assertEqual(
+            ["missing-ci-label"],
+            rendered["actions"][0]["blockingReasons"],
         )
 
     def test_dry_run_reports_legacy_proposals_as_not_executable(self) -> None:
