@@ -12,6 +12,7 @@ import stat
 import threading
 import unittest
 
+from ci_shepherd import coordinator_state, operation_policy
 from ci_shepherd.coordinator_state import (
     CoordinatorStateError,
     CoordinatorStateStore,
@@ -374,7 +375,21 @@ class CoordinatorStateStoreTests(unittest.TestCase):
                 now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
             )
 
-    def test_clear_of_already_expired_decision_is_rejected(self) -> None:
+    def test_clear_is_rejected_when_proposals_document_itself_has_expired(
+        self,
+    ) -> None:
+        # This exercises the shared proposal-activity/expiry gate at the top
+        # of append_exact_decision (checked for every decision, not just
+        # clear), NOT the in-lock effective-decision-expiry check inside
+        # _validate_clear_target_locked. The two can never be told apart
+        # through the public API alone: a decision's persisted expiresAtUtc
+        # is derived from the exact same generatedAtUtc/proposalTtlHours as
+        # the proposals document's own expiry, so for the *same* proposal
+        # bytes they always expire at the same instant, and the shared gate
+        # above rejects first. See
+        # test_clear_is_rejected_when_ledger_decision_has_already_expired for
+        # a test that reaches _validate_clear_target_locked's own check, by
+        # tampering the ledger's persisted expiresAtUtc directly.
         action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
         self.store.append_exact_decision(
             repository=REPOSITORY,
@@ -386,7 +401,7 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
         )
 
-        with self.assertRaises(CoordinatorStateError):
+        with self.assertRaises(CoordinatorStateError) as ctx:
             self.store.append_exact_decision(
                 repository=REPOSITORY,
                 expected_revision=1,
@@ -398,11 +413,55 @@ class CoordinatorStateStoreTests(unittest.TestCase):
                 # past expiry.
                 now=datetime(2026, 9, 6, 0, 0, tzinfo=UTC),
             )
+        self.assertIn("Proposals document has expired", str(ctx.exception))
 
         ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
         self.assertEqual(
             1, len(ledger_path.read_text(encoding="utf-8").splitlines())
         )
+
+    def test_clear_is_rejected_when_ledger_decision_has_already_expired(
+        self,
+    ) -> None:
+        # Reaches _validate_clear_target_locked's own effective-decision-
+        # expiry check (as opposed to the earlier proposal-activity/expiry
+        # gate above) by hand-tampering the ledger's persisted decision
+        # expiresAtUtc to be in the past while the real proposals document
+        # -- used to compute the clear's digest -- is still active. This is
+        # the only way to reach that branch: an untampered ledger's decision
+        # expiry always equals the proposals document's own expiry for the
+        # same proposal bytes.
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        event = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
+        event["decision"]["expiresAtUtc"] = "2026-09-03T17:00:00Z"
+        with ledger_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(event) + "\n")
+
+        with self.assertRaises(CoordinatorStateError) as ctx:
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=1,
+                proposals_path=self.proposals_path,
+                action_id=action_id,
+                decision="clear",
+                actor="github:radical",
+                # Between the tampered expiry (17:00) and the proposals
+                # document's real, untampered expiry (2026-09-04T16:00Z), so
+                # only the ledger-level check below can be firing.
+                now=datetime(2026, 9, 3, 18, 0, tzinfo=UTC),
+            )
+        self.assertIn("already-expired", str(ctx.exception))
 
     def test_clear_twice_is_rejected_the_second_time(self) -> None:
         action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
@@ -672,6 +731,32 @@ class CoordinatorStateStoreTests(unittest.TestCase):
 
         with self.assertRaises(CoordinatorStateError):
             self.store.projection(REPOSITORY)
+
+    def test_ledger_path_being_a_directory_fails_closed(self) -> None:
+        # os.open() on a directory succeeds even with O_NOFOLLOW (it is not
+        # a symlink), so the failure this must catch happens later, at
+        # os.read() time (EISDIR/IsADirectoryError). _read_all must convert
+        # that into a CoordinatorStateError rather than leaking a raw OSError.
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        ledger_path.mkdir(parents=True)
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
+    def test_proposals_path_being_a_directory_fails_closed(self) -> None:
+        directory_proposals_path = self.scratch / "proposals-directory"
+        directory_proposals_path.mkdir()
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=directory_proposals_path,
+                action_id="does-not-matter",
+                decision="approve-once",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
 
     def test_zero_proposal_matches_is_rejected(self) -> None:
         with self.assertRaises(CoordinatorStateError):
@@ -1079,6 +1164,68 @@ class MakeLockFreeDurableIntentReaderTests(unittest.TestCase):
 
         self.assertTrue(reader("a1"))
 
+    def test_unknown_event_type_raises_typed_error(self) -> None:
+        # An unknown eventType must never fail open by returning True: doing
+        # so would falsely claim a durable intent exists for the *queried*
+        # action_id, even when the unrecognized event belongs to a
+        # completely different action. It must instead raise, naming the
+        # type and line, so the caller can tell "reader refused to answer"
+        # apart from "reader answered: yes, intent exists".
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "mystery-event", "actionId": "a1"}
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        with self.assertRaises(CoordinatorStateError) as ctx:
+            reader("a1")
+        self.assertIn("mystery-event", str(ctx.exception))
+        self.assertIn("line 1", str(ctx.exception))
+
+    def test_unknown_event_type_for_an_unrelated_action_still_raises(self) -> None:
+        # Same as above but the unrecognized event does not even mention the
+        # queried action_id: this must still raise rather than silently
+        # answering False (or True) for a1, because the reader cannot prove
+        # anything about the ledger's completeness once it contains a shape
+        # it does not recognize.
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "mystery-event", "actionId": "other"}
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        with self.assertRaises(CoordinatorStateError):
+            reader("a1")
+
+    def test_delegation_baseline_event_does_not_report_a_durable_intent(
+        self,
+    ) -> None:
+        # delegation-baseline/-retired are known, valid execution_state.py
+        # event shapes that are not intent/terminal events; they must pass
+        # through without being misclassified as an unknown type (which
+        # would raise) or as an open intent (which would report True).
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "delegation-baseline", "actionId": "a1"}
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertFalse(reader("a1"))
+
+    def test_delegation_retired_event_does_not_report_a_durable_intent(
+        self,
+    ) -> None:
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "delegation-retired", "actionId": "a1"}
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertFalse(reader("a1"))
+
+    def test_action_events_path_being_a_directory_fails_closed(self) -> None:
+        self.action_events_path.mkdir()
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        with self.assertRaises(CoordinatorStateError):
+            reader("a1")
+
     def test_symlinked_action_events_path_is_rejected(self) -> None:
         real_target = self.scratch / "real-action-events.jsonl"
         real_target.write_text("", encoding="utf-8")
@@ -1143,6 +1290,29 @@ class CoordinatorStateStoreDurableIntentReaderTests(unittest.TestCase):
                 actor="github:radical",
                 now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
             )
+
+
+class RegexIdentityDriftTests(unittest.TestCase):
+    """Test-only cross-check: coordinator_state.py deliberately duplicates
+    operation_policy.py's private repository/actor identity regexes (see the
+    module docstring's rationale for duplicating rather than importing
+    private names or broadening that module's public surface). This asserts
+    the two stay byte-identical so Task 1 changes to those shapes cannot
+    silently drift out of sync with this module's own validation. The
+    private-name import here is test-only and adds no production coupling.
+    """
+
+    def test_repository_regex_matches_operation_policy(self) -> None:
+        self.assertEqual(
+            operation_policy._REPOSITORY_RE.pattern,
+            coordinator_state._REPOSITORY_RE.pattern,
+        )
+
+    def test_actor_regex_matches_operation_policy(self) -> None:
+        self.assertEqual(
+            operation_policy._ACTOR_RE.pattern,
+            coordinator_state._ACTOR_RE.pattern,
+        )
 
 
 if __name__ == "__main__":

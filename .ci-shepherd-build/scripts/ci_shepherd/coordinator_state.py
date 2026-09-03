@@ -106,8 +106,9 @@ _POLICY_LOCK_FILENAME = "policy-events.lock"
 # from ci_shepherd.execution_state.ActionEventStore. Any new eventType a
 # future task adds to action-events.jsonl must also be taught to
 # make_lock_free_durable_intent_reader below, or that reader will (correctly,
-# per its fail-closed contract) treat every action touching this repository's
-# ledger as having a durable intent and reject every clear.
+# per its fail-closed contract) raise CoordinatorStateError and reject every
+# clear rather than silently answering as though the action it was asked
+# about has (or lacks) a durable intent.
 _KNOWN_ACTION_EVENT_TYPES = frozenset(
     {"intent", "terminal", "delegation-baseline", "delegation-retired"}
 )
@@ -417,6 +418,16 @@ class CoordinatorStateStore:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
+        """Acquire the exclusive policy-event lock for the duration of the block.
+
+        Non-reentrant: this is a single OS advisory lock (flock/msvcrt), not
+        a re-entrant lock, so calling this again from inside an already-held
+        ``_locked()`` block deadlocks (or, on Windows, raises). Code that
+        needs to read or append events while the lock is already held --
+        including any future Task 5 work -- must call the internal
+        ``_load_events()`` / ``_append_event_locked()`` helpers directly
+        rather than re-entering ``_locked()``.
+        """
         self._ensure_directories()
         if self._lock_path.is_symlink():
             raise CoordinatorStateError("Policy-event lock file cannot be a symlink.")
@@ -473,7 +484,7 @@ class CoordinatorStateStore:
             self._events_path, os.O_RDONLY, 0o600, "Policy-event ledger"
         )
         try:
-            payload = _read_all(descriptor)
+            payload = _read_all(descriptor, "the policy-event ledger")
         finally:
             os.close(descriptor)
 
@@ -547,7 +558,9 @@ def make_lock_free_durable_intent_reader(
     ``ci_shepherd.execution_state.ActionEventStore``) directly and answers
     whether the given ``actionId`` currently has a durable, unresolved
     ``intent`` event (one with no subsequent ``terminal`` event for the same
-    ``actionId``).
+    ``actionId``). This is scoped to a single ``actionId``, not to a
+    repository: action IDs are presumed globally unique, and the ledger this
+    reads is shared across every repository's actions.
 
     Lock-freedom contract: this function and the callable it returns NEVER
     open or acquire ``action-events.lock``. They perform a single, direct,
@@ -561,13 +574,18 @@ def make_lock_free_durable_intent_reader(
     validator that acquires the locks in the prescribed order.
 
     Fail-closed contract: a missing file reports no durable intent (nothing
-    has ever run for this repository). Any other unsafe or unparseable
-    state -- a symlinked ledger path, malformed JSON, a non-object record, or
-    a truncated/incomplete trailing record -- reports a durable intent
-    (``True``) for malformed/incomplete *tails*, or is surfaced as
-    ``CoordinatorStateError`` for unsafe filesystem state (symlink), so that
-    the caller's clear is rejected rather than proceeding against
-    unverifiable action-event history.
+    has ever run for this actionId). Any other unsafe or unparseable state --
+    a symlinked ledger path, malformed JSON, a non-object record, or a
+    truncated/incomplete trailing record -- reports a durable intent
+    (``True``) for malformed/incomplete *tails*, so that the caller's clear
+    is rejected rather than proceeding against unverifiable action-event
+    history. An ``eventType`` this reader does not recognize is a distinct
+    case: it raises ``CoordinatorStateError`` naming the type and line
+    number instead of returning ``True``, because returning ``True`` would
+    falsely claim a durable intent exists for the *queried* actionId even
+    when the unrecognized event describes a completely unrelated action;
+    raising lets the caller distinguish "this reader refused to answer" from
+    "this reader answered: yes, intent exists".
     """
 
     def _read_durable_intent(action_id: str) -> bool:
@@ -579,14 +597,11 @@ def make_lock_free_durable_intent_reader(
         if not expanded.exists():
             return False
 
+        descriptor = _open_guarded(
+            expanded, os.O_RDONLY, 0o600, "Action-event ledger"
+        )
         try:
-            descriptor = _open_guarded(
-                expanded, os.O_RDONLY, 0o600, "Action-event ledger"
-            )
-        except CoordinatorStateError:
-            raise
-        try:
-            payload = _read_all(descriptor)
+            payload = _read_all(descriptor, "the action-event ledger")
         finally:
             os.close(descriptor)
 
@@ -600,7 +615,8 @@ def make_lock_free_durable_intent_reader(
             return True
 
         last_event_type_for_action: str | None = None
-        for line in text.split("\n")[:-1]:
+        lines = text.split("\n")[:-1]
+        for line_number, line in enumerate(lines, start=1):
             if not line.strip():
                 return True  # Empty record: fail closed.
             try:
@@ -611,7 +627,20 @@ def make_lock_free_durable_intent_reader(
                 return True
             event_type = event.get("eventType")
             if event_type not in _KNOWN_ACTION_EVENT_TYPES:
-                return True  # Unrecognized shape: fail closed.
+                # Never return True here: that would falsely claim a durable
+                # intent exists for `action_id` even if this unrecognized
+                # event belongs to a different action entirely. Raising
+                # instead lets the caller (CoordinatorStateStore's clear
+                # path) tell "reader refused to answer" apart from "reader
+                # answered: yes, intent exists", while still failing closed
+                # overall (the caller wraps any exception here as a rejected
+                # clear).
+                raise CoordinatorStateError(
+                    f"Unknown action-event eventType {event_type!r} at "
+                    f"line {line_number}; refusing to evaluate durable "
+                    "intent against an event shape this reader does not "
+                    "recognize."
+                )
             if event.get("actionId") != action_id:
                 continue
             if event_type in ("intent", "terminal"):
@@ -777,7 +806,7 @@ def _read_proposal_bytes(path: Path) -> bytes:
         raise CoordinatorStateError("Proposals path cannot be a symlink.")
     descriptor = _open_guarded(expanded, os.O_RDONLY, 0o600, "Proposals document")
     try:
-        return _read_all(descriptor)
+        return _read_all(descriptor, "the proposals document")
     finally:
         os.close(descriptor)
 
@@ -805,6 +834,13 @@ def _load_proposal_json(payload: bytes) -> dict[str, Any]:
 
 
 def _fsync_directory(path: Path) -> None:
+    # Directory fsync is a POSIX durability primitive with no Windows
+    # equivalent: os.open() of a directory path raises PermissionError there
+    # (Windows has no notion of a readable directory file descriptor), and
+    # NTFS's own metadata journaling already covers directory-entry
+    # durability, so this is a deliberate no-op on that platform.
+    if os.name == "nt":
+        return
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
@@ -842,13 +878,26 @@ def _open_guarded(path: Path, base_flags: int, mode: int, description: str) -> i
         raise CoordinatorStateError(f"Unable to open {description.lower()}: {path}") from exc
 
 
-def _read_all(descriptor: int) -> bytes:
+def _read_all(descriptor: int, description: str) -> bytes:
+    """Read every byte from ``descriptor`` until EOF.
+
+    Wraps any ``os.read`` failure (for example ``IsADirectoryError`` when
+    ``descriptor`` turns out to refer to a directory rather than a regular
+    file -- opening a directory with ``O_NOFOLLOW`` succeeds, so this is the
+    first point such a path is actually rejected) as a
+    ``CoordinatorStateError`` with the original exception chained, so no
+    raw ``OSError`` can ever escape a read call site in this module.
+    """
+
     chunks: list[bytes] = []
-    while True:
-        chunk = os.read(descriptor, 65536)
-        if not chunk:
-            break
-        chunks.append(chunk)
+    try:
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError as exc:
+        raise CoordinatorStateError(f"Unable to read {description}.") from exc
     return b"".join(chunks)
 
 
