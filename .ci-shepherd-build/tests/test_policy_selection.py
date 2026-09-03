@@ -833,6 +833,213 @@ class ExactDecisionTests(unittest.TestCase):
         self.assertEqual("policy-denied-action-id", candidate["reason"])
         self.assertEqual([], selection["exactActionIds"])
 
+    def _denied_pair_document(
+        self, *, id_issue: int, target_issue: int
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        denied_by_id = _comment_proposal(
+            action_id=f"snapshot:test:1:issue:{id_issue}:retire-status-comment",
+            issue_number=id_issue,
+            operation="edit-comment",
+        )
+        denied_by_target = _comment_proposal(
+            action_id=f"snapshot:test:1:issue:{target_issue}:retire-status-comment",
+            issue_number=target_issue,
+            operation="edit-comment",
+        )
+        document = _document([denied_by_id, denied_by_target])
+        return document, denied_by_id, denied_by_target
+
+    def test_denies_do_not_apply_when_policy_paused_without_exact_approval(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        document, denied_by_id, denied_by_target = self._denied_pair_document(
+            id_issue=750, target_issue=751
+        )
+        policy_doc = _policy_document(
+            status="paused",
+            enabled_classes=frozenset({"edit-comment"}),
+            denied_action_ids=[denied_by_id["actionId"]],
+            denied_targets=["issue:751"],
+        )
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        by_id = {c["actionId"]: c for c in selection["candidates"]}
+        for proposal in (denied_by_id, denied_by_target):
+            candidate = by_id[proposal["actionId"]]
+            self.assertEqual("denied", candidate["status"])
+            self.assertEqual("no-active-policy", candidate["reason"])
+            # Attribution to the revision is retained even though the
+            # revision's deny lists no longer apply while it is paused.
+            self.assertEqual("policy:1", candidate["policyRevisionId"])
+        self.assertEqual([], selection["automaticActionIds"])
+
+    def test_denies_do_not_apply_when_policy_revoked_without_exact_approval(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        document, denied_by_id, denied_by_target = self._denied_pair_document(
+            id_issue=752, target_issue=753
+        )
+        policy_doc = _policy_document(
+            status="revoked",
+            enabled_classes=frozenset({"edit-comment"}),
+            denied_action_ids=[denied_by_id["actionId"]],
+            denied_targets=["issue:753"],
+        )
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        by_id = {c["actionId"]: c for c in selection["candidates"]}
+        for proposal in (denied_by_id, denied_by_target):
+            candidate = by_id[proposal["actionId"]]
+            self.assertEqual("denied", candidate["status"])
+            self.assertEqual("no-active-policy", candidate["reason"])
+        self.assertEqual([], selection["automaticActionIds"])
+
+    def test_denies_do_not_apply_when_policy_naturally_expired_without_exact_approval(
+        self,
+    ) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        document, denied_by_id, denied_by_target = self._denied_pair_document(
+            id_issue=754, target_issue=755
+        )
+        created_at = now - timedelta(days=60)
+        policy_doc = _policy_document(
+            status="active",
+            created_at_utc=created_at,
+            expires_at_utc=created_at + timedelta(days=30),  # expired 30 days before `now`
+            enabled_classes=frozenset({"edit-comment"}),
+            denied_action_ids=[denied_by_id["actionId"]],
+            denied_targets=["issue:755"],
+        )
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        by_id = {c["actionId"]: c for c in selection["candidates"]}
+        for proposal in (denied_by_id, denied_by_target):
+            candidate = by_id[proposal["actionId"]]
+            self.assertEqual("denied", candidate["status"])
+            self.assertEqual("no-active-policy", candidate["reason"])
+        self.assertEqual([], selection["automaticActionIds"])
+
+    def test_denied_action_id_paused_policy_with_approve_once_admits_exact(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        document, denied_by_id, denied_by_target = self._denied_pair_document(
+            id_issue=756, target_issue=757
+        )
+        policy_doc = _policy_document(
+            status="paused",
+            enabled_classes=frozenset({"edit-comment"}),
+            denied_action_ids=[denied_by_id["actionId"]],
+            denied_targets=["issue:757"],
+        )
+        proposals_digest = _digest_of(document)
+        approvals = [
+            _exact_decision(
+                action_id=proposal["actionId"],
+                proposal_digest=proposals_digest,
+                decision="approve-once",
+                now=now,
+                event_revision=revision,
+            )
+            for revision, proposal in enumerate((denied_by_id, denied_by_target), start=1)
+        ]
+        projection = _projection(policy_doc=policy_doc, exact_decisions=approvals)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        by_id = {c["actionId"]: c for c in selection["candidates"]}
+        for revision, proposal in enumerate((denied_by_id, denied_by_target), start=1):
+            candidate = by_id[proposal["actionId"]]
+            self.assertEqual("exact", candidate["status"])
+            self.assertEqual("exact-approval", candidate["reason"])
+            self.assertEqual(f"decision:{revision}", candidate["licenseSource"])
+        self.assertEqual(
+            {denied_by_id["actionId"], denied_by_target["actionId"]},
+            set(selection["exactActionIds"]),
+        )
+        self.assertEqual([], selection["automaticActionIds"])
+
+    def test_denied_action_id_revoked_policy_with_approve_once_admits_exact(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        document, denied_by_id, denied_by_target = self._denied_pair_document(
+            id_issue=758, target_issue=759
+        )
+        policy_doc = _policy_document(
+            status="revoked",
+            enabled_classes=frozenset({"edit-comment"}),
+            denied_action_ids=[denied_by_id["actionId"]],
+            denied_targets=["issue:759"],
+        )
+        proposals_digest = _digest_of(document)
+        approvals = [
+            _exact_decision(
+                action_id=proposal["actionId"],
+                proposal_digest=proposals_digest,
+                decision="approve-once",
+                now=now,
+                event_revision=revision,
+            )
+            for revision, proposal in enumerate((denied_by_id, denied_by_target), start=1)
+        ]
+        projection = _projection(policy_doc=policy_doc, exact_decisions=approvals)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        self.assertEqual(
+            {denied_by_id["actionId"], denied_by_target["actionId"]},
+            set(selection["exactActionIds"]),
+        )
+        self.assertEqual([], selection["automaticActionIds"])
+
+    def test_denied_action_id_expired_policy_with_approve_once_admits_exact(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        document, denied_by_id, denied_by_target = self._denied_pair_document(
+            id_issue=760, target_issue=761
+        )
+        created_at = now - timedelta(days=60)
+        policy_doc = _policy_document(
+            status="active",
+            created_at_utc=created_at,
+            expires_at_utc=created_at + timedelta(days=30),  # expired 30 days before `now`
+            enabled_classes=frozenset({"edit-comment"}),
+            denied_action_ids=[denied_by_id["actionId"]],
+            denied_targets=["issue:761"],
+        )
+        proposals_digest = _digest_of(document)
+        approvals = [
+            _exact_decision(
+                action_id=proposal["actionId"],
+                proposal_digest=proposals_digest,
+                decision="approve-once",
+                now=now,
+                event_revision=revision,
+            )
+            for revision, proposal in enumerate((denied_by_id, denied_by_target), start=1)
+        ]
+        projection = _projection(policy_doc=policy_doc, exact_decisions=approvals)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        self.assertEqual(
+            {denied_by_id["actionId"], denied_by_target["actionId"]},
+            set(selection["exactActionIds"]),
+        )
+        self.assertEqual([], selection["automaticActionIds"])
+
 
 class DependentClosePrerequisiteTests(unittest.TestCase):
     def test_dependent_close_blocked_until_exact_terminal_then_admitted_with_digest(self) -> None:

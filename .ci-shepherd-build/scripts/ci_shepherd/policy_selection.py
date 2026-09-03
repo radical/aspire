@@ -13,7 +13,11 @@ Selection precedence, per candidate, is (highest wins first):
                                  everything, including an exact approval.
 2. ``outside-policy-surface``-- the operation has no policy class mapping.
 3. ``denied`` (policy)       -- ``deniedActionIds``/``deniedTargets`` on the
-                                 active policy. Absolute; never overridden.
+                                 active policy. Absolute and wins over
+                                 approve-once *while that policy revision is
+                                 active*; a paused/revoked/expired policy's
+                                 deny lists no longer apply (falls through to
+                                 ordinary no-active-policy handling below).
 4. ``denied`` (exact reject) -- an applicable ``reject-once`` decision.
                                  Absolute; wins over approve-once.
 5. ``exhausted`` (prerequisite) -- a ``dependsOn`` action has not yet been
@@ -447,11 +451,17 @@ def _classify_initial(
     target_kind, target_number = _proposal_target(proposal)
     target_key = f"{target_kind}:{target_number}"
 
-    if policy is not None and action_id in policy.denied_action_ids:
+    # Deny lists are part of the standing policy envelope, not a separate
+    # exact decision: they only bind while that policy revision is active.
+    # A paused/revoked/expired policy withdraws its automatic grants *and*
+    # its denies together, leaving the candidate to ordinary
+    # no-active-policy handling (still overridable only by an otherwise
+    # valid approve-once, never bypassing eligibility/surface/hard ceilings).
+    if policy is not None and policy_active and action_id in policy.denied_action_ids:
         record["status"] = "denied"
         record["reason"] = "policy-denied-action-id"
         return record
-    if policy is not None and target_key in policy.denied_targets:
+    if policy is not None and policy_active and target_key in policy.denied_targets:
         record["status"] = "denied"
         record["reason"] = "policy-denied-target"
         return record
