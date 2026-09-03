@@ -37,10 +37,18 @@
 
 ### High-level flow
 
-```text
-collect -> assess -> investigate (max 3 concurrent) -> propose
-        -> apply standing policy and exact decisions -> rank permitted actions
-        -> freeze one action -> exact grant -> execute -> reconcile -> report
+```mermaid
+flowchart LR
+    A[Collect] --> B[Assess]
+    B --> C[Investigate<br/>max 3 concurrent]
+    C --> D[Propose]
+    D --> E[Apply policy<br/>and exact decisions]
+    E --> F[Rank permitted actions]
+    F --> G[Freeze one action]
+    G --> H[Exact grant]
+    H --> I[Execute]
+    I --> J[Reconcile]
+    J --> K[Report]
 ```
 
 The Canvas may inspect or change policy and exact decisions at any point before
