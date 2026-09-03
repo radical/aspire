@@ -6,6 +6,7 @@ import unittest
 
 from ci_shepherd.actions import build_action_proposals, build_watch_proposals
 from ci_shepherd.actor import build_dry_run
+from ci_shepherd.models import stable_json
 from ci_shepherd.quarantine_reconciliation import reconcile_quarantine_source
 
 
@@ -1457,6 +1458,68 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
         self.assertEqual([], result["proposals"])
         self.assertEqual([21], result["unchangedIssueNumbers"])
 
+    def test_unresolved_test_name_does_not_claim_source_method_is_absent(
+        self,
+    ) -> None:
+        reconciliation = _reconciliation()
+        finding = reconciliation["findings"][0]
+        assert isinstance(finding, dict)
+        finding["claimedTestName"] = None
+        finding["currentSource"] = []
+
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=reconciliation,
+        )
+
+        body = result["proposals"][0]["body"]
+        self.assertNotIn("No matching method exists in the inspected source.", body)
+        self.assertIn("no source method was checked", body)
+        self.assertIn(
+            "The test may still be quarantined against another issue.",
+            body,
+        )
+
+    def test_renderer_change_replaces_comment_with_legacy_finding_digest(
+        self,
+    ) -> None:
+        reconciliation = _reconciliation()
+        finding = reconciliation["findings"][0]
+        assert isinstance(finding, dict)
+        finding["claimedTestName"] = None
+        finding["currentSource"] = []
+        legacy_digest = "sha256:" + hashlib.sha256(
+            stable_json(finding).encode("utf-8")
+        ).hexdigest()
+        snapshot = _with_owned_comment(
+            _snapshot(),
+            (
+                "[automated] stale reconciliation body\n"
+                "<!-- ci-shepherd:role=status -->\n"
+                "<!-- ci-shepherd:idempotency-key=issue:21:status -->\n"
+                f"<!-- ci-shepherd:finding-digest={legacy_digest} -->"
+            ),
+        )
+
+        result = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=reconciliation,
+        )
+
+        self.assertEqual([], result["unchangedIssueNumbers"])
+        proposal = result["proposals"][0]
+        self.assertEqual("edit-comment", proposal["operation"])
+        self.assertNotEqual(
+            legacy_digest,
+            proposal["sourceEvidenceFingerprint"]["findingDigest"],
+        )
+
     def test_closure_review_finding_never_proposes_an_issue_close(self) -> None:
         reconciliation = _reconciliation()
         finding = reconciliation["findings"][0]
@@ -1488,6 +1551,10 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
         )
         self.assertIn(
             "https://github.com/owner/repo/pull/73",
+            result["proposals"][0]["body"],
+        )
+        self.assertIn(
+            "No matching method exists in the inspected source.",
             result["proposals"][0]["body"],
         )
 

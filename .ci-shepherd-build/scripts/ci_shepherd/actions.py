@@ -934,11 +934,24 @@ def _selected_investigation_recommendation(
     return combined
 
 
+_QUARANTINE_RECONCILIATION_BODY_FORMAT_VERSION = 2
+
+
 def _quarantine_source_lines(finding: dict[str, Any]) -> list[str]:
     entries = finding.get("currentSource")
     if not isinstance(entries, list):
         raise TypeError("Quarantine reconciliation currentSource must be a list.")
     if not entries:
+        # An empty source list means absence only when the inspector had a test name
+        # to search. Without one, source was not checked and only the issue link was.
+        if finding.get("claimedTestName") is None:
+            return [
+                "- The collected reconciliation evidence did not resolve a test "
+                "method name, so no source method was checked. Only the attribute "
+                "link was verified: no `[QuarantinedTest]` attribute references "
+                "this issue. The test may still be quarantined against another "
+                "issue.",
+            ]
         return ["- No matching method exists in the inspected source."]
     lines: list[str] = []
     for entry in entries:
@@ -1752,7 +1765,14 @@ def build_action_proposals(
             continue
         key = f"issue:{issue_number}:status"
         finding_digest = "sha256:" + hashlib.sha256(
-            stable_json(finding).encode("utf-8")
+            stable_json(
+                {
+                    "bodyFormatVersion": (
+                        _QUARANTINE_RECONCILIATION_BODY_FORMAT_VERSION
+                    ),
+                    "finding": finding,
+                }
+            ).encode("utf-8")
         ).hexdigest()
         body = _render_quarantine_reconciliation_body(
             issue_number,
