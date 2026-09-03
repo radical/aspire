@@ -352,6 +352,10 @@ class FrozenFixtureTests(unittest.TestCase):
         self.assertEqual(expected_automatic, selection["selectedActionIds"])
         self.assertEqual(proposals_digest, selection["proposalsDigest"])
         self.assertEqual("policy:1", selection["policyRevisionId"])
+        # Only edit-comment is enabled (maxPerRun=10, maxRolling24h=30); every
+        # other class is disabled and contributes zero, per _build_budgets'
+        # `enabled` gate on both remainingThisRun and remainingRolling24h.
+        self.assertEqual({"thisRun": 10, "rolling24h": 30}, selection["maximumWriteExposure"])
 
         by_id = {c["actionId"]: c for c in selection["candidates"]}
         for issue in (18203, 18299):
@@ -427,10 +431,15 @@ class DeterministicOrderingTests(unittest.TestCase):
     def test_edit_cap_exhausted_then_scan_admits_next_allowed_create(self) -> None:
         now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
         # All three proposals deliberately share the same semantic-suffix
-        # tier, so the scan order is decided purely by the edit-before-create
-        # tiebreak and then issueNumber. This isolates "continue scanning
-        # past an exhausted class cap" from suffix-tier ordering (covered by
-        # test_deterministic_order_within_permitted_set).
+        # tier, isolating "continue scanning past an exhausted class cap"
+        # from suffix-tier ordering (covered by
+        # test_deterministic_order_within_permitted_set). Note these
+        # particular issue numbers do not, by themselves, pin the
+        # edit-before-create operation_priority tiebreak -- removing it
+        # would not change this test's outcome, since edit_b is exhausted
+        # by cap regardless of scan position. See
+        # test_operation_priority_breaks_tie_over_issue_number_within_same_semantic_tier
+        # for a scenario that does isolate that tiebreak.
         edit_a = _comment_proposal(
             action_id="snapshot:test:1:issue:10:review-close-comment",
             issue_number=10,
@@ -466,6 +475,46 @@ class DeterministicOrderingTests(unittest.TestCase):
         self.assertEqual("per-run-cap-exhausted", by_id[edit_b["actionId"]]["reason"])
         self.assertEqual(1, by_id[edit_a["actionId"]]["automaticRank"])
         self.assertEqual(2, by_id[create_a["actionId"]]["automaticRank"])
+
+    def test_operation_priority_breaks_tie_over_issue_number_within_same_semantic_tier(
+        self,
+    ) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        # Same semantic-suffix tier ("watch-comment") on both proposals, so
+        # the only remaining tiebreak is operation_priority then issueNumber.
+        # The create proposal's issue number is deliberately LOWER than the
+        # edit proposal's: sorting by issueNumber alone (i.e. with
+        # operation_priority removed from the key) would rank create first.
+        # operation_priority must still force edit first.
+        edit = _comment_proposal(
+            action_id="snapshot:test:1:issue:500:watch-comment",
+            issue_number=500,
+            operation="edit-comment",
+        )
+        create = _comment_proposal(
+            action_id="snapshot:test:1:issue:100:watch-comment",
+            issue_number=100,
+            operation="create-comment",
+        )
+        # Input order deliberately matches the issue-number-only order, so a
+        # mutation that dropped operation_priority would silently reproduce
+        # this same ordering unless the assertions below catch it.
+        document = _document([create, edit])
+        policy_doc = _policy_document(
+            enabled_classes=frozenset({"create-comment", "edit-comment"})
+        )
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        self.assertEqual(
+            [edit["actionId"], create["actionId"]], selection["automaticActionIds"]
+        )
+        by_id = {c["actionId"]: c for c in selection["candidates"]}
+        self.assertEqual(1, by_id[edit["actionId"]]["automaticRank"])
+        self.assertEqual(2, by_id[create["actionId"]]["automaticRank"])
 
 
 class BudgetWindowTests(unittest.TestCase):
@@ -575,6 +624,136 @@ class BudgetWindowTests(unittest.TestCase):
         )
 
         self.assertEqual(2, selection["budgets"]["edit-comment"]["usedThisRun"])
+
+    def test_rolling_24h_cap_exhausted_with_per_run_headroom_remaining(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:730:retire-status-comment",
+            issue_number=730,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        caps = {name: dict(values) for name, values in DEFAULT_CAPS.items()}
+        caps["edit-comment"] = {"maxPerRun": 10, "maxRolling24h": 1}
+        policy_doc = _policy_document(enabled_classes=frozenset({"edit-comment"}), caps=caps)
+        projection = _projection(policy_doc=policy_doc)
+
+        # Recorded under a different runId: this consumes only the
+        # rolling-24h allowance, not this run's per-run allowance, isolating
+        # the rolling-cap branch from the per-run-cap branch that precedes
+        # it in the automatic scan.
+        rolling_saturating_event = _event(
+            event_type="terminal",
+            action_id="hist:rolling-1",
+            operation="edit-comment",
+            target_number=1,
+            idempotency_key="hist:rolling-1:key",
+            recorded_at=now - timedelta(hours=1),
+            outcome="executed",
+            run_id="other-run",
+        )
+
+        selection = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=[rolling_saturating_event],
+            now=now,
+        )
+
+        self.assertEqual(10, selection["budgets"]["edit-comment"]["remainingThisRun"])
+        self.assertEqual(0, selection["budgets"]["edit-comment"]["remainingRolling24h"])
+        candidate = selection["candidates"][0]
+        self.assertEqual("exhausted", candidate["status"])
+        self.assertEqual("rolling-24h-cap-exhausted", candidate["reason"])
+
+    def test_repository_hard_ceiling_per_run_exhausted_with_unclassified_operations(
+        self,
+    ) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:740:retire-status-comment",
+            issue_number=740,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        policy_doc = _policy_document(enabled_classes=frozenset({"edit-comment"}))
+        projection = _projection(policy_doc=policy_doc)
+
+        # An unclassified legacy operation never appears in any per-class
+        # remaining dict, so it consumes only the repository-wide 100/run
+        # hard ceiling, isolating that branch from the per-class caps that
+        # precede it.
+        saturating_events = [
+            _event(
+                event_type="intent",
+                action_id=f"legacy:{i}",
+                operation="legacy-pilot-op",
+                target_number=i + 1,
+                idempotency_key=f"legacy:{i}:key",
+                recorded_at=now,
+                run_id="run-1",
+            )
+            for i in range(100)
+        ]
+
+        selection = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=saturating_events,
+            now=now,
+        )
+
+        self.assertEqual(10, selection["budgets"]["edit-comment"]["remainingThisRun"])
+        candidate = selection["candidates"][0]
+        self.assertEqual("exhausted", candidate["status"])
+        self.assertEqual("repository-hard-ceiling-run-exhausted", candidate["reason"])
+
+    def test_repository_hard_ceiling_rolling_exhausted_with_unclassified_operations(
+        self,
+    ) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:745:retire-status-comment",
+            issue_number=745,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        policy_doc = _policy_document(enabled_classes=frozenset({"edit-comment"}))
+        projection = _projection(policy_doc=policy_doc)
+
+        # Terminal legacy events recorded under a different runId consume
+        # only the repository-wide 300/rolling-24h hard ceiling: not this
+        # run's per-run ceiling (different runId), and not any per-class
+        # budget (unclassified operation). This isolates the rolling
+        # hard-ceiling branch.
+        saturating_events = [
+            _event(
+                event_type="terminal",
+                action_id=f"legacy:{i}",
+                operation="legacy-pilot-op",
+                target_number=i + 1,
+                idempotency_key=f"legacy:{i}:key",
+                recorded_at=now,
+                outcome="executed",
+                run_id="other-run",
+            )
+            for i in range(300)
+        ]
+
+        selection = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=saturating_events,
+            now=now,
+        )
+
+        self.assertEqual(10, selection["budgets"]["edit-comment"]["remainingThisRun"])
+        candidate = selection["candidates"][0]
+        self.assertEqual("exhausted", candidate["status"])
+        self.assertEqual("repository-hard-ceiling-rolling-exhausted", candidate["reason"])
 
 
 class ExactDecisionTests(unittest.TestCase):
@@ -755,6 +934,56 @@ class ExactDecisionTests(unittest.TestCase):
                 run_id="run-1",
             )
             for i in range(100)
+        ]
+
+        selection = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=saturating_events,
+            now=now,
+        )
+
+        candidate = selection["candidates"][0]
+        self.assertEqual("denied", candidate["status"])
+        self.assertEqual("operation-disabled", candidate["reason"])
+        self.assertEqual([], selection["exactActionIds"])
+
+    def test_exact_approval_does_not_exceed_rolling_hard_ceiling(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:605:retire-status-comment",
+            issue_number=605,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        policy_doc = _policy_document(enabled_classes=frozenset())  # everything disabled
+        proposals_digest = _digest_of(document)
+        approve = _exact_decision(
+            action_id=proposal["actionId"],
+            proposal_digest=proposals_digest,
+            decision="approve-once",
+            now=now,
+        )
+        projection = _projection(policy_doc=policy_doc, exact_decisions=[approve])
+
+        # Saturate only the 300/rolling-24h repository hard ceiling
+        # (terminal events under a different runId), leaving the 100/run
+        # ceiling untouched, so the rolling branch of the exact-approval
+        # exposure check -- not the per-run branch -- is what blocks this
+        # approve-once.
+        saturating_events = [
+            _event(
+                event_type="terminal",
+                action_id=f"legacy:{i}",
+                operation="legacy-pilot-op",
+                target_number=i + 1,
+                idempotency_key=f"legacy:{i}:key",
+                recorded_at=now,
+                outcome="executed",
+                run_id="other-run",
+            )
+            for i in range(300)
         ]
 
         selection = ps.build_policy_selection(
@@ -1130,6 +1359,78 @@ class DependentClosePrerequisiteTests(unittest.TestCase):
             "denied", next(c for c in admitted["candidates"] if c["actionId"] == dep["actionId"])["status"]
         )
 
+    def test_dependent_close_prerequisite_requires_every_identity_field_to_match(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        dep = _comment_proposal(
+            action_id="snapshot:test:1:issue:750:watch-comment",
+            issue_number=750,
+            operation="create-comment",
+        )
+        close = _close_proposal(
+            action_id="snapshot:test:1:issue:750:review-close",
+            issue_number=750,
+            depends_on=dep["actionId"],
+        )
+        document = _document([dep, close])
+        policy_doc = _policy_document(enabled_classes=frozenset({"close-issue"}))
+        projection = _projection(policy_doc=policy_doc)
+        dep_body_digest = "sha256:" + hashlib.sha256(dep["body"].encode("utf-8")).hexdigest()
+
+        # Every kwarg here is an exact match to the dependency's identity.
+        # The positive control below proves this template, unperturbed,
+        # does satisfy the prerequisite -- so each negative scenario is a
+        # genuine single-field isolation, not a broken harness.
+        matching_kwargs: dict[str, object] = dict(
+            event_type="terminal",
+            action_id=dep["actionId"],
+            operation=dep["operation"],
+            target_number=750,
+            idempotency_key=dep["idempotencyKey"],
+            recorded_at=now - timedelta(minutes=5),
+            outcome="executed",
+            repository=REPOSITORY,
+            snapshot_id=document["snapshotId"],
+            body_digest=dep_body_digest,
+        )
+
+        def selection_for(events: list[dict[str, object]]) -> dict[str, object]:
+            return ps.build_policy_selection(
+                document,
+                run_id="run-1",
+                policy_projection=projection,
+                action_events=events,
+                now=now,
+            )
+
+        control = selection_for([_event(**matching_kwargs)])
+        control_close = next(
+            c for c in control["candidates"] if c["actionId"] == close["actionId"]
+        )
+        self.assertEqual("automatic", control_close["status"])
+        self.assertIsNotNone(control_close["satisfiedPrerequisites"])
+
+        # field name (as it appears in the event) -> (kwarg name, mismatched value)
+        mismatches: dict[str, tuple[str, object]] = {
+            "outcome": ("outcome", "failed"),
+            "actionId": ("action_id", "snapshot:test:1:issue:750:some-other-action"),
+            "snapshotId": ("snapshot_id", "snapshot:test-policy-selection:2"),
+            "operation": ("operation", "edit-comment"),
+            "targetNumber": ("target_number", 751),
+            "idempotencyKey": ("idempotency_key", "different:key"),
+            "repository": ("repository", "microsoft/some-other-repo"),
+        }
+        for field_name, (kwarg_name, bad_value) in mismatches.items():
+            with self.subTest(field=field_name):
+                kwargs = dict(matching_kwargs)
+                kwargs[kwarg_name] = bad_value
+                selection = selection_for([_event(**kwargs)])
+                close_candidate = next(
+                    c for c in selection["candidates"] if c["actionId"] == close["actionId"]
+                )
+                self.assertEqual("exhausted", close_candidate["status"])
+                self.assertEqual("prerequisite-not-terminal", close_candidate["reason"])
+                self.assertIsNone(close_candidate["satisfiedPrerequisites"])
+
 
 class SuppressionAndSurfaceTests(unittest.TestCase):
     def test_same_issue_suppression_scoped_to_comment_operations(self) -> None:
@@ -1257,6 +1558,81 @@ class InvariantTests(unittest.TestCase):
         )
         self.assertGreater(sum_per_class_remaining, 10)
         self.assertEqual(10, selection["maximumWriteExposure"]["thisRun"])
+
+    def test_disabled_class_budget_has_zero_remaining_despite_nonzero_caps(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:965:retire-status-comment",
+            issue_number=965,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        # Only edit-comment is enabled; close-issue has nonzero maxPerRun/
+        # maxRolling24h in DEFAULT_CAPS (5/10) but zero usage, so its
+        # remaining budgets must be forced to zero purely because the class
+        # itself is disabled -- proving the `if enabled else 0` gate, not
+        # usage accounting, is what zeroes it out.
+        policy_doc = _policy_document(enabled_classes=frozenset({"edit-comment"}))
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        close_budget = selection["budgets"]["close-issue"]
+        self.assertFalse(close_budget["enabled"])
+        self.assertGreater(close_budget["maxPerRun"], 0)
+        self.assertGreater(close_budget["maxRolling24h"], 0)
+        self.assertEqual(0, close_budget["usedThisRun"])
+        self.assertEqual(0, close_budget["usedRolling24h"])
+        self.assertEqual(0, close_budget["remainingThisRun"])
+        self.assertEqual(0, close_budget["remainingRolling24h"])
+
+    def test_maximum_exposure_is_zero_when_policy_paused(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:966:retire-status-comment",
+            issue_number=966,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        # Every class is nominally "enabled" in the document with ample
+        # per-class headroom, but the policy itself is paused: exposure
+        # must still collapse to zero.
+        policy_doc = _policy_document(status="paused", enabled_classes=frozenset(OPERATION_CLASSES))
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        self.assertEqual({"thisRun": 0, "rolling24h": 0}, selection["maximumWriteExposure"])
+        for op_class in OPERATION_CLASSES:
+            self.assertEqual(0, selection["budgets"][op_class]["remainingThisRun"])
+            self.assertEqual(0, selection["budgets"][op_class]["remainingRolling24h"])
+
+    def test_maximum_exposure_is_zero_when_policy_naturally_expired(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(
+            action_id="snapshot:test:1:issue:967:retire-status-comment",
+            issue_number=967,
+            operation="edit-comment",
+        )
+        document = _document([proposal])
+        created_at = now - timedelta(days=60)
+        policy_doc = _policy_document(
+            status="active",
+            created_at_utc=created_at,
+            expires_at_utc=created_at + timedelta(days=30),
+            enabled_classes=frozenset(OPERATION_CLASSES),
+        )
+        projection = _projection(policy_doc=policy_doc)
+
+        selection = ps.build_policy_selection(
+            document, run_id="run-1", policy_projection=projection, action_events=[], now=now
+        )
+
+        self.assertEqual({"thisRun": 0, "rolling24h": 0}, selection["maximumWriteExposure"])
 
 
 class FailClosedTests(unittest.TestCase):
