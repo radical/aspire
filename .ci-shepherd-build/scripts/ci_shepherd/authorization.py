@@ -17,8 +17,16 @@ from .capacity_policy import (
     ProductionDelegationPolicy,
     load_production_delegation_policy,
 )
+from .coordinator_state import CoordinatorStateError, CoordinatorStateStore
+from .operation_policy import (
+    OPERATION_CLASSES,
+    OperationPolicyError,
+    OperationPolicyRevision,
+    classify_operation,
+    load_operation_policy_document,
+)
 from .quarantine import current_quarantine_source_fingerprint
-from .timeutils import format_utc_z
+from .timeutils import format_utc_z, parse_aware_iso8601
 
 
 class AuthorizationError(ValueError):
@@ -59,6 +67,34 @@ class AuthorizationBudget:
 
 
 @dataclass(frozen=True, slots=True)
+class AutonomousPolicyLicense:
+    """Binds one action to the frozen policy-selection artifact that
+    licensed it, so the license travels with the grant instead of requiring
+    a fresh policy-selection replay at load/execution time."""
+
+    run_id: str
+    operation_class: str
+    selection_digest: str
+    selection_state_revision: int
+    license_source: str
+    satisfied_prerequisites: tuple[tuple[str, str], ...]
+
+    def as_public_dict(self) -> dict[str, object]:
+        return {
+            "schemaVersion": 1,
+            "runId": self.run_id,
+            "operationClass": self.operation_class,
+            "selectionDigest": self.selection_digest,
+            "selectionStateRevision": self.selection_state_revision,
+            "licenseSource": self.license_source,
+            "satisfiedPrerequisites": [
+                {"actionId": action_id, "eventDigest": event_digest}
+                for action_id, event_digest in self.satisfied_prerequisites
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorizationGrant:
     grant_id: str
     repository: str
@@ -78,6 +114,9 @@ class AuthorizationGrant:
     production_delegation_steady_state: bool = False
     capacity_policy_digest: str | None = None
     comment_selection_digest: str | None = None
+    autonomous_policy: bool = False
+    autonomous_policy_license: AutonomousPolicyLicense | None = None
+    policy_selection_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +151,9 @@ _PRODUCTION_DELEGATION_GRANT_KEY = "productionDelegationPilot"
 _PRODUCTION_DELEGATION_STEADY_STATE_KEY = "productionDelegationSteadyState"
 _CAPACITY_POLICY_DIGEST_KEY = "capacityPolicyDigest"
 _COMMENT_SELECTION_DIGEST_KEY = "commentSelectionDigest"
+_AUTONOMOUS_POLICY_GRANT_KEY = "autonomousPolicy"
+_AUTONOMOUS_POLICY_LICENSE_KEY = "autonomousPolicyLicense"
+_POLICY_SELECTION_DIGEST_KEY = "policySelectionDigest"
 _CURRENT_CAPABILITY_KEYS = frozenset(
     {
         _PRODUCTION_DELEGATION_GRANT_KEY,
@@ -119,6 +161,28 @@ _CURRENT_CAPABILITY_KEYS = frozenset(
         _CAPACITY_POLICY_DIGEST_KEY,
     }
 )
+_AUTONOMOUS_POLICY_CAPABILITY_KEYS = frozenset(
+    {
+        _AUTONOMOUS_POLICY_GRANT_KEY,
+        _AUTONOMOUS_POLICY_LICENSE_KEY,
+        _POLICY_SELECTION_DIGEST_KEY,
+    }
+)
+_AUTONOMOUS_POLICY_LICENSE_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "runId",
+        "operationClass",
+        "selectionDigest",
+        "selectionStateRevision",
+        "licenseSource",
+        "satisfiedPrerequisites",
+    }
+)
+_SATISFIED_PREREQUISITE_KEYS = frozenset({"actionId", "eventDigest"})
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_POLICY_LICENSE_SOURCE_RE = re.compile(r"^policy:[1-9][0-9]*$")
+_DECISION_LICENSE_SOURCE_RE = re.compile(r"^decision:[1-9][0-9]*$")
 _BUDGET_KEYS = frozenset(
     {
         "maxMutationAttempts",
@@ -146,6 +210,8 @@ def load_authorized_execution(
     production_delegation_policy_path: Path = (
         DEFAULT_PRODUCTION_DELEGATION_POLICY_PATH
     ),
+    allow_autonomous_policy: bool = False,
+    policy_selection_path: Path | None = None,
     now: datetime | None = None,
 ) -> AuthorizedExecution:
     """Read once and validate the exact proposal document and authorization grant."""
@@ -162,11 +228,14 @@ def load_authorized_execution(
         raise AuthorizationError(
             "allow_production_delegation_steady_state must be a boolean."
         )
+    if not isinstance(allow_autonomous_policy, bool):
+        raise AuthorizationError("allow_autonomous_policy must be a boolean.")
     if sum(
         (
             allow_production_comment_pilot,
             allow_production_delegation_pilot,
             allow_production_delegation_steady_state,
+            allow_autonomous_policy,
         )
     ) > 1:
         raise AuthorizationError(
@@ -242,6 +311,28 @@ def load_authorized_execution(
             "Authorization grant does not bind a comment selection artifact."
         )
 
+    if grant.policy_selection_digest is not None:
+        if policy_selection_path is None:
+            raise AuthorizationError(
+                "Authorization grant requires the bound policy selection "
+                "artifact."
+            )
+        policy_selection_bytes = _read_regular_file(
+            policy_selection_path, "policy selection"
+        )
+        policy_selection_digest = (
+            f"sha256:{hashlib.sha256(policy_selection_bytes).hexdigest()}"
+        )
+        if policy_selection_digest != grant.policy_selection_digest:
+            raise AuthorizationError(
+                "Authorization grant policySelectionDigest does not match "
+                "policy selection bytes."
+            )
+    elif policy_selection_path is not None:
+        raise AuthorizationError(
+            "Authorization grant does not bind a policy selection artifact."
+        )
+
     repository = _require_string(proposal_document, "repository")
     snapshot_id = _require_string(proposal_document, "snapshotId")
     is_production = repository.casefold() == PRODUCTION_REPOSITORY
@@ -249,6 +340,7 @@ def load_authorized_execution(
         allow_production_comment_pilot
         or allow_production_delegation_pilot
         or allow_production_delegation_steady_state
+        or allow_autonomous_policy
     )
     if is_production and not production_pilot_enabled:
         raise AuthorizationError(
@@ -281,6 +373,14 @@ def load_authorized_execution(
     ):
         raise AuthorizationError(
             "Production delegation steady-state confirmation does not match the grant."
+        )
+    if grant.autonomous_policy != allow_autonomous_policy:
+        raise AuthorizationError(
+            "Autonomous policy confirmation does not match the grant."
+        )
+    if grant.autonomous_policy and grant.policy_selection_digest is None:
+        raise AuthorizationError(
+            "Autonomous policy grant must bind a policy selection artifact."
         )
     if repository != grant.repository:
         raise AuthorizationError(
@@ -355,15 +455,24 @@ def load_authorized_execution(
         raise AuthorizationError(
             f"Authorization grant does not allow issue target: {issue_number}"
         )
-    chain_root = _resolve_chain_root(proposals, action_id)
-    if chain_root not in grant.allowed_chain_roots:
-        raise AuthorizationError(
-            f"Authorization grant does not allow chain root: {chain_root}"
-        )
-    if chain_root not in grant.allowed_action_ids:
-        raise AuthorizationError(
-            "Authorization grant chain roots must also be allowedActionIds."
-        )
+    if grant.autonomous_policy:
+        # An autonomous dependent-action grant is self-rooted at generation
+        # time (see `generate_authorization_grant`): its prerequisite's
+        # terminality was proven via the bound policy selection's
+        # satisfiedPrerequisites digest, not by also granting the
+        # prerequisite action, so the real ancestor chain root computed here
+        # would never appear in `allowed_chain_roots`/`allowed_action_ids`.
+        chain_root = action_id
+    else:
+        chain_root = _resolve_chain_root(proposals, action_id)
+        if chain_root not in grant.allowed_chain_roots:
+            raise AuthorizationError(
+                f"Authorization grant does not allow chain root: {chain_root}"
+            )
+        if chain_root not in grant.allowed_action_ids:
+            raise AuthorizationError(
+                "Authorization grant chain roots must also be allowedActionIds."
+            )
     if is_production:
         if allow_production_comment_pilot:
             _validate_production_comment_grant(
@@ -380,6 +489,18 @@ def load_authorized_execution(
                 operation=operation,
                 proposals=proposals,
                 capability=proposal_document.get("productionPilotCapability"),
+            )
+        elif allow_autonomous_policy:
+            _validate_autonomous_policy_grant(
+                grant,
+                action_id=action_id,
+                proposal_digest=digest,
+                repository=repository,
+                proposal=proposal,
+                state_dir=canonical_state_dir,
+                production_delegation_policy_path=production_delegation_policy_path,
+                capability=proposal_document.get("productionPilotCapability"),
+                now=current_time,
             )
         else:
             policy = _load_capacity_policy(production_delegation_policy_path)
@@ -475,6 +596,271 @@ def _validate_comment_selection(
         )
 
 
+def _validate_policy_selection(
+    selection_bytes: bytes,
+    *,
+    action_id: str,
+    proposal: Mapping[str, Any],
+    repository: str,
+    snapshot_id: str,
+    proposals_digest: str,
+) -> dict[str, Any]:
+    """Parse and validate one action's binding within a frozen policy
+    selection artifact (the authoritative output of Task 3's selector).
+
+    Only ``action_id``'s own candidate entry is inspected: an unrelated
+    change elsewhere in the same selection (another action's status, budget
+    usage, and so on) never perturbs this validation, because nothing about
+    another candidate is read. Returns the exact identity fields a caller
+    needs to mint or re-verify an ``AutonomousPolicyLicense``.
+    """
+    selection = _load_json_bytes(selection_bytes, "policy selection")
+    if selection.get("schemaVersion") != 1:
+        raise AuthorizationError("Policy selection schemaVersion must equal 1.")
+    if selection.get("repository") != repository:
+        raise AuthorizationError(
+            "Policy selection repository does not match proposal document."
+        )
+    if selection.get("snapshotId") != snapshot_id:
+        raise AuthorizationError(
+            "Policy selection snapshotId does not match proposal document."
+        )
+    if selection.get("proposalsDigest") != proposals_digest:
+        raise AuthorizationError(
+            "Policy selection proposalsDigest does not match proposal bytes."
+        )
+    run_id = selection.get("runId")
+    if not isinstance(run_id, str) or not run_id:
+        raise AuthorizationError("Policy selection runId must be a non-empty string.")
+    state_revision = selection.get("coordinatorStateRevision")
+    if (
+        not isinstance(state_revision, int)
+        or isinstance(state_revision, bool)
+        or state_revision < 0
+    ):
+        raise AuthorizationError(
+            "Policy selection coordinatorStateRevision must be a nonnegative "
+            "integer."
+        )
+    selected_ids = selection.get("selectedActionIds")
+    if not isinstance(selected_ids, list) or any(
+        not isinstance(value, str) or not value for value in selected_ids
+    ):
+        raise AuthorizationError(
+            "Policy selection selectedActionIds must be an array of strings."
+        )
+    if action_id not in selected_ids:
+        raise AuthorizationError(
+            f"Policy selection does not select actionId: {action_id}"
+        )
+    candidates = selection.get("candidates")
+    if not isinstance(candidates, list):
+        raise AuthorizationError("Policy selection candidates must be an array.")
+    matches = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("actionId") == action_id
+    ]
+    if len(matches) != 1:
+        raise AuthorizationError(
+            "Policy selection candidates must identify exactly one entry for "
+            f"actionId: {action_id}"
+        )
+    candidate = matches[0]
+    operation = _require_string(proposal, "operation")
+    operation_class = classify_operation(operation)
+    if operation_class is None or candidate.get("operationClass") != operation_class:
+        raise AuthorizationError(
+            "Policy selection candidate operationClass does not match the "
+            "proposal operation."
+        )
+    license_source = _require_license_source(candidate)
+    depends_on = proposal.get("dependsOn")
+    satisfied_raw = candidate.get("satisfiedPrerequisites")
+    satisfied: tuple[tuple[str, str], ...]
+    if depends_on is None:
+        if satisfied_raw:
+            raise AuthorizationError(
+                "Policy selection candidate must not carry prerequisites for "
+                "an independent action."
+            )
+        satisfied = ()
+    else:
+        if not isinstance(satisfied_raw, list) or len(satisfied_raw) != 1:
+            raise AuthorizationError(
+                "Policy selection candidate must carry exactly one satisfied "
+                f"prerequisite for dependent actionId: {action_id}"
+            )
+        entry = satisfied_raw[0]
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != _SATISFIED_PREREQUISITE_KEYS
+            or entry.get("actionId") != depends_on
+        ):
+            raise AuthorizationError(
+                "Policy selection candidate satisfiedPrerequisites does not "
+                f"match dependsOn: {depends_on}"
+            )
+        satisfied = (
+            (
+                _require_string(entry, "actionId"),
+                _require_digest(entry, "eventDigest"),
+            ),
+        )
+    return {
+        "run_id": run_id,
+        "operation_class": operation_class,
+        "license_source": license_source,
+        "selection_state_revision": state_revision,
+        "satisfied_prerequisites": satisfied,
+    }
+
+
+def _fail_closed_durable_intent_reader(action_id: str) -> bool:
+    # Never actually invoked: `CoordinatorStateStore` only calls this
+    # callback while clearing a decision, and this module only ever calls
+    # `.projection()` (a pure, lock-scoped read). Kept fail-closed (True =
+    # "a durable intent exists") to honor the store's documented contract
+    # even if a future caller starts clearing decisions through this module.
+    del action_id
+    return True
+
+
+def _resolve_autonomous_license_source(
+    *,
+    license_source: str,
+    action_id: str,
+    proposal_digest: str,
+    target_key: str,
+    repository: str,
+    state_dir: Path,
+    now: datetime,
+) -> datetime:
+    """Confirm ``license_source`` -- a named policy revision or exact
+    decision -- remains effective right now, and return the deadline it caps
+    a grant to.
+
+    This intentionally re-checks only the exact named license (and any
+    currently active absolute deny/reject for this one action), never the
+    ledger's global ``stateRevision``: an unrelated policy or decision event
+    for a different action must never invalidate this grant, but replacing,
+    pausing, or revoking the named policy revision -- or clearing/rejecting
+    the named exact decision -- always changes what this check reads back,
+    so it is still caught.
+    """
+    try:
+        store = CoordinatorStateStore(
+            state_dir,
+            durable_intent_reader=_fail_closed_durable_intent_reader,
+        )
+        projection = store.projection(repository, now=now)
+    except CoordinatorStateError as exc:
+        raise AuthorizationError(f"Unable to read coordinator state: {exc}") from exc
+
+    policy: OperationPolicyRevision | None = None
+    effective_policy_raw = projection.get("effectivePolicy")
+    if effective_policy_raw is not None:
+        # `effectivePolicy` is the stored public policy document plus a
+        # ledger-only `policyDigest` sibling key (see
+        # `CoordinatorStateStore._project_from_events`); strip it before
+        # re-parsing, since `load_operation_policy_document` rejects unknown
+        # fields.
+        policy_document = {
+            key: value
+            for key, value in effective_policy_raw.items()
+            if key != "policyDigest"
+        }
+        try:
+            policy = load_operation_policy_document(policy_document)
+        except OperationPolicyError as exc:
+            raise AuthorizationError(
+                f"Coordinator effective policy is invalid: {exc}"
+            ) from exc
+
+    if policy is not None and policy.active_at(now):
+        if action_id in policy.denied_action_ids or target_key in policy.denied_targets:
+            raise AuthorizationError(
+                f"Standing policy denies actionId: {action_id}"
+            )
+
+    exact_decisions = projection.get("exactDecisions")
+    if not isinstance(exact_decisions, list):
+        raise AuthorizationError("Coordinator exactDecisions must be an array.")
+    matching_decision: Mapping[str, Any] | None = None
+    for entry in exact_decisions:
+        if (
+            isinstance(entry, dict)
+            and entry.get("actionId") == action_id
+            and entry.get("proposalDigest") == proposal_digest
+        ):
+            matching_decision = entry
+            break
+    if matching_decision is not None and matching_decision.get("decision") == "reject-once":
+        raise AuthorizationError(f"Exact decision rejects actionId: {action_id}")
+
+    if license_source.startswith("policy:"):
+        if (
+            policy is None
+            or policy.revision_id != license_source
+            or policy.status != "active"
+            or not policy.active_at(now)
+        ):
+            raise AuthorizationError(
+                f"Licensing policy revision is no longer effective: {license_source}"
+            )
+        return policy.expires_at_utc
+
+    if license_source.startswith("decision:"):
+        if (
+            matching_decision is None
+            or matching_decision.get("decision") != "approve-once"
+            or f"decision:{matching_decision.get('eventRevision')}" != license_source
+        ):
+            raise AuthorizationError(
+                f"Exact approval is no longer effective: {license_source}"
+            )
+        try:
+            return parse_aware_iso8601(
+                matching_decision.get("expiresAtUtc"), "expiresAtUtc"
+            )
+        except ValueError as exc:
+            raise AuthorizationError(str(exc)) from exc
+
+    raise AuthorizationError(f"Unsupported licenseSource: {license_source}")
+
+
+def _validate_autonomous_delegate_capacity(
+    *,
+    max_running_copilot_tasks: int,
+    max_copilot_starts_per_rolling_24h: int,
+    max_open_delegated_prs: int,
+    max_repository_running_copilot_tasks: int,
+    policy: ProductionDelegationPolicy,
+) -> None:
+    """Class caps supplement, never replace, live delegation capacity
+    controls: an autonomous ``delegate-copilot`` grant's requested caps must
+    still fit within the pinned production delegation policy, exactly like
+    the production delegation steady-state pilot."""
+    requested = (
+        max_running_copilot_tasks,
+        max_copilot_starts_per_rolling_24h,
+        max_open_delegated_prs,
+        max_repository_running_copilot_tasks,
+    )
+    maxima = (
+        policy.max_running_copilot_tasks,
+        policy.max_copilot_starts_per_rolling_24h,
+        policy.max_open_delegated_prs,
+        policy.max_repository_running_copilot_tasks,
+    )
+    if any(value < 1 for value in requested) or any(
+        value > maximum for value, maximum in zip(requested, maxima, strict=True)
+    ):
+        raise AuthorizationError(
+            "Autonomous delegate-copilot capacity exceeds its pinned policy."
+        )
+
+
 def generate_authorization_grant(
     proposals_path: Path,
     *,
@@ -497,6 +883,9 @@ def generate_authorization_grant(
     production_delegation_policy_path: Path = (
         DEFAULT_PRODUCTION_DELEGATION_POLICY_PATH
     ),
+    allow_autonomous_policy: bool = False,
+    policy_selection_path: Path | None = None,
+    policy_action_id: str | None = None,
     now: datetime | None = None,
     grant_id: str | None = None,
 ) -> dict[str, Any]:
@@ -510,6 +899,12 @@ def generate_authorization_grant(
     chain budgets are likewise derived counts of the exact selection. Copilot
     task and pull-request capacity limits are explicit grant inputs so the
     executor cannot raise them independently after approval.
+
+    An autonomous policy grant (``allow_autonomous_policy=True``) is the one
+    exception to "dependsOn must also be selected": it authorizes exactly one
+    dependent action on its own, proving its prerequisite is already terminal
+    via the frozen policy-selection artifact's ``satisfiedPrerequisites``
+    digest rather than by also granting the prerequisite action.
 
     ``now`` and ``grant_id`` exist so tests can pin the clock and identifier;
     the public CLI never exposes either, always using the real clock and a
@@ -528,11 +923,14 @@ def generate_authorization_grant(
         raise AuthorizationError(
             "allow_production_delegation_steady_state must be a boolean."
         )
+    if not isinstance(allow_autonomous_policy, bool):
+        raise AuthorizationError("allow_autonomous_policy must be a boolean.")
     if sum(
         (
             allow_production_comment_pilot,
             allow_production_delegation_pilot,
             allow_production_delegation_steady_state,
+            allow_autonomous_policy,
         )
     ) > 1:
         raise AuthorizationError(
@@ -569,6 +967,7 @@ def generate_authorization_grant(
         allow_production_comment_pilot
         or allow_production_delegation_pilot
         or allow_production_delegation_steady_state
+        or allow_autonomous_policy
     )
     if is_production and not production_pilot_enabled:
         raise AuthorizationError(
@@ -615,6 +1014,29 @@ def generate_authorization_grant(
         selected_ids.add(action_id)
         selected_action_ids.append(action_id)
 
+    if allow_autonomous_policy:
+        if len(selected_action_ids) != 1:
+            raise AuthorizationError(
+                "Autonomous policy grants must authorize exactly one actionId."
+            )
+        if policy_selection_path is None:
+            raise AuthorizationError(
+                "Autonomous policy grants require policy_selection_path."
+            )
+        if policy_action_id is None:
+            raise AuthorizationError(
+                "Autonomous policy grants require policy_action_id."
+            )
+        if policy_action_id != selected_action_ids[0]:
+            raise AuthorizationError(
+                "policy_action_id must equal the single selected actionId."
+            )
+    elif policy_selection_path is not None or policy_action_id is not None:
+        raise AuthorizationError(
+            "policy_selection_path and policy_action_id require "
+            "allow_autonomous_policy."
+        )
+
     comment_selection_digest: str | None = None
     if comment_selection_path is not None:
         selection_bytes = _read_regular_file(
@@ -651,7 +1073,11 @@ def generate_authorization_grant(
                 f"Selected actionId is not eligible for execution: {action_id}"
             )
         depends_on = proposal.get("dependsOn")
-        if depends_on is not None and depends_on not in selected_ids:
+        if (
+            depends_on is not None
+            and depends_on not in selected_ids
+            and not allow_autonomous_policy
+        ):
             raise AuthorizationError(
                 f"Selected actionId {action_id} depends on {depends_on}, which "
                 "is not also selected. Approving one action never authorizes "
@@ -668,18 +1094,26 @@ def generate_authorization_grant(
             for proposal in selected_proposals
         }
     )
-    chain_roots = sorted(
-        {_resolve_chain_root(proposals, action_id) for action_id in selected_ids}
-    )
-    for chain_root in chain_roots:
-        # Guaranteed unreachable by the per-action dependsOn check above
-        # (dependsOn is a single chain, so requiring every selected step's
-        # dependency to also be selected forces the whole path up to the
-        # root to be selected). Kept as a fail-closed invariant check.
-        if chain_root not in selected_ids:
-            raise AuthorizationError(
-                f"Chain root {chain_root} is not among the selected action ids."
-            )
+    if allow_autonomous_policy:
+        # An autonomous dependent-action grant is deliberately self-rooted:
+        # its prerequisite's terminality is proven by the bound policy
+        # selection's satisfiedPrerequisites digest, not by also granting
+        # (or chain-rooting through) the prerequisite action itself.
+        chain_roots = sorted(selected_ids)
+    else:
+        chain_roots = sorted(
+            {_resolve_chain_root(proposals, action_id) for action_id in selected_ids}
+        )
+        for chain_root in chain_roots:
+            # Guaranteed unreachable by the per-action dependsOn check above
+            # (dependsOn is a single chain, so requiring every selected step's
+            # dependency to also be selected forces the whole path up to the
+            # root to be selected). Kept as a fail-closed invariant check.
+            if chain_root not in selected_ids:
+                raise AuthorizationError(
+                    f"Chain root {chain_root} is not among the selected action ids."
+                )
+
 
     override_ids: set[str] = set()
     for override_id in override_suppression_for_action_ids:
@@ -697,6 +1131,14 @@ def generate_authorization_grant(
                 "Suppression overrides must reference a selected actionId: "
                 f"{override_id}"
             )
+    expanded_state_dir = state_dir.expanduser()
+    _reject_symlink_path(expanded_state_dir, "State directory")
+    canonical_state_dir = expanded_state_dir.resolve(strict=False)
+
+    capacity_policy_digest_value: str | None = None
+    autonomous_policy_license: AutonomousPolicyLicense | None = None
+    autonomous_proposal_expiry: datetime | None = None
+    autonomous_license_deadline: datetime | None = None
     if is_production:
         if allow_production_comment_pilot:
             _validate_production_comment_selection(
@@ -718,6 +1160,75 @@ def generate_authorization_grant(
                     max_repository_running_copilot_tasks
                 ),
             )
+        elif allow_autonomous_policy:
+            if ttl_minutes > DEFAULT_GRANT_TTL_MINUTES:
+                raise AuthorizationError(
+                    "Autonomous policy grants may live for at most 15 minutes."
+                )
+            proposal = selected_proposals[0]
+            action_id = selected_action_ids[0]
+            generated_at = _parse_timestamp(proposal_document, "generatedAtUtc")
+            proposal_ttl_hours = _require_positive_int(
+                proposal_document, "proposalTtlHours"
+            )
+            autonomous_proposal_expiry = generated_at + timedelta(
+                hours=proposal_ttl_hours
+            )
+            selection_bytes = _read_regular_file(
+                policy_selection_path, "policy selection"
+            )
+            resolved_selection = _validate_policy_selection(
+                selection_bytes,
+                action_id=action_id,
+                proposal=proposal,
+                repository=repository,
+                snapshot_id=snapshot_id,
+                proposals_digest=(
+                    f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+                ),
+            )
+            target_key = (
+                f"issue:{_require_positive_int(proposal, 'issueNumber')}"
+            )
+            autonomous_license_deadline = _resolve_autonomous_license_source(
+                license_source=resolved_selection["license_source"],
+                action_id=action_id,
+                proposal_digest=(
+                    f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+                ),
+                target_key=target_key,
+                repository=repository,
+                state_dir=canonical_state_dir,
+                now=issued_at,
+            )
+            if resolved_selection["operation_class"] == "delegate-copilot":
+                policy = _load_capacity_policy(production_delegation_policy_path)
+                _validate_autonomous_delegate_capacity(
+                    max_running_copilot_tasks=max_running_copilot_tasks,
+                    max_copilot_starts_per_rolling_24h=(
+                        max_copilot_starts_per_rolling_24h
+                    ),
+                    max_open_delegated_prs=max_open_delegated_prs,
+                    max_repository_running_copilot_tasks=(
+                        max_repository_running_copilot_tasks
+                    ),
+                    policy=policy,
+                )
+                capacity_policy_digest_value = policy.digest
+            autonomous_policy_license = AutonomousPolicyLicense(
+                run_id=resolved_selection["run_id"],
+                operation_class=resolved_selection["operation_class"],
+                selection_digest=(
+                    f"sha256:{hashlib.sha256(selection_bytes).hexdigest()}"
+                ),
+                selection_state_revision=resolved_selection[
+                    "selection_state_revision"
+                ],
+                license_source=resolved_selection["license_source"],
+                satisfied_prerequisites=resolved_selection[
+                    "satisfied_prerequisites"
+                ],
+            )
         else:
             policy = _load_capacity_policy(production_delegation_policy_path)
             _validate_production_delegation_steady_state_selection(
@@ -734,6 +1245,7 @@ def generate_authorization_grant(
                 ),
                 policy=policy,
             )
+            capacity_policy_digest_value = policy.digest
         production_freshness_deadline = _production_freshness_deadline(
             snapshot_id,
             capability=proposal_document.get("productionPilotCapability"),
@@ -743,11 +1255,11 @@ def generate_authorization_grant(
     else:
         production_freshness_deadline = None
 
-    expanded_state_dir = state_dir.expanduser()
-    _reject_symlink_path(expanded_state_dir, "State directory")
-    canonical_state_dir = expanded_state_dir.resolve(strict=False)
-
     expires_at = issued_at + timedelta(minutes=ttl_minutes)
+    if allow_autonomous_policy:
+        expires_at = min(
+            expires_at, autonomous_proposal_expiry, autonomous_license_deadline
+        )
     if production_freshness_deadline is not None:
         expires_at = min(expires_at, production_freshness_deadline)
 
@@ -787,15 +1299,23 @@ def generate_authorization_grant(
         "productionDelegationSteadyState": (
             allow_production_delegation_steady_state
         ),
-        "capacityPolicyDigest": (
-            policy.digest
-            if is_production and allow_production_delegation_steady_state
+        "capacityPolicyDigest": capacity_policy_digest_value,
+        "autonomousPolicy": allow_autonomous_policy,
+        "autonomousPolicyLicense": (
+            autonomous_policy_license.as_public_dict()
+            if autonomous_policy_license is not None
+            else None
+        ),
+        "policySelectionDigest": (
+            autonomous_policy_license.selection_digest
+            if autonomous_policy_license is not None
             else None
         ),
     }
     if comment_selection_digest is not None:
         grant[_COMMENT_SELECTION_DIGEST_KEY] = comment_selection_digest
     return grant
+
 
 
 def _generate_grant_id() -> str:
@@ -1101,6 +1621,78 @@ def _validate_production_delegation_steady_state_grant(
         )
 
 
+def _validate_autonomous_policy_grant(
+    grant: AuthorizationGrant,
+    *,
+    action_id: str,
+    proposal_digest: str,
+    repository: str,
+    proposal: Mapping[str, Any],
+    state_dir: Path,
+    production_delegation_policy_path: Path,
+    capability: object,
+    now: datetime,
+) -> None:
+    if grant.repository.casefold() != PRODUCTION_REPOSITORY:
+        raise AuthorizationError(
+            "Autonomous policy grant repository must be microsoft/aspire."
+        )
+    if not grant.autonomous_policy or grant.autonomous_policy_license is None:
+        raise AuthorizationError(
+            "Authorization grant does not carry the autonomous policy capability."
+        )
+    if grant.allowed_action_ids != (action_id,):
+        raise AuthorizationError(
+            "Autonomous policy grant must authorize exactly one actionId."
+        )
+    if grant.allowed_chain_roots != grant.allowed_action_ids:
+        raise AuthorizationError(
+            "Autonomous policy grant must bind its action as an independent root."
+        )
+    if grant.override_suppression_for_action_ids:
+        raise AuthorizationError(
+            "Autonomous policy grants cannot override suppression."
+        )
+    if (
+        grant.expires_at - grant.issued_at
+        > timedelta(minutes=DEFAULT_GRANT_TTL_MINUTES)
+    ):
+        raise AuthorizationError(
+            "Autonomous policy grant lifetime must not exceed 15 minutes."
+        )
+    freshness_deadline = _production_freshness_deadline(
+        grant.snapshot_id,
+        capability=capability,
+        repository=grant.repository,
+        issued_at=grant.issued_at,
+    )
+    if grant.expires_at > freshness_deadline:
+        raise AuthorizationError(
+            "Autonomous policy grant outlives its source snapshot."
+        )
+    # Re-check only the exact named policy revision or exact decision this
+    # grant is licensed against -- not the coordinator's global state
+    # revision -- so unrelated coordinator events never invalidate this
+    # grant, while replacing/pausing/revoking the named policy or
+    # clearing/rejecting the named decision always does.
+    target_key = f"issue:{_require_positive_int(proposal, 'issueNumber')}"
+    _resolve_autonomous_license_source(
+        license_source=grant.autonomous_policy_license.license_source,
+        action_id=action_id,
+        proposal_digest=proposal_digest,
+        target_key=target_key,
+        repository=repository,
+        state_dir=state_dir,
+        now=now,
+    )
+    if grant.autonomous_policy_license.operation_class == "delegate-copilot":
+        policy = _load_capacity_policy(production_delegation_policy_path)
+        if grant.capacity_policy_digest != policy.digest:
+            raise AuthorizationError(
+                "Production delegation capacity policy changed after grant creation."
+            )
+
+
 def _validate_production_comment_grant(
     grant: AuthorizationGrant,
     *,
@@ -1397,6 +1989,12 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
         _GRANT_KEYS | {_PRODUCTION_DELEGATION_GRANT_KEY},
         _GRANT_KEYS | _CURRENT_CAPABILITY_KEYS,
     }
+    # Added as new, additional key-set combinations rather than folded into
+    # the groups above, so every pre-existing production comment/delegation
+    # pilot grant continues to load byte/schema compatible and unchanged.
+    supported_key_sets |= {
+        keys | _AUTONOMOUS_POLICY_CAPABILITY_KEYS for keys in supported_key_sets
+    }
     supported_key_sets |= {
         keys | {_COMMENT_SELECTION_DIGEST_KEY} for keys in supported_key_sets
     }
@@ -1565,26 +2163,123 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
             if _COMMENT_SELECTION_DIGEST_KEY in document
             else None
         ),
+        autonomous_policy=(
+            _require_bool(document, _AUTONOMOUS_POLICY_GRANT_KEY)
+            if _AUTONOMOUS_POLICY_GRANT_KEY in document
+            else False
+        ),
+        autonomous_policy_license=(
+            _load_autonomous_policy_license(
+                document[_AUTONOMOUS_POLICY_LICENSE_KEY]
+            )
+            if document.get(_AUTONOMOUS_POLICY_LICENSE_KEY) is not None
+            else None
+        ),
+        policy_selection_digest=(
+            _require_optional_digest(document, _POLICY_SELECTION_DIGEST_KEY)
+            if _POLICY_SELECTION_DIGEST_KEY in document
+            else None
+        ),
     )
     if sum(
         (
             grant.production_comment_pilot,
             grant.production_delegation_pilot,
             grant.production_delegation_steady_state,
+            grant.autonomous_policy,
         )
     ) > 1:
         raise AuthorizationError(
             "Authorization grant production capabilities are mutually exclusive."
         )
+    if grant.autonomous_policy != (grant.autonomous_policy_license is not None):
+        raise AuthorizationError(
+            "Authorization grant autonomousPolicyLicense must exactly match "
+            "the autonomous policy capability."
+        )
+    if grant.autonomous_policy != (grant.policy_selection_digest is not None):
+        raise AuthorizationError(
+            "Authorization grant policySelectionDigest must exactly match "
+            "the autonomous policy capability."
+        )
     if (
-        grant.production_delegation_steady_state
-        != (grant.capacity_policy_digest is not None)
+        grant.autonomous_policy_license is not None
+        and grant.autonomous_policy_license.selection_digest
+        != grant.policy_selection_digest
     ):
         raise AuthorizationError(
-            "Authorization grant capacityPolicyDigest must exactly match "
-            "the steady-state capability."
+            "Authorization grant policySelectionDigest does not match its "
+            "autonomousPolicyLicense."
+        )
+    capacity_policy_required = grant.production_delegation_steady_state or (
+        grant.autonomous_policy
+        and grant.autonomous_policy_license is not None
+        and grant.autonomous_policy_license.operation_class == "delegate-copilot"
+    )
+    if capacity_policy_required != (grant.capacity_policy_digest is not None):
+        raise AuthorizationError(
+            "Authorization grant capacityPolicyDigest must exactly match its "
+            "capacity-checked capability."
         )
     return grant
+
+
+def _load_autonomous_policy_license(payload: object) -> AutonomousPolicyLicense:
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != _AUTONOMOUS_POLICY_LICENSE_FIELDS
+    ):
+        raise AuthorizationError(
+            "Authorization grant autonomousPolicyLicense must contain exactly "
+            "the supported fields."
+        )
+    if payload.get("schemaVersion") != 1:
+        raise AuthorizationError(
+            "Authorization grant autonomousPolicyLicense schemaVersion must "
+            "equal 1."
+        )
+    run_id = _require_string(payload, "runId")
+    operation_class = payload.get("operationClass")
+    if operation_class not in OPERATION_CLASSES:
+        raise AuthorizationError(
+            "Authorization grant autonomousPolicyLicense operationClass is "
+            "invalid."
+        )
+    selection_digest = _require_digest(payload, "selectionDigest")
+    selection_state_revision = _require_nonnegative_int(
+        payload, "selectionStateRevision"
+    )
+    license_source = _require_license_source(payload)
+    prerequisites_raw = payload.get("satisfiedPrerequisites")
+    if not isinstance(prerequisites_raw, list):
+        raise AuthorizationError(
+            "Authorization grant autonomousPolicyLicense satisfiedPrerequisites "
+            "must be an array."
+        )
+    prerequisites: list[tuple[str, str]] = []
+    for entry in prerequisites_raw:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != _SATISFIED_PREREQUISITE_KEYS
+        ):
+            raise AuthorizationError(
+                "Authorization grant satisfiedPrerequisites entries must "
+                "contain exactly actionId and eventDigest."
+            )
+        prerequisites.append(
+            (
+                _require_string(entry, "actionId"),
+                _require_digest(entry, "eventDigest"),
+            )
+        )
+    return AutonomousPolicyLicense(
+        run_id=run_id,
+        operation_class=operation_class,
+        selection_digest=selection_digest,
+        selection_state_revision=selection_state_revision,
+        license_source=license_source,
+        satisfied_prerequisites=tuple(prerequisites),
+    )
 
 
 def _require_string(document: Mapping[str, Any], key: str) -> str:
@@ -1613,6 +2308,29 @@ def _require_optional_digest(
         or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
     ):
         raise AuthorizationError(f"{key} must be null or a SHA-256 digest.")
+    return value
+
+
+def _require_digest(document: Mapping[str, Any], key: str) -> str:
+    value = document.get(key)
+    if not isinstance(value, str) or _DIGEST_RE.fullmatch(value) is None:
+        raise AuthorizationError(f"{key} must be a SHA-256 digest.")
+    return value
+
+
+def _require_license_source(document: Mapping[str, Any]) -> str:
+    value = document.get("licenseSource")
+    if (
+        not isinstance(value, str)
+        or (
+            _POLICY_LICENSE_SOURCE_RE.fullmatch(value) is None
+            and _DECISION_LICENSE_SOURCE_RE.fullmatch(value) is None
+        )
+    ):
+        raise AuthorizationError(
+            "licenseSource must be 'policy:<revision>' or "
+            "'decision:<eventRevision>'."
+        )
     return value
 
 

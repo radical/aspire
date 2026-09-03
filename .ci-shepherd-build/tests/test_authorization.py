@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
@@ -17,6 +17,9 @@ from ci_shepherd.authorization import (
     write_authorization_grant,
 )
 from ci_shepherd.comment_selection import build_comment_selection
+from ci_shepherd.coordinator_state import CoordinatorStateStore
+from ci_shepherd.operation_policy import DEFAULT_CAPS, OPERATION_CLASSES
+from ci_shepherd import policy_selection as ps
 
 
 class AuthorizationTests(unittest.TestCase):
@@ -1768,6 +1771,759 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             action_ids=[self.comment_action_id, self.close_action_id]
         )
         self.assertEqual([], grant_without_override["overrideSuppressionForActionIds"])
+
+
+def _no_durable_intent(_action_id: str) -> bool:
+    return False
+
+
+def _rfc3339(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _policy_document(
+    *,
+    repository: str,
+    revision: int,
+    enabled_classes: frozenset[str],
+    created_at_utc: datetime,
+    expires_at_utc: datetime,
+    status: str = "active",
+    replaces: str | None = None,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "repository": repository,
+        "revisionId": f"policy:{revision}",
+        "revision": revision,
+        "status": status,
+        "createdAtUtc": _rfc3339(created_at_utc),
+        "expiresAtUtc": _rfc3339(expires_at_utc),
+        "actor": "github:radical",
+        "replacesRevisionId": replaces,
+        "operationClasses": {
+            name: {
+                "enabled": name in enabled_classes,
+                "maxPerRun": DEFAULT_CAPS[name]["maxPerRun"],
+                "maxRolling24h": DEFAULT_CAPS[name]["maxRolling24h"],
+            }
+            for name in OPERATION_CLASSES
+        },
+        "deniedActionIds": [],
+        "deniedTargets": [],
+    }
+
+
+class AutonomousPolicyGrantTests(unittest.TestCase):
+    """Tests for Task 4's autonomous one-action child grants: minting and
+    reloading a grant bound to the frozen Task 3 policy-selection artifact
+    plus the semantic policy-or-decision license source that selected it.
+
+    The fixture reuses the same two-step comment/close dependency chain as
+    `GenerateAuthorizationGrantTests`, pre-switched to the production
+    repository microsoft/aspire (the only repository autonomous policy
+    grants are valid for), backed by a real `CoordinatorStateStore` rooted
+    at the same `state_dir` the grant itself is bound to. Selections are
+    built through the real `build_policy_selection` selector -- never a
+    hand-rolled stand-in -- so these tests stay honest about the selection
+    artifact shape Task 3 actually produces.
+    """
+
+    def setUp(self) -> None:
+        self.scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.scratch.mkdir(parents=True)
+        self.state_dir = (self.scratch / "state").resolve()
+        self.proposals_path = self.scratch / "action-proposals.json"
+        self.policy_selection_path = self.scratch / "policy-selection.json"
+        self.output_path = self.scratch / "authorization-grant.json"
+        self.repository = "microsoft/aspire"
+        self.now = datetime(2026, 8, 29, 20, 0, tzinfo=UTC)
+        self.comment_action_id = (
+            "snapshot:microsoft/aspire:2026-08-29T20:00:00Z:"
+            "issue:1:watch-comment"
+        )
+        self.close_action_id = (
+            "snapshot:microsoft/aspire:2026-08-29T20:00:00Z:"
+            "issue:1:review-close"
+        )
+        self.proposals: dict[str, object] = {
+            "schemaVersion": 2,
+            "repository": self.repository,
+            "snapshotId": "snapshot:microsoft/aspire:2026-08-29T20:00:00Z:r1",
+            "shepherdAuthor": "radical",
+            "generatedAtUtc": "2026-08-29T20:00:00Z",
+            "proposalTtlHours": 24,
+            "maxProposalsPerIssue": 2,
+            "productionPilotCapability": {
+                "schemaVersion": 1,
+                "evidenceRound": 1,
+            },
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [
+                {
+                    "actionId": self.comment_action_id,
+                    "issueNumber": 1,
+                    "issueUrl": "https://github.com/microsoft/aspire/issues/1",
+                    "operation": "edit-comment",
+                    "commentId": 1001,
+                    "sourceCommentFingerprint": {"bodySha256": "0" * 64},
+                    "evidenceBasis": "ci-occurrence",
+                    "idempotencyKey": "issue:1:status",
+                    "body": (
+                        "[automated] Watching.\n\n"
+                        "<!-- ci-shepherd:idempotency-key=issue:1:status -->"
+                    ),
+                    "evidenceIds": ["issue:1"],
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                    },
+                },
+                {
+                    "actionId": self.close_action_id,
+                    "dependsOn": self.comment_action_id,
+                    "issueNumber": 1,
+                    "issueUrl": "https://github.com/microsoft/aspire/issues/1",
+                    "operation": "close-issue",
+                    "evidenceBasis": "ci-occurrence",
+                    "idempotencyKey": "issue:1:close",
+                    "closeReason": "not_planned",
+                    "evidenceIds": ["issue:1"],
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                    },
+                },
+            ],
+            "unchangedIssueNumbers": [],
+        }
+        self._write_proposals()
+        self.store = CoordinatorStateStore(
+            self.state_dir, durable_intent_reader=_no_durable_intent
+        )
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+    # -- fixture plumbing -------------------------------------------------
+
+    def _write_proposals(self) -> bytes:
+        proposal_bytes = (
+            json.dumps(self.proposals, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        self.proposals_path.write_bytes(proposal_bytes)
+        return proposal_bytes
+
+    def _append_policy(
+        self,
+        *,
+        revision: int,
+        enabled_classes: frozenset[str],
+        replaces: str | None = None,
+        status: str = "active",
+        created_at_utc: datetime | None = None,
+        expires_at_utc: datetime | None = None,
+    ) -> None:
+        expected_revision = self.store.projection(
+            self.repository, now=self.now
+        )["stateRevision"]
+        self.store.append_policy_revision(
+            repository=self.repository,
+            expected_revision=expected_revision,
+            document=_policy_document(
+                repository=self.repository,
+                revision=revision,
+                status=status,
+                replaces=replaces,
+                created_at_utc=created_at_utc or (self.now - timedelta(days=1)),
+                expires_at_utc=expires_at_utc or (self.now + timedelta(days=30)),
+                enabled_classes=enabled_classes,
+            ),
+        )
+
+    def _append_decision(
+        self,
+        *,
+        action_id: str,
+        decision: str,
+        now: datetime | None = None,
+    ) -> None:
+        expected_revision = self.store.projection(
+            self.repository, now=self.now
+        )["stateRevision"]
+        self.store.append_exact_decision(
+            repository=self.repository,
+            expected_revision=expected_revision,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision=decision,
+            actor="github:radical",
+            now=now or self.now,
+        )
+
+    def _build_and_write_selection(
+        self, *, action_events: list = (), now: datetime | None = None
+    ) -> dict[str, object]:
+        now = now or self.now
+        projection = self.store.projection(self.repository, now=now)
+        selection = ps.build_policy_selection(
+            self.proposals,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=list(action_events),
+            now=now,
+        )
+        selection_bytes = (
+            json.dumps(selection, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        self.policy_selection_path.write_bytes(selection_bytes)
+        return selection
+
+    def _generate(self, **kwargs):
+        kwargs.setdefault("now", self.now)
+        kwargs.setdefault("grant_id", "grant:fixed-for-test")
+        return generate_authorization_grant(
+            self.proposals_path,
+            state_dir=self.state_dir,
+            **kwargs,
+        )
+
+    def _mint(self, action_id: str, **kwargs) -> dict[str, object]:
+        grant = self._generate(
+            action_ids=[action_id],
+            allow_autonomous_policy=True,
+            policy_selection_path=self.policy_selection_path,
+            policy_action_id=action_id,
+            **kwargs,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        return grant
+
+    def _load(self, action_id: str, **kwargs):
+        kwargs.setdefault("now", self.now)
+        return load_authorized_execution(
+            self.proposals_path,
+            self.output_path,
+            state_dir=self.state_dir,
+            action_id=action_id,
+            allow_autonomous_policy=True,
+            policy_selection_path=self.policy_selection_path,
+            **kwargs,
+        )
+
+    # -- generation-time validation ---------------------------------------
+
+    def test_requires_exactly_one_action_id(self) -> None:
+        with self.assertRaisesRegex(AuthorizationError, "exactly one actionId"):
+            self._generate(
+                action_ids=[self.comment_action_id, self.close_action_id],
+                allow_autonomous_policy=True,
+                policy_selection_path=self.policy_selection_path,
+                policy_action_id=self.comment_action_id,
+            )
+
+    def test_rejects_action_not_in_selection(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"close-issue"})
+        )
+        self._build_and_write_selection()
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "does not select actionId"
+        ):
+            self._mint(self.comment_action_id)
+
+    def test_grant_includes_expected_license_shape(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+
+        grant = self._mint(self.comment_action_id)
+
+        license_payload = grant["autonomousPolicyLicense"]
+        self.assertEqual(1, license_payload["schemaVersion"])
+        self.assertEqual("run-1", license_payload["runId"])
+        self.assertEqual("edit-comment", license_payload["operationClass"])
+        self.assertRegex(
+            license_payload["selectionDigest"], r"^sha256:[0-9a-f]{64}$"
+        )
+        self.assertIsInstance(license_payload["selectionStateRevision"], int)
+        self.assertEqual("policy:1", license_payload["licenseSource"])
+        self.assertEqual([], license_payload["satisfiedPrerequisites"])
+        self.assertEqual(
+            license_payload["selectionDigest"], grant["policySelectionDigest"]
+        )
+
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+    # -- TTL = min(15 minutes, proposal expiry, policy/decision expiry, ---
+    # -- production snapshot freshness) ------------------------------------
+
+    def test_ttl_never_exceeds_fifteen_minutes_by_default(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+
+        grant = self._mint(self.comment_action_id)
+
+        self.assertEqual("2026-08-29T20:15:00Z", grant["expiresAtUtc"])
+
+    def test_ttl_over_fifteen_minutes_rejected_at_generation(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "may live for at most 15 minutes"
+        ):
+            self._mint(self.comment_action_id, ttl_minutes=20)
+
+    def test_ttl_capped_by_policy_expiry(self) -> None:
+        self._append_policy(
+            revision=1,
+            enabled_classes=frozenset({"edit-comment"}),
+            expires_at_utc=self.now + timedelta(minutes=5),
+        )
+        self._build_and_write_selection()
+
+        grant = self._mint(self.comment_action_id)
+
+        self.assertEqual("2026-08-29T20:00:00Z", grant["issuedAtUtc"])
+        self.assertEqual("2026-08-29T20:05:00Z", grant["expiresAtUtc"])
+
+    def test_ttl_capped_by_proposal_expiry(self) -> None:
+        # Isolate the proposal-expiry term of the TTL formula: skew
+        # generatedAtUtc 20 minutes before the snapshot's own embedded
+        # collection time, so the minimum allowed proposalTtlHours (a whole
+        # hour) expires before the 45-minute production snapshot freshness
+        # window would otherwise be the tighter cap.
+        self.proposals["snapshotId"] = (
+            "snapshot:microsoft/aspire:2026-08-29T20:20:00Z:r1"
+        )
+        self.proposals["generatedAtUtc"] = "2026-08-29T20:00:00Z"
+        self.proposals["proposalTtlHours"] = 1
+        self._write_proposals()
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        generate_now = datetime(2026, 8, 29, 20, 50, tzinfo=UTC)
+        self._build_and_write_selection(now=generate_now)
+
+        grant = self._mint(self.comment_action_id, now=generate_now)
+
+        self.assertEqual("2026-08-29T20:50:00Z", grant["issuedAtUtc"])
+        self.assertEqual("2026-08-29T21:00:00Z", grant["expiresAtUtc"])
+
+    # -- byte-binding: any change fails before execution --------------------
+
+    def test_changed_selection_bytes_fail_before_execution(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        selection = json.loads(
+            self.policy_selection_path.read_text(encoding="utf-8")
+        )
+        selection["runId"] = "tampered-run"
+        self.policy_selection_path.write_text(
+            json.dumps(selection, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "policySelectionDigest does not match"
+        ):
+            self._load(self.comment_action_id)
+
+    def test_changed_proposal_bytes_fail_before_execution(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self.proposals["proposals"][0]["body"] += " Edited after grant."
+        self._write_proposals()
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "proposalsDigest does not match"
+        ):
+            self._load(self.comment_action_id)
+
+    # -- semantic re-validation: named license only, not global revision ---
+
+    def test_unrelated_coordinator_event_does_not_invalidate_grant(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        # An exact decision for a *different* action moves the ledger's
+        # global stateRevision forward but must never perturb this grant.
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+    def test_policy_replacement_invalidates_policy_licensed_grant(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_policy(
+            revision=2,
+            enabled_classes=frozenset({"edit-comment"}),
+            replaces="policy:1",
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "Licensing policy revision is no longer effective",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_decision_clear_invalidates_decision_licensed_grant(self) -> None:
+        # No active policy enables edit-comment: the action can only reach
+        # "exact" status via an approve-once exact decision, per
+        # build_policy_selection's exact-promotion precedence (an
+        # automatically-licensed action never reaches the exact scan).
+        self._append_policy(revision=1, enabled_classes=frozenset())
+        self._append_decision(
+            action_id=self.comment_action_id, decision="approve-once"
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_decision(
+            action_id=self.comment_action_id, decision="clear"
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "Exact approval is no longer effective"
+        ):
+            self._load(self.comment_action_id)
+
+    # -- dependent-action prerequisite binding -----------------------------
+
+    def test_dependent_close_grant_binds_prerequisite_digest(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"close-issue"})
+        )
+        comment_proposal = self.proposals["proposals"][0]
+        body_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                comment_proposal["body"].encode("utf-8")
+            ).hexdigest()
+        )
+        terminal_event = {
+            "eventType": "terminal",
+            "repository": self.repository,
+            "actionId": self.comment_action_id,
+            "operation": "edit-comment",
+            "target": {"kind": "issue", "number": 1},
+            "idempotencyKey": comment_proposal["idempotencyKey"],
+            "snapshotId": self.proposals["snapshotId"],
+            "bodyDigest": body_digest,
+            "runId": "prior-run",
+            "recordedAt": "2026-08-29T19:55:00Z",
+            "outcome": "executed",
+        }
+        self._build_and_write_selection(action_events=[terminal_event])
+
+        grant = self._mint(self.close_action_id)
+
+        license_payload = grant["autonomousPolicyLicense"]
+        self.assertEqual("close-issue", license_payload["operationClass"])
+        self.assertEqual("policy:1", license_payload["licenseSource"])
+        selection = json.loads(
+            self.policy_selection_path.read_text(encoding="utf-8")
+        )
+        close_candidate = next(
+            candidate
+            for candidate in selection["candidates"]
+            if candidate["actionId"] == self.close_action_id
+        )
+        self.assertEqual(
+            close_candidate["satisfiedPrerequisites"],
+            license_payload["satisfiedPrerequisites"],
+        )
+
+        execution = self._load(self.close_action_id)
+        self.assertEqual(self.close_action_id, execution.proposal["actionId"])
+
+        # If the terminal event underlying the prerequisite changes -- even
+        # though the dependency remains individually "terminal" -- the whole
+        # selection's bytes differ, so the grant's bound
+        # policySelectionDigest can no longer match.
+        changed_terminal_event = dict(terminal_event)
+        changed_terminal_event["recordedAt"] = "2026-08-29T19:56:00Z"
+        self._build_and_write_selection(action_events=[changed_terminal_event])
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "policySelectionDigest does not match"
+        ):
+            self._load(self.close_action_id)
+
+    # -- delegate-copilot: class caps supplement, never replace, live -----
+    # -- capacity controls -------------------------------------------------
+
+    def test_delegate_copilot_binds_capacity_policy_digest(self) -> None:
+        delegate_action_id = (
+            "snapshot:microsoft/aspire:2026-08-29T20:00:00Z:issue:2:delegate"
+        )
+        self.proposals["proposals"].append(
+            {
+                "actionId": delegate_action_id,
+                "issueNumber": 2,
+                "issueUrl": "https://github.com/microsoft/aspire/issues/2",
+                "operation": "assign-copilot",
+                "targetRepository": "microsoft/aspire",
+                "baseBranch": "main",
+                "customInstructions": "Fix issue #2 and open a draft PR.",
+                "model": "",
+                "evidenceBasis": "ci-occurrence",
+                "idempotencyKey": "issue:2:delegate",
+                "evidenceIds": ["issue:2"],
+                "expectedIssueState": "open",
+                "executionEligibility": {
+                    "eligible": True,
+                    "evidenceBasis": "ci-occurrence",
+                    "ciLabels": ["ci-failure-cause"],
+                    "occurrenceCount": 1,
+                    "collectionComplete": True,
+                    "unavailableEvidenceIds": [],
+                    "untrustedReferenceEvidenceIds": [],
+                    "blockingReasons": [],
+                },
+                "sourceEvidenceFingerprint": {
+                    "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                },
+            }
+        )
+        self._write_proposals()
+        policy_path = self.scratch / "delegation-policy.json"
+        policy_document = {
+            "schemaVersion": 1,
+            "repository": "microsoft/aspire",
+            "maxActionsPerGrant": 5,
+            "capacity": {
+                "maxRunningCopilotTasks": 2,
+                "maxCopilotStartsPerRolling24h": 3,
+                "maxOpenDelegatedPullRequests": 5,
+                "maxRepositoryRunningCopilotTasks": 100,
+            },
+        }
+        policy_path.write_text(json.dumps(policy_document), encoding="utf-8")
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"delegate-copilot"})
+        )
+        self._build_and_write_selection()
+
+        grant = self._mint(
+            delegate_action_id, production_delegation_policy_path=policy_path
+        )
+
+        self.assertEqual(
+            "delegate-copilot", grant["autonomousPolicyLicense"]["operationClass"]
+        )
+        self.assertIsNotNone(grant["capacityPolicyDigest"])
+
+        execution = self._load(
+            delegate_action_id, production_delegation_policy_path=policy_path
+        )
+        self.assertEqual(delegate_action_id, execution.proposal["actionId"])
+
+        # Drift in the pinned capacity policy after grant creation is still
+        # caught: class caps supplement, never replace, live capacity
+        # controls.
+        policy_document["capacity"]["maxRunningCopilotTasks"] = 1
+        policy_path.write_text(json.dumps(policy_document), encoding="utf-8")
+
+        with self.assertRaisesRegex(AuthorizationError, "changed after grant"):
+            self._load(
+                delegate_action_id, production_delegation_policy_path=policy_path
+            )
+
+    # -- byte/schema compatibility and mutual exclusion --------------------
+
+    def test_legacy_grant_without_autonomous_keys_still_loads(self) -> None:
+        # A grant minted before Task 4 existed carries none of the new
+        # autonomous/policy-selection keys at all -- not even as null
+        # placeholders. The loader must still accept this exact byte shape.
+        legacy_action_id = (
+            "snapshot:radical/aspire:2026-08-29T20:00:00Z:issue:1:watch-comment"
+        )
+        legacy_proposals = {
+            "schemaVersion": 2,
+            "repository": "radical/aspire",
+            "snapshotId": "snapshot:radical/aspire:2026-08-29T20:00:00Z",
+            "shepherdAuthor": "radical",
+            "generatedAtUtc": "2026-08-29T20:00:00Z",
+            "proposalTtlHours": 24,
+            "maxProposalsPerIssue": 2,
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [
+                {
+                    "actionId": legacy_action_id,
+                    "issueNumber": 1,
+                    "issueUrl": "https://github.com/radical/aspire/issues/1",
+                    "operation": "create-comment",
+                    "evidenceBasis": "ci-occurrence",
+                    "idempotencyKey": "issue:1:status",
+                    "body": (
+                        "[automated] Watching.\n\n"
+                        "<!-- ci-shepherd:idempotency-key=issue:1:status -->"
+                    ),
+                    "evidenceIds": ["issue:1"],
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": "2026-08-29T19:59:00Z",
+                    },
+                }
+            ],
+            "unchangedIssueNumbers": [],
+        }
+        legacy_proposals_path = self.scratch / "legacy-proposals.json"
+        legacy_authorization_path = self.scratch / "legacy-grant.json"
+        proposal_bytes = (
+            json.dumps(legacy_proposals, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        legacy_proposals_path.write_bytes(proposal_bytes)
+        legacy_grant = {
+            "schemaVersion": 2,
+            "grantId": "grant:legacy",
+            "repository": "radical/aspire",
+            "stateDirectory": str(self.state_dir),
+            "issuedAtUtc": "2026-08-29T20:00:00Z",
+            "expiresAtUtc": "2026-08-29T20:15:00Z",
+            "snapshotId": legacy_proposals["snapshotId"],
+            "proposalsDigest": (
+                f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+            ),
+            "allowedActionIds": [legacy_action_id],
+            "allowedOperations": ["create-comment"],
+            "allowedTargets": [{"kind": "issue", "number": 1}],
+            "allowedChainRoots": [legacy_action_id],
+            "overrideSuppressionForActionIds": [],
+            "budget": {
+                "maxMutationAttempts": 1,
+                "maxChains": 1,
+                "maxRunningCopilotTasks": 2,
+                "maxCopilotStartsPerRolling24h": 3,
+                "maxOpenDelegatedPullRequests": 5,
+                "maxRepositoryRunningCopilotTasks": 100,
+            },
+            "productionCommentPilot": False,
+        }
+        legacy_authorization_path.write_text(
+            json.dumps(legacy_grant), encoding="utf-8"
+        )
+
+        execution = load_authorized_execution(
+            legacy_proposals_path,
+            legacy_authorization_path,
+            state_dir=self.state_dir,
+            action_id=legacy_action_id,
+            now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+        )
+
+        self.assertEqual(legacy_action_id, execution.proposal["actionId"])
+        self.assertFalse(execution.grant.autonomous_policy)
+        self.assertIsNone(execution.grant.autonomous_policy_license)
+
+    def test_autonomous_capability_is_mutually_exclusive_with_pilot_flags(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+
+        for flag_name in (
+            "allow_production_comment_pilot",
+            "allow_production_delegation_pilot",
+            "allow_production_delegation_steady_state",
+        ):
+            with self.subTest(flag=flag_name):
+                with self.assertRaisesRegex(
+                    AuthorizationError, "mutually exclusive"
+                ):
+                    self._generate(
+                        action_ids=[self.comment_action_id],
+                        allow_autonomous_policy=True,
+                        policy_selection_path=self.policy_selection_path,
+                        policy_action_id=self.comment_action_id,
+                        **{flag_name: True},
+                    )
+
+    def test_loader_rejects_unknown_autonomous_license_field(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        grant["autonomousPolicyLicense"]["unexpectedField"] = "nope"
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        with self.assertRaises(AuthorizationError):
+            self._load(self.comment_action_id)
+
+    def test_loader_rejects_malformed_autonomous_license_field(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        grant = self._mint(self.comment_action_id)
+
+        grant["autonomousPolicyLicense"]["selectionStateRevision"] = "not-an-int"
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        with self.assertRaises(AuthorizationError):
+            self._load(self.comment_action_id)
 
 
 if __name__ == "__main__":

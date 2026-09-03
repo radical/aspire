@@ -112,6 +112,30 @@ def _parser() -> argparse.ArgumentParser:
             "within the checked-in production capacity policy."
         ),
     )
+    parser.add_argument(
+        "--policy-selection",
+        type=Path,
+        help=(
+            "The frozen policy-selection artifact (Task 3's selector "
+            "output). Required with --autonomous-policy."
+        ),
+    )
+    parser.add_argument(
+        "--policy-action-id",
+        help=(
+            "The single actionId the policy selection licenses. Required "
+            "with --autonomous-policy, and must equal the one --action-id."
+        ),
+    )
+    parser.add_argument(
+        "--autonomous-policy",
+        action="store_true",
+        help=(
+            "Bind exactly one child grant to a named policy revision or "
+            "exact decision recorded in the frozen policy selection, "
+            "instead of a human-confirmed production pilot flag."
+        ),
+    )
     return parser
 
 
@@ -133,6 +157,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_path = args.output.expanduser().absolute()
     if output_path.exists() and output_path.is_symlink():
         parser.error("--output must not be a symlink")
+    policy_selection_path = (
+        args.policy_selection.expanduser().absolute()
+        if args.policy_selection is not None
+        else None
+    )
+    if args.autonomous_policy:
+        if len(args.action_ids) != 1:
+            parser.error("--autonomous-policy allows exactly one --action-id")
+        if policy_selection_path is None:
+            parser.error("--autonomous-policy requires --policy-selection")
+        if args.policy_action_id is None:
+            parser.error("--autonomous-policy requires --policy-action-id")
+        if args.policy_action_id != args.action_ids[0]:
+            parser.error(
+                "--policy-action-id must equal the single --action-id"
+            )
+    elif policy_selection_path is not None or args.policy_action_id is not None:
+        parser.error(
+            "--policy-selection and --policy-action-id require "
+            "--autonomous-policy"
+        )
 
     grant = generate_authorization_grant(
         proposals_path,
@@ -156,6 +201,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_production_delegation_steady_state=(
             args.production_delegation_steady_state
         ),
+        allow_autonomous_policy=args.autonomous_policy,
+        policy_selection_path=policy_selection_path,
+        policy_action_id=args.policy_action_id,
     )
     written_path = write_authorization_grant(grant, output_path)
     print(written_path)
