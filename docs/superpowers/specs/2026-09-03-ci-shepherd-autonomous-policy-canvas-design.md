@@ -1,18 +1,53 @@
 # CI Shepherd Autonomous Policy and Canvas Design
 
-## Summary
+## Executive Summary
 
-The CI shepherd's primary product is a headless, autonomous cycle that can
-collect evidence, assess cases, run bounded investigations, select permitted
-actions, execute exact mutations, reconcile outcomes, and report results
-without an open user interface.
+### High-level important points
 
-An optional Canvas provides a report-first view for inspecting runs, editing
-durable policy, approving or rejecting exact actions, and watching outcomes.
-It is not a second workflow engine or authorization authority. The existing
-deterministic coordinator remains the only component that may validate
-proposals, consume budgets, mint exact grants, call GitHub, or launch
-investigation sessions.
+- The CI shepherd's primary product is a headless, autonomous cycle that can
+  operate with no Canvas open.
+- Standing policy permits selected operation classes within per-run and rolling
+  24-hour caps. It expires and can be paused or revoked.
+- The report-first Canvas may change standing permissions and exact action
+  decisions, then monitor their outcomes.
+- The Canvas is an optional control surface, not an executor. The coordinator
+  validates every request and remains the only component that calls GitHub.
+- Every mutation still receives a short-lived grant bound to one frozen exact
+  action.
+- Read-only investigations run automatically through a rolling queue with at
+  most three fresh sessions active at once.
+- Closing or restarting the Canvas does not stop the run. Reopening rebuilds
+  the view from durable coordinator state.
+
+### Things that must not be missed
+
+- Broad approval can cover future matching actions, but only within the
+  selected repository, operation classes, caps, and expiry.
+- "Allow all issue changes" is bounded. It never means unlimited writes,
+  quarantine changes, pushes, or pull-request creation.
+- A row-level rejection overrides broad policy. A row-level approval applies
+  to one frozen action and does not silently broaden standing policy.
+- Canvas controls may change permissions or an action's approval decision
+  before execution. They may not rewrite a frozen action's target, operation,
+  or rendered body.
+- Once an action records an execution intent, permission changes cannot erase
+  it. The coordinator must finish or reconcile that intent without replay.
+- The Canvas SDK is experimental, so Canvas code stays isolated from the
+  headless policy and execution engine.
+
+### High-level flow
+
+```text
+collect -> assess -> investigate (max 3 concurrent) -> propose
+        -> apply standing policy and exact decisions -> rank permitted actions
+        -> freeze one action -> exact grant -> execute -> reconcile -> report
+```
+
+The Canvas may inspect or change policy and exact decisions at any point before
+an action records its intent. Headless scheduled cycles use the same durable
+policy without waiting for the Canvas.
+
+### Core selection change
 
 This design replaces the current mismatch-prone sequence:
 
@@ -170,7 +205,9 @@ The Canvas adapter:
 
 - serves layout A, the report-first approval console;
 - reads coordinator-owned status and report projections;
-- submits policy revisions and exact action decisions;
+- creates, activates, revises, pauses, and revokes policy through validated
+  coordinator commands;
+- approves, rejects, or clears exact action decisions before execution;
 - streams or polls durable status changes; and
 - contains no GitHub credentials or mutation implementation.
 
@@ -231,7 +268,8 @@ An exact decision applies to one frozen action ID:
 - `approve-once` authorizes that action even when its operation class is not
   enabled by standing policy;
 - `reject-once` prevents that action in the current cycle even when standing
-  policy permits it; and
+  policy permits it;
+- `clear` removes the draft exact decision before an intent exists; and
 - no decision leaves the standing policy in control.
 
 Exact decisions are bound to proposal bytes and expire with the proposal.
@@ -479,22 +517,19 @@ Implement the durable policy schema, policy-aware selector, exact decisions,
 budget accounting, child-grant binding, and three-slot investigation scheduler.
 Prove the full cycle without a Canvas.
 
-### Phase 2: read-only Canvas
+### Phase 2: Canvas control surface
 
-Add layout A as a report and status projection. Validate reconnect behavior and
-prove that installing or removing the Canvas does not alter cycle artifacts.
+Add layout A with report and status projections, draft policy editing, exact
+approve/reject/clear decisions, policy previews, revision conflicts,
+activation, pause, and revocation. Validate reconnect behavior and prove that
+installing or removing the Canvas does not alter headless cycle decisions.
 
-### Phase 3: policy editing
-
-Enable draft policy editing, exact approve/reject decisions, policy previews,
-revision conflicts, activation, pause, and revocation through the adapter.
-
-### Phase 4: autonomous shadow operation
+### Phase 3: autonomous shadow operation
 
 Run scheduled cycles with standing policy in shadow mode. Compare would-execute
 sets, cap accounting, and reconciliation across repeated cycles.
 
-### Phase 5: bounded production promotion
+### Phase 4: bounded production promotion
 
 Promote one operation class at a time after action-free evidence and an
 independent audit. Preserve exact grants, live preflight, mutation ledgers, and
