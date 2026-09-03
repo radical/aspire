@@ -294,6 +294,15 @@ def _require_replaces_revision_id(value: object, revision: int) -> str | None:
     replaces_revision_id = _require_nonempty_string(value, "replacesRevisionId")
     if _REVISION_ID_RE.fullmatch(replaces_revision_id) is None:
         raise OperationPolicyError("replacesRevisionId must be a policy revision identity.")
+    replaces_revision = int(replaces_revision_id.split(":", 1)[1])
+    if replaces_revision == revision:
+        raise OperationPolicyError(
+            "replacesRevisionId must reference an earlier policy revision, not the current revision."
+        )
+    if replaces_revision > revision:
+        raise OperationPolicyError(
+            "replacesRevisionId must reference an earlier policy revision."
+        )
     return replaces_revision_id
 
 

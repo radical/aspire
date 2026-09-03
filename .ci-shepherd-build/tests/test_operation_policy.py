@@ -237,6 +237,20 @@ class OperationPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(OperationPolicyError, "missing fields"):
             load_operation_policy_document(document)
 
+    def test_rejects_numeric_schema_version_mismatch(self) -> None:
+        document = policy_document()
+        document["schemaVersion"] = 2
+
+        with self.assertRaisesRegex(OperationPolicyError, "schemaVersion must be 1"):
+            load_operation_policy_document(document)
+
+    def test_rejects_string_schema_version(self) -> None:
+        document = policy_document()
+        document["schemaVersion"] = "1"
+
+        with self.assertRaisesRegex(OperationPolicyError, "schemaVersion must be an integer"):
+            load_operation_policy_document(document)
+
     def test_rejects_missing_operation_class(self) -> None:
         document = policy_document()
         del document["operationClasses"]["rerun-or-retry"]
@@ -299,6 +313,18 @@ class OperationPolicyTests(unittest.TestCase):
         policy = load_operation_policy_document(document)
 
         self.assertEqual("policy:1", policy.replaces_revision_id)
+
+    def test_rejects_self_referencing_replaces_revision_identity(self) -> None:
+        document = policy_document(revision=3, replaces_revision_id="policy:3")
+
+        with self.assertRaisesRegex(OperationPolicyError, "current revision"):
+            load_operation_policy_document(document)
+
+    def test_rejects_forward_referencing_replaces_revision_identity(self) -> None:
+        document = policy_document(revision=3, replaces_revision_id="policy:4")
+
+        with self.assertRaisesRegex(OperationPolicyError, "earlier policy revision"):
+            load_operation_policy_document(document)
 
     def test_rejects_duplicate_denied_action_ids(self) -> None:
         document = policy_document()
