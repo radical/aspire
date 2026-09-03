@@ -222,6 +222,12 @@ class OperationPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(OperationPolicyError, "revision"):
             load_operation_policy_document(document)
 
+    def test_rejects_replaces_revision_for_revision_one(self) -> None:
+        document = policy_document(replaces_revision_id="policy:1")
+
+        with self.assertRaisesRegex(OperationPolicyError, "revision 1"):
+            load_operation_policy_document(document)
+
     def test_rejects_invalid_status(self) -> None:
         document = policy_document(status="draft")
 
@@ -233,6 +239,13 @@ class OperationPolicyTests(unittest.TestCase):
 
         with self.assertRaisesRegex(OperationPolicyError, "replacesRevisionId"):
             load_operation_policy_document(document)
+
+    def test_accepts_non_adjacent_valid_replaces_revision_identity(self) -> None:
+        document = policy_document(revision=3, replaces_revision_id="policy:1")
+
+        policy = load_operation_policy_document(document)
+
+        self.assertEqual("policy:1", policy.replaces_revision_id)
 
     def test_rejects_duplicate_denied_action_ids(self) -> None:
         document = policy_document()
