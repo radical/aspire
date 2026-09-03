@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import unittest
+from unittest.mock import patch
 
 from ci_shepherd.authorization import (
     AuthorizationError,
@@ -15,6 +16,7 @@ from ci_shepherd.authorization import (
     load_authorized_execution,
     write_authorization_grant,
 )
+from ci_shepherd.comment_selection import build_comment_selection
 
 
 class AuthorizationTests(unittest.TestCase):
@@ -424,6 +426,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.scratch.mkdir(parents=True)
         self.state_dir = (self.scratch / "state").resolve()
         self.proposals_path = self.scratch / "action-proposals.json"
+        self.comment_selection_path = self.scratch / "comment-selection.json"
         self.output_path = self.scratch / "authorization-grant.json"
         self.now = datetime(2026, 8, 29, 20, 0, tzinfo=UTC)
         self.comment_action_id = (
@@ -518,11 +521,34 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
     def _generate(self, **kwargs):
         kwargs.setdefault("now", self.now)
         kwargs.setdefault("grant_id", "grant:fixed-for-test")
+        if (
+            kwargs.get("allow_production_comment_pilot") is True
+            and "comment_selection_path" not in kwargs
+        ):
+            self._write_comment_selection(list(kwargs["action_ids"]))
+            kwargs["comment_selection_path"] = self.comment_selection_path
         return generate_authorization_grant(
             self.proposals_path,
             state_dir=self.state_dir,
             **kwargs,
         )
+
+    def _write_comment_selection(self, action_ids: list[str]) -> bytes:
+        selection = build_comment_selection(
+            self.proposals,
+            max_comments=min(5, max(1, len(action_ids))),
+        )
+        selection["selectedActionIds"] = action_ids
+        selection_bytes = (
+            json.dumps(
+                selection,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode()
+        self.comment_selection_path.write_bytes(selection_bytes)
+        return selection_bytes
 
     def _use_production_repository(self) -> None:
         serialized = json.dumps(self.proposals).replace(
@@ -594,7 +620,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertEqual("2026-08-29T20:00:00Z", grant["issuedAtUtc"])
         self.assertEqual("2026-08-29T20:15:00Z", grant["expiresAtUtc"])
         self.assertEqual(
-            sorted([self.comment_action_id, self.close_action_id]),
+            [self.comment_action_id, self.close_action_id],
             grant["allowedActionIds"],
         )
         self.assertEqual(
@@ -659,6 +685,61 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             authorized.grant.budget.max_copilot_starts_per_rolling_24h,
         )
         self.assertEqual(12, authorized.grant.budget.max_open_delegated_prs)
+
+    def test_source_reconciliation_revalidates_checkout_before_execution(
+        self,
+    ) -> None:
+        proposal = self.proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal["evidenceBasis"] = "source-reconciliation"
+        proposal["executionEligibility"]["evidenceBasis"] = "source-reconciliation"
+        proposal["licensedClaims"] = [
+            {
+                "kind": "source-method-match",
+                "testName": "Example.Tests.Flaky",
+                "file": "tests/Example.Tests/FlakyTests.cs",
+                "line": 42,
+                "quarantineIssueUrls": [],
+            },
+            {
+                "kind": "no-quarantine-link-to-current-issue",
+                "issueUrl": "https://github.com/radical/aspire/issues/1",
+            },
+        ]
+        proposal["sourceEvidenceFingerprint"].update(
+            {
+                "sourceRevision": "a" * 40,
+                "sourceTreeDigest": "sha256:" + "b" * 64,
+                "inspectorTreeDigest": "sha256:" + "c" * 64,
+                "findingDigest": "sha256:" + "d" * 64,
+            }
+        )
+        self._write_proposals()
+        grant = self._generate(action_ids=[self.comment_action_id])
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+
+        with (
+            patch(
+                "ci_shepherd.authorization.current_quarantine_source_fingerprint",
+                return_value={
+                    "sourceRevision": "e" * 40,
+                    "sourceTreeDigest": "sha256:" + "b" * 64,
+                    "inspectorTreeDigest": "sha256:" + "c" * 64,
+                },
+            ),
+            self.assertRaisesRegex(
+                AuthorizationError,
+                "evidence is unavailable or changed before execution",
+            ),
+        ):
+            load_authorized_execution(
+                self.proposals_path,
+                self.output_path,
+                state_dir=self.state_dir,
+                action_id=self.comment_action_id,
+                source_checkout_path=self.scratch,
+                now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+            )
 
     def test_fork_grant_authorizes_exact_copilot_assignment(self) -> None:
         proposal = self.proposals["proposals"][0]
@@ -927,12 +1008,18 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
     ) -> None:
         self._use_production_repository()
         self._write_proposals()
+        selection_bytes = self._write_comment_selection([self.comment_action_id])
 
         grant = self._generate(
             action_ids=[self.comment_action_id],
+            comment_selection_path=self.comment_selection_path,
             allow_production_comment_pilot=True,
         )
         self.assertTrue(grant["productionCommentPilot"])
+        self.assertEqual(
+            f"sha256:{hashlib.sha256(selection_bytes).hexdigest()}",
+            grant["commentSelectionDigest"],
+        )
         self.assertEqual(
             {
                 "maxMutationAttempts": 1,
@@ -951,12 +1038,39 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             self.output_path,
             state_dir=self.state_dir,
             action_id=self.comment_action_id,
+            comment_selection_path=self.comment_selection_path,
             allow_production_comment_pilot=True,
             now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
         )
 
         self.assertTrue(authorized.grant.production_comment_pilot)
         self.assertEqual(self.comment_action_id, authorized.proposal["actionId"])
+
+    def test_production_execution_rejects_changed_comment_selection(self) -> None:
+        self._use_production_repository()
+        self._write_proposals()
+        self._write_comment_selection([self.comment_action_id])
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            comment_selection_path=self.comment_selection_path,
+            allow_production_comment_pilot=True,
+        )
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        self.comment_selection_path.write_text("{}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "commentSelectionDigest does not match",
+        ):
+            load_authorized_execution(
+                self.proposals_path,
+                self.output_path,
+                state_dir=self.state_dir,
+                action_id=self.comment_action_id,
+                comment_selection_path=self.comment_selection_path,
+                allow_production_comment_pilot=True,
+                now=datetime(2026, 8, 29, 20, 5, tzinfo=UTC),
+            )
 
     def test_production_delegation_pilot_allows_one_capped_assignment(self) -> None:
         self._use_production_repository()
@@ -1166,13 +1280,54 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             },
         )
 
+    def test_production_comment_grant_rejects_reordered_selection(self) -> None:
+        self._use_production_repository()
+        second_action_id = self._add_comment_proposal(2)
+        self._write_proposals()
+        self._write_comment_selection(
+            [self.comment_action_id, second_action_id]
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "exactly match the ordered comment selection",
+        ):
+            self._generate(
+                action_ids=[second_action_id, self.comment_action_id],
+                comment_selection_path=self.comment_selection_path,
+                allow_production_comment_pilot=True,
+            )
+
+    def test_production_comment_grant_recomputes_deterministic_selection(
+        self,
+    ) -> None:
+        self._use_production_repository()
+        second_action_id = self._add_comment_proposal(2)
+        self._write_proposals()
+        self._write_comment_selection(
+            [second_action_id, self.comment_action_id]
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "deterministically recomputed selection",
+        ):
+            self._generate(
+                action_ids=[second_action_id, self.comment_action_id],
+                comment_selection_path=self.comment_selection_path,
+                allow_production_comment_pilot=True,
+            )
+
     def test_production_comment_pilot_rejects_more_than_five_actions(self) -> None:
         self._use_production_repository()
         action_ids = [self.comment_action_id]
         action_ids.extend(self._add_comment_proposal(number) for number in range(2, 7))
         self._write_proposals()
 
-        with self.assertRaisesRegex(AuthorizationError, "between one and 5 actions"):
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "deterministically recomputed selection",
+        ):
             self._generate(
                 action_ids=action_ids,
                 allow_production_comment_pilot=True,
@@ -1270,6 +1425,10 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         grant["proposalsDigest"] = (
             f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
         )
+        selection_bytes = self._write_comment_selection([self.comment_action_id])
+        grant["commentSelectionDigest"] = (
+            f"sha256:{hashlib.sha256(selection_bytes).hexdigest()}"
+        )
         self.output_path.write_text(json.dumps(grant), encoding="utf-8")
 
         with self.assertRaisesRegex(
@@ -1290,11 +1449,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
     ) -> None:
         self._use_production_repository()
         self._write_proposals()
+        self._write_comment_selection([self.comment_action_id])
 
         grant = generate_authorization_grant(
             self.proposals_path,
             action_ids=[self.comment_action_id],
             state_dir=self.state_dir,
+            comment_selection_path=self.comment_selection_path,
             allow_production_comment_pilot=True,
             now=datetime(2026, 8, 29, 20, 30, tzinfo=UTC),
             grant_id="grant:test",
@@ -1305,6 +1466,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
     def test_production_comment_pilot_rejects_stale_expanded_snapshot(self) -> None:
         self._use_production_repository()
         self._write_proposals()
+        self._write_comment_selection([self.comment_action_id])
 
         with self.assertRaisesRegex(
             AuthorizationError,
@@ -1314,6 +1476,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 self.proposals_path,
                 action_ids=[self.comment_action_id],
                 state_dir=self.state_dir,
+                comment_selection_path=self.comment_selection_path,
                 allow_production_comment_pilot=True,
                 now=datetime(2026, 8, 29, 20, 46, tzinfo=UTC),
                 grant_id="grant:test",
@@ -1322,11 +1485,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
     def test_production_comment_pilot_expires_with_snapshot_freshness(self) -> None:
         self._use_production_repository()
         self._write_proposals()
+        self._write_comment_selection([self.comment_action_id])
 
         grant = generate_authorization_grant(
             self.proposals_path,
             action_ids=[self.comment_action_id],
             state_dir=self.state_dir,
+            comment_selection_path=self.comment_selection_path,
             ttl_minutes=15,
             allow_production_comment_pilot=True,
             now=datetime(2026, 8, 29, 20, 40, tzinfo=UTC),
@@ -1362,13 +1527,13 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "comment plus closure",
                 [self.comment_action_id, self.close_action_id],
                 {},
-                "comment creation or editing only",
+                "deterministically recomputed selection",
             ),
             (
                 "closure",
                 [self.comment_action_id],
                 {"operation": "close-issue"},
-                "comment creation or editing only",
+                "deterministically recomputed selection",
             ),
             (
                 "long lifetime",
@@ -1422,7 +1587,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "action",
                 "allowedActionIds",
                 [self.comment_action_id, self.close_action_id],
-                "comment creation or editing only",
+                "ordered comment selection",
             ),
             (
                 "operation",

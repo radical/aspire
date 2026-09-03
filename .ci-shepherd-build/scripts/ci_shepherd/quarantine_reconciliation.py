@@ -74,6 +74,7 @@ def reconcile_quarantine_source(
             "repository": repository,
             "sourceRevision": None,
             "sourceTreeDigest": None,
+            "inspectorTreeDigest": None,
             "findings": [],
             "verifiedIssues": [],
             "unverifiableIssueNumbers": [issue["issueNumber"] for issue in labeled],
@@ -123,6 +124,7 @@ def reconcile_quarantine_source(
         "repository": repository,
         "sourceRevision": pinned["sourceRevision"],
         "sourceTreeDigest": pinned["sourceTreeDigest"],
+        "inspectorTreeDigest": pinned["inspectorTreeDigest"],
         "findings": findings,
         "verifiedIssues": verified_issues,
         "unverifiableIssueNumbers": [],
@@ -286,20 +288,23 @@ def _reconcile_labeled_issue(
         }
     if result is None or result["status"] != "resolved":
         if claimed is None:
-            # No parseable test name: the repository-wide inventory is still
-            # exact enough to say nothing links this issue.
             return {
                 "issueNumber": issue_number,
                 "issueUrl": issue_url,
-                "kind": "label-without-attribute",
+                "kind": "unresolved-test-identity",
                 "claimedTestName": None,
                 "currentSource": [],
                 "summary": (
-                    f"The `{QUARANTINE_LABEL}` label is on this issue, but no "
-                    "`[QuarantinedTest]` attribute in the inspected source "
-                    "links it."
+                    f"The `{QUARANTINE_LABEL}` label is on this issue, but the "
+                    "collected issue evidence does not resolve a test method "
+                    "name. No source method was checked; the repository-wide "
+                    "inventory only confirms that no `[QuarantinedTest]` "
+                    "attribute links this issue."
                 ),
-                "humanAction": _LABEL_HUMAN_ACTION,
+                "humanAction": (
+                    "Identify the test method this issue tracks, or remove the "
+                    f"`{QUARANTINE_LABEL}` label if it does not track a test."
+                ),
             }
         if result is None or result["status"] != "not-found":
             return None
@@ -391,10 +396,25 @@ def _reconcile_labeled_issue(
         if not quarantine_issue_urls
         else "has `[QuarantinedTest]` attributes that link other issues"
     )
+    kind = (
+        "label-without-attribute"
+        if not quarantine_issue_urls
+        else "quarantined-against-other-issue"
+    )
+    human_action = (
+        _LABEL_HUMAN_ACTION
+        if not quarantine_issue_urls
+        else (
+            "Review whether this issue duplicates "
+            f"{', '.join(quarantine_issue_urls)}. Close the duplicate or repoint "
+            "the existing attribute if this issue is the canonical tracker; do "
+            "not add a second quarantine for the same method."
+        )
+    )
     return {
         "issueNumber": issue_number,
         "issueUrl": issue_url,
-        "kind": "label-without-attribute",
+        "kind": kind,
         "claimedTestName": claimed,
         "currentSource": [
             {
@@ -409,7 +429,7 @@ def _reconcile_labeled_issue(
             f"`{claimed}` at `{location}` {attribute_summary} in the "
             "inspected source."
         ),
-        "humanAction": _LABEL_HUMAN_ACTION,
+        "humanAction": human_action,
     }
 
 
@@ -505,12 +525,15 @@ def _validated_source_state(
         return None
     revision = source_state.get("sourceRevision")
     tree_digest = source_state.get("sourceTreeDigest")
+    inspector_digest = source_state.get("inspectorTreeDigest")
     if (
         source_state.get("schemaVersion") != 1
         or not isinstance(revision, str)
         or re.fullmatch(r"[0-9a-f]{40}", revision) is None
         or not isinstance(tree_digest, str)
         or re.fullmatch(r"sha256:[0-9a-f]{64}", tree_digest) is None
+        or not isinstance(inspector_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", inspector_digest) is None
     ):
         return None
 
@@ -586,6 +609,7 @@ def _validated_source_state(
     return {
         "sourceRevision": revision,
         "sourceTreeDigest": tree_digest,
+        "inspectorTreeDigest": inspector_digest,
         "testsByName": tests_by_name,
         "quarantinesByIssueUrl": quarantines_by_issue_url,
         "quarantines": inventory,

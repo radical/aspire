@@ -670,6 +670,80 @@ class QuarantineSourceStateTests(unittest.TestCase):
     def test_missing_checkout_yields_no_source_state(self) -> None:
         self.assertIsNone(collect_quarantine_source_state(None, ["Demo.Tests.Flaky"]))
 
+    def test_dirty_source_inputs_yield_no_commit_attributed_source_state(self) -> None:
+        with patch(
+            "ci_shepherd.quarantine._source_inputs_are_clean",
+            return_value=False,
+        ):
+            state = collect_quarantine_source_state(
+                REPOSITORY_ROOT,
+                ["Demo.Tests.Flaky"],
+            )
+
+        self.assertIsNone(state)
+
+    def test_dirty_nuget_config_yields_no_commit_attributed_source_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkout = Path(temporary_directory)
+            (checkout / "tests").mkdir()
+            (checkout / "tools" / "QuarantineTools").mkdir(parents=True)
+            (checkout / "eng").mkdir()
+            for file_name in (
+                "Directory.Build.props",
+                "Directory.Build.targets",
+                "Directory.Packages.props",
+                "global.json",
+            ):
+                (checkout / file_name).write_text(file_name, encoding="utf-8")
+            nuget_config = checkout / "NuGet.config"
+            nuget_config.write_text("<configuration />\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "--no-pager", "init", "--quiet"],
+                cwd=checkout,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "--no-pager",
+                    "add",
+                    "--",
+                    "Directory.Build.props",
+                    "Directory.Build.targets",
+                    "Directory.Packages.props",
+                    "NuGet.config",
+                    "global.json",
+                ],
+                cwd=checkout,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "--no-pager",
+                    "-c",
+                    "user.name=CI Shepherd Tests",
+                    "-c",
+                    "user.email=ci-shepherd@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "Add source input",
+                ],
+                cwd=checkout,
+                check=True,
+            )
+            nuget_config.write_text("<configuration></configuration>\n", encoding="utf-8")
+
+            state = collect_quarantine_source_state(
+                checkout,
+                ["Demo.Tests.Flaky"],
+            )
+
+        self.assertIsNone(state)
+
     def test_incomplete_inspection_yields_no_source_state(self) -> None:
         with patch(
             "ci_shepherd.quarantine._run_quarantine_tool",

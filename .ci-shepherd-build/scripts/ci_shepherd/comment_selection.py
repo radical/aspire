@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 
 from .authorization import MAX_PRODUCTION_COMMENT_ACTIONS
+from .models import stable_json
 
 
 _COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
@@ -78,7 +80,7 @@ def build_comment_selection(
             continue
 
         priority, priority_reason = _priority(action_id)
-        operation_priority = 0 if operation == "create-comment" else 1
+        operation_priority = 0 if operation == "edit-comment" else 1
         candidates.append(
             (
                 (priority, operation_priority, issue_number, action_id),
@@ -121,6 +123,10 @@ def build_comment_selection(
         "schemaVersion": 1,
         "repository": repository,
         "snapshotId": snapshot_id,
+        "proposalsDigest": (
+            "sha256:"
+            + hashlib.sha256(stable_json(proposals_document).encode("utf-8")).hexdigest()
+        ),
         "maxComments": max_comments,
         "eligibleCount": eligible_count,
         "selectedCount": len(selected),

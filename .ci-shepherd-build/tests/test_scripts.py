@@ -30,6 +30,13 @@ from ci_shepherd.review_selection import SELECTION_SCHEMA_VERSION
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1] / "scripts"
 SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
+REGISTERED_SKILL_PATH = (
+    Path(__file__).resolve().parents[2]
+    / ".agents"
+    / "skills"
+    / "ci-shepherd"
+    / "SKILL.md"
+)
 
 
 
@@ -185,6 +192,14 @@ def load_script(name: str):
 
 
 class PrototypeScriptTests(unittest.TestCase):
+    def test_ci_shepherd_is_registered_as_a_repository_skill(self) -> None:
+        registered = REGISTERED_SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("name: ci-shepherd", registered)
+        self.assertIn(".ci-shepherd-build/SKILL.md", registered)
+        self.assertIn("policy-level inputs", registered)
+        self.assertIn("Do not ask the caller to orchestrate", registered)
+
     def test_skill_requires_authorized_typed_quarantine_lifecycle(self) -> None:
         skill = SKILL_PATH.read_text(encoding="utf-8")
 
@@ -1363,7 +1378,7 @@ class PrototypeScriptTests(unittest.TestCase):
             self.assertEqual(0o600, output_path.stat().st_mode & 0o777)
             grant_document = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(
-                [close_action_id, comment_action_id],
+                [comment_action_id, close_action_id],
                 grant_document["allowedActionIds"],
             )
 

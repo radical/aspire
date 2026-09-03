@@ -505,6 +505,48 @@ Intermittent failure.
             ],
         )
 
+    def test_extracts_bare_fully_qualified_test_from_build_error_leg(self) -> None:
+        signals = extract(
+            "Build error leg or test failing: "
+            "Aspire.Playground.Tests.ProjectSpecificTests.KafkaTest"
+        )
+
+        self.assertEqual(
+            [
+                (
+                    "testName",
+                    "Aspire.Playground.Tests.ProjectSpecificTests.KafkaTest",
+                    "aspire.playground.tests.projectspecifictests.kafkatest",
+                    "build-error-leg",
+                )
+            ],
+            [
+                (fact["field"], fact["raw"], fact["normalized"], fact["method"])
+                for fact in signals.facts
+            ],
+        )
+
+    def test_unescapes_markdown_in_bare_fully_qualified_test(self) -> None:
+        signals = extract(
+            "Build error leg or test failing: "
+            r"Aspire.Hosting.Tests.PipelineTests.ExecuteAsync\_ReportsFailure"
+        )
+
+        self.assertEqual(
+            [
+                (
+                    "testName",
+                    "Aspire.Hosting.Tests.PipelineTests.ExecuteAsync_ReportsFailure",
+                    "aspire.hosting.tests.pipelinetests.executeasync_reportsfailure",
+                    "build-error-leg",
+                )
+            ],
+            [
+                (fact["field"], fact["raw"], fact["normalized"], fact["method"])
+                for fact in signals.facts
+            ],
+        )
+
     def test_extracts_parameterized_xunit_test_from_build_error_leg(self) -> None:
         signals = extract(
             'Build error leg or test failing: Tests / Linux / `Can_connect(resource: "redis", port: 6379)`'

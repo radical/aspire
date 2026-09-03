@@ -924,9 +924,15 @@ class QuarantineSourceReconciliationTests(unittest.TestCase):
         )
 
         finding = result["findings"][0]
-        self.assertEqual("label-without-attribute", finding["kind"])
+        self.assertEqual("quarantined-against-other-issue", finding["kind"])
         self.assertEqual([other_issue_url], finding["currentSource"][0]["quarantineIssueUrls"])
         self.assertIn("link other issues", finding["summary"])
+        self.assertEqual(
+            "Review whether this issue duplicates https://github.com/owner/repo/issues/99. "
+            "Close the duplicate or repoint the existing attribute if this issue is the "
+            "canonical tracker; do not add a second quarantine for the same method.",
+            finding["humanAction"],
+        )
 
     def test_renamed_method_keeps_the_issue_link_and_asks_for_a_correction(
         self,
@@ -1174,18 +1180,19 @@ class QuarantineSourceReconciliationTests(unittest.TestCase):
                 {
                     "issueNumber": 22,
                     "issueUrl": "https://github.com/owner/repo/issues/22",
-                    "kind": "label-without-attribute",
+                    "kind": "unresolved-test-identity",
                     "claimedTestName": None,
                     "currentSource": [],
                     "summary": (
-                        "The `quarantined-test` label is on this issue, but no "
-                        "`[QuarantinedTest]` attribute in the inspected source "
-                        "links it."
+                        "The `quarantined-test` label is on this issue, but the "
+                        "collected issue evidence does not resolve a test method "
+                        "name. No source method was checked; the repository-wide "
+                        "inventory only confirms that no `[QuarantinedTest]` "
+                        "attribute links this issue."
                     ),
                     "humanAction": (
-                        "Confirm whether this test should be quarantined. Either "
-                        "quarantine it against this issue or remove the "
-                        "`quarantined-test` label."
+                        "Identify the test method this issue tracks, or remove the "
+                        "`quarantined-test` label if it does not track a test."
                     ),
                 }
             ],

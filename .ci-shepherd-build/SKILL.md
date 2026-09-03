@@ -518,13 +518,20 @@ the cycle reports the labelled issues as unverifiable and makes no
 source-reconciliation proposal. Nothing here is model-inferred, and nothing
 here writes to GitHub.
 
-Four disagreements become one canonical `issue:<number>:status` comment
+Seven disagreements become one canonical `issue:<number>:status` comment
 proposal each, rendered through the same proposal path, `[automated] ` prefix,
 eligibility gates, and unchanged-body suppression as every other status
 comment:
 
+- `unresolved-test-identity` — the issue evidence does not resolve a test
+  method name. No method-level source claim is made; the comment asks a human
+  to identify the tracked test or remove the label.
 - `label-without-attribute` — the labelled issue's test exists in source with
   no `[QuarantinedTest]` attribute. The label alone never counts as quarantined.
+- `quarantined-against-other-issue` — the labelled issue's test exists and is
+  already quarantined against another tracker. The comment asks a human to
+  resolve the duplicate or repoint the existing attribute; it never asks for a
+  second quarantine of the same method.
 - `attribute-name-drift` — an attribute still links the issue, but on a
   different method than the issue names. The comment quotes the current exact
   method; the shepherd never edits issue titles or metadata.
@@ -545,6 +552,13 @@ status recommendation for the same issue is recorded under
 `superseded-by-quarantine-source-reconciliation` rather than dropped. If the
 source state cannot be pinned, the reconciler makes no claim at all and lists
 the issues under `unverifiableIssueNumbers`.
+
+Every public reconciliation sentence is rendered from a typed finding only
+after that finding produces validated `licensedClaims`. Free-form finding
+summaries are report context and are never copied into public comments. A
+resolved source location, source absence, current or cross-linked tracker, or
+prior quarantine must have the corresponding structured claim or proposal
+generation fails closed.
 
 ## Dry-run action actor
 
@@ -630,8 +644,14 @@ creation and execution, and the generated grant records
 `productionCommentPilot: true`. Such a grant must name between one and five
 independent `create-comment` or `edit-comment` actions, with at most one per
 issue and no dependency or suppression override. The named actions must be the
-ordered IDs written to `comment-selection.json`; do not replace that deterministic
-cut with model or operator preference. The proposals must come from a finalized
+ordered IDs written to `comment-selection.json`; the selection binds the
+proposal digest, and the grant binds the exact selection digest. Execution
+revalidates both artifacts and preserves the ordered IDs in the grant. Ordering
+determines the bounded cut, but the selected actions remain independent so one
+stale action does not block another. Do not replace that deterministic cut with
+model or operator preference. Corrections to existing comments outrank new
+comment creation within the same semantic priority. The
+proposals must come from a finalized
 round-zero or round-one snapshot collected less than 45 minutes earlier. An edit
 must target an existing shepherd-owned comment. Finalized proposal documents
 carry a digest-bound production capability; provisional round-zero proposals
@@ -644,6 +664,7 @@ authorization validation.
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
   --proposals "$SCRATCH/action-proposals.json" \
+  --comment-selection "$SCRATCH/comment-selection.json" \
   --action-id "snapshot:...:issue:17840:watch-comment" \
   --state-dir "$STATE" \
   --output "$SCRATCH/authorization-grant.json" \
@@ -651,12 +672,18 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
 
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
+  --comment-selection "$SCRATCH/comment-selection.json" \
   --authorization "$SCRATCH/authorization-grant.json" \
   --state-dir "$STATE" \
   --action-id "snapshot:...:issue:17840:watch-comment" \
   --execute \
   --production-comment-pilot
 ```
+
+Source-reconciliation actions additionally require
+`--source-checkout "$CHECKOUT"`. Collection rejects dirty quarantine source
+inputs. Execution recomputes the source revision, source tree digest, and
+QuarantineTools inspector digest before any GitHub mutation.
 
 The separate production delegation pilot requires
 `--production-delegation-pilot` at both grant creation and execution. It
@@ -679,6 +706,7 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
 python3 "$CI_SHEPHERD_ROOT/scripts/execute_actions.py" \
   --proposals "$SCRATCH/action-proposals.json" \
   --authorization "$SCRATCH/authorization-grant.json" \
+  --source-checkout "$CHECKOUT" \
   --state-dir "$STATE" \
   --action-id "snapshot:...:issue:12345:assign-copilot" \
   --execute \

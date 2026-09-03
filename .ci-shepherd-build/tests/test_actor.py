@@ -675,8 +675,22 @@ class ActorTests(unittest.TestCase):
             "issueUpdatedAt": "2026-08-21T19:54:00Z",
             "sourceRevision": "a" * 40,
             "sourceTreeDigest": "sha256:" + "b" * 64,
+            "inspectorTreeDigest": "sha256:" + "d" * 64,
             "findingDigest": "sha256:" + "c" * 64,
         }
+        proposal["licensedClaims"] = [
+            {
+                "kind": "source-method-match",
+                "testName": "Example.Tests.Flaky",
+                "file": "tests/Example.Tests/FlakyTests.cs",
+                "line": 42,
+                "quarantineIssueUrls": [],
+            },
+            {
+                "kind": "no-quarantine-link-to-current-issue",
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+            },
+        ]
         proposal["executionEligibility"] = {
             "eligible": True,
             "evidenceBasis": "source-reconciliation",
@@ -1593,6 +1607,57 @@ class ActorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsupported fields"):
             build_dry_run(proposals, action_id=None)
+
+    def test_dry_run_rejects_source_reconciliation_without_typed_claims(
+        self,
+    ) -> None:
+        for claims in (
+            None,
+            [{"summary": "A free-form source claim."}],
+            [{"kind": "invented-source-claim"}],
+            [{"kind": "source-method-match"}],
+        ):
+            with self.subTest(claims=claims):
+                proposals = _proposals()
+                proposals.update(
+                    {
+                        "schemaVersion": 2,
+                        "generatedAtUtc": "2026-08-21T19:55:00Z",
+                        "proposalTtlHours": 24,
+                        "maxProposalsPerIssue": 2,
+                        "executionEligibility": {
+                            "status": "eligible",
+                            "violations": [],
+                        },
+                    }
+                )
+                proposal = proposals["proposals"][0]
+                assert isinstance(proposal, dict)
+                proposal.pop("requiresSeparateApproval")
+                proposal["evidenceBasis"] = "source-reconciliation"
+                proposal["sourceEvidenceFingerprint"] = {
+                    "issueUpdatedAt": "2026-08-21T19:54:00Z",
+                    "sourceRevision": "a" * 40,
+                    "sourceTreeDigest": "sha256:" + "b" * 64,
+                    "inspectorTreeDigest": "sha256:" + "c" * 64,
+                    "findingDigest": "sha256:" + "d" * 64,
+                }
+                proposal["executionEligibility"] = {
+                    "eligible": True,
+                    "evidenceBasis": "source-reconciliation",
+                    "ciLabels": [],
+                    "occurrenceCount": 0,
+                    "collectionComplete": True,
+                    "unavailableEvidenceIds": [],
+                    "untrustedReferenceEvidenceIds": [],
+                    "blockingReasons": [],
+                }
+                if claims is not None:
+                    proposal["licensedClaims"] = claims
+                proposals["proposals"] = [proposal]
+
+                with self.assertRaisesRegex(ValueError, "licensedClaims"):
+                    build_dry_run(proposals, action_id=None)
 
     def test_dry_run_rejects_issue_url_outside_repository(self) -> None:
         proposals = _proposals()

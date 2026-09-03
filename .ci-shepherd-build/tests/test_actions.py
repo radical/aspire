@@ -1352,6 +1352,7 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
                 "issueUpdatedAt": "2026-08-21T15:59:00Z",
                 "sourceRevision": "a" * 40,
                 "sourceTreeDigest": "sha256:" + "b" * 64,
+                "inspectorTreeDigest": "sha256:" + "c" * 64,
                 "findingDigest": proposal["sourceEvidenceFingerprint"][
                     "findingDigest"
                 ],
@@ -1392,6 +1393,22 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
         self.assertIn("`Demo.Tests/Tests.cs:31`", proposal["body"])
         self.assertIn("no `[QuarantinedTest]` attribute", proposal["body"])
         self.assertIn("a" * 40, proposal["body"])
+        self.assertEqual(
+            [
+                {
+                    "kind": "source-method-match",
+                    "testName": "Demo.Tests.Flaky",
+                    "file": "Demo.Tests/Tests.cs",
+                    "line": 31,
+                    "quarantineIssueUrls": [],
+                },
+                {
+                    "kind": "no-quarantine-link-to-current-issue",
+                    "issueUrl": "https://github.com/owner/repo/issues/21",
+                },
+            ],
+            proposal["licensedClaims"],
+        )
         self.assertIn(
             "<!-- ci-shepherd:idempotency-key=issue:21:status -->",
             proposal["body"],
@@ -1464,6 +1481,7 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
         reconciliation = _reconciliation()
         finding = reconciliation["findings"][0]
         assert isinstance(finding, dict)
+        finding["kind"] = "unresolved-test-identity"
         finding["claimedTestName"] = None
         finding["currentSource"] = []
 
@@ -1483,12 +1501,127 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
             body,
         )
 
+    def test_cross_linked_claim_requires_an_actual_attribute_link(self) -> None:
+        reconciliation = _reconciliation()
+        finding = reconciliation["findings"][0]
+        assert isinstance(finding, dict)
+        finding["kind"] = "quarantined-against-other-issue"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "requires another quarantine issue link",
+        ):
+            build_action_proposals(
+                _snapshot(),
+                _prepared(),
+                _judgments(),
+                "ankj",
+                quarantine_reconciliation=reconciliation,
+            )
+
+    def test_attribute_name_drift_licenses_the_current_issue_link(self) -> None:
+        reconciliation = _reconciliation()
+        finding = reconciliation["findings"][0]
+        assert isinstance(finding, dict)
+        finding.update(
+            {
+                "kind": "attribute-name-drift",
+                "claimedTestName": "Demo.Tests.OldName",
+                "currentSource": [
+                    {
+                        "testName": "Demo.Tests.Flaky",
+                        "file": "Demo.Tests/Tests.cs",
+                        "line": 31,
+                        "quarantineIssueUrls": [
+                            "https://github.com/owner/repo/issues/21"
+                        ],
+                    }
+                ],
+            }
+        )
+
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=reconciliation,
+        )
+
+        claims = result["proposals"][0]["licensedClaims"]
+        self.assertIn(
+            {
+                "kind": "quarantine-link-to-current-issue",
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+            },
+            claims,
+        )
+        self.assertNotIn(
+            {
+                "kind": "no-quarantine-link-to-current-issue",
+                "issueUrl": "https://github.com/owner/repo/issues/21",
+            },
+            claims,
+        )
+
+    def test_ambiguous_move_claim_licenses_both_absence_and_candidates(
+        self,
+    ) -> None:
+        reconciliation = _reconciliation()
+        finding = reconciliation["findings"][0]
+        assert isinstance(finding, dict)
+        finding.update(
+            {
+                "kind": "ambiguous-absence",
+                "currentSource": [
+                    {
+                        "testName": "Moved.Tests.Flaky",
+                        "file": "Moved.Tests/Tests.cs",
+                        "line": 47,
+                        "quarantineIssueUrls": [
+                            "https://github.com/owner/repo/issues/22"
+                        ],
+                    }
+                ],
+            }
+        )
+
+        result = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
+            quarantine_reconciliation=reconciliation,
+        )
+
+        claims = result["proposals"][0]["licensedClaims"]
+        self.assertIn(
+            {
+                "kind": "source-method-not-found",
+                "testName": "Demo.Tests.Flaky",
+            },
+            claims,
+        )
+        self.assertIn(
+            {
+                "kind": "source-method-match",
+                "testName": "Moved.Tests.Flaky",
+                "file": "Moved.Tests/Tests.cs",
+                "line": 47,
+                "quarantineIssueUrls": [
+                    "https://github.com/owner/repo/issues/22"
+                ],
+            },
+            claims,
+        )
+
     def test_renderer_change_replaces_comment_with_legacy_finding_digest(
         self,
     ) -> None:
         reconciliation = _reconciliation()
         finding = reconciliation["findings"][0]
         assert isinstance(finding, dict)
+        finding["kind"] = "unresolved-test-identity"
         finding["claimedTestName"] = None
         finding["currentSource"] = []
         legacy_digest = "sha256:" + hashlib.sha256(

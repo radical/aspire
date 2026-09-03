@@ -34,6 +34,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--proposals", required=True, type=Path)
     parser.add_argument(
+        "--comment-selection",
+        type=Path,
+        help=(
+            "The deterministic comment-selection artifact. Required for the "
+            "production comment pilot."
+        ),
+    )
+    parser.add_argument(
         "--action-id",
         dest="action_ids",
         action="append",
@@ -84,8 +92,8 @@ def _parser() -> argparse.ArgumentParser:
         "--production-comment-pilot",
         action="store_true",
         help=(
-            "Permit one comment action on microsoft/aspire under the bounded "
-            "production pilot limits."
+            "Permit the deterministic bounded comment selection on "
+            "microsoft/aspire under the production pilot limits."
         ),
     )
     parser.add_argument(
@@ -130,6 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         proposals_path,
         action_ids=args.action_ids,
         state_dir=state_dir,
+        comment_selection_path=args.comment_selection,
         ttl_minutes=args.ttl_minutes,
         max_running_copilot_tasks=args.max_running_copilot_tasks,
         max_copilot_starts_per_rolling_24h=(

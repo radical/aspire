@@ -69,6 +69,9 @@ _BUILD_ERROR_LEG_RE = re.compile(
     r"(?im)^build error leg(?: or test failing)?\s*:\s*(?P<value>.+?)\s*$"
 )
 _BUILD_ERROR_TEST_SUFFIX_RE = re.compile(r"^(?P<job>.+) / `(?P<test>[^`\r\n]+)`$")
+_FULLY_QUALIFIED_TEST_NAME_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*\.){2,}[A-Za-z_][A-Za-z0-9_]*$"
+)
 _TYPE_RE = re.compile(
     r"(?im)^\*\*type(?:\*\*\s*:|:\*\*)\s*`?(?P<value>[^`\r\n]+?)`?\s*$"
 )
@@ -356,8 +359,12 @@ def _extract_facts(
 
     for match in _BUILD_ERROR_LEG_RE.finditer(text):
         value = match.group("value")
-        job = value
+        job: str | None = value
         test_suffix = _BUILD_ERROR_TEST_SUFFIX_RE.fullmatch(value)
+        # Failure issues use both "Tests / Linux / `Namespace.Type.Test`" and a
+        # bare "Namespace.Type.Test\_Case". GitHub Markdown escapes underscores
+        # outside code spans, but source lookup needs the original identifier.
+        bare_test_name = value.replace(r"\_", "_")
         if (
             value.count("`") == 2
             and test_suffix is not None
@@ -370,13 +377,23 @@ def _extract_facts(
                 "build-error-leg",
                 source_evidence_id,
             )
-        _append_fact(
-            facts,
-            "job",
-            job,
-            "build-error-leg",
-            source_evidence_id,
-        )
+        elif _FULLY_QUALIFIED_TEST_NAME_RE.fullmatch(bare_test_name):
+            job = None
+            _append_fact(
+                facts,
+                "testName",
+                bare_test_name,
+                "build-error-leg",
+                source_evidence_id,
+            )
+        if job is not None:
+            _append_fact(
+                facts,
+                "job",
+                job,
+                "build-error-leg",
+                source_evidence_id,
+            )
 
     for match in _TRIGGERING_PULL_RE.finditer(text):
         _append_fact(

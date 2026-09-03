@@ -26,6 +26,22 @@ def _parser() -> argparse.ArgumentParser:
         description="Preview or execute one validated CI shepherd action."
     )
     parser.add_argument("--proposals", required=True, type=Path)
+    parser.add_argument(
+        "--comment-selection",
+        type=Path,
+        help=(
+            "The deterministic comment-selection artifact bound by a "
+            "production comment authorization."
+        ),
+    )
+    parser.add_argument(
+        "--source-checkout",
+        type=Path,
+        help=(
+            "Checkout whose pinned quarantine source evidence must still match "
+            "before a source-reconciliation action."
+        ),
+    )
     result_location = parser.add_mutually_exclusive_group()
     result_location.add_argument("--results", type=Path)
     result_location.add_argument(
@@ -40,7 +56,8 @@ def _parser() -> argparse.ArgumentParser:
         "--production-comment-pilot",
         action="store_true",
         help=(
-            "Permit an authorized one-action comment pilot on microsoft/aspire."
+            "Permit one action from an authorized deterministic comment selection "
+            "on microsoft/aspire."
         ),
     )
     parser.add_argument(
@@ -109,6 +126,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.authorization,
         state_dir=args.state_dir,
         action_id=args.action_id,
+        comment_selection_path=args.comment_selection,
+        source_checkout_path=args.source_checkout,
         allow_production_comment_pilot=args.production_comment_pilot,
         allow_production_delegation_pilot=args.production_delegation_pilot,
         allow_production_delegation_steady_state=(

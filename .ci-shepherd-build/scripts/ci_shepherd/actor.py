@@ -44,6 +44,7 @@ EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
     | {
         "executionEligibility",
         "evidenceBasis",
+        "licensedClaims",
         "sourceCommentFingerprint",
         "sourceEvidenceFingerprint",
     }
@@ -267,6 +268,17 @@ def _validate_proposal(
             proposal.get("sourceEvidenceFingerprint"),
             action_id=action_id,
         )
+        licensed_claims = proposal.get("licensedClaims")
+        if (
+            evidence_basis == "source-reconciliation"
+            and operation in {"create-comment", "edit-comment"}
+        ):
+            _validate_licensed_claims(licensed_claims, action_id=action_id)
+        elif licensed_claims is not None:
+            raise ValueError(
+                f"{action_id}.licensedClaims is only valid for "
+                "source-reconciliation comments."
+            )
 
     if operation in {"create-comment", "edit-comment"}:
         body = _required_string(
@@ -346,6 +358,91 @@ def _validate_proposal(
     return proposal
 
 
+def _validate_licensed_claims(value: object, *, action_id: str) -> None:
+    if not isinstance(value, list) or not value:
+        raise ValueError(
+            f"{action_id}.licensedClaims must contain structured claims."
+        )
+    claim_fields = {
+        "source-method-match": frozenset(
+            {
+                "kind",
+                "testName",
+                "file",
+                "line",
+                "quarantineIssueUrls",
+            }
+        ),
+        "source-method-not-found": frozenset({"kind", "testName"}),
+        "test-identity-unresolved": frozenset({"kind"}),
+        "no-quarantine-link-to-current-issue": frozenset({"kind", "issueUrl"}),
+        "quarantine-link-to-current-issue": frozenset({"kind", "issueUrl"}),
+        "prior-quarantine": frozenset({"kind", "pullRequestUrl", "recordedAt"}),
+    }
+    kinds: set[str] = set()
+    for claim in value:
+        if (
+            not isinstance(claim, dict)
+            or not isinstance(claim.get("kind"), str)
+            or not claim["kind"]
+        ):
+            raise ValueError(
+                f"{action_id}.licensedClaims must contain typed claim objects."
+            )
+        kind = claim["kind"]
+        expected_fields = claim_fields.get(kind)
+        if expected_fields is None or frozenset(claim) != expected_fields:
+            raise ValueError(
+                f"{action_id}.licensedClaims contains an unsupported or malformed "
+                f"{kind} claim."
+            )
+        kinds.add(kind)
+        for field in expected_fields - {"kind", "line", "quarantineIssueUrls"}:
+            if not isinstance(claim[field], str) or not claim[field]:
+                raise ValueError(
+                    f"{action_id}.licensedClaims {kind}.{field} must be nonempty."
+                )
+        if kind == "source-method-match":
+            line = claim["line"]
+            issue_urls = claim["quarantineIssueUrls"]
+            if (
+                not isinstance(line, int)
+                or isinstance(line, bool)
+                or line <= 0
+                or not isinstance(issue_urls, list)
+                or any(
+                    not isinstance(issue_url, str) or not issue_url
+                    for issue_url in issue_urls
+                )
+            ):
+                raise ValueError(
+                    f"{action_id}.licensedClaims contains malformed source evidence."
+                )
+    link_claims = kinds.intersection(
+        {
+            "no-quarantine-link-to-current-issue",
+            "quarantine-link-to-current-issue",
+        }
+    )
+    if len(link_claims) != 1 or not kinds.intersection(
+        {
+            "source-method-match",
+            "source-method-not-found",
+            "test-identity-unresolved",
+        }
+    ):
+        raise ValueError(
+            f"{action_id}.licensedClaims does not license the reconciliation claim."
+        )
+    if "test-identity-unresolved" in kinds and kinds.intersection(
+        {"source-method-match", "source-method-not-found"}
+    ):
+        raise ValueError(
+            f"{action_id}.licensedClaims cannot resolve and leave test identity "
+            "unresolved."
+        )
+
+
 def _validate_source_evidence_fingerprint(
     value: object,
     *,
@@ -358,6 +455,7 @@ def _validate_source_evidence_fingerprint(
                 "issueUpdatedAt",
                 "sourceRevision",
                 "sourceTreeDigest",
+                "inspectorTreeDigest",
                 "findingDigest",
             }
         ),
@@ -382,6 +480,12 @@ def _validate_source_evidence_fingerprint(
             value.get("findingDigest"),
             field=f"{action_id}.sourceEvidenceFingerprint.findingDigest",
         )
+        inspector_tree_digest = _required_string(
+            value.get("inspectorTreeDigest"),
+            field=(
+                f"{action_id}.sourceEvidenceFingerprint.inspectorTreeDigest"
+            ),
+        )
         if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
             raise ValueError(
                 f"{action_id}.sourceEvidenceFingerprint.sourceRevision is invalid."
@@ -393,6 +497,11 @@ def _validate_source_evidence_fingerprint(
         if re.fullmatch(r"sha256:[0-9a-f]{64}", finding_digest) is None:
             raise ValueError(
                 f"{action_id}.sourceEvidenceFingerprint.findingDigest is invalid."
+            )
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", inspector_tree_digest) is None:
+            raise ValueError(
+                f"{action_id}.sourceEvidenceFingerprint.inspectorTreeDigest "
+                "is invalid."
             )
     return value
 

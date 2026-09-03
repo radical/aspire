@@ -17,6 +17,7 @@ from .capacity_policy import (
     ProductionDelegationPolicy,
     load_production_delegation_policy,
 )
+from .quarantine import current_quarantine_source_fingerprint
 from .timeutils import format_utc_z
 
 
@@ -76,6 +77,7 @@ class AuthorizationGrant:
     production_delegation_pilot: bool = False
     production_delegation_steady_state: bool = False
     capacity_policy_digest: str | None = None
+    comment_selection_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +111,7 @@ _GRANT_KEYS = frozenset(
 _PRODUCTION_DELEGATION_GRANT_KEY = "productionDelegationPilot"
 _PRODUCTION_DELEGATION_STEADY_STATE_KEY = "productionDelegationSteadyState"
 _CAPACITY_POLICY_DIGEST_KEY = "capacityPolicyDigest"
+_COMMENT_SELECTION_DIGEST_KEY = "commentSelectionDigest"
 _CURRENT_CAPABILITY_KEYS = frozenset(
     {
         _PRODUCTION_DELEGATION_GRANT_KEY,
@@ -135,6 +138,8 @@ def load_authorized_execution(
     *,
     state_dir: Path,
     action_id: str,
+    comment_selection_path: Path | None = None,
+    source_checkout_path: Path | None = None,
     allow_production_comment_pilot: bool = False,
     allow_production_delegation_pilot: bool = False,
     allow_production_delegation_steady_state: bool = False,
@@ -204,6 +209,38 @@ def load_authorized_execution(
         raise AuthorizationError(
             "Authorization grant proposalsDigest does not match proposal bytes."
         )
+    if grant.comment_selection_digest is not None:
+        if comment_selection_path is None:
+            conventional_selection_path = proposals_path.with_name(
+                "comment-selection.json"
+            )
+            if conventional_selection_path.exists():
+                comment_selection_path = conventional_selection_path
+            else:
+                raise AuthorizationError(
+                    "Authorization grant requires the bound comment selection "
+                    "artifact."
+                )
+        selection_bytes = _read_regular_file(
+            comment_selection_path,
+            "comment selection",
+        )
+        selection_digest = f"sha256:{hashlib.sha256(selection_bytes).hexdigest()}"
+        if selection_digest != grant.comment_selection_digest:
+            raise AuthorizationError(
+                "Authorization grant commentSelectionDigest does not match "
+                "comment selection bytes."
+            )
+        _validate_comment_selection(
+            selection_bytes,
+            proposal_document=proposal_document,
+            proposals_digest=digest,
+            selected_action_ids=grant.allowed_action_ids,
+        )
+    elif comment_selection_path is not None:
+        raise AuthorizationError(
+            "Authorization grant does not bind a comment selection artifact."
+        )
 
     repository = _require_string(proposal_document, "repository")
     snapshot_id = _require_string(proposal_document, "snapshotId")
@@ -226,6 +263,10 @@ def load_authorized_execution(
     if grant.production_comment_pilot != allow_production_comment_pilot:
         raise AuthorizationError(
             "Production comment pilot confirmation does not match the grant."
+        )
+    if grant.production_comment_pilot and grant.comment_selection_digest is None:
+        raise AuthorizationError(
+            "Production comment pilot grant must bind a comment selection artifact."
         )
     if (
         grant.production_delegation_pilot
@@ -281,6 +322,31 @@ def load_authorized_execution(
         )
     operation = _require_string(proposal, "operation")
     issue_number = _require_positive_int(proposal, "issueNumber")
+    if proposal.get("evidenceBasis") == "source-reconciliation":
+        if source_checkout_path is None:
+            raise AuthorizationError(
+                "Source-reconciliation execution requires source_checkout_path."
+            )
+        current_fingerprint = current_quarantine_source_fingerprint(
+            source_checkout_path
+        )
+        expected_fingerprint = proposal.get("sourceEvidenceFingerprint")
+        if (
+            current_fingerprint is None
+            or not isinstance(expected_fingerprint, Mapping)
+            or any(
+                current_fingerprint[field] != expected_fingerprint.get(field)
+                for field in (
+                    "sourceRevision",
+                    "sourceTreeDigest",
+                    "inspectorTreeDigest",
+                )
+            )
+        ):
+            raise AuthorizationError(
+            "Source-reconciliation evidence is unavailable or changed before "
+            "execution."
+        )
     if operation not in grant.allowed_operations:
         raise AuthorizationError(
             f"Authorization grant does not allow operation: {operation}"
@@ -360,11 +426,61 @@ def _read_and_validate_proposal_document(
     return proposal_bytes, proposal_document
 
 
+def _validate_comment_selection(
+    selection_bytes: bytes,
+    *,
+    proposal_document: Mapping[str, Any],
+    proposals_digest: str,
+    selected_action_ids: Sequence[str],
+) -> None:
+    selection = _load_json_bytes(selection_bytes, "comment selection")
+    if selection.get("schemaVersion") != 1:
+        raise AuthorizationError("Comment selection schemaVersion must equal 1.")
+    if selection.get("repository") != proposal_document.get("repository"):
+        raise AuthorizationError(
+            "Comment selection repository does not match proposal document."
+        )
+    if selection.get("snapshotId") != proposal_document.get("snapshotId"):
+        raise AuthorizationError(
+            "Comment selection snapshotId does not match proposal document."
+        )
+    if selection.get("proposalsDigest") != proposals_digest:
+        raise AuthorizationError(
+            "Comment selection proposalsDigest does not match proposal bytes."
+        )
+    from .comment_selection import build_comment_selection
+
+    try:
+        expected_selection = build_comment_selection(
+            proposal_document,
+            max_comments=selection.get("maxComments"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise AuthorizationError(f"Invalid comment selection: {exc}") from exc
+    if selection != expected_selection:
+        raise AuthorizationError(
+            "Comment selection does not match the deterministically recomputed "
+            "selection."
+        )
+    selected = selection.get("selectedActionIds")
+    if not isinstance(selected, list) or any(
+        not isinstance(action_id, str) or not action_id for action_id in selected
+    ):
+        raise AuthorizationError(
+            "Comment selection selectedActionIds must be an array of strings."
+        )
+    if selected != list(selected_action_ids):
+        raise AuthorizationError(
+            "Selected action ids must exactly match the ordered comment selection."
+        )
+
+
 def generate_authorization_grant(
     proposals_path: Path,
     *,
     action_ids: Sequence[str],
     state_dir: Path,
+    comment_selection_path: Path | None = None,
     ttl_minutes: int = DEFAULT_GRANT_TTL_MINUTES,
     max_running_copilot_tasks: int = DEFAULT_MAX_RUNNING_COPILOT_TASKS,
     max_copilot_starts_per_rolling_24h: int = (
@@ -489,6 +605,7 @@ def generate_authorization_grant(
 
     if not action_ids:
         raise AuthorizationError("At least one actionId must be selected.")
+    selected_action_ids: list[str] = []
     selected_ids: set[str] = set()
     for action_id in action_ids:
         if not isinstance(action_id, str) or not action_id:
@@ -496,9 +613,33 @@ def generate_authorization_grant(
         if action_id in selected_ids:
             raise AuthorizationError(f"Duplicate selected actionId: {action_id}")
         selected_ids.add(action_id)
+        selected_action_ids.append(action_id)
+
+    comment_selection_digest: str | None = None
+    if comment_selection_path is not None:
+        selection_bytes = _read_regular_file(
+            comment_selection_path,
+            "comment selection",
+        )
+        _validate_comment_selection(
+            selection_bytes,
+            proposal_document=proposal_document,
+            proposals_digest=(
+                f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+            ),
+            selected_action_ids=selected_action_ids,
+        )
+        comment_selection_digest = (
+            f"sha256:{hashlib.sha256(selection_bytes).hexdigest()}"
+        )
+    elif allow_production_comment_pilot:
+        raise AuthorizationError(
+            "Production comment pilot authorization requires "
+            "comment_selection_path."
+        )
 
     selected_proposals: list[dict[str, Any]] = []
-    for action_id in selected_ids:
+    for action_id in selected_action_ids:
         proposal = by_action_id.get(action_id)
         if proposal is None:
             raise AuthorizationError(
@@ -613,7 +754,7 @@ def generate_authorization_grant(
     if grant_id is not None and (not isinstance(grant_id, str) or not grant_id):
         raise AuthorizationError("grantId must be a non-empty string.")
 
-    return {
+    grant = {
         "schemaVersion": AUTHORIZATION_SCHEMA_VERSION,
         "grantId": grant_id if grant_id is not None else _generate_grant_id(),
         "repository": repository,
@@ -622,7 +763,7 @@ def generate_authorization_grant(
         "expiresAtUtc": format_utc_z(expires_at),
         "snapshotId": snapshot_id,
         "proposalsDigest": f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}",
-        "allowedActionIds": sorted(selected_ids),
+        "allowedActionIds": selected_action_ids,
         "allowedOperations": allowed_operations,
         "allowedTargets": [
             {"kind": "issue", "number": number} for number in allowed_issue_numbers
@@ -652,6 +793,9 @@ def generate_authorization_grant(
             else None
         ),
     }
+    if comment_selection_digest is not None:
+        grant[_COMMENT_SELECTION_DIGEST_KEY] = comment_selection_digest
+    return grant
 
 
 def _generate_grant_id() -> str:
@@ -1248,11 +1392,15 @@ def _load_json_bytes(payload: bytes, description: str) -> dict[str, Any]:
 def _load_grant(payload: bytes) -> AuthorizationGrant:
     document = _load_json_bytes(payload, "authorization grant")
     document_keys = set(document)
-    if document_keys not in {
+    supported_key_sets = {
         _GRANT_KEYS,
         _GRANT_KEYS | {_PRODUCTION_DELEGATION_GRANT_KEY},
         _GRANT_KEYS | _CURRENT_CAPABILITY_KEYS,
-    }:
+    }
+    supported_key_sets |= {
+        keys | {_COMMENT_SELECTION_DIGEST_KEY} for keys in supported_key_sets
+    }
+    if document_keys not in supported_key_sets:
         raise AuthorizationError(
             "Authorization grant must contain exactly the supported fields."
         )
@@ -1410,6 +1558,11 @@ def _load_grant(payload: bytes) -> AuthorizationGrant:
         capacity_policy_digest=(
             _require_optional_digest(document, _CAPACITY_POLICY_DIGEST_KEY)
             if _CAPACITY_POLICY_DIGEST_KEY in document
+            else None
+        ),
+        comment_selection_digest=(
+            _require_optional_digest(document, _COMMENT_SELECTION_DIGEST_KEY)
+            if _COMMENT_SELECTION_DIGEST_KEY in document
             else None
         ),
     )

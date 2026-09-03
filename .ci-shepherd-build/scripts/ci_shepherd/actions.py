@@ -934,7 +934,181 @@ def _selected_investigation_recommendation(
     return combined
 
 
-_QUARANTINE_RECONCILIATION_BODY_FORMAT_VERSION = 2
+_QUARANTINE_RECONCILIATION_BODY_FORMAT_VERSION = 3
+
+
+def _licensed_quarantine_claims(finding: dict[str, Any]) -> list[dict[str, object]]:
+    kind = finding.get("kind")
+    claimed = finding.get("claimedTestName")
+    entries = finding.get("currentSource")
+    issue_url = finding.get("issueUrl")
+    if not isinstance(kind, str) or not isinstance(entries, list):
+        raise ValueError("Quarantine finding must have a kind and source entries.")
+    if not isinstance(issue_url, str) or not issue_url:
+        raise ValueError("Quarantine finding must identify its issue URL.")
+
+    source_claims: list[dict[str, object]] = []
+    linked_issue_urls: list[str] = []
+    for entry in entries:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("testName"), str)
+            or not entry["testName"]
+            or not isinstance(entry.get("file"), str)
+            or not entry["file"]
+            or not isinstance(entry.get("line"), int)
+            or isinstance(entry["line"], bool)
+            or entry["line"] <= 0
+            or not isinstance(entry.get("quarantineIssueUrls"), list)
+            or any(
+                not isinstance(url, str) or not url
+                for url in entry["quarantineIssueUrls"]
+            )
+        ):
+            raise ValueError(
+                "Quarantine source claims require a test name, location, and "
+                "validated quarantine issue links."
+            )
+        issue_urls = list(entry["quarantineIssueUrls"])
+        linked_issue_urls.extend(issue_urls)
+        source_claims.append(
+            {
+                "kind": "source-method-match",
+                "testName": entry["testName"],
+                "file": entry["file"],
+                "line": entry["line"],
+                "quarantineIssueUrls": issue_urls,
+            }
+        )
+
+    if kind == "unresolved-test-identity":
+        if claimed is not None or entries:
+            raise ValueError(
+                "Unresolved test identity cannot license a method-level source claim."
+            )
+        return [
+            {"kind": "test-identity-unresolved"},
+            {
+                "kind": "no-quarantine-link-to-current-issue",
+                "issueUrl": issue_url,
+            },
+        ]
+
+    if not isinstance(claimed, str) or not claimed:
+        raise ValueError(f"{kind} requires a resolved test method name.")
+    if kind == "label-without-attribute":
+        if not entries or linked_issue_urls:
+            raise ValueError(
+                "label-without-attribute requires a resolved source method "
+                "without quarantine issue links."
+            )
+    elif kind == "quarantined-against-other-issue":
+        other_links = [
+            url
+            for url in linked_issue_urls
+            if url.rstrip("/").casefold() != issue_url.rstrip("/").casefold()
+        ]
+        if not entries or not other_links:
+            raise ValueError(
+                "quarantined-against-other-issue requires another quarantine "
+                "issue link."
+            )
+    elif kind == "ambiguous-inspection":
+        if len(entries) < 2:
+            raise ValueError(
+                "ambiguous-inspection requires multiple source matches."
+            )
+    elif kind == "attribute-name-drift":
+        if not entries:
+            raise ValueError("attribute-name-drift requires a current source match.")
+        if not any(
+            url.rstrip("/").casefold() == issue_url.rstrip("/").casefold()
+            for url in linked_issue_urls
+        ):
+            raise ValueError(
+                "attribute-name-drift requires a quarantine link to the current issue."
+            )
+    elif kind in {"ambiguous-absence", "removed-test-closure-review"}:
+        if kind == "removed-test-closure-review" and entries:
+            raise ValueError(
+                "removed-test-closure-review cannot contain a source match."
+            )
+        source_claims.append(
+            {"kind": "source-method-not-found", "testName": claimed}
+        )
+    else:
+        raise ValueError(f"Unsupported quarantine reconciliation kind: {kind}")
+
+    source_claims.append(
+        {
+            "kind": (
+                "quarantine-link-to-current-issue"
+                if kind == "attribute-name-drift"
+                else "no-quarantine-link-to-current-issue"
+            ),
+            "issueUrl": issue_url,
+        }
+    )
+    prior = finding.get("priorQuarantine")
+    if isinstance(prior, dict):
+        source_claims.append(
+            {
+                "kind": "prior-quarantine",
+                "pullRequestUrl": prior.get("pullRequestUrl"),
+                "recordedAt": prior.get("recordedAt"),
+            }
+        )
+    return source_claims
+
+
+def _quarantine_decision(finding: dict[str, Any]) -> str:
+    kind = finding["kind"]
+    if kind == "unresolved-test-identity":
+        return (
+            "Identify the test method this issue tracks, or remove the "
+            "`quarantined-test` label if it does not track a test."
+        )
+    if kind == "label-without-attribute":
+        return (
+            "Confirm whether this test should be quarantined. Either quarantine "
+            "it against this issue or remove the `quarantined-test` label."
+        )
+    if kind == "quarantined-against-other-issue":
+        issue_urls = sorted(
+            {
+                str(url)
+                for entry in finding["currentSource"]
+                for url in entry["quarantineIssueUrls"]
+            }
+        )
+        return (
+            f"Review whether this issue duplicates {', '.join(issue_urls)}. "
+            "Close the duplicate or repoint the existing attribute if this issue "
+            "is the canonical tracker; do not add a second quarantine for the "
+            "same method."
+        )
+    if kind == "attribute-name-drift":
+        return (
+            "Update the issue title and metadata to the current method name. "
+            "The shepherd does not edit issue metadata."
+        )
+    if kind == "ambiguous-inspection":
+        return (
+            "Identify the current canonical test method and update the issue "
+            "metadata or source attribute. The shepherd will not infer identity "
+            "from ambiguous matches."
+        )
+    if kind == "removed-test-closure-review":
+        return (
+            "Confirm the test was deleted rather than renamed, then close this "
+            "issue. The shepherd does not close issues on absence."
+        )
+    if kind == "ambiguous-absence":
+        return (
+            "Decide whether the test was renamed or removed. The shepherd will "
+            "not close this issue on absence alone."
+        )
+    raise ValueError(f"Unsupported quarantine reconciliation kind: {kind}")
 
 
 def _quarantine_source_lines(finding: dict[str, Any]) -> list[str]:
@@ -977,10 +1151,17 @@ def _render_quarantine_reconciliation_body(
     source_revision: str,
     finding_digest: str,
 ) -> str:
+    _licensed_quarantine_claims(finding)
     leads = {
+        "unresolved-test-identity": (
+            "The CI shepherd could not resolve the test method this issue tracks."
+        ),
         "label-without-attribute": (
             "The CI shepherd could not confirm this issue's `quarantined-test` "
             "label against the inspected source."
+        ),
+        "quarantined-against-other-issue": (
+            "The CI shepherd found this test quarantined against a different issue."
         ),
         "attribute-name-drift": (
             "The CI shepherd found stale test-name metadata on this issue."
@@ -1017,13 +1198,11 @@ def _render_quarantine_reconciliation_body(
         [
             f"[automated] {lead}",
             "",
-            f"**Current assessment:** {finding['summary']}",
-            "",
             f"**Current source evidence** (revision `{source_revision}`):",
             *_quarantine_source_lines(finding),
             "",
             *prior_lines,
-            f"**Decision needed:** {finding['humanAction']}",
+            f"**Decision needed:** {_quarantine_decision(finding)}",
             "",
             (
                 "The shepherd made no source, label, or issue-metadata change "
@@ -1754,6 +1933,9 @@ def build_action_proposals(
                     "sourceEvidenceFingerprint": {
                         "sourceRevision": source_revision,
                         "sourceTreeDigest": source_tree_digest,
+                        "inspectorTreeDigest": quarantine_reconciliation[
+                            "inspectorTreeDigest"
+                        ],
                         "findingDigest": finding_digest,
                     },
                 }
@@ -1774,6 +1956,7 @@ def build_action_proposals(
                 }
             ).encode("utf-8")
         ).hexdigest()
+        licensed_claims = _licensed_quarantine_claims(finding)
         body = _render_quarantine_reconciliation_body(
             issue_number,
             finding,
@@ -1807,11 +1990,15 @@ def build_action_proposals(
             "evidenceBasis": "source-reconciliation",
             "idempotencyKey": key,
             "body": body,
+            "licensedClaims": licensed_claims,
             "evidenceIds": [f"issue:{issue_number}"],
             "expectedIssueState": "open",
             "sourceEvidenceFingerprint": {
                 "sourceRevision": reconciliation_revision,
                 "sourceTreeDigest": quarantine_reconciliation["sourceTreeDigest"],
+                "inspectorTreeDigest": quarantine_reconciliation[
+                    "inspectorTreeDigest"
+                ],
                 "findingDigest": finding_digest,
             },
         }

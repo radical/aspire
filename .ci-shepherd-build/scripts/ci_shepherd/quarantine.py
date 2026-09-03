@@ -739,6 +739,10 @@ def collect_quarantine_source_state(
         if not tool_project.is_dir() or not tests_root.is_dir():
             raise ValueError("Checkout does not contain QuarantineTools and tests.")
 
+        if not _source_inputs_are_clean(checkout):
+            raise ValueError(
+                "Quarantine source inputs differ from the checkout revision."
+            )
         source_revision = _source_revision(checkout)
         source_tree_digest = _source_tree_digest(checkout)
         inspector_tree_digest = quarantine_tool_tree_digest(tool_project)
@@ -996,6 +1000,67 @@ def _source_revision(checkout: Path) -> str:
     if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise ValueError("Unable to resolve checkout revision.")
     return revision
+
+
+def current_quarantine_source_fingerprint(
+    checkout: Path,
+) -> dict[str, str] | None:
+    try:
+        checkout = checkout.expanduser().resolve(strict=True)
+        tool_project = checkout / "tools" / "QuarantineTools"
+        if (
+            not tool_project.is_dir()
+            or not (checkout / "tests").is_dir()
+            or not _source_inputs_are_clean(checkout)
+        ):
+            return None
+        return {
+            "sourceRevision": _source_revision(checkout),
+            "sourceTreeDigest": _source_tree_digest(checkout),
+            "inspectorTreeDigest": quarantine_tool_tree_digest(tool_project),
+        }
+    except (
+        FileNotFoundError,
+        NotADirectoryError,
+        OSError,
+        subprocess.TimeoutExpired,
+        UnicodeError,
+        ValueError,
+    ):
+        return None
+
+
+def _source_inputs_are_clean(checkout: Path) -> bool:
+    source_paths = (
+        "tests",
+        "tools/QuarantineTools",
+        "eng",
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Packages.props",
+        "NuGet.config",
+        "global.json",
+    )
+    if any(not (checkout / source_path).exists() for source_path in source_paths):
+        return False
+    result = subprocess.run(
+        [
+            "git",
+            "--no-pager",
+            "-C",
+            str(checkout),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            *source_paths,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.returncode == 0 and not result.stdout.strip()
 
 
 def _source_tree_digest(checkout: Path) -> str:

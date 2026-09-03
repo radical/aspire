@@ -44,8 +44,8 @@ class CommentSelectionTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(
             [
-                "snapshot:owner/repo:time:issue:10:ping-human-comment",
                 "snapshot:owner/repo:time:issue:20:ping-human-comment",
+                "snapshot:owner/repo:time:issue:10:ping-human-comment",
                 "snapshot:owner/repo:time:issue:40:"
                 "quarantine-reconciliation-comment",
             ],
