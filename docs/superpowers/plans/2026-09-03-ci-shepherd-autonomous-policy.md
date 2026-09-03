@@ -245,7 +245,7 @@ Define frozen dataclasses `OperationClassPolicy` and `OperationPolicyRevision`. 
 - require `revision >= 1`, `status in {"active", "paused", "revoked"}`, and `replacesRevisionId is None` only for revision 1;
 - require `createdAtUtc < expiresAtUtc <= createdAtUtc + 90 days`;
 - require sums of class caps to remain at or below 100/run and 300/24h;
-- expose `active_at(now)` that is true only for active, unexpired policy;
+- expose `active_at(now)` that is true only when status is active and `createdAtUtc <= now < expiresAtUtc`; a policy never authorizes before its activation instant, keeping the 90-day wall-clock ceiling meaningful;
 - compute `digest` as SHA-256 over `stable_json(document).encode("utf-8")`, because this identity participates in the authorization boundary.
 
 Use `parse_aware_iso8601` and `format_utc_z` from `ci_shepherd.timeutils`.

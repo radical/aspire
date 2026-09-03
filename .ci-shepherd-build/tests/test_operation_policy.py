@@ -276,14 +276,17 @@ class OperationPolicyTests(unittest.TestCase):
 
     def test_active_at_requires_active_unexpired_policy(self) -> None:
         now = datetime(2026, 9, 3, 16, 1, tzinfo=UTC)
+        created_at = datetime(2026, 9, 3, 16, 0, tzinfo=UTC)
 
-        active = load_operation_policy_document(policy_document())
+        active = load_operation_policy_document(policy_document(created_at_utc=created_at))
         paused = load_operation_policy_document(policy_document(status="paused"))
         revoked = load_operation_policy_document(policy_document(status="revoked"))
         expired = load_operation_policy_document(
             policy_document(expires_at_utc=datetime(2026, 9, 3, 16, 0, 1, tzinfo=UTC))
         )
 
+        self.assertFalse(active.active_at(created_at - timedelta(seconds=1)))
+        self.assertTrue(active.active_at(created_at))
         self.assertTrue(active.active_at(now))
         self.assertFalse(paused.active_at(now))
         self.assertFalse(revoked.active_at(now))
