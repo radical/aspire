@@ -147,7 +147,7 @@ class OperationPolicyRevision:
         return self._digest
 
     def active_at(self, now: datetime) -> bool:
-        current = _require_aware_datetime(now, "now").astimezone(UTC)
+        current = _require_aware_datetime(now, "now")
         return (
             self.status == "active"
             and self.created_at_utc <= current
@@ -381,5 +381,10 @@ def _parse_policy_timestamp(value: object, field_name: str) -> datetime:
 
 
 def _digest_policy_document(document: Mapping[str, Any]) -> str:
-    canonical = stable_json(document).encode("utf-8")
+    try:
+        canonical = stable_json(document).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise OperationPolicyError(
+            "Operation policy document must be JSON serializable for digest calculation."
+        ) from exc
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"

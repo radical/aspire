@@ -94,6 +94,47 @@ class OperationPolicyTests(unittest.TestCase):
         self.assertEqual("2026-09-03T16:00:00Z", policy.as_public_dict()["createdAtUtc"])
         self.assertNotEqual(normalized_digest, policy.digest)
 
+    def test_rejects_non_json_serializable_document_when_digesting(self) -> None:
+        document = policy_document()
+        document["operationClasses"]["edit-comment"]["enabled"] = {1}
+
+        with self.assertRaises(OperationPolicyError) as context:
+            load_operation_policy_document(document)
+
+        self.assertIn("JSON serializable", str(context.exception))
+        self.assertIsInstance(context.exception.__cause__, TypeError)
+
+    def test_accepts_total_per_run_caps_at_hard_ceiling(self) -> None:
+        document = policy_document()
+        for name in OPERATION_CLASSES:
+            document["operationClasses"][name]["maxPerRun"] = 0
+        document["operationClasses"]["edit-comment"]["maxPerRun"] = HARD_MAX_PER_RUN
+
+        policy = load_operation_policy_document(document)
+
+        self.assertEqual(
+            HARD_MAX_PER_RUN,
+            sum(policy.operation_classes[name].max_per_run for name in OPERATION_CLASSES),
+        )
+
+    def test_accepts_total_rolling_24h_caps_at_hard_ceiling(self) -> None:
+        document = policy_document()
+        for name in OPERATION_CLASSES:
+            document["operationClasses"][name]["maxRolling24h"] = 0
+        document["operationClasses"]["edit-comment"]["maxRolling24h"] = (
+            HARD_MAX_ROLLING_24H
+        )
+
+        policy = load_operation_policy_document(document)
+
+        self.assertEqual(
+            HARD_MAX_ROLLING_24H,
+            sum(
+                policy.operation_classes[name].max_rolling_24h
+                for name in OPERATION_CLASSES
+            ),
+        )
+
     def test_rejects_total_per_run_caps_above_hard_ceiling(self) -> None:
         document = policy_document()
         document["operationClasses"]["edit-comment"]["maxPerRun"] = HARD_MAX_PER_RUN
@@ -117,6 +158,18 @@ class OperationPolicyTests(unittest.TestCase):
 
         with self.assertRaisesRegex(OperationPolicyError, "90 days"):
             load_operation_policy_document(document)
+
+    def test_accepts_expiry_at_ninety_days(self) -> None:
+        created_at = datetime(2026, 9, 3, 16, 0, tzinfo=UTC)
+        expires_at = created_at + timedelta(days=MAX_EXPIRY_DAYS)
+        document = policy_document(
+            created_at_utc=created_at,
+            expires_at_utc=expires_at,
+        )
+
+        policy = load_operation_policy_document(document)
+
+        self.assertEqual(expires_at, policy.expires_at_utc)
 
     def test_rejects_non_increasing_timestamps(self) -> None:
         document = policy_document(
