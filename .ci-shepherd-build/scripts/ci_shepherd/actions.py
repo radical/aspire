@@ -1898,12 +1898,28 @@ def build_action_proposals(
             if isinstance(proposal, dict)
             and proposal.get("operation") == "assign-copilot"
         }
+        closing_issue_numbers = {
+            int(proposal["issueNumber"])
+            for proposal in proposals
+            if isinstance(proposal, dict)
+            and proposal.get("operation") == "close-issue"
+        }
         for issue_number, verified in sorted(verified_quarantines.items()):
             if (
                 issue_number not in open_issue_numbers
                 or issue_number in delegation_handoffs
                 or issue_number in proposed_issue_numbers
             ):
+                continue
+            if issue_number in closing_issue_numbers:
+                blocked_recommendations.append(
+                    {
+                        "issueNumber": issue_number,
+                        "disposition": "delegate-copilot",
+                        "blockingReasons": ["superseded-by-closure-review"],
+                        "evidenceIds": [f"issue:{issue_number}"],
+                    }
+                )
                 continue
             finding_digest = "sha256:" + hashlib.sha256(
                 stable_json(verified).encode("utf-8")

@@ -487,6 +487,9 @@ and verifies both identities once the global ID is available.
 Generated assignment proposals use the repository policy's base ref, preserve
 one stable issue-scoped idempotency key, and instruct Copilot to keep the pull
 request in draft when evidence or a human decision is missing.
+An issue with an executable closure proposal is never also assigned to Copilot;
+the suppressed delegation remains visible under `blockedRecommendations` with
+reason `superseded-by-closure-review`.
 
 Three independent limits are signed into the short-lived authorization grant:
 

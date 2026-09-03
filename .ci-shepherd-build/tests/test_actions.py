@@ -1005,6 +1005,39 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual("duplicate", close["closeReason"])
         self.assertEqual(comment["actionId"], close["dependsOn"])
 
+    def test_superseded_duplicate_close_suppresses_verified_quarantine_assignment(
+        self,
+    ) -> None:
+        prepared = _prepared()
+        prepared["repositoryPolicy"] = {
+            "quarantinePullRequest": {"baseRef": "main"},
+        }
+
+        result = build_action_proposals(
+            _snapshot(),
+            prepared,
+            _duplicate_judgments(),
+            "ankj",
+            agent_input=_duplicate_agent_input(),
+            quarantine_reconciliation=_verified_reconciliation(),
+        )
+
+        self.assertEqual(
+            ["create-comment", "close-issue"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 21,
+                    "disposition": "delegate-copilot",
+                    "blockingReasons": ["superseded-by-closure-review"],
+                    "evidenceIds": ["issue:21"],
+                }
+            ],
+            result["blockedRecommendations"],
+        )
+
     def test_build_watch_proposals_renders_new_status_comment(self) -> None:
         result = build_watch_proposals(
             _snapshot(),
