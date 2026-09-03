@@ -66,6 +66,7 @@ EXECUTION_ELIGIBILITY_FIELDS = frozenset(
 )
 ELIGIBILITY_REASONS = frozenset(
     {
+        "body-occurrence-contradiction",
         "missing-ci-label",
         "no-parsed-occurrences",
         "incomplete-collection",
@@ -73,6 +74,10 @@ ELIGIBILITY_REASONS = frozenset(
         "unavailable-evidence",
         "untrusted-reference-provenance",
     }
+)
+_CONSECUTIVE_FAILURE_CLAIM = re.compile(
+    r"\bfailed\s+[1-9]\d*\s+consecutive\s+times\b",
+    re.IGNORECASE,
 )
 MAX_EXECUTABLE_PROPOSAL_TTL_HOURS = 24
 MAX_EXECUTABLE_PROPOSALS_PER_ISSUE = 2
@@ -258,6 +263,7 @@ def _validate_proposal(
             proposal.get("executionEligibility"),
             action_id=action_id,
             evidence_basis=evidence_basis,
+            body=proposal.get("body"),
         )
         if (
             "source-comment-unavailable" in eligibility["blockingReasons"]
@@ -514,6 +520,7 @@ def _validate_execution_eligibility(
     *,
     action_id: str,
     evidence_basis: str,
+    body: object,
 ) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != EXECUTION_ELIGIBILITY_FIELDS:
         raise ValueError(
@@ -615,6 +622,12 @@ def _validate_execution_eligibility(
         derived_reasons.append("unavailable-evidence")
     if untrusted_reference_evidence_ids:
         derived_reasons.append("untrusted-reference-provenance")
+    if (
+        occurrence_count == 0
+        and isinstance(body, str)
+        and _CONSECUTIVE_FAILURE_CLAIM.search(body) is not None
+    ):
+        derived_reasons.append("body-occurrence-contradiction")
     if "source-comment-unavailable" in blocking_reasons:
         derived_reasons.append("source-comment-unavailable")
     if blocking_reasons != derived_reasons or eligible != (not derived_reasons):
@@ -653,6 +666,7 @@ def _validate_document_execution_eligibility(
                 proposal.get("evidenceBasis"),
                 field=f"{action_id}.evidenceBasis",
             ),
+            body=proposal.get("body"),
         )
         if eligibility["eligible"] is not True:
             derived_violations.append(
@@ -1121,6 +1135,7 @@ def execute_action(
                 proposal.get("evidenceBasis"),
                 field=f"{action_id}.evidenceBasis",
             ),
+            body=proposal.get("body"),
         )
         if eligibility["eligible"] is not True:
             raise ValueError(f"{action_id} is not eligible for execution.")

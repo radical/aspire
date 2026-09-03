@@ -838,6 +838,12 @@ class WatchActionTests(unittest.TestCase):
             "body-occurrence-contradiction",
             proposal["executionEligibility"]["blockingReasons"],
         )
+        rendered = build_dry_run(result, action_id=proposal["actionId"])
+        self.assertFalse(rendered["actions"][0]["wouldExecute"])
+        self.assertIn(
+            "body-occurrence-contradiction",
+            rendered["actions"][0]["blockingReasons"],
+        )
 
     def test_build_action_proposals_renders_resolved_review_close(self) -> None:
         result = build_action_proposals(
