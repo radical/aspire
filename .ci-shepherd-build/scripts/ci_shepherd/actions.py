@@ -4,6 +4,7 @@ import hashlib
 import re
 from typing import Any, Mapping
 
+from ci_shepherd.comment_body import comment_bodies_materially_equal
 from ci_shepherd.eligibility import executable_ci_labels
 from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
@@ -478,6 +479,10 @@ TRUSTED_ACTION_REFERENCE_METHODS = frozenset(
         "occurrence-pull-request",
     }
 )
+_CONSECUTIVE_FAILURE_CLAIM = re.compile(
+    r"\bfailed\s+[1-9]\d*\s+consecutive\s+times\b",
+    re.IGNORECASE,
+)
 
 
 def _execution_eligibility(
@@ -489,6 +494,7 @@ def _execution_eligibility(
 ) -> dict[str, object]:
     if evidence_basis not in {
         "ci-occurrence",
+        "issue-state",
         "source-reconciliation",
         "delegation-state",
     }:
@@ -559,9 +565,10 @@ def _execution_eligibility(
 
     blocking_reasons: list[str] = []
     ci_labels = sorted(executable_ci_labels(raw_labels))
-    if evidence_basis == "ci-occurrence":
+    if evidence_basis in {"ci-occurrence", "issue-state"}:
         if not ci_labels:
             blocking_reasons.append("missing-ci-label")
+    if evidence_basis == "ci-occurrence":
         if occurrence_count <= 0:
             blocking_reasons.append("no-parsed-occurrences")
     if relevant_collection_errors:
@@ -605,15 +612,25 @@ def _finalize_execution_metadata(
         evidence_ids = proposal.get("evidenceIds")
         if not isinstance(evidence_ids, list):
             raise TypeError("Action proposal evidenceIds must be a list.")
-        evidence_basis = proposal.setdefault("evidenceBasis", "ci-occurrence")
+        evidence_basis = proposal.get("evidenceBasis")
         if not isinstance(evidence_basis, str):
-            raise TypeError("Action proposal evidenceBasis must be a string.")
+            raise TypeError("Action proposal evidenceBasis must be explicit.")
         eligibility = _execution_eligibility(
             snapshot,
             issue_number=issue_number,
             evidence_ids=evidence_ids,
             evidence_basis=evidence_basis,
         )
+        body = proposal.get("body")
+        if (
+            eligibility["occurrenceCount"] == 0
+            and isinstance(body, str)
+            and _CONSECUTIVE_FAILURE_CLAIM.search(body) is not None
+        ):
+            blocking_reasons = eligibility["blockingReasons"]
+            assert isinstance(blocking_reasons, list)
+            blocking_reasons.append("body-occurrence-contradiction")
+            eligibility["eligible"] = False
         proposal["executionEligibility"] = eligibility
         evidence = snapshot.get("evidence")
         issue_record = (
@@ -1236,7 +1253,7 @@ def build_watch_proposals(
             if existing
             else ""
         )
-        if existing and existing_body == body.strip():
+        if existing and comment_bodies_materially_equal(existing_body, body):
             unchanged.append(issue_number)
             continue
 
@@ -1247,6 +1264,7 @@ def build_watch_proposals(
             "issueNumber": issue_number,
             "issueUrl": prepared_issues[issue_number]["issueUrl"],
             "operation": "edit-comment" if existing else "create-comment",
+            "evidenceBasis": "issue-state",
             "idempotencyKey": key,
             "body": body,
             "evidenceIds": list(recommendation["evidenceIds"]),
@@ -1455,6 +1473,7 @@ def build_action_proposals(
                     "issueNumber": issue_number,
                     "issueUrl": prepared_issues[issue_number]["issueUrl"],
                     "operation": "assign-copilot",
+                    "evidenceBasis": "ci-occurrence",
                     "idempotencyKey": (
                         f"issue:{issue_number}:copilot-assignment"
                     ),
@@ -1484,7 +1503,7 @@ def build_action_proposals(
                         snapshot,
                     )
                     existing_body = str(existing[0].get("body") or "").strip()
-                    if existing_body == body.strip():
+                    if comment_bodies_materially_equal(existing_body, body):
                         unchanged = result["unchangedIssueNumbers"]
                         if (
                             isinstance(unchanged, list)
@@ -1501,6 +1520,7 @@ def build_action_proposals(
                                 "issueNumber": issue_number,
                                 "issueUrl": prepared_issues[issue_number]["issueUrl"],
                                 "operation": "edit-comment",
+                                "evidenceBasis": "issue-state",
                                 "commentId": existing[0]["id"],
                                 "idempotencyKey": key,
                                 "body": body,
@@ -1529,7 +1549,7 @@ def build_action_proposals(
                 if existing
                 else ""
             )
-            if existing and existing_body == body.strip():
+            if existing and comment_bodies_materially_equal(existing_body, body):
                 unchanged = result["unchangedIssueNumbers"]
                 if isinstance(unchanged, list) and issue_number not in unchanged:
                     unchanged.append(issue_number)
@@ -1544,6 +1564,7 @@ def build_action_proposals(
                     "operation": (
                         "edit-comment" if existing else "create-comment"
                     ),
+                    "evidenceBasis": "issue-state",
                     "idempotencyKey": key,
                     "body": body,
                     "evidenceIds": list(recommendation["evidenceIds"]),
@@ -1628,13 +1649,17 @@ def build_action_proposals(
             if existing
             else ""
         )
-        comment_proposed = not existing or existing_body != body.strip()
+        comment_proposed = not existing or not comment_bodies_materially_equal(
+            existing_body,
+            body,
+        )
         if comment_proposed:
             comment: dict[str, object] = {
                 "actionId": comment_action_id,
                 "issueNumber": issue_number,
                 "issueUrl": prepared_issue["issueUrl"],
                 "operation": "edit-comment" if existing else "create-comment",
+                "evidenceBasis": "ci-occurrence",
                 "idempotencyKey": key,
                 "body": body,
                 "evidenceIds": list(recommendation["evidenceIds"]),
@@ -1651,6 +1676,7 @@ def build_action_proposals(
             "issueNumber": issue_number,
             "issueUrl": prepared_issue["issueUrl"],
             "operation": "close-issue",
+            "evidenceBasis": "ci-occurrence",
             "closeReason": close_reason,
             "idempotencyKey": f"issue:{issue_number}:close:{close_reason}",
             "evidenceIds": list(recommendation["evidenceIds"]),
@@ -1743,7 +1769,7 @@ def build_action_proposals(
             str(existing[0].get("body") or "").strip() if existing else ""
         )
         if existing and (
-            existing_body == body.strip()
+            comment_bodies_materially_equal(existing_body, body)
             or f"ci-shepherd:finding-digest={finding_digest}" in existing_body
         ):
             unchanged = result["unchangedIssueNumbers"]
@@ -1791,7 +1817,7 @@ def build_action_proposals(
         existing_body = (
             str(existing[0].get("body") or "").strip() if existing else ""
         )
-        if existing and existing_body == body.strip():
+        if existing and comment_bodies_materially_equal(existing_body, body):
             unchanged = result["unchangedIssueNumbers"]
             if isinstance(unchanged, list) and issue_number not in unchanged:
                 unchanged.append(issue_number)

@@ -30,7 +30,8 @@ python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" start \
   --checkout "$CHECKOUT" \
   --state-dir "$STATE" \
   --work-dir "$SCRATCH" \
-  --shepherd-author "$GITHUB_LOGIN"
+  --shepherd-author "$GITHUB_LOGIN" \
+  --max-comments 5
 ```
 
 `cycle.py start` performs the GET-only refresh, prepares compact issue and
@@ -60,11 +61,18 @@ python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
 ```
 
 The supported cycle writes deterministic `report.md`,
-`action-proposals.json`, `actor-dry-run.json`, `investigation-plan.json`, and
-`quarantine-session.json`, then records the validated snapshot, judgments, and
-artifacts under `$STATE/runs/<cycle-id>/`. A failed or interrupted cycle does
-not advance `current.json`. Successfully selected issue and pull-request reviews
-are recorded in
+`action-proposals.json`, `comment-selection.json`, `actor-dry-run.json`,
+`investigation-plan.json`, and `quarantine-session.json`, then records the
+validated snapshot, judgments, and artifacts under `$STATE/runs/<cycle-id>/`.
+`--max-comments` is an invocation policy input from 1 through 5; it does not
+authorize mutation. The selection file deterministically ranks eligible issue
+comments as human input, quarantine reconciliation, delegation handoff, watch
+status, status retirement, closure review, then other comments. Creation wins
+ties over editing, followed by issue number and action ID. `report.md` discloses
+the complete ranking and any applied cut.
+
+A failed or interrupted cycle does not advance `current.json`. Successfully
+selected issue and pull-request reviews are recorded in
 `$STATE/ledgers/review-events.jsonl`; merely refreshing an unchanged case does
 not consume a future typed wakeup.
 
@@ -504,7 +512,11 @@ A `quarantined-test` label is a routing hint, not code truth. Each cycle
 reconciles every open labelled issue against the inspected checkout and writes
 `quarantine-reconciliation.json`. Inventory and inspection both run through
 QuarantineTools, pinned to one revision, source tree digest, and inspector tree
-digest; nothing here is model-inferred, and nothing here writes to GitHub.
+digest; the inspector invocation restores its tool project when a fresh
+worktree has no assets. If inspection still cannot produce pinned source state,
+the cycle reports the labelled issues as unverifiable and makes no
+source-reconciliation proposal. Nothing here is model-inferred, and nothing
+here writes to GitHub.
 
 Four disagreements become one canonical `issue:<number>:status` comment
 proposal each, rendered through the same proposal path, `[automated] ` prefix,
@@ -612,19 +624,22 @@ python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
   --output "$SCRATCH/authorization-grant.json"
 ```
 
-`microsoft/aspire` remains denied by default. The production comment pilot
+`microsoft/aspire` remains denied by default. The production issue-comment pilot
 requires `--production-comment-pilot` at both grant
 creation and execution, and the generated grant records
-`productionCommentPilot: true`. Such a grant must name exactly one
-`create-comment` or `edit-comment` action, have no dependency or suppression
-override, and come from a finalized round-zero or round-one snapshot collected
-less than 45 minutes earlier. An edit must target an existing shepherd-owned
-comment. Finalized proposal documents carry a digest-bound production
-capability; provisional round-zero proposals written before expansion planning
-do not. The grant lives for at most 15 minutes and expires no later than 45
-minutes after collection. The final actor boundary allows only the corresponding
-comment POST or PATCH; issue closure remains denied there even if an invalid
-caller bypasses authorization validation.
+`productionCommentPilot: true`. Such a grant must name between one and five
+independent `create-comment` or `edit-comment` actions, with at most one per
+issue and no dependency or suppression override. The named actions must be the
+ordered IDs written to `comment-selection.json`; do not replace that deterministic
+cut with model or operator preference. The proposals must come from a finalized
+round-zero or round-one snapshot collected less than 45 minutes earlier. An edit
+must target an existing shepherd-owned comment. Finalized proposal documents
+carry a digest-bound production capability; provisional round-zero proposals
+written before expansion planning do not. The grant lives for at most 15 minutes
+and expires no later than 45 minutes after collection. The final actor boundary
+allows only the corresponding issue-comment POST or PATCH; issue closure and
+pull-request comments remain denied there even if an invalid caller bypasses
+authorization validation.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \
@@ -718,6 +733,7 @@ quarantine-session.json
 quarantine-reconciliation.json
 report.md
 action-proposals.json
+comment-selection.json
 actor-dry-run.json
 progress.json
 api-calls.jsonl
@@ -1079,8 +1095,10 @@ using the checkout that contains this skill. The workflow prompt must:
 5. launch and record new read-only requests in `investigation-plan.json`;
 6. independently validate investigation results and regenerate frozen
    `action-proposals.json`;
-7. execute only exact action IDs enumerated by a valid authorization grant, in
-   dependency order, stopping at its persisted mutation and chain budgets;
+7. when the invocation explicitly authorizes live issue comments, internally
+   mint one exact grant for the ordered action IDs in `comment-selection.json`
+   and execute only those IDs, stopping at its persisted mutation and chain
+   budgets; never substitute a model-selected or manually preferred action;
 8. never execute a proposal without that grant or start
    `quarantine-session.json` without the required approval;
 9. update the final report with investigation and action outcomes, proposals

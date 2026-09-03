@@ -538,6 +538,34 @@ class DelegationEventTests(unittest.TestCase):
         )
         self.assertIn("| 0 | 0 | 0 | 3 |", report)
 
+    def test_report_discloses_eligible_delegation_proposals(self) -> None:
+        report = render_delegation_status_section(
+            {
+                "status": "complete",
+                "records": [],
+            },
+            {
+                "proposals": [
+                    {
+                        "actionId": "snapshot:owner/repo:time:issue:42:assign-copilot",
+                        "issueNumber": 42,
+                        "operation": "assign-copilot",
+                        "executionEligibility": {
+                            "eligible": True,
+                            "blockingReasons": [],
+                        },
+                    }
+                ]
+            },
+        )
+
+        self.assertIn("**1 executable delegation proposal**", report)
+        self.assertIn(
+            "| #42 | `snapshot:owner/repo:time:issue:42:assign-copilot` |",
+            report,
+        )
+        self.assertIn("not included in production comment selection", report)
+
 
 class CapacityAccountingTests(unittest.TestCase):
     def test_only_recent_missing_owned_tasks_block_new_starts(self) -> None:

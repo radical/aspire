@@ -1253,6 +1253,7 @@ class CycleTests(unittest.TestCase):
                 checkout=None,
                 shepherd_author="ankj",
                 input_path=first_input,
+                max_comments=1,
             )
 
             self.assertEqual("awaiting-review", started["stage"])
@@ -1280,12 +1281,21 @@ class CycleTests(unittest.TestCase):
             self.assertEqual("completed", completed["stage"])
             self.assertTrue((first_work / "report.md").is_file())
             self.assertTrue((first_work / "action-proposals.json").is_file())
+            self.assertTrue((first_work / "comment-selection.json").is_file())
+            comment_selection = json.loads(
+                (first_work / "comment-selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(1, comment_selection["maxComments"])
             proposals = json.loads(
                 (first_work / "action-proposals.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
                 {"schemaVersion": 1, "evidenceRound": 0},
                 proposals["productionPilotCapability"],
+            )
+            self.assertIn(
+                "## Production comment selection",
+                (first_work / "report.md").read_text(encoding="utf-8"),
             )
             self.assertEqual(1, len(list((state / "runs").iterdir())))
 

@@ -255,6 +255,8 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 {
                     "testName": "Tests.FirstTest",
                     "reason": "insufficient-evidence-class",
+                    "issueNumbers": [21],
+                    "issueUrls": ["https://github.com/owner/repo/issues/21"],
                     "evidenceReason": (
                         "no artifact-derived exact failing test occurrence was collected"
                     ),
@@ -262,6 +264,8 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 {
                     "testName": "Tests.SecondTest",
                     "reason": "insufficient-evidence-class",
+                    "issueNumbers": [22],
+                    "issueUrls": ["https://github.com/owner/repo/issues/22"],
                     "evidenceReason": (
                         "no artifact-derived exact failing test occurrence was collected"
                     ),
@@ -1427,6 +1431,10 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                     {
                         "testName": "Tests.Blocked",
                         "reason": "The source method was ambiguous.",
+                        "issueNumbers": [21],
+                        "issueUrls": [
+                            "https://github.com/owner/repo/issues/21"
+                        ],
                     }
                 ],
                 "pendingPullRequests": [],
@@ -1436,6 +1444,7 @@ class QuarantineSessionRequestTests(unittest.TestCase):
         self.assertIn("Tests.New", rendered)
         self.assertIn("Tests.Blocked", rendered)
         self.assertIn("The source method was ambiguous.", rendered)
+        self.assertIn("[#21](https://github.com/owner/repo/issues/21)", rendered)
 
 
 if __name__ == "__main__":

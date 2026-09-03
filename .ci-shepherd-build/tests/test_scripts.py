@@ -940,6 +940,7 @@ class PrototypeScriptTests(unittest.TestCase):
             "agent-judgments.json",
             "judgments.json",
             "report.md",
+            "comment-selection.json",
             "progress.json",
             "api-calls.jsonl",
         ):

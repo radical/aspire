@@ -31,6 +31,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from .comment_body import comment_bodies_materially_equal
 from .models import ValidationError, validate_snapshot
 
 
@@ -1734,7 +1735,10 @@ def build_pull_request_comment_proposals(
             body = _render_retired_human_request_body(number)
         else:
             continue
-        if existing and str(existing[0].get("body") or "").strip() == body.strip():
+        if existing and comment_bodies_materially_equal(
+            str(existing[0].get("body") or ""),
+            body,
+        ):
             unchanged.append(number)
             continue
 

@@ -1141,16 +1141,40 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         self.assertEqual(self.proposals["snapshotId"], grant["snapshotId"])
 
-    def test_production_comment_pilot_rejects_multiple_actions(
+    def test_production_comment_pilot_allows_up_to_five_actions(
         self,
     ) -> None:
         self._use_production_repository()
         second_action_id = self._add_comment_proposal(2)
+        third_action_id = self._add_comment_proposal(3)
         self._write_proposals()
 
-        with self.assertRaisesRegex(AuthorizationError, "exactly one action"):
+        grant = self._generate(
+            action_ids=[
+                self.comment_action_id,
+                second_action_id,
+                third_action_id,
+            ],
+            allow_production_comment_pilot=True,
+        )
+
+        self.assertEqual(
+            {"maxMutationAttempts": 3, "maxChains": 3},
+            {
+                key: grant["budget"][key]
+                for key in ("maxMutationAttempts", "maxChains")
+            },
+        )
+
+    def test_production_comment_pilot_rejects_more_than_five_actions(self) -> None:
+        self._use_production_repository()
+        action_ids = [self.comment_action_id]
+        action_ids.extend(self._add_comment_proposal(number) for number in range(2, 7))
+        self._write_proposals()
+
+        with self.assertRaisesRegex(AuthorizationError, "between one and 5 actions"):
             self._generate(
-                action_ids=[self.comment_action_id, second_action_id],
+                action_ids=action_ids,
                 allow_production_comment_pilot=True,
             )
 
@@ -1338,7 +1362,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "comment plus closure",
                 [self.comment_action_id, self.close_action_id],
                 {},
-                "exactly one action",
+                "comment creation or editing only",
             ),
             (
                 "closure",
@@ -1398,7 +1422,7 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
                 "action",
                 "allowedActionIds",
                 [self.comment_action_id, self.close_action_id],
-                "invalid action count",
+                "comment creation or editing only",
             ),
             (
                 "operation",

@@ -857,7 +857,10 @@ def decide_new_start(usage: CapacityUsage, limits: CapacityLimits) -> StartDecis
     return StartDecision(permitted=not blocked_by, blocked_by=tuple(blocked_by))
 
 
-def render_delegation_status_section(status: object) -> str:
+def render_delegation_status_section(
+    status: object,
+    proposals_document: object | None = None,
+) -> str:
     lines = ["## Copilot delegations", ""]
     if not isinstance(status, Mapping):
         lines.append("No delegation status was collected.")
@@ -893,7 +896,13 @@ def render_delegation_status_section(status: object) -> str:
             )
     records = status.get("records")
     if not isinstance(records, list) or not records:
-        lines.append("No shepherd-owned Copilot delegations are being tracked.")
+        lines.extend(
+            [
+                "No shepherd-owned Copilot delegations are currently being tracked.",
+                "",
+            ]
+        )
+        _append_delegation_proposals(lines, proposals_document)
         return "\n".join(lines) + "\n"
     lines.extend(
         [
@@ -926,7 +935,47 @@ def render_delegation_status_section(status: object) -> str:
             f"| {', '.join(rendered_pulls) or 'none'} "
             f"| {'required' if record.get('requiresHuman') else 'no'} |"
         )
+    lines.append("")
+    _append_delegation_proposals(lines, proposals_document)
     return "\n".join(lines) + "\n"
+
+
+def _append_delegation_proposals(
+    lines: list[str],
+    proposals_document: object | None,
+) -> None:
+    if not isinstance(proposals_document, Mapping):
+        return
+    proposals = proposals_document.get("proposals")
+    if not isinstance(proposals, list):
+        return
+    eligible = [
+        proposal
+        for proposal in proposals
+        if isinstance(proposal, Mapping)
+        and proposal.get("operation") == "assign-copilot"
+        and isinstance(proposal.get("executionEligibility"), Mapping)
+        and proposal["executionEligibility"].get("eligible") is True
+    ]
+    if not eligible:
+        return
+    count = len(eligible)
+    noun = "proposal" if count == 1 else "proposals"
+    verb = "was" if count == 1 else "were"
+    lines.extend(
+        [
+            f"**{count} executable delegation {noun}** {verb} generated. They are "
+            "not included in production comment selection and require the separate "
+            "production delegation capability.",
+            "",
+            "| Issue | Action |",
+            "|---|---|",
+        ]
+    )
+    for proposal in eligible:
+        lines.append(
+            f"| #{proposal.get('issueNumber')} | `{proposal.get('actionId')}` |"
+        )
 
 
 def _nonempty_string(value: object, name: str) -> str:

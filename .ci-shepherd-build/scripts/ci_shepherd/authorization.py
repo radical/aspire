@@ -33,7 +33,7 @@ MAX_GRANT_TTL_MINUTES = 60
 AUTHORIZATION_SCHEMA_VERSION = 2
 PRODUCTION_REPOSITORY = "microsoft/aspire"
 PRODUCTION_COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
-MAX_PRODUCTION_COMMENT_ACTIONS = 1
+MAX_PRODUCTION_COMMENT_ACTIONS = 5
 PRODUCTION_DELEGATION_OPERATIONS = frozenset({"assign-copilot"})
 MAX_PRODUCTION_DELEGATION_ACTIONS = 1
 MAX_PRODUCTION_SNAPSHOT_AGE = timedelta(minutes=45)
@@ -735,9 +735,10 @@ def _validate_production_comment_selection(
     ttl_minutes: int,
     override_ids: set[str],
 ) -> None:
-    if len(proposals) != MAX_PRODUCTION_COMMENT_ACTIONS:
+    if not 1 <= len(proposals) <= MAX_PRODUCTION_COMMENT_ACTIONS:
         raise AuthorizationError(
-            "Production comment pilot grants must authorize exactly one action."
+            "Production comment pilot grants must authorize between one and "
+            f"{MAX_PRODUCTION_COMMENT_ACTIONS} actions."
         )
     issue_numbers: set[int] = set()
     for proposal in proposals:
@@ -972,7 +973,7 @@ def _validate_production_comment_grant(
         raise AuthorizationError(
             "Authorization grant does not carry the production comment capability."
         )
-    if len(grant.allowed_action_ids) != MAX_PRODUCTION_COMMENT_ACTIONS:
+    if not 1 <= len(grant.allowed_action_ids) <= MAX_PRODUCTION_COMMENT_ACTIONS:
         raise AuthorizationError(
             "Production comment pilot grant has an invalid action count."
         )

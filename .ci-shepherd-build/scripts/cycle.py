@@ -11,6 +11,10 @@ from typing import Any, Mapping
 
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import build_dry_run
+from ci_shepherd.comment_selection import (
+    build_comment_selection,
+    render_comment_selection_section,
+)
 from ci_shepherd.delegations import render_delegation_status_section
 from ci_shepherd.evidence_planning import build_proposal_evidence_requests
 from ci_shepherd.history import load_current
@@ -418,6 +422,7 @@ def start_cycle(
     input_path: Path | None = None,
     full_refresh: bool = False,
     repository_policy_path: Path = DEFAULT_REPOSITORY_POLICY_PATH,
+    max_comments: int = 5,
 ) -> dict[str, object]:
     _ensure_separate_directories(state_dir, work_dir)
     if work_dir.exists() and any(work_dir.iterdir()):
@@ -606,6 +611,7 @@ def start_cycle(
             else None
         ),
         "shepherdAuthor": shepherd_author,
+        "maxComments": max_comments,
         "baseRunId": (
             getattr(current_history, "run_id", None)
             if current_history is not None
@@ -643,6 +649,7 @@ def finish_cycle(
     state_directory = manifest.get("stateDirectory")
     checkout_value = manifest.get("checkout")
     shepherd_author = manifest.get("shepherdAuthor")
+    max_comments = manifest.get("maxComments", 5)
     if not all(isinstance(value, str) and value for value in (repository, state_directory, shepherd_author)):
         raise ValueError("Cycle manifest identity is incomplete.")
     state_dir = Path(state_directory)
@@ -659,6 +666,7 @@ def finish_cycle(
         "pullRequestJudgments": work_dir / "pull-request-judgments.json",
         "report": work_dir / "report.md",
         "proposals": work_dir / "action-proposals.json",
+        "commentSelection": work_dir / "comment-selection.json",
         "dryRun": work_dir / "actor-dry-run.json",
         "quarantineSession": work_dir / "quarantine-session.json",
         "quarantineReconciliation": work_dir / "quarantine-reconciliation.json",
@@ -780,6 +788,11 @@ def finish_cycle(
         },
     }
     _write_private_json(paths["proposals"], proposals)
+    comment_selection = build_comment_selection(
+        proposals,
+        max_comments=max_comments,
+    )
+    _write_private_json(paths["commentSelection"], comment_selection)
     review_selection = _load_json(paths["selection"], "review selection")
     visible_issue_numbers = {
         int(entry["issueNumber"])
@@ -791,6 +804,18 @@ def finish_cycle(
         and isinstance(entry.get("issueNumber"), int)
         and not isinstance(entry.get("issueNumber"), bool)
     }
+    visible_issue_numbers.update(
+        int(issue["issueNumber"])
+        for issue in final_judgments["issues"]
+        if isinstance(issue, Mapping)
+        and isinstance(issue.get("issueNumber"), int)
+        and not isinstance(issue.get("issueNumber"), bool)
+        and any(
+            isinstance(recommendation, Mapping)
+            and recommendation.get("disposition") == "review-quarantine"
+            for recommendation in issue.get("recommendations", [])
+        )
+    )
     report_markdown = render_poc_markdown(
         prepared,
         final_judgments,
@@ -806,6 +831,8 @@ def finish_cycle(
             pull_request_judgments,
         ).lstrip()
         + "\n"
+        + render_comment_selection_section(comment_selection)
+        + "\n"
         + render_investigation_section(investigation_plan)
         + "\n"
         + render_quarantine_session_section(quarantine_plan)
@@ -814,7 +841,10 @@ def finish_cycle(
             quarantine_reconciliation
         )
         + "\n"
-        + render_delegation_status_section(snapshot.get("delegationStatus"))
+        + render_delegation_status_section(
+            snapshot.get("delegationStatus"),
+            proposals,
+        )
     )
     _write_private_text(paths["report"], report_markdown)
     dry_run = build_dry_run(proposals, action_id=None)
@@ -833,6 +863,7 @@ def finish_cycle(
             work_dir / "pull-request-review.json",
             paths["pullRequestJudgments"],
             paths["proposals"],
+            paths["commentSelection"],
             paths["dryRun"],
             paths["quarantineSession"],
             paths["quarantineReconciliation"],
@@ -912,6 +943,7 @@ def finish_cycle(
         "stage": "completed",
         "runDirectory": str(run_directory),
         "proposalCount": len(proposals["proposals"]),
+        "selectedCommentCount": comment_selection["selectedCount"],
         "quarantineTestCount": len(quarantine_request["tests"]),
         "quarantineSessionProposed": quarantine_plan["proposal"] is not None,
         "quarantineActiveBatchId": quarantine_plan["activeBatchId"],
@@ -951,6 +983,7 @@ def main() -> int:
     start.add_argument("--shepherd-author", required=True)
     start.add_argument("--input", type=Path)
     start.add_argument("--full-refresh", action="store_true")
+    start.add_argument("--max-comments", type=int, default=5)
     start.add_argument(
         "--repository-policy",
         type=Path,
@@ -974,6 +1007,7 @@ def main() -> int:
                 input_path=args.input,
                 full_refresh=args.full_refresh,
                 repository_policy_path=args.repository_policy,
+                max_comments=args.max_comments,
             )
         else:
             result = finish_cycle(

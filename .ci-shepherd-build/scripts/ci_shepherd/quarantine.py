@@ -317,6 +317,12 @@ def build_quarantine_session_request(
                 {
                     "testName": test_name,
                     "reason": "insufficient-evidence-class",
+                    "issueNumbers": [
+                        candidate["issueNumber"] for candidate in source_issues
+                    ],
+                    "issueUrls": [
+                        candidate["issueUrl"] for candidate in source_issues
+                    ],
                     "evidenceReason": evidence_gap,
                 }
             )
@@ -823,7 +829,6 @@ def _run_quarantine_tool(
             "run",
             "--project",
             str(tool_project),
-            "--no-restore",
             "--verbosity",
             "quiet",
             "--",
@@ -1951,11 +1956,19 @@ def render_quarantine_session_section(plan: Mapping[str, Any]) -> str:
             lines.append("No quarantine session was proposed.")
         blocked_targets = plan.get("blockedTargets", [])
         if isinstance(blocked_targets, list) and blocked_targets:
-            lines.extend(["", "| Blocked test | Reason |", "|---|---|"])
+            lines.extend(
+                [
+                    "",
+                    "| Blocked test | Issue | Reason |",
+                    "|---|---|---|",
+                ]
+            )
             for target in blocked_targets:
                 if isinstance(target, Mapping):
                     lines.append(
-                        f"| `{target.get('testName')}` | {target.get('reason')} |"
+                        f"| `{target.get('testName')}` | "
+                        f"{_target_issue_links(target)} | "
+                        f"{target.get('reason')} |"
                     )
         return "\n".join(lines) + "\n"
 
@@ -1992,11 +2005,19 @@ def render_quarantine_session_section(plan: Mapping[str, Any]) -> str:
     pending_pull_requests = plan.get("pendingPullRequests", [])
     blocked_targets = plan.get("blockedTargets", [])
     if isinstance(blocked_targets, list) and blocked_targets:
-        lines.extend(["", "| Blocked test | Reason |", "|---|---|"])
+        lines.extend(
+            [
+                "",
+                "| Blocked test | Issue | Reason |",
+                "|---|---|---|",
+            ]
+        )
         for target in blocked_targets:
             if isinstance(target, Mapping):
                 lines.append(
-                    f"| `{target.get('testName')}` | {target.get('reason')} |"
+                    f"| `{target.get('testName')}` | "
+                    f"{_target_issue_links(target)} | "
+                    f"{target.get('reason')} |"
                 )
     if isinstance(pending_pull_requests, list) and pending_pull_requests:
         lines.extend(
@@ -2007,3 +2028,20 @@ def render_quarantine_session_section(plan: Mapping[str, Any]) -> str:
             ]
         )
     return "\n".join(lines) + "\n"
+
+
+def _target_issue_links(target: Mapping[str, Any]) -> str:
+    issue_numbers = target.get("issueNumbers")
+    issue_urls = target.get("issueUrls")
+    if not isinstance(issue_numbers, list) or not isinstance(issue_urls, list):
+        issue_numbers = [target.get("issueNumber")]
+        issue_urls = [target.get("issueUrl")]
+    links = [
+        f"[#{number}]({url})"
+        for number, url in zip(issue_numbers, issue_urls, strict=False)
+        if isinstance(number, int)
+        and not isinstance(number, bool)
+        and isinstance(url, str)
+        and url
+    ]
+    return ", ".join(links) or "-"

@@ -422,7 +422,12 @@ def _validate_execution_eligibility(
         raise ValueError(f"{action_id}.executionEligibility.eligible must be boolean.")
     if (
         evidence_basis
-        not in {"ci-occurrence", "source-reconciliation", "delegation-state"}
+        not in {
+            "ci-occurrence",
+            "issue-state",
+            "source-reconciliation",
+            "delegation-state",
+        }
         or recorded_evidence_basis != evidence_basis
     ):
         raise ValueError(
@@ -1100,7 +1105,7 @@ def execute_action(
             )
         if (
             validated["schemaVersion"] == 2
-            and proposal.get("evidenceBasis") == "ci-occurrence"
+            and proposal.get("evidenceBasis") in {"ci-occurrence", "issue-state"}
             and not live_labels & EXECUTABLE_CI_LABELS
         ):
             return _terminal_result(

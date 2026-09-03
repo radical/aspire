@@ -767,6 +767,77 @@ class WatchActionTests(unittest.TestCase):
         self.assertIn("`release-infrastructure`", proposal["body"])
         self.assertIn("<!-- ci-shepherd:role=status -->", proposal["body"])
 
+    def test_ping_human_ignores_evidence_citation_only_changes(self) -> None:
+        first = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+        body = first["proposals"][0]["body"]
+        body = body.replace(
+            "**Evidence reviewed:**",
+            (
+                "**Evidence reviewed:**\n"
+                "- [issue:21:comment:900]"
+                "(https://github.com/owner/repo/issues/21#issuecomment-900)"
+            ),
+        )
+
+        result = build_action_proposals(
+            _with_owned_comment(_snapshot(), body),
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], result["proposals"])
+        self.assertEqual([21], result["unchangedIssueNumbers"])
+
+    def test_ping_human_uses_issue_state_without_requiring_occurrences(self) -> None:
+        snapshot = _snapshot()
+        payload = snapshot["evidence"]["issue:21"]["payload"]
+        assert isinstance(payload, dict)
+        payload["occurrences"] = []
+
+        result = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+
+        proposal = result["proposals"][0]
+        self.assertEqual("issue-state", proposal["evidenceBasis"])
+        self.assertTrue(proposal["executionEligibility"]["eligible"])
+        self.assertEqual([], proposal["executionEligibility"]["blockingReasons"])
+
+    def test_ping_human_blocks_body_that_contradicts_zero_occurrences(self) -> None:
+        snapshot = _snapshot()
+        payload = snapshot["evidence"]["issue:21"]["payload"]
+        assert isinstance(payload, dict)
+        payload["occurrences"] = []
+        judgments = _ping_human_judgments()
+        issue = judgments["issues"][0]
+        assert isinstance(issue, dict)
+        recommendation = issue["recommendations"][0]
+        assert isinstance(recommendation, dict)
+        recommendation["summary"] = "The release lane failed 10 consecutive times."
+
+        result = build_action_proposals(
+            snapshot,
+            _prepared(),
+            judgments,
+            "ankj",
+        )
+
+        proposal = result["proposals"][0]
+        self.assertFalse(proposal["executionEligibility"]["eligible"])
+        self.assertIn(
+            "body-occurrence-contradiction",
+            proposal["executionEligibility"]["blockingReasons"],
+        )
+
     def test_build_action_proposals_renders_resolved_review_close(self) -> None:
         result = build_action_proposals(
             _snapshot(),
