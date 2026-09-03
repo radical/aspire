@@ -898,6 +898,70 @@ class ActorTests(unittest.TestCase):
         self.assertEqual("missing-ci-label", result["reason"])
         self.assertEqual([("get_issue", 21)], client.calls)
 
+    def test_v2_execution_rejects_delegation_handoff_that_lost_its_ci_label(
+        self,
+    ) -> None:
+        proposals = _proposals()
+        proposals.update(
+            {
+                "schemaVersion": 2,
+                "generatedAtUtc": "2026-08-21T19:55:00Z",
+                "proposalTtlHours": 24,
+                "maxProposalsPerIssue": 2,
+                "executionEligibility": {"status": "eligible", "violations": []},
+            }
+        )
+        proposal = proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal.pop("requiresSeparateApproval")
+        proposal["evidenceBasis"] = "delegation-state"
+        proposal["executionEligibility"] = {
+            "eligible": True,
+            "evidenceBasis": "delegation-state",
+            "ciLabels": ["ci-failure-cause"],
+            "occurrenceCount": 0,
+            "collectionComplete": True,
+            "unavailableEvidenceIds": [],
+            "untrustedReferenceEvidenceIds": [],
+            "blockingReasons": [],
+        }
+        proposal["sourceEvidenceFingerprint"] = {
+            "issueUpdatedAt": "2026-08-21T19:54:00Z"
+        }
+        proposals["proposals"] = [proposal]
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "labels": [],
+                },
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T20:00:01Z",
+                    "labels": [],
+                },
+            ],
+            comments=[[]],
+            single_comments=[
+                {"id": 900, "body": COMMENT_BODY, "user": {"login": "ankj"}}
+            ],
+        )
+
+        result = execute_action(
+            proposals,
+            action_id=COMMENT_ACTION_ID,
+            prior_results=_results(),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("stale", result["outcome"])
+        self.assertEqual("missing-ci-label", result["reason"])
+        self.assertEqual([("get_issue", 21)], client.calls)
+
     def test_v2_execution_rejects_comment_body_changed_after_proposal(self) -> None:
         proposals = _proposals()
         proposals.update(

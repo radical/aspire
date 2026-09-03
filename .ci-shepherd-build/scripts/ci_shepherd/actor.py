@@ -603,7 +603,7 @@ def _validate_execution_eligibility(
         )
 
     derived_reasons: list[str] = []
-    if evidence_basis in {"ci-occurrence", "issue-state"}:
+    if evidence_basis in {"ci-occurrence", "issue-state", "delegation-state"}:
         if not ci_labels:
             derived_reasons.append("missing-ci-label")
     if evidence_basis == "ci-occurrence":
@@ -1221,7 +1221,8 @@ def execute_action(
             )
         if (
             validated["schemaVersion"] == 2
-            and proposal.get("evidenceBasis") in {"ci-occurrence", "issue-state"}
+            and proposal.get("evidenceBasis")
+            in {"ci-occurrence", "issue-state", "delegation-state"}
             and not live_labels & EXECUTABLE_CI_LABELS
         ):
             return _terminal_result(

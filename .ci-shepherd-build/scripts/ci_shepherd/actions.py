@@ -10,10 +10,24 @@ from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
 
 
+_QUARANTINE_SOURCE_REVISION_RE = re.compile(
+    r"(?m)^(\*\*Current source evidence\*\* \(revision `)[0-9a-f]{40}(`\):)$"
+)
+
+
 def _status_markers(issue_number: int) -> str:
     return (
         "<!-- ci-shepherd:role=status -->\n"
         f"<!-- ci-shepherd:idempotency-key=issue:{issue_number}:status -->"
+    )
+
+
+def _quarantine_comment_bodies_materially_equal(left: str, right: str) -> bool:
+    if "ci-shepherd:finding-digest" in left:
+        return False
+    return comment_bodies_materially_equal(
+        _QUARANTINE_SOURCE_REVISION_RE.sub(r"\1<revision>\2", left),
+        _QUARANTINE_SOURCE_REVISION_RE.sub(r"\1<revision>\2", right),
     )
 
 
@@ -565,7 +579,7 @@ def _execution_eligibility(
 
     blocking_reasons: list[str] = []
     ci_labels = sorted(executable_ci_labels(raw_labels))
-    if evidence_basis in {"ci-occurrence", "issue-state"}:
+    if evidence_basis in {"ci-occurrence", "issue-state", "delegation-state"}:
         if not ci_labels:
             blocking_reasons.append("missing-ci-label")
     if evidence_basis == "ci-occurrence":
@@ -1140,7 +1154,8 @@ def _quarantine_source_lines(finding: dict[str, Any]) -> list[str]:
             else "`[QuarantinedTest]` links " + ", ".join(str(url) for url in issue_urls)
         )
         lines.append(
-            f"- `{entry['testName']}` — `{entry['file']}:{entry['line']}` — {attribute}"
+            f"- `{entry['testName']}` — `tests/{entry['file']}:{entry['line']}` — "
+            f"{attribute}"
         )
     return lines
 
@@ -1149,7 +1164,6 @@ def _render_quarantine_reconciliation_body(
     issue_number: int,
     finding: dict[str, Any],
     source_revision: str,
-    finding_digest: str,
 ) -> str:
     _licensed_quarantine_claims(finding)
     leads = {
@@ -1210,7 +1224,6 @@ def _render_quarantine_reconciliation_body(
             ),
             "",
             _status_markers(issue_number),
-            f"<!-- ci-shepherd:finding-digest={finding_digest} -->",
         ]
     )
 
@@ -1640,8 +1653,40 @@ def build_action_proposals(
             continue
         if issue_number in delegation_handoffs:
             continue
+        prepared_issue = prepared_issues[issue_number]
+        compact_issue = compact_issues.get(issue_number, {})
+        action_cluster = action_clusters.get(issue_number)
+        is_duplicate = (
+            isinstance(action_cluster, dict)
+            and action_cluster.get("role") == "superseded"
+        )
+        has_recovery = (
+            prepared_issue.get("candidateState") == "resolved"
+            and prepared_issue.get("candidateAction") == "recommend-close"
+            and bool(prepared_issue.get("resolutionEvidence"))
+        )
+        recovered_run_evidence_id = compact_issue.get("recoveredRunEvidenceId")
+        has_run_recovery = (
+            isinstance(recovered_run_evidence_id, str)
+            and bool(recovered_run_evidence_id)
+        )
+        closure_supersedes_delegation = (
+            status_recommendation is not None
+            and status_recommendation["disposition"] == "review-close"
+            and (is_duplicate or has_recovery or has_run_recovery)
+        )
+        if delegation_recommendation is not None and closure_supersedes_delegation:
+            blocked_recommendations.append(
+                {
+                    "issueNumber": issue_number,
+                    "disposition": "delegate-copilot",
+                    "blockingReasons": ["superseded-by-closure-review"],
+                    "evidenceIds": list(delegation_recommendation["evidenceIds"]),
+                }
+            )
+            delegation_recommendation = None
         if delegation_recommendation is not None and _machine_actionability(
-            prepared_issues[issue_number],
+            prepared_issue,
             list(delegation_recommendation["evidenceIds"]),
         ) is None:
             blocked_recommendations.append(
@@ -1772,24 +1817,7 @@ def build_action_proposals(
         ):
             continue
 
-        prepared_issue = prepared_issues[issue_number]
-        compact_issue = compact_issues.get(issue_number, {})
-        action_cluster = action_clusters.get(issue_number)
-        is_duplicate = (
-            isinstance(action_cluster, dict)
-            and action_cluster.get("role") == "superseded"
-        )
-        has_recovery = (
-            prepared_issue.get("candidateState") == "resolved"
-            and prepared_issue.get("candidateAction") == "recommend-close"
-            and bool(prepared_issue.get("resolutionEvidence"))
-        )
-        recovered_run_evidence_id = compact_issue.get("recoveredRunEvidenceId")
-        has_run_recovery = (
-            isinstance(recovered_run_evidence_id, str)
-            and bool(recovered_run_evidence_id)
-        )
-        if not is_duplicate and not has_recovery and not has_run_recovery:
+        if not closure_supersedes_delegation:
             blocked_recommendations.append(
                 {
                     "issueNumber": issue_number,
@@ -1977,7 +2005,6 @@ def build_action_proposals(
             issue_number,
             finding,
             reconciliation_revision,
-            finding_digest,
         )
         existing = _owned_status_comments(snapshot, issue_number, key)
         if len(existing) > 1:
@@ -1987,9 +2014,9 @@ def build_action_proposals(
         existing_body = (
             str(existing[0].get("body") or "").strip() if existing else ""
         )
-        if existing and (
-            comment_bodies_materially_equal(existing_body, body)
-            or f"ci-shepherd:finding-digest={finding_digest}" in existing_body
+        if existing and _quarantine_comment_bodies_materially_equal(
+            existing_body,
+            body,
         ):
             unchanged = result["unchangedIssueNumbers"]
             if isinstance(unchanged, list) and issue_number not in unchanged:

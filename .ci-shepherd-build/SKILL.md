@@ -67,8 +67,8 @@ validated snapshot, judgments, and artifacts under `$STATE/runs/<cycle-id>/`.
 `--max-comments` is an invocation policy input from 1 through 5; it does not
 authorize mutation. The selection file deterministically ranks eligible issue
 comments as human input, quarantine reconciliation, delegation handoff, watch
-status, status retirement, closure review, then other comments. Creation wins
-ties over editing, followed by issue number and action ID. `report.md` discloses
+status, status retirement, closure review, then other comments. Editing wins
+ties over creation, followed by issue number and action ID. `report.md` discloses
 the complete ranking and any applied cut.
 
 A failed or interrupted cycle does not advance `current.json`. Successfully
@@ -693,7 +693,8 @@ The separate production delegation pilot requires
 authorizes exactly one independent `assign-copilot` action from the same
 fresh finalized-cycle capability, records `productionDelegationPilot: true`,
 forbids suppression overrides, and requires all three signed capacity limits
-to equal one:
+to equal one. Delegation assignment and handoff actions require a recognized CI
+label both in the frozen evidence and at the live executor preflight:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/create_authorization.py" \

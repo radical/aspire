@@ -1038,6 +1038,62 @@ class WatchActionTests(unittest.TestCase):
             result["blockedRecommendations"],
         )
 
+    def test_superseded_duplicate_close_suppresses_model_delegation(self) -> None:
+        prepared = _prepared()
+        prepared["repositoryPolicy"] = {
+            "quarantinePullRequest": {"baseRef": "main"},
+        }
+        prepared["issues"][0]["machineActionability"] = {
+            "status": "verified",
+            "kind": "deterministic-failure",
+            "fingerprint": "test:Demo.Tests.Broken",
+            "evidenceIds": ["issue:21", "run:777"],
+        }
+        judgments = _delegate_judgments()
+        issue = judgments["issues"][0]
+        assert isinstance(issue, dict)
+        recommendations = issue["recommendations"]
+        assert isinstance(recommendations, list)
+        recommendations.append(
+            {
+                "confidence": "medium",
+                "disposition": "review-close",
+                "evidenceIds": ["issue:21"],
+                "missingEvidence": [],
+                "reassessWhen": (
+                    "If canonical issue #20 no longer tracks the shared failure."
+                ),
+                "summary": (
+                    "Review closure as a superseded duplicate of canonical issue #20."
+                ),
+                "target": {"kind": "test", "value": "Demo.Tests.Broken"},
+            }
+        )
+
+        result = build_action_proposals(
+            _snapshot(),
+            prepared,
+            judgments,
+            "ankj",
+            agent_input=_duplicate_agent_input(),
+        )
+
+        self.assertEqual(
+            ["create-comment", "close-issue"],
+            [proposal["operation"] for proposal in result["proposals"]],
+        )
+        self.assertEqual(
+            [
+                {
+                    "issueNumber": 21,
+                    "disposition": "delegate-copilot",
+                    "blockingReasons": ["superseded-by-closure-review"],
+                    "evidenceIds": ["issue:21", "run:777"],
+                }
+            ],
+            result["blockedRecommendations"],
+        )
+
     def test_build_watch_proposals_renders_new_status_comment(self) -> None:
         result = build_watch_proposals(
             _snapshot(),
@@ -1321,6 +1377,45 @@ class DelegationHandoffActionTests(unittest.TestCase):
         self.assertNotIn("watch-comment", proposal["actionId"])
         build_dry_run(proposals, action_id=proposal["actionId"])
 
+    def test_delegation_handoff_without_ci_label_is_not_executable(self) -> None:
+        snapshot = _snapshot()
+        issue_evidence = snapshot["evidence"]["issue:21"]
+        assert isinstance(issue_evidence, dict)
+        issue_payload = issue_evidence["payload"]
+        assert isinstance(issue_payload, dict)
+        issue_payload["labels"] = []
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [
+                {
+                    "actionId": "assignment:21",
+                    "repository": "owner/repo",
+                    "issueNumber": 21,
+                    "startedAt": "2026-08-21T15:00:00Z",
+                    "taskId": "task-21",
+                    "taskState": "waiting_for_user",
+                    "lifecycle": "handoff_required",
+                    "requiresHuman": True,
+                    "pullRequests": [],
+                }
+            ],
+        }
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        proposal = proposals["proposals"][0]
+        self.assertEqual(
+            ["missing-ci-label"],
+            proposal["executionEligibility"]["blockingReasons"],
+        )
+        rendered = build_dry_run(proposals, action_id=proposal["actionId"])
+        self.assertFalse(rendered["actions"][0]["wouldExecute"])
+
     def test_handoff_supersedes_model_status_recommendation(self) -> None:
         snapshot = _snapshot()
         snapshot["delegationStatus"] = {
@@ -1423,7 +1518,7 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
         self.assertTrue(proposal["executionEligibility"]["eligible"])
         self.assertTrue(proposal["body"].startswith("[automated] "))
         self.assertIn("`Demo.Tests.Flaky`", proposal["body"])
-        self.assertIn("`Demo.Tests/Tests.cs:31`", proposal["body"])
+        self.assertIn("`tests/Demo.Tests/Tests.cs:31`", proposal["body"])
         self.assertIn("no `[QuarantinedTest]` attribute", proposal["body"])
         self.assertIn("a" * 40, proposal["body"])
         self.assertEqual(
@@ -1446,6 +1541,7 @@ class QuarantineSourceReconciliationActionTests(unittest.TestCase):
             "<!-- ci-shepherd:idempotency-key=issue:21:status -->",
             proposal["body"],
         )
+        self.assertNotIn("ci-shepherd:finding-digest", proposal["body"])
         self.assertEqual(
             [
                 {
