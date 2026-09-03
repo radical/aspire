@@ -3,15 +3,20 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 import hashlib
 import json
 import os
 import shutil
+import stat
 import threading
-import time
 import unittest
 
-from ci_shepherd.coordinator_state import CoordinatorStateError, CoordinatorStateStore
+from ci_shepherd.coordinator_state import (
+    CoordinatorStateError,
+    CoordinatorStateStore,
+    make_lock_free_durable_intent_reader,
+)
 from ci_shepherd.operation_policy import DEFAULT_CAPS, DEFAULT_EXPIRY_DAYS, OPERATION_CLASSES
 
 
@@ -355,6 +360,126 @@ class CoordinatorStateStoreTests(unittest.TestCase):
                 now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
             )
 
+    def test_clear_of_nonexistent_decision_is_rejected(self) -> None:
+        # C1: a clear must never silently no-op. There is no effective
+        # decision at all for this (digest, actionId) yet.
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=self.proposals_path,
+                action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+                decision="clear",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
+
+    def test_clear_of_already_expired_decision_is_rejected(self) -> None:
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=1,
+                proposals_path=self.proposals_path,
+                action_id=action_id,
+                decision="clear",
+                actor="github:radical",
+                # Proposal TTL is 24h from 2026-09-03T16:00Z, so this is well
+                # past expiry.
+                now=datetime(2026, 9, 6, 0, 0, tzinfo=UTC),
+            )
+
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        self.assertEqual(
+            1, len(ledger_path.read_text(encoding="utf-8").splitlines())
+        )
+
+    def test_clear_twice_is_rejected_the_second_time(self) -> None:
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=1,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="clear",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=2,
+                proposals_path=self.proposals_path,
+                action_id=action_id,
+                decision="clear",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 7, tzinfo=UTC),
+            )
+
+    def test_clear_against_regenerated_proposal_bytes_is_rejected_and_old_decision_survives(
+        self,
+    ) -> None:
+        # A clear is bound to the exact raw-byte digest of the proposals
+        # document it names. Regenerating an otherwise-identical proposals
+        # document (same actionId, different bytes/timestamp) must not be
+        # able to clear a decision recorded against the original bytes --
+        # that would silently leave the real decision live while reporting
+        # success (fail-open).
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id=action_id,
+            decision="approve-once",
+            actor="github:radical",
+            now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+        regenerated_path = _write_proposals(
+            self.scratch / "regenerated-proposals.json",
+            generated_at_utc="2026-09-03T16:01:00Z",
+        )
+        self.assertNotEqual(
+            self.proposals_path.read_bytes(), regenerated_path.read_bytes()
+        )
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=1,
+                proposals_path=regenerated_path,
+                action_id=action_id,
+                decision="clear",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+            )
+
+        projection = self.store.projection(
+            REPOSITORY, now=datetime(2026, 9, 3, 16, 7, tzinfo=UTC)
+        )
+        self.assertEqual(1, len(projection["exactDecisions"]))
+        self.assertEqual("approve-once", projection["exactDecisions"][0]["decision"])
+
     def test_malformed_jsonl_fails_closed(self) -> None:
         self.store.append_policy_revision(
             repository=REPOSITORY,
@@ -419,6 +544,272 @@ class CoordinatorStateStoreTests(unittest.TestCase):
                 repository=REPOSITORY,
                 expected_revision=0,
                 document=policy_document(revision=1, replaces=None),
+            )
+
+    def test_proposals_path_may_not_be_a_symlink(self) -> None:
+        real_target = self.scratch / "real-proposals.json"
+        _write_proposals(real_target)
+        symlinked = self.scratch / "symlinked-proposals.json"
+        symlinked.symlink_to(real_target)
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=symlinked,
+                action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+                decision="approve-once",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
+
+    def test_corrupt_decision_action_id_type_fails_closed(self) -> None:
+        self._append_corrupt_decision_field("actionId", 12345)
+
+    def test_corrupt_decision_actor_type_fails_closed(self) -> None:
+        self._append_corrupt_decision_field("actor", ["github:radical"])
+
+    def test_corrupt_decision_expires_at_utc_type_fails_closed(self) -> None:
+        self._append_corrupt_decision_field("expiresAtUtc", 1234567890)
+
+    def test_corrupt_decision_expires_at_utc_unparseable_fails_closed(self) -> None:
+        self._append_corrupt_decision_field("expiresAtUtc", "not-a-timestamp")
+
+    def _append_corrupt_decision_field(self, field: str, value: object) -> None:
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        decision = {
+            "actionId": "snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+            "proposalDigest": f"sha256:{'0' * 64}",
+            "decision": "approve-once",
+            "actor": "github:radical",
+            "expiresAtUtc": "2026-09-04T16:00:00Z",
+        }
+        decision[field] = value
+        event = {
+            "schemaVersion": 1,
+            "stateRevision": 1,
+            "eventType": "decision",
+            "repository": REPOSITORY,
+            "recordedAtUtc": "2026-09-03T16:05:00Z",
+            "decision": decision,
+        }
+        with ledger_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(event) + "\n")
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
+    def test_corrupt_policy_revision_id_type_fails_closed(self) -> None:
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "schemaVersion": 1,
+            "stateRevision": 1,
+            "eventType": "policy",
+            "repository": REPOSITORY,
+            "recordedAtUtc": "2026-09-03T16:00:00Z",
+            "policy": {"revisionId": 1, "status": "active", "replacesRevisionId": None},
+            "policyDigest": f"sha256:{'0' * 64}",
+        }
+        with ledger_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(event) + "\n")
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
+    def test_corrupt_repository_type_fails_closed(self) -> None:
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "schemaVersion": 1,
+            "stateRevision": 1,
+            "eventType": "policy",
+            "repository": "not-a-valid-repository",
+            "recordedAtUtc": "2026-09-03T16:00:00Z",
+            "policy": {
+                "revisionId": "policy:1",
+                "status": "active",
+                "replacesRevisionId": None,
+            },
+            "policyDigest": f"sha256:{'0' * 64}",
+        }
+        with ledger_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(event) + "\n")
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
+    def test_state_revision_position_mismatch_fails_closed(self) -> None:
+        self.store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        event = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
+        event["stateRevision"] = 99  # Corrupt: does not match ledger position 1.
+        with ledger_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(event) + "\n")
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
+    def test_real_mid_record_truncation_fails_closed(self) -> None:
+        self.store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        # Simulate a crash mid-write: a second record that is a genuine
+        # partial JSON fragment (no closing brace, no trailing newline),
+        # rather than the appended-garbage or blank-line cases above.
+        with ledger_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                '{"schemaVersion": 1, "stateRevision": 2, "eventType": "decis'
+            )
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection(REPOSITORY)
+
+    def test_zero_proposal_matches_is_rejected(self) -> None:
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=self.proposals_path,
+                action_id="does-not-exist-in-the-proposals-document",
+                decision="approve-once",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
+
+    def test_duplicate_proposal_matches_is_rejected(self) -> None:
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        duplicate_path = _write_proposals(
+            self.scratch / "duplicate-proposals.json",
+            duplicate_action_id=action_id,
+        )
+
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=duplicate_path,
+                action_id=action_id,
+                decision="approve-once",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
+
+    def test_restart_via_new_store_instance_observes_prior_state(self) -> None:
+        self.store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+
+        second_store = CoordinatorStateStore(
+            self.state_dir,
+            durable_intent_reader=_no_durable_intent,
+        )
+        projection = second_store.projection(REPOSITORY)
+
+        self.assertEqual(1, projection["stateRevision"])
+        self.assertEqual("policy:1", projection["effectivePolicy"]["revisionId"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits are not meaningful on Windows.")
+    def test_owner_only_permissions_on_posix(self) -> None:
+        self.store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+
+        coordinator_dir = self.state_dir / "coordinator"
+        ledger_path = coordinator_dir / "policy-events.jsonl"
+        lock_path = coordinator_dir / "policy-events.lock"
+
+        self.assertEqual(0o700, stat.S_IMODE(self.state_dir.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(coordinator_dir.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(ledger_path.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(lock_path.stat().st_mode))
+
+    def test_decision_recorded_at_utc_is_real_wall_clock_not_caller_now(self) -> None:
+        caller_now = datetime(2026, 9, 3, 16, 5, 0, tzinfo=UTC)
+        before = datetime.now(UTC)
+        self.store.append_exact_decision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            proposals_path=self.proposals_path,
+            action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+            decision="approve-once",
+            actor="github:radical",
+            now=caller_now,
+        )
+        after = datetime.now(UTC)
+
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        event = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
+        recorded_at = datetime.fromisoformat(event["recordedAtUtc"].replace("Z", "+00:00"))
+
+        self.assertNotEqual(caller_now, recorded_at)
+        self.assertLessEqual(before, recorded_at)
+        self.assertLessEqual(recorded_at, after)
+
+    def test_policy_recorded_at_utc_is_real_wall_clock(self) -> None:
+        before = datetime.now(UTC)
+        self.store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+        after = datetime.now(UTC)
+
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        event = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
+        recorded_at = datetime.fromisoformat(event["recordedAtUtc"].replace("Z", "+00:00"))
+
+        self.assertLessEqual(before, recorded_at)
+        self.assertLessEqual(recorded_at, after)
+
+    def test_malformed_repository_is_rejected_by_append_policy_revision(self) -> None:
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_policy_revision(
+                repository="not-a-repository",
+                expected_revision=0,
+                document=policy_document(
+                    revision=1, replaces=None, repository="not-a-repository"
+                ),
+            )
+
+    def test_malformed_repository_is_rejected_by_projection(self) -> None:
+        with self.assertRaises(CoordinatorStateError):
+            self.store.projection("not-a-repository")
+
+    def test_malformed_actor_is_rejected_by_append_exact_decision(self) -> None:
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=self.proposals_path,
+                action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+                decision="approve-once",
+                actor="not-an-actor",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
+
+    def test_actor_with_embedded_newline_is_rejected(self) -> None:
+        with self.assertRaises(CoordinatorStateError):
+            self.store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=0,
+                proposals_path=self.proposals_path,
+                action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+                decision="approve-once",
+                actor="github:radical\nX-Injected: true",
+                now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
             )
 
     def test_projection_returns_monotonic_state_revision_and_latest_values(
@@ -515,6 +906,7 @@ class CoordinatorStateStoreTests(unittest.TestCase):
         self.assertEqual([], projection["exactDecisions"])
         self.assertEqual(2, projection["stateRevision"])
 
+    @unittest.skipIf(os.name == "nt", "Test uses fcntl-based POSIX advisory locking directly.")
     def test_race_clear_against_reservation_in_action_then_policy_lock_order(
         self,
     ) -> None:
@@ -522,17 +914,41 @@ class CoordinatorStateStoreTests(unittest.TestCase):
         # then policy-events.lock, fsyncing the intent before releasing either.
         # This test proves the prescribed lock order is deadlock-free against a
         # `clear` call using only a barrier/recording lock harness: it never
-        # implements Task 5 reservation integration, only the ordering.
+        # implements Task 5 reservation integration, only the ordering. The
+        # store's durable_intent_reader is the real lock-free factory reading a
+        # real action-events.jsonl, and the proof that `clear` never contends
+        # for the action lock is a deterministic guard on ``os.open`` (not a
+        # wall-clock elapsed-time assertion, which would be flaky under load).
+        action_events_path = self.state_dir / "action-events.jsonl"
         action_lock_path = self.state_dir / "action-events.lock"
         action_lock_path.parent.mkdir(parents=True, exist_ok=True)
-        policy_lock_path = self.state_dir / "coordinator" / "policy-events.lock"
-        policy_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        action_id = "snapshot:microsoft/aspire:time:issue:7:retire-status-comment"
+        # A "terminal" event means the lock-free reader reports no durable
+        # intent, so the clear below is expected to be permitted.
+        with action_events_path.open("w", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "eventType": "terminal",
+                        "actionId": action_id,
+                        "outcome": "success",
+                    }
+                )
+                + "\n"
+            )
 
-        self.store.append_exact_decision(
+        store = CoordinatorStateStore(
+            self.state_dir,
+            durable_intent_reader=make_lock_free_durable_intent_reader(
+                action_events_path
+            ),
+        )
+        store.append_exact_decision(
             repository=REPOSITORY,
             expected_revision=0,
             proposals_path=self.proposals_path,
-            action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
+            action_id=action_id,
             decision="approve-once",
             actor="github:radical",
             now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
@@ -553,14 +969,6 @@ class CoordinatorStateStoreTests(unittest.TestCase):
                 # would, per the documented order, subsequently take the
                 # policy lock -- proving `clear` never needs to wait on us.
                 release_action_lock.wait(timeout=5)
-                policy_descriptor = os.open(
-                    policy_lock_path, os.O_RDWR | os.O_CREAT, 0o600
-                )
-                try:
-                    fcntl.flock(policy_descriptor, fcntl.LOCK_EX)
-                    fcntl.flock(policy_descriptor, fcntl.LOCK_UN)
-                finally:
-                    os.close(policy_descriptor)
             finally:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
                 os.close(descriptor)
@@ -570,24 +978,132 @@ class CoordinatorStateStoreTests(unittest.TestCase):
         thread.start()
         self.assertTrue(action_lock_acquired.wait(timeout=5))
 
-        # `clear` must not attempt to acquire the action lock, so it must
-        # complete promptly even while the reservation thread holds it.
-        started = time.monotonic()
-        self.store.append_exact_decision(
-            repository=REPOSITORY,
-            expected_revision=1,
-            proposals_path=self.proposals_path,
-            action_id="snapshot:microsoft/aspire:time:issue:7:retire-status-comment",
-            decision="clear",
-            actor="github:radical",
-            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
-        )
-        elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 4.0)
+        # Deterministic proof (not timing-based): if `clear` -- via the
+        # injected durable_intent_reader -- ever attempted to open the action
+        # lock file, this guard raises immediately regardless of whether the
+        # real open would have blocked.
+        real_open = os.open
+        guarded_path = os.fspath(action_lock_path)
+
+        def _guarded_open(path: object, *args: object, **kwargs: object) -> int:
+            if os.fspath(path) == guarded_path:  # type: ignore[arg-type]
+                raise AssertionError(
+                    "clear must never attempt to open the action-events lock "
+                    "file; durable_intent_reader is required to be lock-free."
+                )
+            return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+        with mock.patch("os.open", side_effect=_guarded_open):
+            store.append_exact_decision(
+                repository=REPOSITORY,
+                expected_revision=1,
+                proposals_path=self.proposals_path,
+                action_id=action_id,
+                decision="clear",
+                actor="github:radical",
+                now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+            )
 
         release_action_lock.set()
         thread.join(timeout=5)
         self.assertTrue(reservation_finished.is_set())
+
+
+class MakeLockFreeDurableIntentReaderTests(unittest.TestCase):
+    """Unit tests for the ``make_lock_free_durable_intent_reader`` factory in
+    isolation from ``CoordinatorStateStore`` -- these cover reader
+    correctness (missing file, open intent, resolved intent, malformed and
+    truncated tails); the lock-order/no-contention proof lives in
+    ``test_race_clear_against_reservation_in_action_then_policy_lock_order``
+    above.
+    """
+
+    def setUp(self) -> None:
+        self.scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.scratch.mkdir(parents=True)
+        self.action_events_path = self.scratch / "action-events.jsonl"
+
+    def _write_lines(self, *lines: dict[str, object]) -> None:
+        text = "".join(json.dumps(line) + "\n" for line in lines)
+        self.action_events_path.write_text(text, encoding="utf-8")
+
+    def test_missing_file_reports_no_durable_intent(self) -> None:
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertFalse(reader("some-action"))
+
+    def test_open_intent_without_terminal_is_durable(self) -> None:
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "intent", "actionId": "a1"}
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertTrue(reader("a1"))
+
+    def test_terminal_after_intent_is_not_durable(self) -> None:
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "intent", "actionId": "a1"},
+            {
+                "schemaVersion": 1,
+                "eventType": "terminal",
+                "actionId": "a1",
+                "outcome": "success",
+            },
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertFalse(reader("a1"))
+
+    def test_unrelated_action_ids_do_not_affect_result(self) -> None:
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "intent", "actionId": "other-action"},
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertFalse(reader("a1"))
+
+    def test_truncated_tail_fails_closed(self) -> None:
+        # No trailing newline: simulates a crash mid-write.
+        self.action_events_path.write_text(
+            '{"schemaVersion": 1, "eventType": "intent", "actionId": "a1"}',
+            encoding="utf-8",
+        )
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertTrue(reader("a1"))
+
+    def test_malformed_line_fails_closed(self) -> None:
+        self.action_events_path.write_text("{not valid json}\n", encoding="utf-8")
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        self.assertTrue(reader("a1"))
+
+    def test_symlinked_action_events_path_is_rejected(self) -> None:
+        real_target = self.scratch / "real-action-events.jsonl"
+        real_target.write_text("", encoding="utf-8")
+        self.action_events_path.symlink_to(real_target)
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+
+        with self.assertRaises(CoordinatorStateError):
+            reader("a1")
+
+    @unittest.skipIf(os.name == "nt", "Test asserts on POSIX-style os.open path arguments.")
+    def test_reader_never_opens_the_action_lock_file(self) -> None:
+        self._write_lines(
+            {"schemaVersion": 1, "eventType": "intent", "actionId": "a1"}
+        )
+        lock_path = self.scratch / "action-events.lock"
+        real_open = os.open
+
+        def _guarded_open(path: object, *args: object, **kwargs: object) -> int:
+            if os.fspath(path) == os.fspath(lock_path):  # type: ignore[arg-type]
+                raise AssertionError("reader must not open the action lock file")
+            return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+        reader = make_lock_free_durable_intent_reader(self.action_events_path)
+        with mock.patch("os.open", side_effect=_guarded_open):
+            self.assertTrue(reader("a1"))
 
 
 class CoordinatorStateStoreDurableIntentReaderTests(unittest.TestCase):
