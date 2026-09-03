@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import copy
 from datetime import UTC, datetime, timedelta
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,7 @@ import shutil
 import unittest
 from unittest.mock import patch
 
+import create_authorization
 from ci_shepherd.authorization import (
     AuthorizationError,
     generate_authorization_grant,
@@ -1790,6 +1793,8 @@ def _policy_document(
     expires_at_utc: datetime,
     status: str = "active",
     replaces: str | None = None,
+    denied_action_ids: frozenset[str] = frozenset(),
+    denied_targets: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     return {
         "schemaVersion": 1,
@@ -1809,8 +1814,8 @@ def _policy_document(
             }
             for name in OPERATION_CLASSES
         },
-        "deniedActionIds": [],
-        "deniedTargets": [],
+        "deniedActionIds": sorted(denied_action_ids),
+        "deniedTargets": sorted(denied_targets),
     }
 
 
@@ -1944,6 +1949,8 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         status: str = "active",
         created_at_utc: datetime | None = None,
         expires_at_utc: datetime | None = None,
+        denied_action_ids: frozenset[str] = frozenset(),
+        denied_targets: frozenset[str] = frozenset(),
     ) -> None:
         expected_revision = self.store.projection(
             self.repository, now=self.now
@@ -1959,8 +1966,48 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
                 created_at_utc=created_at_utc or (self.now - timedelta(days=1)),
                 expires_at_utc=expires_at_utc or (self.now + timedelta(days=30)),
                 enabled_classes=enabled_classes,
+                denied_action_ids=denied_action_ids,
+                denied_targets=denied_targets,
             ),
         )
+
+    def _flip_current_policy_status_in_ledger(self, *, status: str) -> None:
+        """Rewrite the ledger's latest policy event in place, keeping its
+        exact revisionId/revision but changing only its status.
+
+        `append_policy_revision` (the only production write path) always
+        mints a *new* revisionId when a policy is replaced -- including when
+        an operator pauses or revokes it, per this module's own "pauses and
+        revocations are simply new revisions" contract (see
+        `coordinator_state.py`'s module docstring). That means a black-box
+        test going through the public API can never produce a policy whose
+        `revisionId` still equals a grant's `licenseSource` but whose
+        `status` is no longer "active" -- `_resolve_autonomous_license_source`
+        would always reject such a grant via the `revision_id != license_
+        source` half of its check, never actually exercising the sibling
+        `status != "active"` half. Appending a hand-built ledger line here
+        (bypassing `CoordinatorStateStore` entirely) isolates that status
+        check on its own, independent of revision identity.
+        """
+        projection = self.store.projection(self.repository, now=self.now)
+        effective_policy = dict(projection["effectivePolicy"])
+        policy_digest = effective_policy.pop("policyDigest")
+        effective_policy["status"] = status
+        ledger_path = self.state_dir / "coordinator" / "policy-events.jsonl"
+        existing_line_count = len(
+            ledger_path.read_text(encoding="utf-8").splitlines()
+        )
+        event = {
+            "schemaVersion": 1,
+            "stateRevision": existing_line_count + 1,
+            "eventType": "policy",
+            "repository": self.repository,
+            "recordedAtUtc": _rfc3339(self.now),
+            "policy": effective_policy,
+            "policyDigest": policy_digest,
+        }
+        with ledger_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, sort_keys=True) + "\n")
 
     def _append_decision(
         self,
@@ -2139,6 +2186,24 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         self.assertEqual("2026-08-29T20:50:00Z", grant["issuedAtUtc"])
         self.assertEqual("2026-08-29T21:00:00Z", grant["expiresAtUtc"])
 
+    def test_ttl_capped_by_production_snapshot_freshness(self) -> None:
+        # Isolate the freshness term: mint 35 minutes after the snapshot's
+        # own embedded collection time (fixture default 20:00). That leaves
+        # the 45-minute freshness window closing at 20:45 -- five minutes
+        # before the naive 15-minute cap (20:35 + 15m = 20:50) and hours
+        # before the default policy (+30 days) and proposal (+24h) expiry
+        # terms, so freshness alone must be the binding cap.
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        generate_now = datetime(2026, 8, 29, 20, 35, tzinfo=UTC)
+        self._build_and_write_selection(now=generate_now)
+
+        grant = self._mint(self.comment_action_id, now=generate_now)
+
+        self.assertEqual("2026-08-29T20:35:00Z", grant["issuedAtUtc"])
+        self.assertEqual("2026-08-29T20:45:00Z", grant["expiresAtUtc"])
+
     # -- byte-binding: any change fails before execution --------------------
 
     def test_changed_selection_bytes_fail_before_execution(self) -> None:
@@ -2232,6 +2297,179 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             AuthorizationError, "Exact approval is no longer effective"
+        ):
+            self._load(self.comment_action_id)
+
+    def test_policy_pause_invalidates_policy_licensed_grant(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        # An unrelated event first -- the global stateRevision moves, but
+        # the grant must still load.
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+        # Pausing the exact revision that licensed the grant -- same
+        # revisionId, status alone flips -- must invalidate it.
+        self._flip_current_policy_status_in_ledger(status="paused")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "Licensing policy revision is no longer effective: policy:1",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_policy_revocation_invalidates_policy_licensed_grant(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+        self._flip_current_policy_status_in_ledger(status="revoked")
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            "Licensing policy revision is no longer effective: policy:1",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_later_reject_once_invalidates_decision_licensed_grant(self) -> None:
+        # Distinct from test_decision_clear_invalidates_decision_licensed_
+        # grant: here the same (proposalDigest, actionId) key receives a
+        # *later* reject-once rather than a clear of the approve-once that
+        # licensed the grant. `_latest_decision_events` keeps only the
+        # ledger-order-last event per key, so the reject-once supersedes the
+        # approval outright, and `_resolve_autonomous_license_source`'s
+        # unconditional reject-scan (which runs before either license-source
+        # branch) fires -- raising "Exact decision rejects", never "Exact
+        # approval is no longer effective".
+        self._append_policy(revision=1, enabled_classes=frozenset())
+        self._append_decision(
+            action_id=self.comment_action_id, decision="approve-once"
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+        self._append_decision(
+            action_id=self.comment_action_id, decision="reject-once"
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            f"Exact decision rejects actionId: {self.comment_action_id}",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_same_action_reject_once_invalidates_policy_licensed_grant(
+        self,
+    ) -> None:
+        # A policy-licensed grant (not a decision-licensed one, distinct
+        # from the reject-once scenario above) can still be blocked by a
+        # later exact reject-once for the same action: the reject-scan in
+        # _resolve_autonomous_license_source runs unconditionally, ahead of
+        # the "policy:" branch.
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+        self._append_decision(
+            action_id=self.comment_action_id, decision="reject-once"
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            f"Exact decision rejects actionId: {self.comment_action_id}",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_active_standing_policy_deny_action_id_blocks_licensed_action(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+        # A later revision that denies this exact actionId blocks it via
+        # the standing-policy deny-check -- which runs before, and raises
+        # a distinct message from, the "Licensing policy revision is no
+        # longer effective" check that the revision-identity mismatch
+        # alone would otherwise raise.
+        self._append_policy(
+            revision=2,
+            enabled_classes=frozenset({"edit-comment"}),
+            replaces="policy:1",
+            denied_action_ids=frozenset({self.comment_action_id}),
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            f"Standing policy denies actionId: {self.comment_action_id}",
+        ):
+            self._load(self.comment_action_id)
+
+    def test_active_standing_policy_deny_target_blocks_licensed_action(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        self._build_and_write_selection()
+        self._mint(self.comment_action_id)
+
+        self._append_decision(
+            action_id=self.close_action_id, decision="reject-once"
+        )
+        execution = self._load(self.comment_action_id)
+        self.assertEqual(self.comment_action_id, execution.proposal["actionId"])
+
+        # Both proposals target issue 1 (see setUp), so denying that target
+        # blocks the licensed action the same way denying its actionId
+        # would, via the sibling deniedTargets half of the same check.
+        self._append_policy(
+            revision=2,
+            enabled_classes=frozenset({"edit-comment"}),
+            replaces="policy:1",
+            denied_targets=frozenset({"issue:1"}),
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError,
+            f"Standing policy denies actionId: {self.comment_action_id}",
         ):
             self._load(self.comment_action_id)
 
@@ -2524,6 +2762,75 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
 
         with self.assertRaises(AuthorizationError):
             self._load(self.comment_action_id)
+
+    # -- CLI: --autonomous-policy argparse validation -----------------------
+    #
+    # create_authorization.py's own `main()` validates --autonomous-policy's
+    # companion flags with `parser.error(...)` before ever calling
+    # generate_authorization_grant, so these exercise argparse's exit path
+    # directly rather than duplicating authorization.py's own tests.
+
+    def _run_create_authorization_cli(self, argv: list[str]) -> tuple[int, str]:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                create_authorization.main(argv)
+        exit_code = raised.exception.code
+        assert isinstance(exit_code, int)
+        return exit_code, stderr.getvalue()
+
+    def test_cli_autonomous_mode_rejects_multiple_action_ids(self) -> None:
+        exit_code, stderr = self._run_create_authorization_cli(
+            [
+                "--proposals", str(self.proposals_path),
+                "--state-dir", str(self.state_dir),
+                "--output", str(self.output_path),
+                "--action-id", self.comment_action_id,
+                "--action-id", self.close_action_id,
+                "--autonomous-policy",
+                "--policy-selection", str(self.policy_selection_path),
+                "--policy-action-id", self.comment_action_id,
+            ]
+        )
+        self.assertEqual(2, exit_code)
+        self.assertIn(
+            "--autonomous-policy allows exactly one --action-id", stderr
+        )
+
+    def test_cli_autonomous_mode_requires_policy_selection(self) -> None:
+        exit_code, stderr = self._run_create_authorization_cli(
+            [
+                "--proposals", str(self.proposals_path),
+                "--state-dir", str(self.state_dir),
+                "--output", str(self.output_path),
+                "--action-id", self.comment_action_id,
+                "--autonomous-policy",
+                "--policy-action-id", self.comment_action_id,
+            ]
+        )
+        self.assertEqual(2, exit_code)
+        self.assertIn(
+            "--autonomous-policy requires --policy-selection", stderr
+        )
+
+    def test_cli_autonomous_mode_requires_matching_policy_action_id(
+        self,
+    ) -> None:
+        exit_code, stderr = self._run_create_authorization_cli(
+            [
+                "--proposals", str(self.proposals_path),
+                "--state-dir", str(self.state_dir),
+                "--output", str(self.output_path),
+                "--action-id", self.comment_action_id,
+                "--autonomous-policy",
+                "--policy-selection", str(self.policy_selection_path),
+                "--policy-action-id", self.close_action_id,
+            ]
+        )
+        self.assertEqual(2, exit_code)
+        self.assertIn(
+            "--policy-action-id must equal the single --action-id", stderr
+        )
 
 
 if __name__ == "__main__":
