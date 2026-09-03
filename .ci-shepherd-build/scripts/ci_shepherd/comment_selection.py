@@ -7,8 +7,18 @@ from .authorization import MAX_PRODUCTION_COMMENT_ACTIONS
 from .models import stable_json
 
 
-_COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
-_PRIORITY_SUFFIXES = (
+__all__ = [
+    "COMMENT_OPERATIONS",
+    "PRIORITY_SUFFIXES",
+    "build_comment_selection",
+    "operation_priority",
+    "priority_for_action_id",
+    "render_comment_selection_section",
+]
+
+
+COMMENT_OPERATIONS = frozenset({"create-comment", "edit-comment"})
+PRIORITY_SUFFIXES = (
     ("ping-human-comment", "human input requested"),
     ("quarantine-reconciliation-comment", "quarantine state reconciliation"),
     ("delegation-handoff-comment", "delegation handoff"),
@@ -16,6 +26,28 @@ _PRIORITY_SUFFIXES = (
     ("retire-status-comment", "status retirement"),
     ("review-close-comment", "closure review"),
 )
+# Legacy private aliases: nothing outside this module referenced these names,
+# but they are kept so any future in-module or external private access still
+# resolves to the same objects.
+_COMMENT_OPERATIONS = COMMENT_OPERATIONS
+_PRIORITY_SUFFIXES = PRIORITY_SUFFIXES
+
+
+def priority_for_action_id(action_id: str) -> tuple[int, str]:
+    """Rank an actionId by its committed semantic-suffix priority table.
+
+    Shared with ``policy_selection`` so both modules agree on which comment
+    role ranks first without duplicating the suffix table.
+    """
+    for priority, (suffix, reason) in enumerate(PRIORITY_SUFFIXES):
+        if action_id.endswith(suffix):
+            return priority, reason
+    return len(PRIORITY_SUFFIXES), "other issue comment"
+
+
+def operation_priority(operation: str) -> int:
+    """Return the edit-before-create tiebreak used within a priority tier."""
+    return 0 if operation == "edit-comment" else 1
 
 
 def build_comment_selection(
@@ -61,7 +93,7 @@ def build_comment_selection(
             raise ValueError("Action proposals must carry valid action identities.")
 
         reasons: list[str] = []
-        if operation not in _COMMENT_OPERATIONS:
+        if operation not in COMMENT_OPERATIONS:
             reasons.append("not-comment-operation")
         if proposal.get("dependsOn") is not None:
             reasons.append("dependent-action")
@@ -79,18 +111,18 @@ def build_comment_selection(
             excluded.append({"actionId": action_id, "reasons": sorted(set(reasons))})
             continue
 
-        priority, priority_reason = _priority(action_id)
-        operation_priority = 0 if operation == "edit-comment" else 1
+        priority, priority_reason = priority_for_action_id(action_id)
+        op_priority = operation_priority(operation)
         candidates.append(
             (
-                (priority, operation_priority, issue_number, action_id),
+                (priority, op_priority, issue_number, action_id),
                 {
                     "actionId": action_id,
                     "issueNumber": issue_number,
                     "operation": operation,
                     "priority": priority,
                     "priorityReason": priority_reason,
-                    "operationPriority": operation_priority,
+                    "operationPriority": op_priority,
                 },
             )
         )
@@ -167,10 +199,3 @@ def render_comment_selection_section(selection: Mapping[str, object]) -> str:
     if not selection["rankedCandidates"]:
         lines.append("| - | - | - | No eligible comments | - |")
     return "\n".join(lines) + "\n"
-
-
-def _priority(action_id: str) -> tuple[int, str]:
-    for priority, (suffix, reason) in enumerate(_PRIORITY_SUFFIXES):
-        if action_id.endswith(suffix):
-            return priority, reason
-    return len(_PRIORITY_SUFFIXES), "other issue comment"

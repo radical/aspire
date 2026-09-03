@@ -1,0 +1,95 @@
+{
+  "cutApplied": true,
+  "cutReason": "Selected the first 2 of 7 eligible issue comments by the committed priority order.",
+  "eligibleCount": 7,
+  "excluded": [
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:18203:watch-comment",
+      "reasons": [
+        "untrusted-reference-provenance"
+      ]
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:18299:watch-comment",
+      "reasons": [
+        "unavailable-evidence",
+        "untrusted-reference-provenance"
+      ]
+    }
+  ],
+  "maxComments": 2,
+  "proposalsDigest": "sha256:fed8a27dea6b51c7b531ac2856b18796a8572e0c70adc0e012f66b64ab6280a7",
+  "rankedCandidates": [
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19835:watch-comment",
+      "issueNumber": 19835,
+      "operation": "create-comment",
+      "operationPriority": 1,
+      "priority": 3,
+      "priorityReason": "watch status",
+      "rank": 1
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19839:watch-comment",
+      "issueNumber": 19839,
+      "operation": "create-comment",
+      "operationPriority": 1,
+      "priority": 3,
+      "priorityReason": "watch status",
+      "rank": 2
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19875:watch-comment",
+      "issueNumber": 19875,
+      "operation": "create-comment",
+      "operationPriority": 1,
+      "priority": 3,
+      "priorityReason": "watch status",
+      "rank": 3
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19876:watch-comment",
+      "issueNumber": 19876,
+      "operation": "create-comment",
+      "operationPriority": 1,
+      "priority": 3,
+      "priorityReason": "watch status",
+      "rank": 4
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19166:retire-status-comment",
+      "issueNumber": 19166,
+      "operation": "edit-comment",
+      "operationPriority": 0,
+      "priority": 4,
+      "priorityReason": "status retirement",
+      "rank": 5
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19453:retire-status-comment",
+      "issueNumber": 19453,
+      "operation": "edit-comment",
+      "operationPriority": 0,
+      "priority": 4,
+      "priorityReason": "status retirement",
+      "rank": 6
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19530:retire-status-comment",
+      "issueNumber": 19530,
+      "operation": "edit-comment",
+      "operationPriority": 0,
+      "priority": 4,
+      "priorityReason": "status retirement",
+      "rank": 7
+    }
+  ],
+  "repository": "microsoft/aspire",
+  "schemaVersion": 1,
+  "selectedActionIds": [
+    "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19835:watch-comment",
+    "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19839:watch-comment"
+  ],
+  "selectedCount": 2,
+  "snapshotId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z"
+}

@@ -1,0 +1,383 @@
+{
+  "blockedRecommendations": [],
+  "executionEligibility": {
+    "status": "partially-eligible",
+    "violations": [
+      {
+        "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:18203:watch-comment",
+        "blockingReasons": [
+          "untrusted-reference-provenance"
+        ]
+      },
+      {
+        "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:18299:watch-comment",
+        "blockingReasons": [
+          "unavailable-evidence",
+          "untrusted-reference-provenance"
+        ]
+      }
+    ]
+  },
+  "generatedAtUtc": "2026-09-03T15:55:19.413043Z",
+  "maxProposalsPerIssue": 2,
+  "productionPilotCapability": {
+    "evidenceRound": 0,
+    "schemaVersion": 1
+  },
+  "proposalTtlHours": 24,
+  "proposals": [
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:18203:watch-comment",
+      "body": "[automated] The CI shepherd is watching this failure.\n\n**Current assessment:** Watch this single-infrastructure-occurrence for recurrence or positive recovery.\n\n**Evidence reviewed:**\n- [issue:18203](https://github.com/microsoft/aspire/issues/18203)\n- [issue:17739](https://github.com/microsoft/aspire/issues/17739)\n- [issue:18027](https://github.com/microsoft/aspire/issues/18027)\n\n**Evidence still needed:**\n- recognized-producer-ledger\n\n**Reassess when:** After another independent occurrence or positive recovery.\n\nNo quarantine, retry, closure, or investigation has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:18203:status -->",
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:18203",
+        "issue:17739",
+        "issue:18027"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [
+          "untrusted-reference-provenance"
+        ],
+        "ciLabels": [
+          "test-failure"
+        ],
+        "collectionComplete": true,
+        "eligible": false,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 0,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": [
+          "issue:17739",
+          "issue:18027"
+        ]
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:18203:status",
+      "issueNumber": 18203,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/18203",
+      "operation": "create-comment",
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-06-18T05:48:12Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:18299:watch-comment",
+      "body": "[automated] The CI shepherd is watching this failure.\n\n**Current assessment:** Watch this single-infrastructure-occurrence for recurrence or positive recovery.\n\n**Evidence reviewed:**\n- [issue:18299](https://github.com/microsoft/aspire/issues/18299)\n- [issue:12685](https://github.com/microsoft/aspire/issues/12685)\n- [issue:12977](https://github.com/microsoft/aspire/issues/12977)\n\n**Evidence still needed:**\n- recognized-producer-ledger\n\n**Reassess when:** After another independent occurrence or positive recovery.\n\nNo quarantine, retry, closure, or investigation has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:18299:status -->",
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:18299",
+        "issue:12685",
+        "issue:12977"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [
+          "unavailable-evidence",
+          "untrusted-reference-provenance"
+        ],
+        "ciLabels": [
+          "test-failure"
+        ],
+        "collectionComplete": true,
+        "eligible": false,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 0,
+        "unavailableEvidenceIds": [
+          "issue:12685",
+          "issue:12977"
+        ],
+        "untrustedReferenceEvidenceIds": [
+          "issue:12685",
+          "issue:12977"
+        ]
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:18299:status",
+      "issueNumber": 18299,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/18299",
+      "operation": "create-comment",
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-06-18T05:48:09Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19166:retire-status-comment",
+      "body": "[automated] The CI shepherd is no longer watching or requesting input through this status comment.\n\n**Current assessment:** The same deterministic CDN HTTP 404 occurred in independent runs, so the install path needs investigation rather than transient-infrastructure watching.\n\n**Evidence reviewed:**\n- [issue:19166](https://github.com/microsoft/aspire/issues/19166)\n- [run:31269165475](https://github.com/microsoft/aspire/actions/runs/31269165475)\n- [run:31362242749](https://github.com/microsoft/aspire/actions/runs/31362242749)\n\n**Status:** This case moved to report-only investigation. No GitHub action has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19166:status -->",
+      "commentId": 5518761151,
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19166",
+        "run:31269165475",
+        "run:31362242749"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 2,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19166:status",
+      "issueNumber": 19166,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19166",
+      "operation": "edit-comment",
+      "sourceCommentFingerprint": {
+        "bodySha256": "ff783e99b3b0fb9d7299720619056258aedd8b2a3ff670a2d05ece004390b959"
+      },
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-03T01:08:35Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19453:retire-status-comment",
+      "body": "[automated] The CI shepherd is no longer watching or requesting input through this status comment.\n\n**Current assessment:** The generic shard exit code does not identify a test or cause, and diagnostic evidence can be investigated now rather than awaiting recurrence.\n\n**Evidence reviewed:**\n- [issue:19453](https://github.com/microsoft/aspire/issues/19453)\n- [run:32062674946](https://github.com/microsoft/aspire/actions/runs/32062674946)\n- [pr:19402](https://github.com/microsoft/aspire/pull/19402)\n\n**Status:** This case moved to report-only investigation. No GitHub action has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19453:status -->",
+      "commentId": 5518761563,
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19453",
+        "run:32062674946",
+        "pr:19402"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause",
+          "test-failure"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 1,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19453:status",
+      "issueNumber": 19453,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19453",
+      "operation": "edit-comment",
+      "sourceCommentFingerprint": {
+        "bodySha256": "ccd833888161283ed7390a3fd65f1b20c4789672a64cd604d76bae5f9b5806dd"
+      },
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-03T01:08:38Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19530:retire-status-comment",
+      "body": "[automated] The CI shepherd is no longer watching or requesting input through this status comment.\n\n**Current assessment:** The generic step exit code lacks a diagnostic identity, so the available failure should be investigated instead of waiting for another occurrence.\n\n**Evidence reviewed:**\n- [issue:19530](https://github.com/microsoft/aspire/issues/19530)\n- [run:32329544217](https://github.com/microsoft/aspire/actions/runs/32329544217)\n- [pr:19336](https://github.com/microsoft/aspire/pull/19336)\n\n**Status:** This case moved to report-only investigation. No GitHub action has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19530:status -->",
+      "commentId": 5518761993,
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19530",
+        "run:32329544217",
+        "pr:19336"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 1,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19530:status",
+      "issueNumber": 19530,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19530",
+      "operation": "edit-comment",
+      "sourceCommentFingerprint": {
+        "bodySha256": "94b6ad561ae4f921109b33ade01038aaffbce66f5da36720f7e38e0bdf7c501f"
+      },
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-03T01:08:41Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19835:watch-comment",
+      "body": "[automated] The CI shepherd is watching this failure.\n\n**Current assessment:** Watch this single-test-occurrence for another independent failure of the same test on a different day.\n\n**Evidence reviewed:**\n- [issue:19835](https://github.com/microsoft/aspire/issues/19835)\n- [run:33458228838](https://github.com/microsoft/aspire/actions/runs/33458228838)\n- [pr:15671](https://github.com/microsoft/aspire/pull/15671)\n\n**Evidence still needed:**\n- verified-fix-or-current-recurrence-check\n\n**Reassess when:** After another independent failure of the same test on a different day or positive recovery.\n\nNo quarantine, retry, closure, or investigation has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19835:status -->",
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19835",
+        "run:33458228838",
+        "pr:15671"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause",
+          "test-failure"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 1,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19835:status",
+      "issueNumber": 19835,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19835",
+      "operation": "create-comment",
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-01T01:55:49Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19839:watch-comment",
+      "body": "[automated] The CI shepherd is watching this failure.\n\n**Current assessment:** Watch this single-test-occurrence for another independent failure of the same test on a different day.\n\n**Evidence reviewed:**\n- [issue:19839](https://github.com/microsoft/aspire/issues/19839)\n- [run:33494022725](https://github.com/microsoft/aspire/actions/runs/33494022725)\n- [pr:19826](https://github.com/microsoft/aspire/pull/19826)\n\n**Evidence still needed:**\n- verified-fix-or-current-recurrence-check\n\n**Reassess when:** After another independent failure of the same test on a different day or positive recovery.\n\nNo quarantine, retry, closure, or investigation has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19839:status -->",
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19839",
+        "run:33494022725",
+        "pr:19826"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause",
+          "test-failure"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 1,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19839:status",
+      "issueNumber": 19839,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19839",
+      "operation": "create-comment",
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-01T10:27:10Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19875:watch-comment",
+      "body": "[automated] The CI shepherd is watching this failure.\n\n**Current assessment:** Watch this single-test-occurrence for another independent failure of the same test on a different day.\n\n**Evidence reviewed:**\n- [issue:19875](https://github.com/microsoft/aspire/issues/19875)\n- [run:33669706128](https://github.com/microsoft/aspire/actions/runs/33669706128)\n- [pr:19872](https://github.com/microsoft/aspire/pull/19872)\n\n**Evidence still needed:**\n- verified-fix-or-current-recurrence-check\n\n**Reassess when:** After another independent failure of the same test on a different day or positive recovery.\n\nNo quarantine, retry, closure, or investigation has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19875:status -->",
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19875",
+        "run:33669706128",
+        "pr:19872"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause",
+          "test-failure"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 1,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19875:status",
+      "issueNumber": 19875,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19875",
+      "operation": "create-comment",
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-02T19:28:35Z"
+      }
+    },
+    {
+      "actionId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z:issue:19876:watch-comment",
+      "body": "[automated] The CI shepherd is watching this failure.\n\n**Current assessment:** Watch the single artifact-upload network timeout for an independent recurrence or positive recovery.\n\n**Evidence reviewed:**\n- [issue:19876](https://github.com/microsoft/aspire/issues/19876)\n- [run:33671638017](https://github.com/microsoft/aspire/actions/runs/33671638017)\n- [pr:19403](https://github.com/microsoft/aspire/pull/19403)\n\n**Evidence still needed:**\n- an independent matching recurrence or positive recovery\n\n**Reassess when:** After another independent artifact-upload ETIMEDOUT failure or a matching successful execution.\n\nNo quarantine, retry, closure, or investigation has been started.\n\n<!-- ci-shepherd:role=status -->\n<!-- ci-shepherd:idempotency-key=issue:19876:status -->",
+      "evidenceBasis": "issue-state",
+      "evidenceIds": [
+        "issue:19876",
+        "run:33671638017",
+        "pr:19403"
+      ],
+      "executionEligibility": {
+        "blockingReasons": [],
+        "ciLabels": [
+          "ci-failure-cause"
+        ],
+        "collectionComplete": true,
+        "eligible": true,
+        "evidenceBasis": "issue-state",
+        "occurrenceCount": 1,
+        "unavailableEvidenceIds": [],
+        "untrustedReferenceEvidenceIds": []
+      },
+      "expectedIssueState": "open",
+      "idempotencyKey": "issue:19876:status",
+      "issueNumber": 19876,
+      "issueUrl": "https://github.com/microsoft/aspire/issues/19876",
+      "operation": "create-comment",
+      "sourceEvidenceFingerprint": {
+        "issueUpdatedAt": "2026-09-02T19:58:01Z"
+      }
+    }
+  ],
+  "repository": "microsoft/aspire",
+  "schemaVersion": 2,
+  "shepherdAuthor": "radical",
+  "snapshotId": "snapshot:microsoft/aspire:2026-09-03T15:55:19.413043Z",
+  "unchangedIssueNumbers": [
+    18672,
+    18690,
+    18691,
+    18755,
+    18764,
+    18783,
+    18794,
+    18800,
+    18801,
+    18815,
+    18821,
+    18840,
+    18901,
+    18920,
+    18921,
+    18950,
+    18967,
+    18994,
+    19002,
+    19005,
+    19011,
+    19167,
+    19168,
+    19201,
+    19252,
+    19308,
+    19362,
+    19363,
+    19379,
+    19442,
+    19449,
+    19456,
+    19480,
+    19526,
+    19529,
+    19542,
+    19623,
+    19634,
+    19637,
+    19659,
+    19671,
+    19725,
+    19737,
+    19743,
+    19744,
+    19745,
+    18784
+  ]
+}
