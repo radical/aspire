@@ -19,6 +19,9 @@ namespace Aspire.Hosting;
 /// </summary>
 public static class RedisBuilderExtensions
 {
+    private const string RedisCommanderRelationshipType = "RedisCommander";
+    private const string RedisInsightRelationshipType = "RedisInsight";
+
     /// <summary>
     /// Adds a Redis container to the application model.
     /// </summary>
@@ -230,6 +233,7 @@ public static class RedisBuilderExtensions
         if (builder.ApplicationBuilder.Resources.OfType<RedisCommanderResource>().SingleOrDefault() is { } existingRedisCommanderResource)
         {
             var builderForExistingResource = builder.ApplicationBuilder.CreateResourceBuilder(existingRedisCommanderResource);
+            builderForExistingResource.WithRedisRelationship(builder.Resource, RedisCommanderRelationshipType);
             configureContainer?.Invoke(builderForExistingResource);
             return builder;
         }
@@ -285,7 +289,7 @@ public static class RedisBuilderExtensions
 
             configureContainer?.Invoke(resourceBuilder);
 
-            resourceBuilder.WithRelationship(builder.Resource, "RedisCommander");
+            resourceBuilder.WithRedisRelationship(builder.Resource, RedisCommanderRelationshipType);
 
             return builder;
         }
@@ -307,9 +311,10 @@ public static class RedisBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        if (builder.ApplicationBuilder.Resources.OfType<RedisInsightResource>().SingleOrDefault() is { } existingRedisCommanderResource)
+        if (builder.ApplicationBuilder.Resources.OfType<RedisInsightResource>().SingleOrDefault() is { } existingRedisInsightResource)
         {
-            var builderForExistingResource = builder.ApplicationBuilder.CreateResourceBuilder(existingRedisCommanderResource);
+            var builderForExistingResource = builder.ApplicationBuilder.CreateResourceBuilder(existingRedisInsightResource);
+            builderForExistingResource.WithRedisRelationship(builder.Resource, RedisInsightRelationshipType);
             configureContainer?.Invoke(builderForExistingResource);
             return builder;
         }
@@ -353,7 +358,7 @@ public static class RedisBuilderExtensions
                         counter++;
                     }
                 })
-                .WithRelationship(builder.Resource, "RedisInsight")
+                .WithRedisRelationship(builder.Resource, RedisInsightRelationshipType)
                 .WithCertificateTrustConfiguration(ctx =>
                 {
                     var redisInstances = builder.ApplicationBuilder.Resources.OfType<RedisResource>();
@@ -636,5 +641,21 @@ public static class RedisBuilderExtensions
             endpoint.Port = port;
         });
 
+    }
+
+    private static IResourceBuilder<TResource> WithRedisRelationship<TResource>(
+        this IResourceBuilder<TResource> builder,
+        RedisResource redisResource,
+        string relationshipType)
+        where TResource : IResource
+    {
+        if (!builder.Resource.Annotations.OfType<ResourceRelationshipAnnotation>()
+            .Any(relationship => ReferenceEquals(relationship.Resource, redisResource)
+                && string.Equals(relationship.Type, relationshipType, StringComparison.Ordinal)))
+        {
+            builder.WithRelationship(redisResource, relationshipType);
+        }
+
+        return builder;
     }
 }
