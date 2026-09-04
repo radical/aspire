@@ -152,6 +152,7 @@ path_rules:
       - eng/scripts/expand-test-matrix-github.ps1   # GitHub matrix expansion; a bug skews every PR's matrix -> err toward ALL (also runs its ExpandTestMatrixGitHubTests verifier)
       - eng/scripts/write-class-mode-test-props.ps1   # enumerate-tests class-mode restriction; a bug skews every PR's matrix -> err toward ALL (also runs its WriteClassModeTestPropsTests verifier)
       - eng/scripts/scan-test-partitions-from-source.ps1   # source partition discovery in the runsheet builder; a bug skews every split project's enumeration -> err toward ALL
+      - eng/scripts/validate-npm-release-aliases.ps1
       - eng/TestEnumerationRunsheetBuilder/**
       - tools/ExtractTestPartitions/**   # compiled partition extractor used for every split test project
       - eng/testing/CITestsProperties.props
@@ -313,9 +314,8 @@ path_rules:
       - eng/scripts/download-native-archives.ps1
       - eng/scripts/stage-native-cli-tool-packages.ps1
       - eng/scripts/validate-npm-package-signatures.ps1
-      - eng/scripts/validate-npm-release-aliases.ps1
     targets: [test:Infrastructure.Tests]
-    reason: Infrastructure.Tests/PowerShellScripts validates these CLI-archive/npm packaging scripts (DownloadNativeArchivesTests, StageNativeCliToolPackagesTests, ValidateNpmPackageSignaturesTests, ValidateNpmReleaseAliasesTests; ReleasePublishNugetPipelineTests reads validate-npm-release-aliases.ps1); the build jobs that run them are unconditional needs, so the unit verifier is the trigger that must fire
+    reason: Infrastructure.Tests/PowerShellScripts validates these CLI-archive/npm packaging scripts (DownloadNativeArchivesTests, StageNativeCliToolPackagesTests, ValidateNpmPackageSignaturesTests); the build jobs that run them are unconditional needs, so the unit verifier is the trigger that must fire
   - paths:
       - eng/scripts/aspire-skills-bundle.common.ps1
       - eng/test-retry-patterns.json
