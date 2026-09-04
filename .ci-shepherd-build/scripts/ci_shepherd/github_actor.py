@@ -22,6 +22,9 @@ _CREATE_COMMENT_ENDPOINT_RE = re.compile(
 _EDIT_COMMENT_ENDPOINT_RE = re.compile(
     r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*$"
 )
+_CLOSE_ISSUE_ENDPOINT_RE = re.compile(
+    r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$"
+)
 _ASSIGN_COPILOT_ENDPOINT_RE = re.compile(
     r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/assignees$"
 )
@@ -39,6 +42,7 @@ class GitHubActorClient:
         *,
         allowed_repositories: Collection[str] = (),
         protected_comment_repositories: Collection[str] = (),
+        protected_closure_repositories: Collection[str] = (),
         protected_delegation_repositories: Collection[str] = (),
         runner: Any = subprocess.run,
         request_timeout_seconds: float = 60,
@@ -55,12 +59,17 @@ class GitHubActorClient:
             self._repository(repository).casefold()
             for repository in protected_comment_repositories
         )
+        self._protected_closure_repositories = frozenset(
+            self._repository(repository).casefold()
+            for repository in protected_closure_repositories
+        )
         self._protected_delegation_repositories = frozenset(
             self._repository(repository).casefold()
             for repository in protected_delegation_repositories
         )
         protected_overrides = (
             self._protected_comment_repositories
+            | self._protected_closure_repositories
             | self._protected_delegation_repositories
         )
         if not protected_overrides.issubset(
@@ -71,11 +80,14 @@ class GitHubActorClient:
                 "that are also explicitly allowed."
             )
         if (
-            self._protected_comment_repositories
+            self._protected_comment_repositories & self._protected_closure_repositories
+            or self._protected_comment_repositories
+            & self._protected_delegation_repositories
+            or self._protected_closure_repositories
             & self._protected_delegation_repositories
         ):
             raise ValueError(
-                "Protected comment and delegation repositories must be disjoint."
+                "Protected comment, closure, and delegation repositories must be disjoint."
             )
         self._runner = runner
         self._request_timeout_seconds = request_timeout_seconds
@@ -268,6 +280,19 @@ class GitHubActorClient:
                         raise MutationRepositoryError(
                             "Protected repository pilot permits comment "
                             "creation or editing only."
+                        )
+                elif normalized_repository in self._protected_closure_repositories:
+                    if not (
+                        method == "PATCH"
+                        and _CLOSE_ISSUE_ENDPOINT_RE.fullmatch(endpoint)
+                        and payload is not None
+                        and payload.get("state") == "closed"
+                        and payload.get("state_reason")
+                        in {"completed", "not_planned", "duplicate"}
+                        and set(payload) == {"state", "state_reason"}
+                    ):
+                        raise MutationRepositoryError(
+                            "Protected repository pilot permits issue closure only."
                         )
                 elif normalized_repository in self._protected_delegation_repositories:
                     if not (

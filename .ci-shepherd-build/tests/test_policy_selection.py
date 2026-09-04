@@ -371,6 +371,91 @@ class FrozenFixtureTests(unittest.TestCase):
 
 
 class DeterministicOrderingTests(unittest.TestCase):
+    def test_terminal_action_is_removed_so_sequential_loop_advances(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        first = _comment_proposal(action_id="a:first", issue_number=1)
+        second = _comment_proposal(action_id="b:second", issue_number=2)
+        document = _document([first, second])
+        projection = _projection(
+            policy_doc=_policy_document(
+                enabled_classes=frozenset({"create-comment"})
+            )
+        )
+
+        initial = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=[],
+            now=now,
+        )
+        after_first = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=[
+                _event(
+                    event_type="terminal",
+                    action_id=first["actionId"],
+                    operation=first["operation"],
+                    target_number=first["issueNumber"],
+                    idempotency_key=first["idempotencyKey"],
+                    recorded_at=now - timedelta(minutes=1),
+                    run_id="run-1",
+                    outcome="executed",
+                    body_digest=(
+                        "sha256:"
+                        + hashlib.sha256(first["body"].encode("utf-8")).hexdigest()
+                    ),
+                )
+            ],
+            now=now,
+        )
+
+        self.assertEqual(["a:first", "b:second"], initial["selectedActionIds"])
+        self.assertEqual(["b:second"], after_first["selectedActionIds"])
+        first_candidate = next(
+            candidate
+            for candidate in after_first["candidates"]
+            if candidate["actionId"] == "a:first"
+        )
+        self.assertEqual("exhausted", first_candidate["status"])
+        self.assertEqual("already-terminal", first_candidate["reason"])
+
+    def test_indeterminate_action_remains_selected_for_reconciliation(self) -> None:
+        now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
+        proposal = _comment_proposal(action_id="a:first", issue_number=1)
+        document = _document([proposal])
+        projection = _projection(
+            policy_doc=_policy_document(
+                enabled_classes=frozenset({"create-comment"})
+            )
+        )
+        event = _event(
+            event_type="terminal",
+            action_id=proposal["actionId"],
+            operation=proposal["operation"],
+            target_number=proposal["issueNumber"],
+            idempotency_key=proposal["idempotencyKey"],
+            recorded_at=now - timedelta(minutes=1),
+            run_id="run-1",
+            outcome="indeterminate",
+            body_digest=(
+                "sha256:"
+                + hashlib.sha256(proposal["body"].encode("utf-8")).hexdigest()
+            ),
+        )
+
+        selection = ps.build_policy_selection(
+            document,
+            run_id="run-1",
+            policy_projection=projection,
+            action_events=[event],
+            now=now,
+        )
+
+        self.assertEqual(["a:first"], selection["selectedActionIds"])
+
     def test_deterministic_order_within_permitted_set(self) -> None:
         now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
         create_low = _comment_proposal(
@@ -1353,10 +1438,15 @@ class DependentClosePrerequisiteTests(unittest.TestCase):
             close_candidate["satisfiedPrerequisites"],
         )
         self.assertIn(close["actionId"], admitted["automaticActionIds"])
-        # The dependency itself is still not selected: only the prerequisite
-        # check consumed its terminal record, not a grant.
+        # The dependency itself is terminal and therefore is not selected
+        # again; only the dependent close advances.
         self.assertEqual(
-            "denied", next(c for c in admitted["candidates"] if c["actionId"] == dep["actionId"])["status"]
+            "exhausted",
+            next(
+                c
+                for c in admitted["candidates"]
+                if c["actionId"] == dep["actionId"]
+            )["status"],
         )
 
     def test_dependent_close_prerequisite_requires_every_identity_field_to_match(self) -> None:

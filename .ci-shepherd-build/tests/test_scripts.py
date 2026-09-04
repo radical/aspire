@@ -1953,6 +1953,7 @@ class PrototypeScriptTests(unittest.TestCase):
             client_factory.assert_called_once_with(
                 allowed_repositories={"microsoft/aspire"},
                 protected_comment_repositories={"microsoft/aspire"},
+                protected_closure_repositories=set(),
                 protected_delegation_repositories=set(),
                 audit_path=state_path / "api-calls.jsonl",
             )
@@ -2413,6 +2414,116 @@ class PrototypeScriptTests(unittest.TestCase):
                 ["intent", "delegation-baseline", "terminal"],
                 [event["eventType"] for event in events],
             )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_execute_actions_records_capacity_deferred_assignment_as_terminal(
+        self,
+    ) -> None:
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        state_path = (scratch / "state").resolve()
+        action_id = "action:assign"
+        proposal = {
+            "actionId": action_id,
+            "issueNumber": 1,
+            "operation": "assign-copilot",
+            "idempotencyKey": "issue:1:copilot-assignment",
+        }
+        proposals = {
+            "schemaVersion": 2,
+            "repository": "owner/repo",
+            "snapshotId": "snapshot:owner/repo:1",
+            "shepherdAuthor": "ankj",
+            "proposals": [proposal],
+        }
+        proposals_path.write_text(json.dumps(proposals), encoding="utf-8")
+        grant = AuthorizationGrant(
+            grant_id="grant:assignment",
+            repository="owner/repo",
+            state_directory=state_path,
+            issued_at=datetime(2026, 8, 21, 19, tzinfo=UTC),
+            expires_at=datetime(2026, 8, 21, 21, tzinfo=UTC),
+            snapshot_id="snapshot:owner/repo:1",
+            proposals_digest="sha256:" + ("0" * 64),
+            allowed_action_ids=(action_id,),
+            allowed_operations=frozenset({"assign-copilot"}),
+            allowed_targets=frozenset({("issue", 1)}),
+            allowed_chain_roots=(action_id,),
+            override_suppression_for_action_ids=frozenset(),
+            budget=AuthorizationBudget(max_mutation_attempts=1, max_chains=1),
+            production_comment_pilot=False,
+        )
+        stdout = io.StringIO()
+        try:
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "execute_actions.py",
+                        "--proposals",
+                        str(proposals_path),
+                        "--state-dir",
+                        str(state_path),
+                        "--authorization",
+                        str(scratch / "authorization-grant.json"),
+                        "--action-id",
+                        action_id,
+                        "--execute",
+                    ],
+                ),
+                patch.object(
+                    execute_script,
+                    "load_authorized_execution",
+                    return_value=SimpleNamespace(
+                        proposal_document=proposals,
+                        proposal=proposal,
+                        chain_root=action_id,
+                        grant=grant,
+                    ),
+                ),
+                patch.object(
+                    execute_script,
+                    "GitHubActorClient",
+                    return_value=object(),
+                ),
+                patch.object(
+                    execute_script,
+                    "GitHubClient",
+                    return_value=object(),
+                ),
+                patch.object(
+                    execute_script,
+                    "reserve_delegation_start",
+                    return_value=SimpleNamespace(
+                        permitted=False,
+                        blocked_by=("max-running-tasks",),
+                    ),
+                ),
+                patch.object(execute_script, "execute_action") as execute,
+                contextlib.redirect_stdout(stdout),
+            ):
+                self.assertEqual(0, execute_script.main())
+
+            output = json.loads(stdout.getvalue())
+            self.assertEqual("skipped", output["outcome"])
+            self.assertEqual("delegation-capacity-blocked", output["reason"])
+            events = [
+                json.loads(line)
+                for line in (state_path / "action-events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(
+                ["intent", "terminal"],
+                [event["eventType"] for event in events],
+            )
+            self.assertEqual("skipped", events[-1]["outcome"])
+            execute.assert_not_called()
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 

@@ -1,0 +1,27 @@
+{
+  "create-comment": {
+    "enabled": true,
+    "maxPerRun": 2,
+    "maxRolling24h": 10
+  },
+  "edit-comment": {
+    "enabled": true,
+    "maxPerRun": 2,
+    "maxRolling24h": 10
+  },
+  "close-issue": {
+    "enabled": true,
+    "maxPerRun": 2,
+    "maxRolling24h": 4
+  },
+  "delegate-copilot": {
+    "enabled": true,
+    "maxPerRun": 2,
+    "maxRolling24h": 4
+  },
+  "rerun-or-retry": {
+    "enabled": false,
+    "maxPerRun": 0,
+    "maxRolling24h": 0
+  }
+}

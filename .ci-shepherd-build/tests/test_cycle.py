@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -288,6 +289,81 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_coordinator_stage_requires_active_policy_or_selected_action(
+        self,
+    ) -> None:
+        now = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+        operation_classes = {
+            operation_class: {
+                "enabled": operation_class == "create-comment",
+                "maxPerRun": 1 if operation_class == "create-comment" else 0,
+                "maxRolling24h": (
+                    2 if operation_class == "create-comment" else 0
+                ),
+            }
+            for operation_class in (
+                "create-comment",
+                "edit-comment",
+                "close-issue",
+                "delegate-copilot",
+                "rerun-or-retry",
+            )
+        }
+        policy = {
+            "schemaVersion": 1,
+            "repository": "owner/repo",
+            "revisionId": "policy:1",
+            "revision": 1,
+            "status": "active",
+            "createdAtUtc": "2026-09-04T11:00:00Z",
+            "expiresAtUtc": "2026-09-05T11:00:00Z",
+            "actor": "github:radical",
+            "replacesRevisionId": None,
+            "operationClasses": operation_classes,
+            "deniedActionIds": [],
+            "deniedTargets": [],
+            "policyDigest": "sha256:" + ("0" * 64),
+        }
+        selection = {"selectedActionIds": []}
+
+        self.assertEqual(
+            "policy-active",
+            cycle_script._coordinator_stage(
+                {"effectivePolicy": policy},
+                selection,
+                now=now,
+            ),
+        )
+        self.assertEqual(
+            "awaiting-policy",
+            cycle_script._coordinator_stage(
+                {"effectivePolicy": {**policy, "status": "paused"}},
+                selection,
+                now=now,
+            ),
+        )
+        self.assertEqual(
+            "awaiting-policy",
+            cycle_script._coordinator_stage(
+                {
+                    "effectivePolicy": {
+                        **policy,
+                        "expiresAtUtc": "2026-09-04T11:30:00Z",
+                    }
+                },
+                selection,
+                now=now,
+            ),
+        )
+        self.assertEqual(
+            "ready",
+            cycle_script._coordinator_stage(
+                {"effectivePolicy": {**policy, "status": "revoked"}},
+                {"selectedActionIds": ["action:1"]},
+                now=now,
+            ),
+        )
+
     def test_blocking_evidence_expands_once_and_requires_fresh_review(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)
@@ -1282,6 +1358,8 @@ class CycleTests(unittest.TestCase):
             self.assertTrue((first_work / "report.md").is_file())
             self.assertTrue((first_work / "action-proposals.json").is_file())
             self.assertTrue((first_work / "comment-selection.json").is_file())
+            self.assertTrue((first_work / "policy-selection.json").is_file())
+            self.assertTrue((first_work / "coordinator-projection.json").is_file())
             comment_selection = json.loads(
                 (first_work / "comment-selection.json").read_text(encoding="utf-8")
             )
@@ -1293,10 +1371,31 @@ class CycleTests(unittest.TestCase):
                 {"schemaVersion": 1, "evidenceRound": 0},
                 proposals["productionPilotCapability"],
             )
+            report = (first_work / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Legacy production comment pilot selection", report)
             self.assertIn(
-                "## Production comment selection",
-                (first_work / "report.md").read_text(encoding="utf-8"),
+                "## Autonomous policy selection at cycle finalization",
+                report,
             )
+            self.assertIn(
+                "This section is authoritative for autonomous policy execution",
+                report,
+            )
+            self.assertNotIn("## Policy-aware action selection", report)
+            self.assertEqual("awaiting-policy", completed["coordinatorStage"])
+            projection = json.loads(
+                (first_work / "coordinator-projection.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            policy_selection = json.loads(
+                (first_work / "policy-selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                projection["stateRevision"],
+                policy_selection["coordinatorStateRevision"],
+            )
+            self.assertEqual([], policy_selection["selectedActionIds"])
             self.assertEqual(1, len(list((state / "runs").iterdir())))
 
             second_work = root / "work-2"

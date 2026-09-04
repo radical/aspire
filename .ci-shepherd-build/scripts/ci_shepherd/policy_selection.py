@@ -326,34 +326,45 @@ def build_policy_selection(
     }
 
 
-def render_policy_selection_section(selection: Mapping[str, object]) -> str:
+def render_policy_selection_section(
+    selection: Mapping[str, object],
+    *,
+    heading: str = "Policy-aware action selection",
+    introduction: str | None = None,
+) -> str:
     """Render a deterministic markdown summary of a policy selection."""
 
     budgets = selection["budgets"]
     exposure = selection["maximumWriteExposure"]
     lines = [
-        "## Policy-aware action selection",
+        f"## {heading}",
         "",
-        (
-            f"Automatic: **{len(selection['automaticActionIds'])}** &middot; "
-            f"Exact: **{len(selection['exactActionIds'])}** &middot; "
-            f"Selected: **{len(selection['selectedActionIds'])}** of "
-            f"**{len(selection['candidates'])}** proposed actions."
-        ),
-        "",
-        (
-            f"Policy revision: `{selection['policyRevisionId'] or 'none'}` &middot; "
-            f"Coordinator state revision: {selection['coordinatorStateRevision']}."
-        ),
-        "",
-        (
-            "Maximum write exposure this run: "
-            f"**{exposure['thisRun']}**, rolling 24h: **{exposure['rolling24h']}**."
-        ),
-        "",
-        "| Class | Enabled | Used/Max (run) | Used/Max (24h) |",
-        "|---|---|---:|---:|",
     ]
+    if introduction is not None:
+        lines.extend([introduction, ""])
+    lines.extend(
+        [
+            (
+                f"Automatic: **{len(selection['automaticActionIds'])}** &middot; "
+                f"Exact: **{len(selection['exactActionIds'])}** &middot; "
+                f"Selected: **{len(selection['selectedActionIds'])}** of "
+                f"**{len(selection['candidates'])}** proposed actions."
+            ),
+            "",
+            (
+                f"Policy revision: `{selection['policyRevisionId'] or 'none'}` &middot; "
+                f"Coordinator state revision: {selection['coordinatorStateRevision']}."
+            ),
+            "",
+            (
+                "Maximum write exposure this run: "
+                f"**{exposure['thisRun']}**, rolling 24h: **{exposure['rolling24h']}**."
+            ),
+            "",
+            "| Class | Enabled | Used/Max (run) | Used/Max (24h) |",
+            "|---|---|---:|---:|",
+        ]
+    )
     for cls in OPERATION_CLASSES:
         budget = budgets[cls]
         lines.append(
@@ -450,6 +461,22 @@ def _classify_initial(
 
     target_kind, target_number = _proposal_target(proposal)
     target_key = f"{target_kind}:{target_number}"
+    body_digest = _body_digest(proposal.get("body"))
+    if any(
+        event["eventType"] == "terminal"
+        and event["actionId"] == action_id
+        and event["snapshotId"] == snapshot_id
+        and event["operation"] == operation
+        and event["targetKind"] == target_kind
+        and event["targetNumber"] == target_number
+        and event["idempotencyKey"] == proposal["idempotencyKey"]
+        and event["bodyDigest"] == body_digest
+        and event["outcome"] != "indeterminate"
+        for event in normalized_events
+    ):
+        record["status"] = "exhausted"
+        record["reason"] = "already-terminal"
+        return record
 
     # Deny lists are part of the standing policy envelope, not a separate
     # exact decision: they only bind while that policy revision is active.

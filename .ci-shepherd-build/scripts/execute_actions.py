@@ -233,6 +233,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             or autonomous_operation_class in {"create-comment", "edit-comment"}
             else set()
         )
+        production_closure_overrides = (
+            {authorized.grant.repository}
+            if autonomous_operation_class == "close-issue"
+            else set()
+        )
         production_delegation_overrides = (
             {authorized.grant.repository}
             if (
@@ -245,6 +250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         client = GitHubActorClient(
             allowed_repositories={authorized.grant.repository},
             protected_comment_repositories=production_comment_overrides,
+            protected_closure_repositories=production_closure_overrides,
             protected_delegation_repositories=production_delegation_overrides,
             audit_path=state_dir / "api-calls.jsonl",
         )
@@ -291,10 +297,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "attemptedAt": datetime.now(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
-                    "outcome": "deferred",
+                    "outcome": "skipped",
                     "reason": "delegation-capacity-blocked",
                     "blockedBy": list(capacity.blocked_by),
                 }
+                execution.append_terminal(
+                    result=result,
+                    at=datetime.now(UTC),
+                )
                 _print_json(result)
                 return 0
             delegation_baseline = capacity.task_ids_before

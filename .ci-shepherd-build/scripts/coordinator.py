@@ -31,7 +31,7 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from ci_shepherd.authorization import (
     AuthorizationError,
@@ -267,6 +267,8 @@ def _stage_for(
     now: datetime,
     selection: dict[str, object] | None,
 ) -> str:
+    if selection is not None and selection.get("selectedActionIds"):
+        return "ready"
     if effective_policy is None:
         return "awaiting-policy"
     # Re-parse the recorded revision through the same schema validator that
@@ -280,8 +282,6 @@ def _stage_for(
         return "awaiting-policy"
     if not parsed.active_at(now):
         return "awaiting-policy"
-    if selection is not None and selection.get("selectedActionIds"):
-        return "ready"
     return "policy-active"
 
 
@@ -314,6 +314,7 @@ def _build_selection(
     now: datetime,
 ) -> dict[str, object]:
     proposals_document = _read_json_file(proposals_path, "action proposals document")
+    _validate_cycle_run_id(proposals_document, run_id)
     projection = store.projection(repository, now=now)
     action_events = _build_action_event_store(state_dir).events(repository=repository)
     return build_policy_selection(
@@ -323,6 +324,25 @@ def _build_selection(
         action_events=action_events,
         now=now,
     )
+
+
+def _validate_cycle_run_id(
+    proposals_document: Mapping[str, object],
+    run_id: str,
+) -> None:
+    snapshot_id = proposals_document.get("snapshotId")
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        raise _CoordinatorCliError(
+            "invalid-argument",
+            "Action proposals must contain a nonempty snapshotId.",
+        )
+    expected_run_id = f"cycle:{snapshot_id}"
+    if run_id != expected_run_id:
+        raise _CoordinatorCliError(
+            "invalid-argument",
+            "--run-id must equal cycle:<proposal snapshotId> so per-run budgets "
+            "cannot be reset within one evidence cycle.",
+        )
 
 
 def _read_operation_classes(caps_path: Path) -> dict[str, object]:
@@ -561,6 +581,7 @@ def _cmd_policy_preview(args: argparse.Namespace) -> dict[str, object]:
         "exactDecisions": projection["exactDecisions"],
     }
     proposals_document = _read_json_file(args.proposals, "action proposals document")
+    _validate_cycle_run_id(proposals_document, args.run_id)
     action_events = _build_action_event_store(args.state_dir).events(repository=args.repository)
     selection = build_policy_selection(
         proposals_document,

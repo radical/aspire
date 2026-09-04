@@ -10,8 +10,10 @@ reuses unchanged factual evidence, and sends first-seen, materially changed, or
 explicitly woken cases to a fresh assessment agent. Stable reviewed cases stay
 out of model input until their evidence changes or a typed wakeup becomes due.
 Collection and assessment are advisory. The coordinator may run bounded
-read-only investigations without approval. GitHub-visible effects and local
-quarantine work remain separate, individually approved actions.
+read-only investigations without approval. GitHub-visible effects require
+either an exact operator decision or an active standing policy; every permitted
+effect still receives a single-action internal grant before execution. Local
+quarantine work remains separately approved.
 
 ## Supported cycle
 
@@ -60,12 +62,88 @@ python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
   --pull-request-judgments "$SCRATCH/agent-pull-request-judgments.json"
 ```
 
+## Autonomous local operator cycle
+
+The supported autonomous deployment is a manually started local skill session,
+not a GitHub-hosted service. Once started, the agent owns the complete cycle:
+collect and assess fresh evidence, run the bounded investigations, finalize
+proposals, select permitted actions, execute them one at a time, reconcile
+results, verify replay, and write the operator report. Do not ask the operator
+to choose individual action IDs.
+
+Standing policy is intentionally broad. For the current live pilot, activate
+`.ci-shepherd-build/policies/autonomous-live-pilot-caps-v1.json`, which permits:
+
+| Class | Per run | Rolling 24 hours |
+|---|---:|---:|
+| Create comments | 2 | 10 |
+| Edit comments | 2 | 10 |
+| Close issues | 2 | 4 |
+| Delegate to Copilot | 2 | 4 |
+| Rerun or retry | 0 | 0 |
+
+Policy activation is the operator authorization boundary. Read the current
+coordinator projection, use its exact `stateRevision` as
+`--expected-revision`, and activate the checked-in caps with
+`coordinator.py policy-activate`. Never widen the caps in a run without fresh
+operator approval.
+
+After `cycle.py finish`, treat `policy-selection.json` and
+`coordinator-projection.json` as authoritative. `comment-selection.json` is a
+migration artifact only and never authorizes an autonomous action.
+
+Begin the mutation phase immediately after finalization. Protected production
+grants require a snapshot collected less than 45 minutes earlier and expire no
+later than the end of that freshness window. If the next grant cannot be minted
+before that deadline, stop without reselecting stale work and restart from a
+fresh collection and finalized cycle.
+
+Run the mutation phase as a deterministic sequential loop:
+
+1. Rebuild selection with `coordinator.py select`, writing a new immutable
+   `policy-selection.<iteration>.json`. Its `--run-id` must be exactly
+   `cycle:<action-proposals snapshotId>`; the coordinator rejects any other
+   budget namespace.
+2. Invoke `coordinator.py grant-next`, writing
+   `authorization-grant.<iteration>.json`. A grant is an internal
+   single-effect token, not a request for operator approval.
+3. If no action is granted, stop the mutation phase.
+4. Execute that exact action with `execute_actions.py --execute
+   --autonomous-policy --source-checkout "$CHECKOUT" --policy-selection
+   policy-selection.<iteration>.json`.
+5. Before rebuilding selection, replay the exact same command with the same
+   grant, selection, and `--source-checkout "$CHECKOUT"`. For a
+   non-`indeterminate` result, require byte-identical output with no new API
+   calls or ledger events. An `indeterminate` result instead permits one
+   read-only reconciliation and one superseding terminal event. If that resolves
+   the outcome, replay once more and require byte-identical output with no new
+   calls or events; if it remains `indeterminate`, stop the mutation phase
+   visibly.
+6. Require a terminal action event, then return to step 1 so dependency
+   completion, class budgets, and rolling budgets are re-evaluated from the
+   ledger.
+
+Never execute multiple mutations concurrently. Investigation sessions use
+rolling concurrency instead: start at most three at once, then start another as
+a slot becomes available until the cycle's maximum of five is reached.
+Authorization, stale-checkout, or execution failure stops the mutation phase
+visibly; do not blindly reselect an action that failed before recording an
+intent. A capacity-blocked Copilot assignment records a terminal `skipped`
+result, so it does not wedge the loop or unlock a dependent action.
+
+After the loop, rebuild canonical `policy-selection.json` once more and
+preserve it with the projection, every iteration selection and exact grant,
+action ledger, API audit, and a concise `final-operator-report.md`. An immediate
+unchanged follow-up cycle must produce zero GitHub writes.
+
 The supported cycle writes deterministic `report.md`,
-`action-proposals.json`, `comment-selection.json`, `actor-dry-run.json`,
-`investigation-plan.json`, and `quarantine-session.json`, then records the
-validated snapshot, judgments, and artifacts under `$STATE/runs/<cycle-id>/`.
-`--max-comments` is an invocation policy input from 1 through 5; it does not
-authorize mutation. The selection file deterministically ranks eligible issue
+`action-proposals.json`, authoritative `policy-selection.json` and
+`coordinator-projection.json`, migration-only `comment-selection.json`,
+`actor-dry-run.json`, `investigation-plan.json`, and
+`quarantine-session.json`, then records the validated snapshot, judgments, and
+artifacts under `$STATE/runs/<cycle-id>/`. `--max-comments` is an invocation
+policy input from 1 through 5; it does not authorize mutation. The legacy
+selection file deterministically ranks eligible issue
 comments as human input, quarantine reconciliation, delegation handoff, watch
 status, status retirement, closure review, then other comments. Editing wins
 ties over creation, followed by issue number and action ID. `report.md` discloses
@@ -117,12 +195,14 @@ never read as a clean one.
 - A quarantine recommendation is a separately approved request for one isolated
   local worktree session. The worker may edit and validate locally, but must not
   push or open a pull request until its draft title and body receive approval.
-- Push, pull-request creation, quarantine, rerun, and retry remain individually
-  approval-gated.
-- Every mutation requires an exact machine-readable authorization grant. The
-  grant enumerates action IDs, targets, operations, expiry, proposal identity,
-  and a persistent mutation budget. Prose, labels, disposition names, and
-  sequential invocation are never authorization.
+- Push, pull-request creation, and local quarantine remain individually
+  approval-gated. Rerun and retry are disabled by the live pilot policy.
+- Every mutation requires an exact machine-readable authorization grant.
+  It is derived from either the active standing policy or an exact operator
+  decision.
+  An autonomous grant enumerates one action ID, target, operation, expiry,
+  proposal identity, and persistent mutation budget. Prose, labels,
+  disposition names, and sequential invocation are never authorization.
 - Executable proposals are limited to issue comments, issue-comment edits,
   issue closure, and separately capability-gated Copilot assignment.
   Pull-request findings and all other high-risk actions remain advisory and

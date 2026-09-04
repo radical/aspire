@@ -172,7 +172,12 @@ def build_comment_selection(
 
 def render_comment_selection_section(selection: Mapping[str, object]) -> str:
     lines = [
-        "## Production comment selection",
+        "## Legacy production comment pilot selection",
+        "",
+        (
+            "This migration-only selector does not authorize autonomous "
+            "execution. See the autonomous policy selection below."
+        ),
         "",
         (
             f"Selected **{selection['selectedCount']}** of "

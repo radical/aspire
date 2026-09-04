@@ -15,8 +15,13 @@ from ci_shepherd.comment_selection import (
     build_comment_selection,
     render_comment_selection_section,
 )
+from ci_shepherd.coordinator_state import (
+    CoordinatorStateStore,
+    make_lock_free_durable_intent_reader,
+)
 from ci_shepherd.delegations import render_delegation_status_section
 from ci_shepherd.evidence_planning import build_proposal_evidence_requests
+from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.history import load_current
 from ci_shepherd.investigations import (
     attach_latest_investigation_results,
@@ -28,6 +33,7 @@ from ci_shepherd.investigations import (
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.observations import build_observations
+from ci_shepherd.operation_policy import load_operation_policy_document
 from ci_shepherd.policy import load_policy
 from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.poc_state import load_review_schedule, record_review_events
@@ -35,6 +41,10 @@ from ci_shepherd.pull_requests import build_pull_request_handoff
 from ci_shepherd.pull_requests import (
     merge_pull_request_judgments,
     render_pull_request_section,
+)
+from ci_shepherd.policy_selection import (
+    build_policy_selection,
+    render_policy_selection_section,
 )
 from ci_shepherd.quarantine import (
     build_quarantine_session_plan,
@@ -66,6 +76,28 @@ DEFAULT_REPOSITORY_POLICY_PATH = (
     / "repositories"
     / "aspire-v1.json"
 )
+
+
+def _coordinator_stage(
+    projection: Mapping[str, object],
+    selection: Mapping[str, object],
+    *,
+    now: datetime,
+) -> str:
+    if selection["selectedActionIds"]:
+        return "ready"
+    effective_policy = projection["effectivePolicy"]
+    if isinstance(effective_policy, Mapping):
+        policy = load_operation_policy_document(
+            {
+                key: value
+                for key, value in effective_policy.items()
+                if key != "policyDigest"
+            }
+        )
+        if policy.active_at(now):
+            return "policy-active"
+    return "awaiting-policy"
 
 
 def _write_private_json(path: Path, document: object) -> None:
@@ -667,6 +699,8 @@ def finish_cycle(
         "report": work_dir / "report.md",
         "proposals": work_dir / "action-proposals.json",
         "commentSelection": work_dir / "comment-selection.json",
+        "policySelection": work_dir / "policy-selection.json",
+        "coordinatorProjection": work_dir / "coordinator-projection.json",
         "dryRun": work_dir / "actor-dry-run.json",
         "quarantineSession": work_dir / "quarantine-session.json",
         "quarantineReconciliation": work_dir / "quarantine-reconciliation.json",
@@ -793,6 +827,26 @@ def finish_cycle(
         max_comments=max_comments,
     )
     _write_private_json(paths["commentSelection"], comment_selection)
+    coordinator_now = datetime.now(UTC)
+    coordinator_store = CoordinatorStateStore(
+        state_dir,
+        durable_intent_reader=make_lock_free_durable_intent_reader(
+            state_dir / "action-events.jsonl"
+        ),
+    )
+    coordinator_projection = coordinator_store.projection(
+        repository,
+        now=coordinator_now,
+    )
+    policy_selection = build_policy_selection(
+        proposals,
+        run_id=f"cycle:{prepared['snapshotId']}",
+        policy_projection=coordinator_projection,
+        action_events=ActionEventStore(state_dir).events(repository=repository),
+        now=coordinator_now,
+    )
+    _write_private_json(paths["policySelection"], policy_selection)
+    _write_private_json(paths["coordinatorProjection"], coordinator_projection)
     review_selection = _load_json(paths["selection"], "review selection")
     visible_issue_numbers = {
         int(entry["issueNumber"])
@@ -833,6 +887,16 @@ def finish_cycle(
         + "\n"
         + render_comment_selection_section(comment_selection)
         + "\n"
+        + render_policy_selection_section(
+            policy_selection,
+            heading="Autonomous policy selection at cycle finalization",
+            introduction=(
+                "This section is authoritative for autonomous policy execution. "
+                "The legacy production comment pilot selection above is retained "
+                "only for migration diagnostics and does not authorize actions."
+            ),
+        )
+        + "\n"
         + render_investigation_section(investigation_plan)
         + "\n"
         + render_quarantine_session_section(quarantine_plan)
@@ -864,6 +928,8 @@ def finish_cycle(
             paths["pullRequestJudgments"],
             paths["proposals"],
             paths["commentSelection"],
+            paths["policySelection"],
+            paths["coordinatorProjection"],
             paths["dryRun"],
             paths["quarantineSession"],
             paths["quarantineReconciliation"],
@@ -941,6 +1007,11 @@ def finish_cycle(
     completed = {
         **manifest,
         "stage": "completed",
+        "coordinatorStage": _coordinator_stage(
+            coordinator_projection,
+            policy_selection,
+            now=coordinator_now,
+        ),
         "runDirectory": str(run_directory),
         "proposalCount": len(proposals["proposals"]),
         "selectedCommentCount": comment_selection["selectedCount"],

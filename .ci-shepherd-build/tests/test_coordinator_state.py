@@ -172,7 +172,10 @@ class CoordinatorStateStoreTests(unittest.TestCase):
         )
 
         self.assertEqual(2, decision["stateRevision"])
-        projection = self.store.projection(REPOSITORY)
+        projection = self.store.projection(
+            REPOSITORY,
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )
         self.assertEqual(
             "reject-once", projection["exactDecisions"][0]["decision"]
         )
@@ -1019,7 +1022,10 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
         )
 
-        projection = self.store.projection(REPOSITORY)
+        projection = self.store.projection(
+            REPOSITORY,
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )
 
         self.assertEqual(1, len(projection["exactDecisions"]))
         self.assertEqual(2, projection["exactDecisions"][0]["eventRevision"])
@@ -1035,7 +1041,10 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             actor="github:radical",
             now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
         )
-        first = self.store.projection(REPOSITORY)["exactDecisions"][0]
+        first = self.store.projection(
+            REPOSITORY,
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )["exactDecisions"][0]
         self.assertEqual(1, first["eventRevision"])
 
         self.store.append_exact_decision(
@@ -1047,7 +1056,10 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             actor="github:someone-else",
             now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
         )
-        second = self.store.projection(REPOSITORY)["exactDecisions"][0]
+        second = self.store.projection(
+            REPOSITORY,
+            now=datetime(2026, 9, 3, 16, 7, tzinfo=UTC),
+        )["exactDecisions"][0]
 
         # Same (proposalDigest, actionId) key, but the replacement was
         # recorded as ledger event 2, so its eventRevision must advance to
@@ -1068,7 +1080,10 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             actor="github:radical",
             now=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
         )
-        before = self.store.projection(REPOSITORY)
+        before = self.store.projection(
+            REPOSITORY,
+            now=datetime(2026, 9, 3, 16, 6, tzinfo=UTC),
+        )
         self.assertEqual(1, before["stateRevision"])
         self.assertEqual(1, before["exactDecisions"][0]["eventRevision"])
 
@@ -1086,7 +1101,10 @@ class CoordinatorStateStoreTests(unittest.TestCase):
             ),
         )
 
-        after = self.store.projection(REPOSITORY)
+        after = self.store.projection(
+            REPOSITORY,
+            now=datetime(2026, 9, 3, 16, 7, tzinfo=UTC),
+        )
         self.assertEqual(2, after["stateRevision"])
         self.assertEqual(1, after["exactDecisions"][0]["eventRevision"])
 

@@ -35,20 +35,21 @@ executor supports exactly three operations: issue `create-comment`,
 Every mutation requires a machine-readable grant that binds the repository, the
 absolute state directory, the snapshot ID, a SHA-256 digest of the raw proposal
 bytes, explicit action IDs, operations, issue targets, chain roots, an expiry,
-mutation and chain budgets, and the production-comment-pilot capability.
+mutation and chain budgets, and any protected-repository capability or
+policy-selection identity used to license the action.
 
 Production remains denied by default at three independent boundaries. The
-action grant generator and loader accept `microsoft/aspire` only when their
-callers explicitly enable the production comment pilot. The exact grant then
-records that capability and is constrained to one dependency-free
-`edit-comment` action against an existing shepherd-owned comment, no suppression
-override, and a finalized round-zero or round-one snapshot collected less than
-15 minutes earlier. The cycle adds a digest-bound production capability only
-after expansion planning confirms that the proposal document is final;
-provisional round-zero proposals never carry it. Execution requires the same
-explicit confirmation. Finally, `github_actor.py` permits only the fixed
-issue-comment PATCH endpoint for a separately configured protected comment
-repository; closure and every other mutation remain denied.
+grant generator and loader accept `microsoft/aspire` only for an explicit
+legacy pilot capability or a revalidated autonomous policy selection. The
+cycle adds a digest-bound production capability only after expansion planning
+confirms that the proposal document is final; provisional round-zero proposals
+never carry it. Execution independently requires the matching capability.
+Finally, `github_actor.py` uses pairwise-disjoint protected capabilities:
+comment capability permits only fixed issue-comment create/edit endpoints,
+closure capability permits only an issue PATCH whose complete payload is
+`state=closed` plus a supported `state_reason`, and delegation capability
+permits only the Copilot assignee endpoint. A capability never authorizes
+another mutation class.
 `quarantine_authorization.py` still hard-denies `microsoft/aspire` without
 exception.
 

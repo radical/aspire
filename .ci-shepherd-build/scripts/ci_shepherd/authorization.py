@@ -634,6 +634,10 @@ def _validate_policy_selection(
     run_id = selection.get("runId")
     if not isinstance(run_id, str) or not run_id:
         raise AuthorizationError("Policy selection runId must be a non-empty string.")
+    if run_id != f"cycle:{snapshot_id}":
+        raise AuthorizationError(
+            "Policy selection runId must equal cycle:<proposal snapshotId>."
+        )
     state_revision = selection.get("coordinatorStateRevision")
     if (
         not isinstance(state_revision, int)
@@ -1338,7 +1342,7 @@ def _production_freshness_deadline(
         or capability.get("schemaVersion") != 1
     ):
         raise AuthorizationError(
-            "Production comment pilot grants require a finalized-cycle capability."
+            "Protected production grants require a finalized-cycle capability."
         )
     evidence_round = capability.get("evidenceRound")
     if (
@@ -1347,26 +1351,26 @@ def _production_freshness_deadline(
         or evidence_round not in {0, 1}
     ):
         raise AuthorizationError(
-            "Production comment pilot capability must identify round 0 or 1."
+            "Protected production capability must identify round 0 or 1."
         )
     if not snapshot_id.startswith(prefix):
         raise AuthorizationError(
-            "Production comment pilot snapshot does not match its repository."
+            "Protected production snapshot does not match its repository."
         )
     collected_at_text = snapshot_id[len(prefix) :]
     if evidence_round == 1:
         if not collected_at_text.endswith(":r1"):
             raise AuthorizationError(
-                "Production comment pilot capability does not match its snapshot round."
+                "Protected production capability does not match its snapshot round."
             )
         collected_at_text = collected_at_text.removesuffix(":r1")
     elif ":r" in collected_at_text:
         raise AuthorizationError(
-            "Production comment pilot capability does not match its snapshot round."
+            "Protected production capability does not match its snapshot round."
         )
     if not collected_at_text or ":r" in collected_at_text:
         raise AuthorizationError(
-            "Production comment pilot snapshot time is invalid."
+            "Protected production snapshot time is invalid."
         )
     try:
         collected_at = datetime.fromisoformat(
@@ -1374,22 +1378,22 @@ def _production_freshness_deadline(
         )
     except ValueError as error:
         raise AuthorizationError(
-            "Production comment pilot snapshot time is invalid."
+            "Protected production snapshot time is invalid."
         ) from error
     if collected_at.tzinfo is None:
         raise AuthorizationError(
-            "Production comment pilot snapshot time must be timezone-aware."
+            "Protected production snapshot time must be timezone-aware."
         )
     collected_at = collected_at.astimezone(UTC)
     freshness_deadline = collected_at + MAX_PRODUCTION_SNAPSHOT_AGE
     if issued_at < collected_at:
         raise AuthorizationError(
-            "Production comment pilot snapshot is not active yet."
+            "Protected production snapshot is not active yet."
         )
     if issued_at >= freshness_deadline:
         max_age_minutes = int(MAX_PRODUCTION_SNAPSHOT_AGE.total_seconds() // 60)
         raise AuthorizationError(
-            "Production comment pilot snapshots must be less than "
+            "Protected production snapshots must be less than "
             f"{max_age_minutes} minutes old."
         )
     return freshness_deadline

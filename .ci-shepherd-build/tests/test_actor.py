@@ -2270,6 +2270,64 @@ class GitHubActorClientTests(unittest.TestCase):
                 protected_comment_repositories={"microsoft/aspire"},
             )
 
+    def test_production_closure_repository_allows_issue_closure_only(self) -> None:
+        runner = RecordingRunner(
+            {"number": 21, "state": "closed", "state_reason": "completed"}
+        )
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_closure_repositories={"Microsoft/Aspire"},
+        )
+
+        client.close_issue("microsoft/aspire", 21, "completed")
+        with self.assertRaisesRegex(
+            MutationRepositoryError,
+            "issue closure only",
+        ):
+            client.create_comment("microsoft/aspire", 21, COMMENT_BODY)
+
+        self.assertEqual(1, len(runner.calls))
+        command, request = runner.calls[0]
+        self.assertIn("PATCH", command)
+        self.assertTrue(command[-1].endswith("/issues/21"))
+        self.assertEqual(
+            {"state": "closed", "state_reason": "completed"},
+            request,
+        )
+
+    def test_production_closure_repository_rejects_other_issue_patch_payloads(
+        self,
+    ) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_closure_repositories={"microsoft/aspire"},
+        )
+
+        invalid_payloads = [
+            {"title": "Rewrite the issue"},
+            {"state": "open", "state_reason": "reopened"},
+            {
+                "state": "closed",
+                "state_reason": "completed",
+                "labels": ["different-label"],
+            },
+        ]
+        for payload in invalid_payloads:
+            with (
+                self.subTest(payload=payload),
+                self.assertRaises(MutationRepositoryError),
+            ):
+                client._request(
+                    "PATCH",
+                    "repos/microsoft/aspire/issues/123",
+                    payload,
+                )
+
+        self.assertEqual([], runner.calls)
+
     def test_production_delegation_repository_allows_assignment_only(self) -> None:
         runner = RecordingRunner({"number": 21, "state": "open"})
         client = GitHubActorClient(

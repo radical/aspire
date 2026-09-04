@@ -2036,7 +2036,7 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         projection = self.store.projection(self.repository, now=now)
         selection = ps.build_policy_selection(
             self.proposals,
-            run_id="run-1",
+            run_id=f"cycle:{self.proposals['snapshotId']}",
             policy_projection=projection,
             action_events=list(action_events),
             now=now,
@@ -2111,7 +2111,10 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
 
         license_payload = grant["autonomousPolicyLicense"]
         self.assertEqual(1, license_payload["schemaVersion"])
-        self.assertEqual("run-1", license_payload["runId"])
+        self.assertEqual(
+            f"cycle:{self.proposals['snapshotId']}",
+            license_payload["runId"],
+        )
         self.assertEqual("edit-comment", license_payload["operationClass"])
         self.assertRegex(
             license_payload["selectionDigest"], r"^sha256:[0-9a-f]{64}$"
@@ -2203,6 +2206,36 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
 
         self.assertEqual("2026-08-29T20:35:00Z", grant["issuedAtUtc"])
         self.assertEqual("2026-08-29T20:45:00Z", grant["expiresAtUtc"])
+
+    def test_rejects_stale_production_snapshot(self) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        generate_now = datetime(2026, 8, 29, 20, 46, tzinfo=UTC)
+        self._build_and_write_selection(now=generate_now)
+
+        with self.assertRaisesRegex(
+            AuthorizationError, "less than 45 minutes old"
+        ):
+            self._mint(self.comment_action_id, now=generate_now)
+
+    def test_rejects_selection_run_id_outside_proposal_cycle_namespace(
+        self,
+    ) -> None:
+        self._append_policy(
+            revision=1, enabled_classes=frozenset({"edit-comment"})
+        )
+        selection = self._build_and_write_selection()
+        selection["runId"] = "fresh-budget-namespace"
+        self.policy_selection_path.write_text(
+            json.dumps(selection, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            AuthorizationError, r"cycle:<proposal snapshotId>"
+        ):
+            self._mint(self.comment_action_id)
 
     # -- byte-binding: any change fails before execution --------------------
 

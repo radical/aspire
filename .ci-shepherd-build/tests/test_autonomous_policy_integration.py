@@ -221,7 +221,6 @@ class AutonomousPolicyExecutionBoundaryTests(unittest.TestCase):
 
         self.repository = "microsoft/aspire"
         self.login = "radical"
-        self.run_id = "run-autonomous-1"
         # A real wall-clock "now" (not a frozen historical fixture date) so
         # the production snapshot-freshness and grant-TTL checks --
         # `_production_freshness_deadline`/`_validate_autonomous_policy_grant`
@@ -231,6 +230,7 @@ class AutonomousPolicyExecutionBoundaryTests(unittest.TestCase):
         self.now = datetime.now(UTC)
         collected_at = _rfc3339(self.now)
         self.snapshot_id = f"snapshot:{self.repository}:{collected_at}:r1"
+        self.run_id = f"cycle:{self.snapshot_id}"
         self.action_id = (
             f"snapshot:{self.repository}:{collected_at}:issue:777:create-comment"
         )
@@ -733,16 +733,16 @@ class AutonomousPolicyExecutionBoundaryTests(unittest.TestCase):
 class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
     """Proves execute_actions.py routes an autonomous grant's *revalidated*
     operation class -- never the `--autonomous-policy` CLI flag alone -- into
-    `GitHubActorClient`'s `protected_comment_repositories` /
-    `protected_delegation_repositories` override sets.
+    `GitHubActorClient`'s     `protected_comment_repositories`, `protected_closure_repositories`, or
+    `protected_delegation_repositories` override set.
 
     Unlike `AutonomousPolicyExecutionBoundaryTests` above, these tests
     construct the REAL `GitHubActorClient` (not `RecordingActor`) and fake
     only the outermost `gh api` subprocess runner, reusing test_actor.py's
     own `SequencedRunner`. This proves a valid autonomous create-comment
     grant genuinely reaches GitHub's HTTP boundary on the protected
-    microsoft/aspire repository -- the actual live-pilot blocker this commit
-    fixes -- and that autonomous close-issue there still is not.
+    microsoft/aspire repository, and that each autonomous operation class maps
+    only to its matching protected capability.
     """
 
     def setUp(self) -> None:
@@ -757,7 +757,6 @@ class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
 
         self.repository = "microsoft/aspire"
         self.login = "radical"
-        self.run_id = "run-autonomous-override-1"
         self.now = datetime.now(UTC)
 
     def tearDown(self) -> None:
@@ -777,6 +776,7 @@ class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
     ) -> str:
         collected_at = _rfc3339(self.now)
         snapshot_id = f"snapshot:{self.repository}:{collected_at}:r1"
+        self.run_id = f"cycle:{snapshot_id}"
         action_id = f"snapshot:{self.repository}:{collected_at}:issue:777:{operation}"
         proposal: dict[str, object] = {
             "actionId": action_id,
@@ -1049,10 +1049,9 @@ class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
             {self.repository}, kwargs["protected_delegation_repositories"]
         )
         self.assertEqual(set(), kwargs["protected_comment_repositories"])
+        self.assertEqual(set(), kwargs["protected_closure_repositories"])
 
-    # -- deliberately NOT mapped: close-issue stays denied ------------------
-
-    def test_autonomous_close_issue_grant_remains_blocked_on_protected_repository_with_zero_runner_calls(
+    def test_autonomous_close_issue_grant_reaches_permitted_runner_boundary_on_protected_repository(
         self,
     ) -> None:
         action_id = self._mint_fixture(
@@ -1068,9 +1067,19 @@ class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
             "html_url": f"https://github.com/{self.repository}/issues/777",
             "labels": [{"name": "ci-failure-cause"}],
         }
-        # Only the common preflight (get_issue, get_authenticated_login)
-        # reaches the runner; the close_issue PATCH must never get there.
-        runner = SequencedRunner([issue_payload, {"login": self.login}])
+        closed_issue_payload = {
+            **issue_payload,
+            "state": "closed",
+            "state_reason": "completed",
+        }
+        runner = SequencedRunner(
+            [
+                issue_payload,
+                {"login": self.login},
+                closed_issue_payload,
+                closed_issue_payload,
+            ]
+        )
 
         stdout = io.StringIO()
         with (
@@ -1085,11 +1094,16 @@ class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
         result = json.loads(stdout.getvalue())
 
         self.assertEqual(0, code)
-        self.assertEqual("indeterminate", result["outcome"], result)
-        self.assertIn("protected", result["reason"])
+        self.assertEqual("executed", result["outcome"], result)
 
         methods = [self._call_method(call) for call in runner.calls]
-        self.assertEqual(["GET", "GET"], methods)
+        self.assertEqual(["GET", "GET", "PATCH", "GET"], methods)
+        mutating_command, mutating_payload = runner.calls[2]
+        self.assertTrue(mutating_command[-1].endswith("/issues/777"))
+        self.assertEqual(
+            {"state": "closed", "state_reason": "completed"},
+            mutating_payload,
+        )
 
         events = self._events()
         self.assertEqual(["intent", "terminal"], [e["eventType"] for e in events])

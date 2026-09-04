@@ -169,6 +169,10 @@ class CoordinatorCliTestCase(unittest.TestCase):
         self._write_json(self.proposals_path, document)
         return document
 
+    def _cycle_run_id(self) -> str:
+        proposals = json.loads(self.proposals_path.read_text(encoding="utf-8"))
+        return f"cycle:{proposals['snapshotId']}"
+
     def _activate_policy(
         self,
         *,
@@ -218,7 +222,13 @@ class CoordinatorCliTestCase(unittest.TestCase):
         self.assertEqual(0, code, stderr)
         return json.loads(stdout)
 
-    def _select(self, *, run_id: str = "run-1", now: datetime | None = None) -> Path:
+    def _select(
+        self,
+        *,
+        run_id: str | None = None,
+        now: datetime | None = None,
+    ) -> Path:
+        run_id = run_id or self._cycle_run_id()
         output_path = self.scratch / "selection.json"
         code, stdout, stderr = self._run(
             [
@@ -241,6 +251,16 @@ class CoordinatorCliTestCase(unittest.TestCase):
 
 
 class ProjectionCommandTests(CoordinatorCliTestCase):
+    def test_exact_selection_is_ready_without_active_policy(self) -> None:
+        self.assertEqual(
+            "ready",
+            coordinator._stage_for(
+                None,
+                self.now,
+                {"selectedActionIds": ["action:1"]},
+            ),
+        )
+
     def test_no_policy_returns_awaiting_policy_stage_not_error(self) -> None:
         code, stdout, stderr = self._run(
             [
@@ -288,7 +308,7 @@ class ProjectionCommandTests(CoordinatorCliTestCase):
                 "--repository", self.repository,
                 "--state-dir", str(self.state_dir),
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", self._cycle_run_id(),
                 "--now", self._now_arg(),
             ]
         )
@@ -320,7 +340,7 @@ class ProjectionCommandTests(CoordinatorCliTestCase):
                 "projection",
                 "--repository", self.repository,
                 "--state-dir", str(self.state_dir),
-                "--run-id", "run-1",
+                "--run-id", "cycle:missing",
                 "--now", self._now_arg(),
             ]
         )
@@ -499,6 +519,59 @@ class PolicyAppendCommandTests(CoordinatorCliTestCase):
 
 
 class PolicyActivateCommandTests(CoordinatorCliTestCase):
+    def test_activates_checked_in_bounded_live_pilot_caps(self) -> None:
+        caps_path = (
+            Path(__file__).parents[1]
+            / "policies"
+            / "autonomous-live-pilot-caps-v1.json"
+        )
+
+        code, stdout, stderr = self._run(
+            [
+                "policy-activate",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--expected-revision", "0",
+                "--caps", str(caps_path),
+                "--expires-in-days", "1",
+                "--actor", "github:radical",
+                "--now", self._now_arg(),
+            ]
+        )
+
+        self.assertEqual(0, code, stderr)
+        operation_classes = json.loads(stdout)["effectivePolicy"]["operationClasses"]
+        self.assertEqual(
+            {
+                "create-comment": {
+                    "enabled": True,
+                    "maxPerRun": 2,
+                    "maxRolling24h": 10,
+                },
+                "edit-comment": {
+                    "enabled": True,
+                    "maxPerRun": 2,
+                    "maxRolling24h": 10,
+                },
+                "close-issue": {
+                    "enabled": True,
+                    "maxPerRun": 2,
+                    "maxRolling24h": 4,
+                },
+                "delegate-copilot": {
+                    "enabled": True,
+                    "maxPerRun": 2,
+                    "maxRolling24h": 4,
+                },
+                "rerun-or-retry": {
+                    "enabled": False,
+                    "maxPerRun": 0,
+                    "maxRolling24h": 0,
+                },
+            },
+            operation_classes,
+        )
+
     def test_first_activation_derives_revision_one_with_null_predecessor(
         self,
     ) -> None:
@@ -843,7 +916,7 @@ class PolicyPreviewCommandTests(CoordinatorCliTestCase):
                 "--caps", str(caps_path),
                 "--expires-in-days", "30",
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", self._cycle_run_id(),
                 "--now", self._now_arg(),
             ]
         )
@@ -854,6 +927,31 @@ class PolicyPreviewCommandTests(CoordinatorCliTestCase):
         self.assertIn("maximumWriteExposure", result["selection"])
         after = self._current_state_revision()
         self.assertEqual(before, after)
+
+    def test_rejects_run_id_outside_proposal_cycle_namespace(self) -> None:
+        self._write_proposals(
+            [_comment_proposal(action_id="a:1", issue_number=1)],
+            unchanged_issue_numbers=[],
+        )
+        caps_path = self.scratch / "caps.json"
+        self._write_json(caps_path, _caps_document())
+
+        code, _stdout, stderr = self._run(
+            [
+                "policy-preview",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--expected-revision", "0",
+                "--caps", str(caps_path),
+                "--expires-in-days", "30",
+                "--proposals", str(self.proposals_path),
+                "--run-id", "arbitrary-budget-namespace",
+                "--now", self._now_arg(),
+            ]
+        )
+
+        self.assertNotEqual(0, code)
+        self.assertEqual("invalid-argument", json.loads(stderr)["code"])
 
     def test_stale_expected_revision_is_a_view_consistency_failure(self) -> None:
         self._activate_policy()
@@ -873,7 +971,7 @@ class PolicyPreviewCommandTests(CoordinatorCliTestCase):
                 "--caps", str(caps_path),
                 "--expires-in-days", "30",
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", self._cycle_run_id(),
                 "--now", self._now_arg(),
             ]
         )
@@ -900,7 +998,7 @@ class PolicyPreviewCommandTests(CoordinatorCliTestCase):
                 "--caps", str(caps_path),
                 "--expires-in-days", str(MAX_EXPIRY_DAYS + 1),
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", self._cycle_run_id(),
                 "--now", self._now_arg(),
             ]
         )
@@ -1038,6 +1136,32 @@ class DecisionCommandTests(CoordinatorCliTestCase):
 
 
 class SelectCommandTests(CoordinatorCliTestCase):
+    def test_rejects_run_id_not_bound_to_proposal_snapshot(self) -> None:
+        self._activate_policy()
+        self._write_proposals(
+            [_comment_proposal(action_id="a:1", issue_number=1)],
+            unchanged_issue_numbers=[],
+        )
+        output_path = self.scratch / "selection.json"
+
+        code, _stdout, stderr = self._run(
+            [
+                "select",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--proposals", str(self.proposals_path),
+                "--run-id", "fresh-budget-namespace",
+                "--output", str(output_path),
+                "--now", self._now_arg(),
+            ]
+        )
+
+        self.assertNotEqual(0, code)
+        error = json.loads(stderr)
+        self.assertEqual("invalid-argument", error["code"])
+        self.assertIn("proposal snapshot", error["message"])
+        self.assertFalse(output_path.exists())
+
     def test_writes_atomic_owner_only_selection_output(self) -> None:
         self._activate_policy()
         action_id = "snapshot:test:1:issue:1:comment"
@@ -1052,7 +1176,7 @@ class SelectCommandTests(CoordinatorCliTestCase):
         self.assertEqual(0o600, mode)
         written = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual([action_id], written["automaticActionIds"])
-        self.assertEqual("run-1", written["runId"])
+        self.assertEqual(self._cycle_run_id(), written["runId"])
 
     def test_rejects_malformed_proposals_document(self) -> None:
         self._write_json(self.proposals_path, {"schemaVersion": 2})
@@ -1064,7 +1188,7 @@ class SelectCommandTests(CoordinatorCliTestCase):
                 "--repository", self.repository,
                 "--state-dir", str(self.state_dir),
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", "cycle:malformed",
                 "--output", str(output_path),
                 "--now", self._now_arg(),
             ]
@@ -1092,7 +1216,7 @@ class SelectCommandTests(CoordinatorCliTestCase):
                 "--repository", self.repository,
                 "--state-dir", str(self.state_dir),
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", self._cycle_run_id(),
                 "--output", str(link_output),
                 "--now", self._now_arg(),
             ]
@@ -1266,7 +1390,7 @@ class GrantNextCommandTests(CoordinatorCliTestCase):
             ]
         )
         self.assertEqual(0, code, stderr)
-        selection_path = self._select(run_id="run-2")
+        selection_path = self._select()
 
         code, stdout, stderr = self._run(
             [
@@ -1441,7 +1565,7 @@ class CrossCuttingTests(CoordinatorCliTestCase):
                 "--caps", str(self.scratch / "caps.json"),
                 "--expires-in-days", "30",
                 "--proposals", str(self.proposals_path),
-                "--run-id", "run-1",
+                "--run-id", "cycle:missing",
                 "--now", self._now_arg(),
             ],
             "decision-set": [
