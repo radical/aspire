@@ -133,6 +133,49 @@ public class RedisFunctionalTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
+    public void SharedManagementResourcesRelateToEveryRedisInstance()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
+
+        var redis1 = builder.AddRedis("redis-1");
+        redis1.WithRedisCommander().WithRedisInsight();
+        redis1.WithRedisCommander().WithRedisInsight();
+
+        var redis2 = builder.AddRedis("redis-2");
+        redis2.WithRedisCommander().WithRedisInsight();
+
+        var redisCommander = Assert.Single(builder.Resources.OfType<RedisCommanderResource>());
+        var redisCommanderRelationships = redisCommander.Annotations.OfType<ResourceRelationshipAnnotation>();
+        Assert.Collection(
+            redisCommanderRelationships,
+            relationship =>
+            {
+                Assert.Same(redis1.Resource, relationship.Resource);
+                Assert.Equal("RedisCommander", relationship.Type);
+            },
+            relationship =>
+            {
+                Assert.Same(redis2.Resource, relationship.Resource);
+                Assert.Equal("RedisCommander", relationship.Type);
+            });
+
+        var redisInsight = Assert.Single(builder.Resources.OfType<RedisInsightResource>());
+        var redisInsightRelationships = redisInsight.Annotations.OfType<ResourceRelationshipAnnotation>();
+        Assert.Collection(
+            redisInsightRelationships,
+            relationship =>
+            {
+                Assert.Same(redis1.Resource, relationship.Resource);
+                Assert.Equal("RedisInsight", relationship.Type);
+            },
+            relationship =>
+            {
+                Assert.Same(redis2.Resource, relationship.Resource);
+                Assert.Equal("RedisInsight", relationship.Type);
+            });
+    }
+
+    [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task WithModuleLoadsNativeModule()
     {
