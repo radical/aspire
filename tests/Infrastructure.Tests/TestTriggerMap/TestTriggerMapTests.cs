@@ -502,6 +502,15 @@ public sealed class TestTriggerMapTests
         Assert.Equal(expectedTargets.Order(StringComparer.Ordinal), actualTargets);
     }
 
+    [Fact]
+    public void ExportedSurfaceBaselineSelectsAtLeastOneTarget()
+    {
+        var result = SelectWithRealMap("src/Aspire.Hosting.Redis/api/Aspire.Hosting.Redis.ats.txt");
+        var selectedTargets = result.TestProjects.Select(name => $"test:{name}").Concat(result.Jobs);
+
+        Assert.NotEmpty(selectedTargets);
+    }
+
     [Theory]
     [InlineData(".gitattributes")]
     [InlineData("eng/scripts/gha-testreport.ps1")]
