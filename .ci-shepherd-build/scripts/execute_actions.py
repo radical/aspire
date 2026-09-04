@@ -80,6 +80,22 @@ def _parser() -> argparse.ArgumentParser:
             "microsoft/aspire."
         ),
     )
+    parser.add_argument(
+        "--autonomous-policy",
+        action="store_true",
+        help=(
+            "Permit an authorized one-action grant bound to a coordinator "
+            "policy selection on microsoft/aspire."
+        ),
+    )
+    parser.add_argument(
+        "--policy-selection",
+        type=Path,
+        help=(
+            "The deterministic policy-selection artifact bound by an "
+            "autonomous-policy authorization."
+        ),
+    )
     return parser
 
 
@@ -138,6 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_production_delegation_steady_state=(
             args.production_delegation_steady_state
         ),
+        allow_autonomous_policy=args.autonomous_policy,
+        policy_selection_path=args.policy_selection,
     )
     proposals = authorized.proposal_document
     proposal = authorized.proposal
