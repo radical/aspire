@@ -34,6 +34,9 @@ eng/github-ci/ci-skip-entirely-patterns.txt
 # Documentation
 **.md
 
+# Generated API baselines
+src/*/api/**
+
 # Engineering pipeline scripts (Azure DevOps, not used in the GitHub CI build)
 eng/pipelines/**
 eng/test-configuration.json
