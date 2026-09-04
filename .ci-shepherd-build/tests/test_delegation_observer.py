@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from ci_shepherd.delegation_observer import observe_delegations
+from ci_shepherd.delegation_observer import _human_identity, observe_delegations
 from ci_shepherd.delegations import PullRequestState, TaskState
 
 
@@ -27,6 +27,14 @@ class ScriptedClient:
 
 
 class DelegationObserverTests(unittest.TestCase):
+    def test_human_identity_requires_structured_non_bot_account(self) -> None:
+        self.assertTrue(_human_identity({"login": "maintainer", "type": "User"}))
+        self.assertFalse(
+            _human_identity({"login": "automation[bot]", "type": "Bot"})
+        )
+        self.assertIsNone(_human_identity({"login": "maintainer"}))
+        self.assertIsNone(_human_identity({"type": "User"}))
+
     def test_names_missing_owned_task_evidence(self) -> None:
         with self.assertRaisesRegex(
             RuntimeError,
@@ -82,6 +90,7 @@ class DelegationObserverTests(unittest.TestCase):
             f"/repos/{repository}/pulls"
             "?head=owner%3Acopilot%2Ftask-1&state=all&per_page=100"
         )
+        pull_detail_endpoint = f"/repos/{repository}/pulls/201"
         issue_endpoint = f"/repos/{repository}/issues/42"
         task_record = {
             "id": "task-1",
@@ -126,6 +135,15 @@ class DelegationObserverTests(unittest.TestCase):
             },
             {
                 owned_task_endpoint: task_record,
+                pull_detail_endpoint: {
+                    "id": 101,
+                    "number": 201,
+                    "node_id": "PR_open",
+                    "state": "closed",
+                    "merged_at": "2026-09-01T14:00:00Z",
+                    "draft": False,
+                    "changed_files": 4,
+                },
                 issue_endpoint: {
                     "number": 42,
                     "state": "open",
@@ -148,8 +166,8 @@ class DelegationObserverTests(unittest.TestCase):
         self.assertTrue(observation.issues[0].copilot_assigned)
         self.assertEqual(
             [
-                (101, "PR_open", PullRequestState.MERGED, False),
-                (102, None, PullRequestState.UNKNOWN, False),
+                (101, "PR_open", PullRequestState.MERGED, False, 4),
+                (102, None, PullRequestState.UNKNOWN, False, None),
             ],
             [
                 (
@@ -157,6 +175,7 @@ class DelegationObserverTests(unittest.TestCase):
                     pull.global_id,
                     pull.state,
                     pull.is_draft,
+                    pull.changed_files,
                 )
                 for pull in observation.pull_requests
             ],
@@ -166,6 +185,7 @@ class DelegationObserverTests(unittest.TestCase):
                 (owned_task_endpoint, None),
                 (running_task_endpoint, "tasks"),
                 (pull_endpoint, None),
+                (pull_detail_endpoint, None),
                 (issue_endpoint, None),
             ],
             client.calls,

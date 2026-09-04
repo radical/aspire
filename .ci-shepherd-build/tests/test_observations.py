@@ -64,8 +64,9 @@ def issue_payload(
     number: int,
     *,
     facts: list[dict[str, object]] | None = None,
+    ledger_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "number": number,
         "state": "open",
         "title": f"Issue {number}",
@@ -76,6 +77,17 @@ def issue_payload(
         "producer": "ci-failure-cause",
         "facts": facts or [],
     }
+    if ledger_rows is not None:
+        payload["ledger"] = {
+            "source": "issue-body",
+            "schema": "ci-failure-occurrences-v1",
+            "schemaRecognized": True,
+            "sourceRecordCount": len(ledger_rows),
+            "parsedRowCount": len(ledger_rows),
+            "complete": True,
+            "rows": ledger_rows,
+        }
+    return payload
 
 
 def fact(field: str, raw: str, normalized: str | None = None, **extra: object) -> dict[str, object]:
@@ -247,6 +259,241 @@ def annotation_payload(
 
 
 class ObservationTests(unittest.TestCase):
+    def test_push_main_scope_overrides_reported_pull_request(self) -> None:
+        issue_number = 12
+        observations = build_observations(
+            snapshot(
+                issue_payload(
+                    issue_number,
+                    ledger_rows=[
+                        {
+                            "date": "2026-08-19",
+                            "sourceRun": 100,
+                            "runUrl": f"https://github.com/{REPOSITORY}/actions/runs/100",
+                            "job": "Tests / Aspire.Hosting.Tests (ubuntu-latest)",
+                            "pullRequest": 6866,
+                        }
+                    ],
+                ),
+                evidence("run:100", "workflow-run", run_payload()),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(issue_number),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        self.assertEqual(
+            {
+                "kind": "pull-request",
+                "pullRequest": 6866,
+            },
+            observations["occurrences"][0]["reportedScope"],
+        )
+        self.assertEqual(
+            {
+                "kind": "main",
+                "repository": REPOSITORY,
+                "event": "push",
+                "ref": "main",
+                "headSha": "a" * 40,
+            },
+            observations["occurrences"][0]["verifiedScope"],
+        )
+        self.assertTrue(observations["occurrences"][0]["scopeConflict"])
+
+    def test_pull_request_scope_requires_one_matching_subject_pull_request(self) -> None:
+        issue_number = 12
+        run = run_payload()
+        run.update(
+            {
+                "event": "pull_request",
+                "branch": "feature",
+                "subjectPullRequests": [
+                    {
+                        "number": 6866,
+                        "headSha": "a" * 40,
+                        "headRepository": REPOSITORY,
+                        "baseRepository": REPOSITORY,
+                    }
+                ],
+            }
+        )
+        observations = build_observations(
+            snapshot(
+                issue_payload(issue_number),
+                evidence("run:100", "workflow-run", run),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(issue_number),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        self.assertEqual(
+            {
+                "kind": "pull-request",
+                "repository": REPOSITORY,
+                "event": "pull_request",
+                "ref": "feature",
+                "headSha": "a" * 40,
+                "pullRequest": 6866,
+            },
+            observations["occurrences"][0]["verifiedScope"],
+        )
+
+    def test_non_pull_request_run_scope_uses_immutable_branch_identity(self) -> None:
+        for event, branch, expected_kind in (
+            ("schedule", "main", "main"),
+            ("workflow_dispatch", "release/9.0", "branch"),
+            ("merge_group", "gh-readonly-queue/main/pr-12", "branch"),
+            ("push", "feature", "branch"),
+        ):
+            with self.subTest(event=event, branch=branch):
+                run = run_payload()
+                run.update({"event": event, "branch": branch})
+                result = build_observations(
+                    snapshot(
+                        issue_payload(12),
+                        evidence("run:100", "workflow-run", run),
+                        evidence(
+                            "run:100:attempt:1:job:900",
+                            "workflow-job",
+                            job_payload(12),
+                        ),
+                    ),
+                    policy=policy(),
+                )
+
+                self.assertEqual(
+                    expected_kind,
+                    result["occurrences"][0]["verifiedScope"]["kind"],
+                )
+                self.assertEqual(
+                    branch,
+                    result["occurrences"][0]["verifiedScope"]["ref"],
+                )
+
+    def test_pull_request_subject_base_repository_matching_is_case_insensitive(self) -> None:
+        run = run_payload()
+        run.update(
+            {
+                "event": "pull_request",
+                "branch": "feature",
+                "subjectPullRequests": [
+                    {
+                        "number": 6866,
+                        "headSha": "a" * 40,
+                        "headRepository": REPOSITORY.upper(),
+                        "baseRepository": REPOSITORY.upper(),
+                    }
+                ],
+            }
+        )
+
+        result = build_observations(
+            snapshot(
+                issue_payload(12),
+                evidence("run:100", "workflow-run", run),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(12),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        self.assertEqual(
+            "pull-request",
+            result["occurrences"][0]["verifiedScope"]["kind"],
+        )
+
+    def test_pull_request_scope_fails_closed_for_incomplete_subject_evidence(self) -> None:
+        issue_number = 12
+        cases = {
+            "missing": None,
+            "multiple": [
+                {
+                    "number": 6866,
+                    "headSha": "a" * 40,
+                    "headRepository": REPOSITORY,
+                    "baseRepository": REPOSITORY,
+                },
+                {
+                    "number": 8728,
+                    "headSha": "a" * 40,
+                    "headRepository": REPOSITORY,
+                    "baseRepository": REPOSITORY,
+                },
+            ],
+            "mismatched-sha": [
+                {
+                    "number": 6866,
+                    "headSha": "b" * 40,
+                    "headRepository": REPOSITORY,
+                    "baseRepository": REPOSITORY,
+                }
+            ],
+            "mismatched-repository": [
+                {
+                    "number": 6866,
+                    "headSha": "a" * 40,
+                    "headRepository": REPOSITORY,
+                    "baseRepository": "other/aspire",
+                }
+            ],
+        }
+        for name, subject_pull_requests in cases.items():
+            with self.subTest(name=name):
+                run = run_payload()
+                run.update({"event": "pull_request", "branch": "feature"})
+                if subject_pull_requests is not None:
+                    run["subjectPullRequests"] = subject_pull_requests
+                result = build_observations(
+                    snapshot(
+                        issue_payload(issue_number),
+                        evidence("run:100", "workflow-run", run),
+                        evidence(
+                            "run:100:attempt:1:job:900",
+                            "workflow-job",
+                            job_payload(issue_number),
+                        ),
+                    ),
+                    policy=policy(),
+                )
+
+                self.assertEqual(
+                    "unknown",
+                    result["occurrences"][0]["verifiedScope"]["kind"],
+                )
+
+    def test_legacy_run_without_scope_metadata_remains_unknown(self) -> None:
+        issue_number = 12
+        run = run_payload()
+        del run["event"]
+        result = build_observations(
+            snapshot(
+                issue_payload(issue_number),
+                evidence("run:100", "workflow-run", run),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(issue_number),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        self.assertEqual(
+            {"kind": "unknown", "reason": "incomplete-run-identity"},
+            result["occurrences"][0]["verifiedScope"],
+        )
+
     def test_two_failed_tests_in_one_job_get_stable_distinct_ids_sorted_by_test_name(self) -> None:
         issue_number = 12
         observations = build_observations(
@@ -347,6 +594,13 @@ class ObservationTests(unittest.TestCase):
                     "attempt": 2,
                     "jobId": 900,
                     "headSha": "b" * 40,
+                    "verifiedScope": {
+                        "kind": "main",
+                        "repository": REPOSITORY,
+                        "event": "push",
+                        "ref": "main",
+                        "headSha": "b" * 40,
+                    },
                     "observedAt": "2026-08-19T15:30:00Z",
                     "status": "succeeded",
                     "independentRecoveryEligible": False,
@@ -476,6 +730,119 @@ class ObservationTests(unittest.TestCase):
                 "ci:tests-linux:ubuntu-latest:test:alpha-tests-punctuation-case",
             ],
             [coverage["subjectId"] for coverage in test_coverage],
+        )
+
+    def test_test_failure_requires_later_exact_test_execution_for_positive_coverage(self) -> None:
+        issue_number = 12
+        test_name = "Alpha.Tests.Punctuation_Case"
+        failure_log_id = "run:100:attempt:1:job:900:log"
+        success_log_id = "run:200:attempt:1:job:901:log"
+        success_job = job_payload(
+            issue_number,
+            run_id=200,
+            job_id=901,
+            conclusion="success",
+            log_evidence_id=success_log_id,
+        )
+        success_job["startedAt"] = "2026-08-19T15:31:00Z"
+        success_job["completedAt"] = "2026-08-19T15:45:00Z"
+        result = build_observations(
+            snapshot(
+                issue_payload(issue_number),
+                evidence("run:100", "workflow-run", run_payload()),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(issue_number, log_evidence_id=failure_log_id),
+                ),
+                evidence(
+                    failure_log_id,
+                    "workflow-log",
+                    log_payload(
+                        issue_number,
+                        excerpt=f"Failed {test_name} [42 ms]",
+                    ),
+                ),
+                evidence(
+                    "run:200",
+                    "workflow-run",
+                    run_payload(run_id=200, conclusion="success"),
+                ),
+                evidence(
+                    "run:200:attempt:1:job:901",
+                    "workflow-job",
+                    success_job,
+                ),
+                evidence(
+                    success_log_id,
+                    "workflow-log",
+                    log_payload(
+                        issue_number,
+                        run_id=200,
+                        job_id=901,
+                        excerpt=f"Passed {test_name} [42 ms]",
+                    ),
+                ),
+            ),
+            policy=policy(),
+        )
+
+        occurrence = result["occurrences"][0]
+        self.assertEqual("covered", occurrence["coverageState"])
+        self.assertEqual(
+            f"coverage:run:200:attempt:1:job:901:test:{quote(test_name, safe='')}",
+            occurrence["positiveCoverageId"],
+        )
+
+    def test_successful_lane_without_exact_test_execution_needs_positive_coverage(self) -> None:
+        issue_number = 12
+        test_name = "Alpha.Tests.Punctuation_Case"
+        failure_log_id = "run:100:attempt:1:job:900:log"
+        success_job = job_payload(
+            issue_number,
+            run_id=200,
+            job_id=901,
+            conclusion="success",
+        )
+        success_job["startedAt"] = "2026-08-19T15:31:00Z"
+        success_job["completedAt"] = "2026-08-19T15:45:00Z"
+        result = build_observations(
+            snapshot(
+                issue_payload(issue_number),
+                evidence("run:100", "workflow-run", run_payload()),
+                evidence(
+                    "run:100:attempt:1:job:900",
+                    "workflow-job",
+                    job_payload(issue_number, log_evidence_id=failure_log_id),
+                ),
+                evidence(
+                    failure_log_id,
+                    "workflow-log",
+                    log_payload(
+                        issue_number,
+                        excerpt=f"Failed {test_name} [42 ms]",
+                    ),
+                ),
+                evidence(
+                    "run:200",
+                    "workflow-run",
+                    run_payload(run_id=200, conclusion="success"),
+                ),
+                evidence(
+                    "run:200:attempt:1:job:901",
+                    "workflow-job",
+                    success_job,
+                ),
+            ),
+            policy=policy(),
+        )
+
+        occurrence = result["occurrences"][0]
+        self.assertEqual("needs-positive-coverage", occurrence["coverageState"])
+        self.assertIsNone(occurrence["positiveCoverageId"])
+        self.assertEqual(
+            ["lane"],
+            [coverage["subjectKind"] for coverage in result["coverage"]],
         )
 
     def test_retry_results_bind_exact_failure_and_pass_to_the_same_test(self) -> None:
@@ -3468,7 +3835,18 @@ class OccurrenceRecordShapeTests(unittest.TestCase):
                     ],
                     "retrySafe": False,
                     "evidenceIds": ["issue:12", "run:100", "run:100:attempt:1:job:900"],
+                    "reportedScope": None,
+                    "verifiedScope": {
+                        "kind": "main",
+                        "repository": REPOSITORY,
+                        "event": "push",
+                        "ref": "main",
+                        "headSha": "a" * 40,
+                    },
+                    "scopeConflict": False,
                     "occurrenceId": "occurrence:12:100:1:900:1",
+                    "coverageState": "needs-positive-coverage",
+                    "positiveCoverageId": None,
                 }
             ],
             observations["occurrences"],

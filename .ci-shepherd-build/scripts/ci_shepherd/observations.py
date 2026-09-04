@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from ci_shepherd.naming import normalize_component
 from ci_shepherd.policy import ManualPolicy
+from ci_shepherd.run_scope import reported_issue_scope, scopes_conflict, verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 
 
@@ -176,6 +177,15 @@ def build_observations(
                 )
             )
 
+    for occurrence in occurrences:
+        issue_number = int(occurrence["issueNumber"])
+        run_id = int(occurrence["runId"])
+        reported_scope = reported_issue_scope(records[f"issue:{issue_number}"].payload, run_id)
+        verified_scope = verified_run_scope(runs_by_id[run_id].payload)
+        occurrence["reportedScope"] = reported_scope
+        occurrence["verifiedScope"] = verified_scope
+        occurrence["scopeConflict"] = scopes_conflict(reported_scope, verified_scope)
+
     occurrences = _assign_occurrence_ids(occurrences, _history_occurrence_ordinals(history))
     coverage = _build_coverage(
         records,
@@ -185,6 +195,7 @@ def build_observations(
         window_cutoff=window_cutoff,
         collected_at=collected_at,
     )
+    _attach_positive_coverage(occurrences, coverage)
     fingerprints = _build_fingerprint_summaries(
         occurrences,
         history,
@@ -886,6 +897,7 @@ def _build_coverage(
                 "attempt": attempt,
                 "jobId": job_id,
                 "headSha": run_record.payload.get("headSha"),
+                "verifiedScope": verified_run_scope(run_record.payload),
                 "observedAt": observed_at,
                 "status": "succeeded",
                 "independentRecoveryEligible": _independent_recovery_eligible(attempt),
@@ -915,6 +927,7 @@ def _build_coverage(
                     "attempt": attempt,
                     "jobId": job_id,
                     "headSha": run_record.payload.get("headSha"),
+                    "verifiedScope": verified_run_scope(run_record.payload),
                     "observedAt": observed_at,
                     "status": "succeeded",
                     "independentRecoveryEligible": _independent_recovery_eligible(attempt),
@@ -922,6 +935,72 @@ def _build_coverage(
                 }
             )
     return coverage
+
+
+def _attach_positive_coverage(
+    occurrences: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+) -> None:
+    for occurrence in occurrences:
+        matches = [
+            item
+            for item in coverage
+            if _coverage_matches_occurrence(occurrence, item)
+        ]
+        matches.sort(key=lambda item: (str(item.get("observedAt")), str(item["coverageId"])))
+        occurrence["coverageState"] = (
+            "covered" if matches else "needs-positive-coverage"
+        )
+        occurrence["positiveCoverageId"] = (
+            matches[0]["coverageId"] if matches else None
+        )
+
+
+def _coverage_matches_occurrence(
+    occurrence: Mapping[str, Any],
+    coverage: Mapping[str, Any],
+) -> bool:
+    if occurrence.get("verifiedScope", {}).get("kind") == "unknown":
+        return False
+    if _scope_subject(occurrence.get("verifiedScope")) != _scope_subject(
+        coverage.get("verifiedScope")
+    ):
+        return False
+    if any(
+        occurrence.get(field) != coverage.get(field)
+        for field in ("workflow", "jobName", "lane", "os")
+    ):
+        return False
+    failure_observed_at = occurrence.get("observedAt")
+    coverage_observed_at = coverage.get("observedAt")
+    if not isinstance(failure_observed_at, str) or not isinstance(
+        coverage_observed_at, str
+    ):
+        return False
+    if parse_aware_iso8601(
+        coverage_observed_at, "coverage observedAt"
+    ) <= parse_aware_iso8601(failure_observed_at, "occurrence observedAt"):
+        return False
+    test_name = occurrence.get("testName")
+    if isinstance(test_name, str) and test_name:
+        return (
+            coverage.get("subjectKind") == "test"
+            and coverage.get("testName") == test_name
+        )
+    return coverage.get("subjectKind") == "lane"
+
+
+def _scope_subject(scope: object) -> tuple[object, ...] | None:
+    if not isinstance(scope, Mapping):
+        return None
+    kind = scope.get("kind")
+    if kind == "main":
+        return kind, scope.get("repository")
+    if kind == "pull-request":
+        return kind, scope.get("repository"), scope.get("pullRequest")
+    if kind == "branch":
+        return kind, scope.get("repository"), scope.get("ref")
+    return None
 
 
 def _build_fingerprint_summaries(

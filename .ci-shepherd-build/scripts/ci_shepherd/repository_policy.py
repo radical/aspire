@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 import hashlib
 import json
 import os
@@ -79,17 +80,33 @@ class QuarantinePullRequestPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class HandoffReminderPolicy:
+    interval: timedelta
+    stale_progress_interval: timedelta
+    maximum: int
+
+
+@dataclass(frozen=True, slots=True)
 class RepositoryPolicy:
     policy_version: str
     repositories: frozenset[str]
     retry_test_results: RetryTestResultsPolicy
     quarantine_pull_request: QuarantinePullRequestPolicy
+    handoff_reminders: HandoffReminderPolicy = HandoffReminderPolicy(
+        interval=timedelta(days=1),
+        stale_progress_interval=timedelta(days=7),
+        maximum=2,
+    )
+    handoff_reminders_explicit: bool = False
+    managed_issue_producers: frozenset[str] = frozenset()
+    manages_pull_requests: bool = False
+    managed_automation_explicit: bool = False
 
     def supports_repository(self, repository: str) -> bool:
         return repository.casefold() in self.repositories
 
     def as_public_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "schemaVersion": _SCHEMA_VERSION,
             "policyVersion": self.policy_version,
             "repositories": sorted(self.repositories),
@@ -117,6 +134,23 @@ class RepositoryPolicy:
                 ),
             },
         }
+        if self.handoff_reminders_explicit:
+            result["handoffReminders"] = {
+                "intervalHours": int(
+                    self.handoff_reminders.interval.total_seconds() // 3600
+                ),
+                "staleProgressHours": int(
+                    self.handoff_reminders.stale_progress_interval.total_seconds()
+                    // 3600
+                ),
+                "maximum": self.handoff_reminders.maximum,
+            }
+        if self.managed_automation_explicit:
+            result["managedAutomation"] = {
+                "issueProducers": sorted(self.managed_issue_producers),
+                "pullRequests": self.manages_pull_requests,
+            }
+        return result
 
     @property
     def digest(self) -> str:
@@ -139,6 +173,10 @@ _POLICY_FIELDS = frozenset(
         "quarantinePullRequest",
     }
 )
+_HANDOFF_REMINDER_FIELDS = frozenset(
+    {"intervalHours", "staleProgressHours", "maximum"}
+)
+_MANAGED_AUTOMATION_FIELDS = frozenset({"issueProducers", "pullRequests"})
 _QUARANTINE_PULL_REQUEST_FIELDS = frozenset(
     {
         "baseRef",
@@ -200,7 +238,12 @@ def load_repository_policy(path: Path) -> RepositoryPolicy:
 
 def load_repository_policy_document(document: object) -> RepositoryPolicy:
     mapping = _require_mapping(document, "Repository policy")
-    _require_exact_keys(mapping, _POLICY_FIELDS, "Repository policy")
+    optional_fields = {
+        field
+        for field in ("handoffReminders", "managedAutomation")
+        if field in mapping
+    }
+    _require_exact_keys(mapping, _POLICY_FIELDS | optional_fields, "Repository policy")
     schema_version = mapping.get("schemaVersion")
     if schema_version != _SCHEMA_VERSION or isinstance(schema_version, bool):
         raise RepositoryPolicyError(
@@ -220,6 +263,25 @@ def load_repository_policy_document(document: object) -> RepositoryPolicy:
         mapping.get("quarantinePullRequest"),
         "quarantinePullRequest",
     )
+    reminder_mapping = mapping.get("handoffReminders")
+    if reminder_mapping is not None:
+        reminder_mapping = _require_mapping(
+            reminder_mapping,
+            "handoffReminders",
+        )
+        _require_exact_keys(
+            reminder_mapping,
+            _HANDOFF_REMINDER_FIELDS,
+            "handoffReminders",
+        )
+    managed_mapping = mapping.get("managedAutomation")
+    if managed_mapping is not None:
+        managed_mapping = _require_mapping(managed_mapping, "managedAutomation")
+        _require_exact_keys(
+            managed_mapping,
+            _MANAGED_AUTOMATION_FIELDS,
+            "managedAutomation",
+        )
     _require_exact_keys(
         pull_request_mapping,
         _QUARANTINE_PULL_REQUEST_FIELDS,
@@ -282,6 +344,55 @@ def load_repository_policy_document(document: object) -> RepositoryPolicy:
                 maximum=10,
             ),
         ),
+        **(
+            {
+                "handoff_reminders": HandoffReminderPolicy(
+                    interval=timedelta(
+                        hours=_require_bounded_integer(
+                            reminder_mapping,
+                            "intervalHours",
+                            minimum=1,
+                            maximum=720,
+                        )
+                    ),
+                    stale_progress_interval=timedelta(
+                        hours=_require_bounded_integer(
+                            reminder_mapping,
+                            "staleProgressHours",
+                            minimum=1,
+                            maximum=2160,
+                        )
+                    ),
+                    maximum=_require_bounded_integer(
+                        reminder_mapping,
+                        "maximum",
+                        minimum=1,
+                        maximum=10,
+                    ),
+                ),
+                "handoff_reminders_explicit": True,
+            }
+            if reminder_mapping is not None
+            else {}
+        ),
+        **(
+            {
+                "managed_issue_producers": frozenset(
+                    value.casefold()
+                    for value in _require_unique_strings(
+                        managed_mapping,
+                        "issueProducers",
+                    )
+                ),
+                "manages_pull_requests": _require_bool(
+                    managed_mapping,
+                    "pullRequests",
+                ),
+                "managed_automation_explicit": True,
+            }
+            if managed_mapping is not None
+            else {}
+        ),
     )
 
 
@@ -290,11 +401,13 @@ def load_embedded_repository_policy(
     repository: str,
 ) -> RepositoryPolicy:
     mapping = _require_mapping(document, "Embedded repository policy")
-    _require_exact_keys(
-        mapping,
-        _POLICY_FIELDS | {"digest"},
-        "Embedded repository policy",
-    )
+    expected = _POLICY_FIELDS | {"digest"}
+    expected |= {
+        field
+        for field in ("handoffReminders", "managedAutomation")
+        if field in mapping
+    }
+    _require_exact_keys(mapping, expected, "Embedded repository policy")
     digest = mapping.pop("digest")
     policy = load_repository_policy_document(mapping)
     if digest != policy.digest:

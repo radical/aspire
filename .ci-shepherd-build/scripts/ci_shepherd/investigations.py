@@ -170,6 +170,7 @@ def build_investigation_plan(
     requests: list[dict[str, object]] = []
     reused: list[str] = []
     active: list[str] = []
+    active_investigations: list[dict[str, object]] = []
     exhausted: list[dict[str, object]] = []
     for issue in judgments.get("issues", []):
         if not isinstance(issue, Mapping):
@@ -220,6 +221,13 @@ def build_investigation_plan(
                 continue
             if investigation_id in active_ids:
                 active.append(investigation_id)
+                active_investigations.append(
+                    {
+                        "investigationId": investigation_id,
+                        "issueNumber": issue_number,
+                        "target": dict(target),
+                    }
+                )
                 continue
             attempt = attempt_count_by_id.get(investigation_id, 0) + 1
             if attempt > _MAX_INVESTIGATION_ATTEMPTS:
@@ -295,6 +303,12 @@ def build_investigation_plan(
     requests = requests[:max_requests]
     reused.sort()
     active.sort()
+    active_investigations.sort(
+        key=lambda item: (
+            int(item["issueNumber"]),
+            str(item["investigationId"]),
+        )
+    )
     return {
         "schemaVersion": 1,
         "repository": repository,
@@ -304,6 +318,7 @@ def build_investigation_plan(
         "maxRequests": max_requests,
         "reusedInvestigationIds": reused,
         "activeInvestigationIds": active,
+        "activeInvestigations": active_investigations,
     }
 
 

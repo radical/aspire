@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from ci_shepherd.observations import is_annotation_evidence_id, is_scoped_to_issue
+from ci_shepherd.run_scope import verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 
 
@@ -97,6 +98,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "completedAt",
         "headSha",
         "headBranch",
+        "subjectPullRequests",
         "referencedBy",
         "targetRepository",
         "runBudgetExcluded",
@@ -691,6 +693,27 @@ def _commit_anchored_recovery(
     rows: list[Any],
 ) -> dict[str, Any] | None:
     latest_occurrence = latest_occurrence_timestamp(scoped, rows)
+    runs_by_id = {
+        payload["runId"]: payload
+        for _, record in scoped
+        if record.get("kind") == "workflow-run"
+        and isinstance((payload := record.get("payload")), Mapping)
+        and isinstance(payload.get("runId"), int)
+        and not isinstance(payload.get("runId"), bool)
+    }
+    source_runs = {
+        row["sourceRun"]
+        for row in rows
+        if isinstance(row, Mapping)
+        and isinstance(row.get("sourceRun"), int)
+        and not isinstance(row.get("sourceRun"), bool)
+    }
+    if any(
+        verified_run_scope(runs_by_id[run_id]).get("kind") == "main"
+        for run_id in source_runs
+        if run_id in runs_by_id
+    ):
+        return None
     pull_requests: list[tuple[str, Mapping[str, Any]]] = []
     successful_runs: list[tuple[str, Mapping[str, Any]]] = []
     for evidence_id, record in scoped:

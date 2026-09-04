@@ -427,7 +427,7 @@ class Collector:
         include_closed_discovery: bool = False,
         full_refresh: bool = False,
     ) -> InventoryResult:
-        from .refresh import plan_refresh, reconstruct_inventory
+        from .refresh import COLLECTION_VERSION, plan_refresh, reconstruct_inventory
 
         open_seed = self._fetch_open_inventory()
         open_inventory = [
@@ -481,11 +481,15 @@ class Collector:
                 record = previous_evidence.get(evidence_id)
                 if isinstance(record, dict) and evidence_id in inventory.evidence:
                     inventory.evidence[evidence_id] = copy.deepcopy(record)
+            can_carry_completed_run_history = (
+                previous_snapshot.get("collectionVersion") == COLLECTION_VERSION
+            )
             for evidence_id in plan.refresh:
                 previous_record = previous_evidence.get(evidence_id)
                 current_record = inventory.evidence.get(evidence_id)
                 if (
-                    not self._can_refresh_completed_run_history(previous_record)
+                    not can_carry_completed_run_history
+                    or not self._can_refresh_completed_run_history(previous_record)
                     or not isinstance(current_record, dict)
                 ):
                     continue
@@ -3878,6 +3882,7 @@ class Collector:
                 "event": _text(raw_run, "event"),
                 "branch": branch,
                 "headSha": _text(raw_run, "head_sha"),
+                "subjectPullRequests": _normalize_subject_pull_requests(raw_run),
                 "attempt": run_attempt,
                 "status": _text(raw_run, "status"),
                 "conclusion": _text(raw_run, "conclusion"),
@@ -4505,6 +4510,55 @@ def _extract_labels(raw_issue: dict[str, Any]) -> list[str]:
 def _text(mapping: dict[str, Any], key: str) -> str:
     value = mapping.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _normalize_subject_pull_requests(
+    raw_run: Mapping[str, Any],
+) -> list[dict[str, object]]:
+    raw_pull_requests = raw_run.get("pull_requests")
+    if not isinstance(raw_pull_requests, list):
+        return []
+    normalized: list[dict[str, object]] = []
+    for raw_pull_request in raw_pull_requests:
+        if not isinstance(raw_pull_request, Mapping):
+            return []
+        number = raw_pull_request.get("number")
+        head = raw_pull_request.get("head")
+        base = raw_pull_request.get("base")
+        head_repository_payload = head.get("repo") if isinstance(head, Mapping) else None
+        base_repository_payload = base.get("repo") if isinstance(base, Mapping) else None
+        head_sha = head.get("sha") if isinstance(head, Mapping) else None
+        head_repository = (
+            head_repository_payload.get("full_name")
+            if isinstance(head_repository_payload, Mapping)
+            else None
+        )
+        base_repository = (
+            base_repository_payload.get("full_name")
+            if isinstance(base_repository_payload, Mapping)
+            else None
+        )
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number <= 0
+            or not isinstance(head_sha, str)
+            or not head_sha
+            or not isinstance(head_repository, str)
+            or not head_repository
+            or not isinstance(base_repository, str)
+            or not base_repository
+        ):
+            return []
+        normalized.append(
+            {
+                "number": number,
+                "headSha": head_sha,
+                "headRepository": head_repository,
+                "baseRepository": base_repository,
+            }
+        )
+    return normalized
 
 
 def _nested_text(mapping: dict[str, Any], keys: tuple[str, ...]) -> str:

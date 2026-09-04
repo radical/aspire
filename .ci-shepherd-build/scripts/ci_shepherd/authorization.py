@@ -1336,9 +1336,15 @@ def _production_freshness_deadline(
     issued_at: datetime,
 ) -> datetime:
     prefix = f"snapshot:{repository}:"
+    allowed_capability_fields = {
+        "schemaVersion",
+        "evidenceRound",
+        "managedItemCoverage",
+    }
     if (
         not isinstance(capability, Mapping)
-        or set(capability) != {"schemaVersion", "evidenceRound"}
+        or not {"schemaVersion", "evidenceRound"}.issubset(capability)
+        or not set(capability).issubset(allowed_capability_fields)
         or capability.get("schemaVersion") != 1
     ):
         raise AuthorizationError(

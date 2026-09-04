@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import unquote
 
 
-COLLECTION_VERSION = 2
+COLLECTION_VERSION = 3
 
 
 _ISSUE_EVIDENCE_ID_RE = re.compile(

@@ -21,8 +21,10 @@ from ci_shepherd.delegations import (
 from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.github import GitHubClient
 from ci_shepherd.history import load_current
+from ci_shepherd.handoff_reminders import derive_handoff_reminders
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.progress import ProgressTracker
+from ci_shepherd.poc_state import record_review_wakeup
 from ci_shepherd.refresh import COLLECTION_VERSION, RefreshPlan, complete_refresh_plan
 from ci_shepherd.repository_policy import (
     RepositoryPolicy,
@@ -174,9 +176,18 @@ def observe_delegation_status(
         if record.get("taskId") in active_task_ids
         or record.get("taskId") is None
     ]
+    episode_ordinals: dict[str, int] = {}
+    for start in starts:
+        if start.issue_number is None:
+            continue
+        key = str(start.issue_number)
+        episode_ordinals.setdefault(key, 1)
+        if start.task_id in retired_task_ids:
+            episode_ordinals[key] += 1
     status: dict[str, object] = {
         "status": "complete",
         "records": tracking_records,
+        "episodeOrdinals": episode_ordinals,
         "capacity": {
             "runningTasks": usage.running_tasks,
             "startsInRolling24h": usage.starts_in_rolling_24h,
@@ -191,8 +202,18 @@ def observe_delegation_status(
         sorted(
             str(record["taskId"])
             for record in tracking_records
-            if record.get("lifecycle") == "completed"
+            if (
+                record.get("lifecycle") == "completed"
+                or (
+                    record.get("lifecycle") == "handoff_required"
+                    and record.get("taskState") == "completed"
+                )
+            )
             and isinstance(record.get("taskId"), str)
+            and (
+                record.get("issueOpen") is False
+                or record.get("copilotAssigned") is False
+            )
             and all(
                 pull.get("state") not in {"open", "unknown"}
                 for pull in record.get("pullRequests", [])
@@ -201,6 +222,40 @@ def observe_delegation_status(
         )
     )
     return status, newly_retired_task_ids
+
+
+def record_delegation_wakeups(
+    state_dir: Path,
+    repository: str,
+    records: list[dict[str, object]],
+) -> None:
+    for record in records:
+        wakeup = record.get("nextWakeup")
+        if wakeup is None:
+            continue
+        if not isinstance(wakeup, dict):
+            raise TypeError("Delegation nextWakeup must be an object.")
+        issue_number = record.get("issueNumber")
+        evaluate_at = wakeup.get("evaluateAt")
+        reason = wakeup.get("reason")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+            or not isinstance(evaluate_at, str)
+            or not evaluate_at
+            or not isinstance(reason, str)
+            or not reason
+        ):
+            raise ValueError("Delegation nextWakeup is incomplete.")
+        record_review_wakeup(
+            state_dir,
+            repository,
+            target_kind="issue",
+            target_number=issue_number,
+            evaluate_at=evaluate_at,
+            reason=reason,
+        )
 
 
 def retain_tracked_delegations(
@@ -213,13 +268,6 @@ def retain_tracked_delegations(
         if isinstance(record.get("issueNumber"), int)
         and not isinstance(record.get("issueNumber"), bool)
         and record.get("requiresHuman") is not True
-    }
-    handoff_issue_numbers = {
-        record["issueNumber"]
-        for record in records
-        if isinstance(record.get("issueNumber"), int)
-        and not isinstance(record.get("issueNumber"), bool)
-        and record.get("requiresHuman") is True
     }
     pull_request_numbers = {
         pull_request["number"]
@@ -236,13 +284,8 @@ def retain_tracked_delegations(
     delegated_issues = {
         int(issue["number"]): issue
         for issue in inventory.delegated_issues
-        if int(issue["number"]) not in handoff_issue_numbers
     }
-    open_issues = {
-        int(issue["number"]): issue
-        for issue in inventory.delegated_issues
-        if int(issue["number"]) in handoff_issue_numbers
-    }
+    open_issues: dict[int, dict[str, object]] = {}
     for issue in inventory.open_issues:
         number = int(issue["number"])
         if number in issue_numbers:
@@ -354,6 +397,17 @@ def collect(
                         now=now,
                     )
                 )
+                if repository_policy is not None:
+                    derive_handoff_reminders(
+                        list(delegation_status["records"]),
+                        events,
+                        repository_policy.handoff_reminders,
+                    )
+                record_delegation_wakeups(
+                    state_dir,
+                    repository,
+                    list(delegation_status["records"]),
+                )
                 if retired_task_ids:
                     event_store.append_delegation_retirements(
                         repository=repository,
@@ -365,20 +419,6 @@ def collect(
                     previous_snapshot,
                     exc,
                 )
-        released_delegation_issue_numbers = tuple(
-            sorted(
-                int(record["issueNumber"])
-                for record in delegation_status["records"]
-                if isinstance(record, dict)
-                and record.get("requiresHuman") is True
-                and isinstance(record.get("issueNumber"), int)
-                and not isinstance(record.get("issueNumber"), bool)
-            )
-        )
-        if released_delegation_issue_numbers:
-            collector_options["released_delegation_issue_numbers"] = (
-                released_delegation_issue_numbers
-            )
         collector = Collector(
             client,
             repository,

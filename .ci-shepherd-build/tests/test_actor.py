@@ -1232,6 +1232,58 @@ class ActorTests(unittest.TestCase):
         )
         self.assertEqual([], client.calls)
 
+    def test_new_assignment_episode_executes_once_after_prior_episode(self) -> None:
+        proposals = _assignment_proposals()
+        proposal = proposals["proposals"][0]
+        assert isinstance(proposal, dict)
+        proposal["actionId"] = (
+            "snapshot:owner/repo:2:issue:21:assign-copilot"
+        )
+        proposal["idempotencyKey"] = (
+            "issue:21:copilot-assignment:episode-2"
+        )
+        prior_episode = {
+            "actionId": "snapshot:owner/repo:1:issue:21:assign-copilot",
+            "outcome": "executed",
+            "idempotencyKey": "issue:21:copilot-assignment:episode-1",
+            "target": {"kind": "issue", "number": 21},
+        }
+        client = ScriptedActorClient(
+            issues=[
+                {
+                    "number": 21,
+                    "state": "open",
+                    "updated_at": "2026-08-21T19:54:00Z",
+                    "assignees": [],
+                    "labels": [{"name": "test-failure"}],
+                }
+            ]
+        )
+
+        executed = execute_action(
+            proposals,
+            action_id=str(proposal["actionId"]),
+            prior_results=_results(prior_episode),
+            client=client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+        replay_client = ScriptedActorClient()
+        replay = execute_action(
+            proposals,
+            action_id=str(proposal["actionId"]),
+            prior_results=_results(prior_episode, executed),
+            client=replay_client,
+            now=lambda: datetime(2026, 8, 21, 20, tzinfo=UTC),
+        )
+
+        self.assertEqual("indeterminate", executed["outcome"])
+        self.assertEqual("stale", replay["outcome"])
+        self.assertEqual(
+            "action-already-attempted",
+            replay["reason"],
+        )
+        self.assertEqual([], replay_client.calls)
+
     def test_nonterminal_intent_does_not_trigger_already_attempted_guard(self) -> None:
         client = ScriptedActorClient(
             issues=[

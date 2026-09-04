@@ -10,6 +10,8 @@ from .repository_policy import (
     RepositoryPolicyError,
     load_embedded_repository_policy,
 )
+from .poc_state import REVIEW_WAKEUP_REASONS
+from .timeutils import parse_aware_iso8601
 
 
 class ValidationError(ValueError):
@@ -434,7 +436,7 @@ def _validate_delegation_status(value: object) -> None:
     status = _require_mapping(value, "delegationStatus")
     _require_only_fields(
         status,
-        {"status", "records", "problem", "capacity"},
+        {"status", "records", "problem", "capacity", "episodeOrdinals"},
         "delegationStatus",
     )
     status_value = _require_nonempty_string(status, "status")
@@ -457,6 +459,12 @@ def _validate_delegation_status(value: object) -> None:
                 "taskState",
                 "lifecycle",
                 "requiresHuman",
+                "issueOpen",
+                "copilotAssigned",
+                "humanAssigned",
+                "handoffStartedAt",
+                "handoffReminder",
+                "nextWakeup",
                 "pullRequests",
             },
             field,
@@ -482,13 +490,120 @@ def _validate_delegation_status(value: object) -> None:
         _require_nonempty_string(record, "lifecycle")
         if not isinstance(record.get("requiresHuman"), bool):
             raise ValidationError(f"{field}.requiresHuman must be a boolean.")
+        issue_open = record.get("issueOpen")
+        copilot_assigned = record.get("copilotAssigned")
+        if (issue_open is None) != (copilot_assigned is None):
+            raise ValidationError(
+                f"{field}.issueOpen and copilotAssigned must be supplied together."
+            )
+        if issue_open is not None and (
+            not isinstance(issue_open, bool)
+            or not isinstance(copilot_assigned, bool)
+        ):
+            raise ValidationError(
+                f"{field}.issueOpen and copilotAssigned must be booleans."
+            )
+        human_assigned = record.get("humanAssigned")
+        if human_assigned is not None and not isinstance(human_assigned, bool):
+            raise ValidationError(
+                f"{field}.humanAssigned must be a boolean when supplied."
+            )
+        handoff_started_at = record.get("handoffStartedAt")
+        if handoff_started_at is not None:
+            try:
+                parse_aware_iso8601(
+                    _require_nonempty_string(record, "handoffStartedAt"),
+                    f"{field}.handoffStartedAt",
+                )
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+        next_wakeup_value = record.get("nextWakeup")
+        if next_wakeup_value is not None:
+            if record.get("lifecycle") not in {
+                "association_pending",
+                "handoff_required",
+            }:
+                raise ValidationError(
+                    f"{field}.nextWakeup is not valid for this lifecycle."
+                )
+            next_wakeup = _require_mapping(
+                next_wakeup_value,
+                f"{field}.nextWakeup",
+            )
+            _require_only_fields(
+                next_wakeup,
+                {"reason", "evaluateAt"},
+                f"{field}.nextWakeup",
+            )
+            reason = _require_nonempty_string(next_wakeup, "reason")
+            if reason not in REVIEW_WAKEUP_REASONS:
+                raise ValidationError(
+                    f"{field}.nextWakeup.reason is unsupported."
+                )
+            evaluate_at = _require_nonempty_string(next_wakeup, "evaluateAt")
+            try:
+                parse_aware_iso8601(
+                    evaluate_at,
+                    f"{field}.nextWakeup.evaluateAt",
+                )
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+        reminder_value = record.get("handoffReminder")
+        if reminder_value is not None:
+            if (
+                record.get("lifecycle") != "handoff_required"
+                or record.get("requiresHuman") is not True
+            ):
+                raise ValidationError(
+                    f"{field}.handoffReminder requires an active handoff."
+                )
+            reminder = _require_mapping(
+                reminder_value,
+                f"{field}.handoffReminder",
+            )
+            _require_only_fields(
+                reminder,
+                {"episodeId", "ordinal", "state", "nextWakeup"},
+                f"{field}.handoffReminder",
+            )
+            _require_nonempty_string(reminder, "episodeId")
+            ordinal = reminder.get("ordinal")
+            if (
+                not isinstance(ordinal, int)
+                or isinstance(ordinal, bool)
+                or ordinal < 1
+            ):
+                raise ValidationError(
+                    f"{field}.handoffReminder.ordinal must be positive."
+                )
+            reminder_state = _require_nonempty_string(reminder, "state")
+            if reminder_state not in {
+                "pending",
+                "human-owned",
+                "operator-escalation",
+            }:
+                raise ValidationError(
+                    f"{field}.handoffReminder.state is unsupported."
+                )
+            if reminder.get("nextWakeup") != next_wakeup_value:
+                raise ValidationError(
+                    f"{field}.handoffReminder.nextWakeup must match nextWakeup."
+                )
         pull_requests = _require_list(record, "pullRequests")
         for pull_index, pull_value in enumerate(pull_requests):
             pull_field = f"{field}.pullRequests[{pull_index}]"
             pull = _require_mapping(pull_value, pull_field)
             _require_only_fields(
                 pull,
-                {"databaseId", "globalId", "number", "state", "isDraft"},
+                {
+                    "databaseId",
+                    "globalId",
+                    "number",
+                    "state",
+                    "isDraft",
+                    "changedFiles",
+                    "humanAuthored",
+                },
                 pull_field,
             )
             database_id = pull.get("databaseId")
@@ -517,6 +632,41 @@ def _validate_delegation_status(value: object) -> None:
             _require_nonempty_string(pull, "state")
             if not isinstance(pull.get("isDraft"), bool):
                 raise ValidationError(f"{pull_field}.isDraft must be a boolean.")
+            changed_files = pull.get("changedFiles")
+            if changed_files is not None and (
+                not isinstance(changed_files, int)
+                or isinstance(changed_files, bool)
+                or changed_files < 0
+            ):
+                raise ValidationError(
+                    f"{pull_field}.changedFiles must be nonnegative when supplied."
+                )
+            human_authored = pull.get("humanAuthored")
+            if human_authored is not None and not isinstance(
+                human_authored,
+                bool,
+            ):
+                raise ValidationError(
+                    f"{pull_field}.humanAuthored must be a boolean when supplied."
+                )
+    episode_ordinals_value = status.get("episodeOrdinals")
+    if episode_ordinals_value is not None:
+        episode_ordinals = _require_mapping(
+            episode_ordinals_value,
+            "delegationStatus.episodeOrdinals",
+        )
+        for issue_number, ordinal in episode_ordinals.items():
+            if (
+                not isinstance(issue_number, str)
+                or re.fullmatch(r"[1-9][0-9]*", issue_number) is None
+                or not isinstance(ordinal, int)
+                or isinstance(ordinal, bool)
+                or ordinal <= 0
+            ):
+                raise ValidationError(
+                    "delegationStatus.episodeOrdinals must map positive issue "
+                    "number strings to positive integers."
+                )
     capacity_value = status.get("capacity")
     if capacity_value is not None:
         capacity = _require_mapping(

@@ -939,6 +939,16 @@ Deployment tests are failing.
                 "event": "push",
                 "head_branch": "main",
                 "head_sha": "abc",
+                "pull_requests": [
+                    {
+                        "number": 6866,
+                        "head": {
+                            "sha": "abc",
+                            "repo": {"full_name": "fork/aspire"},
+                        },
+                        "base": {"repo": {"full_name": REPOSITORY}},
+                    }
+                ],
                 "status": "completed",
                 "conclusion": "failure",
                 "created_at": "2026-08-10T00:00:00Z",
@@ -967,6 +977,17 @@ Deployment tests are failing.
             first,
             minimal_run_evidence=True,
             include_run_history=True,
+        )
+        self.assertEqual(
+            [
+                {
+                    "number": 6866,
+                    "headSha": "abc",
+                    "headRepository": "fork/aspire",
+                    "baseRepository": REPOSITORY,
+                }
+            ],
+            first.evidence[f"run:{run_id}"]["payload"]["subjectPullRequests"],
         )
         snapshot = {
             "schemaVersion": 1,
@@ -1017,6 +1038,37 @@ Deployment tests are failing.
             "run-001",
             snapshot,
             report,
+        )
+        legacy_snapshot = copy.deepcopy(snapshot)
+        legacy_snapshot["collectionVersion"] = COLLECTION_VERSION - 1
+        del legacy_snapshot["evidence"][f"run:{run_id}"]["payload"][
+            "subjectPullRequests"
+        ]
+        legacy_history = copy.deepcopy(current.document)
+        legacy_history["sourceSchemaVersions"]["collection"] = (
+            COLLECTION_VERSION - 1
+        )
+        upgraded_collector = Collector(
+            ScriptedClient(pages=pages, singles=singles),
+            REPOSITORY,
+            NOW,
+        )
+        upgraded = upgraded_collector.collect_incremental(
+            legacy_snapshot,
+            legacy_history,
+            include_supporting=True,
+            include_timeline=False,
+        )
+        upgraded = upgraded_collector.enrich_github_evidence(
+            upgraded,
+            minimal_run_evidence=True,
+            include_run_history=True,
+        )
+        self.assertEqual(
+            first.evidence[f"run:{run_id}"]["payload"]["subjectPullRequests"],
+            upgraded.evidence[f"run:{run_id}"]["payload"][
+                "subjectPullRequests"
+            ],
         )
 
         second_history = copy.deepcopy(singles[history_endpoint])

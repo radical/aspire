@@ -565,8 +565,11 @@ still populating the global node ID. Tracking uses the numeric ID in that state
 and verifies both identities once the global ID is available.
 
 Generated assignment proposals use the repository policy's base ref, preserve
-one stable issue-scoped idempotency key, and instruct Copilot to keep the pull
-request in draft when evidence or a human decision is missing.
+one stable idempotency key per delegation episode, and instruct Copilot to keep
+the pull request in draft when evidence or a human decision is missing.
+Exactly one validated `delegate-copilot` judgment is required for every
+`assign-copilot` proposal. Quarantine source reconciliation may enrich that
+proposal with pinned test identity, but it never creates delegation authority.
 An issue with an executable closure proposal is never also assigned to Copilot;
 the suppressed delegation remains visible under `blockedRecommendations` with
 reason `superseded-by-closure-review`.
@@ -585,9 +588,71 @@ Task, including tasks not started by the current state ledger.
 The snapshot keeps delegated issues and pull requests out of general
 assessment lanes while preserving `delegationStatus` records linking each
 shepherd action to its issue, Agent Task, and known pull requests. Failed or
-paused work is marked for human handoff in `report.md`. A pull artifact absent
-from the complete open-pull inventory is `unknown`, not assumed merged; only
-authoritative merge evidence may resolve the source issue.
+paused work is marked for human handoff in `report.md`. A completed task with
+an open nonempty pull request remains tracked awaiting review; a zero-file,
+missing, or closed-unmerged pull request requires handoff. Missing or ambiguous
+pull-request identity, state, or changed-file evidence remains
+`association_pending` and records a short typed `retry-backoff` wakeup rather
+than claiming completion. Only an exact pull-request detail response with merge
+evidence completes the delegated work, and the issue-task-PR chain remains
+tracked until the source issue is no longer both open and Copilot-assigned.
+
+A delegated `handoff_required` state remains active work. Its stable handoff
+episode is derived from the durable assignment action and carries one pending
+reminder ordinal. A due wakeup only selects the case for fresh assessment; it
+cannot authorize a public effect. Every initial handoff or reminder comment
+still requires a validated `ping-human` recommendation and the normal exact
+proposal, policy, grant, preflight, execution, and reconciliation path.
+
+Review, denial, deferral, missing authorization, stale preflight, failed or
+indeterminate execution, and unchanged assessment do not consume the ordinal.
+Only a matching `executed` terminal action advances it and schedules exactly
+one next wakeup. Repository policy bounds the interval and maximum. At the
+maximum, reminders stop and the delegation report surfaces operator escalation.
+A pending later ordinal cannot propose before its typed wakeup is due.
+A verified non-bot human assignee or linked non-bot human-authored open pull
+request suppresses the unowned reminder and schedules
+`human-stale-progress`; incomplete identity evidence fails closed. Human
+comments are activity evidence, not takeover authority.
+
+## Immutable workflow scope and managed coverage
+
+Workflow-related occurrences derive `verifiedScope` only from the collected
+workflow run's target repository, event, head ref, head SHA, and normalized
+`pull_requests` subject metadata. A `push` on `main` is main-scoped even when
+the issue occurrence table reports a pull request. A `pull_request` run is
+PR-scoped only when exactly one subject pull request matches the run SHA and
+target repository; missing, multiple, or mismatched subject evidence produces
+an unknown scope. Other immutable non-PR events are main-scoped when their head
+ref is `main` and otherwise retain an exact branch scope. `reportedScope` and
+`scopeConflict` preserve the structured issue report for audit without giving
+it decision authority.
+
+Positive coverage is a later completed successful execution of the same
+verified scope, workflow, job, lane, and OS. Test failures additionally require
+explicit success for the exact test. A green lane without exact passed-test
+evidence, skipped or unselected work, incomplete collection, and silence leave
+the occurrence in `needs-positive-coverage`. A selected `no-action` case in
+that state records one typed `positive-coverage-review` wakeup so waiting work
+remains durable without treating silence as recovery.
+
+Repository policy explicitly opts issue producers and open pull requests into
+the managed-active-item invariant. `managed-item-coverage.json` projects every
+configured active target exactly once as terminal, pending action, tracked open
+PR, active delegation or investigation, typed wakeup, uncovered, or
+conflicting. The same projection is rendered in `report.md`. Unknown verified
+run scope, observation-generation failure, uncovered work, or conflicting
+terminal/active state clears every selected policy action and sets mutation
+exposure to zero; collection, assessment, and reporting still complete. The
+Aspire policy initially enables this gate only for `ci-failure-cause` issues;
+open pull requests and other issue producers remain outside the managed set
+until they have an equally durable coverage path.
+
+The finalized proposal document carries the managed-coverage validity and
+blockers inside its production capability. Because the proposal bytes bind
+authorization, every later `coordinator.py select` iteration reapplies the same
+gate before minting a grant; rebuilding selection cannot bypass an invalid
+coverage projection.
 
 ## Quarantine source reconciliation
 
@@ -866,6 +931,7 @@ $STATE/
   ledgers/fingerprints.jsonl
   ledgers/case-events.jsonl
   ledgers/review-events.jsonl
+  ledgers/review-wakeups.jsonl
   ledgers/investigation-results.jsonl
   ledgers/quarantine-sessions.jsonl
   action-events.jsonl
@@ -883,9 +949,17 @@ history matching. The compact handoff is generated by `compact.py` from
 `fingerprints.jsonl` is the append-only exact-fingerprint occurrence ledger
 under `$STATE/ledgers`, so recurrence survives scratch cleanup.
 `case-events.jsonl` records bootstrap and material disposition transitions.
+`review-schedule.json` freezes the typed wakeup projection used by the cycle,
+and `managed-item-coverage.json` freezes the configured active-item mutation
+gate rendered in the report.
 `review-events.jsonl` records only cases actually handed to the assessment
-agent. Its latest timestamp per target prevents already-consumed typed wakeups
-from firing again; no blanket age-based reassessment is scheduled.
+agent. Its latest timestamp per target prevents ordinary typed wakeups from
+firing again. Cases explicitly awaiting positive coverage schedule a bounded
+typed review rather than relying on blanket age-based reassessment.
+Transactional handoff wakeups (`escalation-reminder`, `human-stale-progress`,
+and `operator-escalation`) are not consumed by review. They remain pending
+until a later lifecycle-derived wakeup supersedes them after authoritative
+delivery, takeover, or escalation.
 `investigation-results.jsonl` records validated read-only conclusions keyed by
 the issue, target, and source-evidence fingerprint.
 `quarantine-sessions.jsonl` records the one-at-a-time local quarantine
@@ -1377,6 +1451,10 @@ The question must identify the decision the human should make; "please
 investigate" is not a decision. The rendered draft comment must begin with
 `[automated]`, state why automation cannot proceed, ask the question, and give
 concrete next steps.
+For an active delegated handoff, a matching `ping-human` judgment is also
+required before the canonical `issue:<number>:status` comment can be created or
+edited. The handoff episode and reminder ordinal identify the exact effect;
+scheduling evidence alone never creates a proposal.
 
 Use multiple recommendations for one issue only when the targets differ. Never
 split one target across multiple queues to hedge. If evidence is incomplete,

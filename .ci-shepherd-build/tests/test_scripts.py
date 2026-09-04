@@ -18,7 +18,13 @@ from unittest.mock import ANY, patch
 
 from ci_shepherd.authorization import AuthorizationBudget, AuthorizationGrant
 from ci_shepherd.collector import CollectionError, InventoryResult
-from ci_shepherd.delegations import CapacityEvidence, normalize_agent_task
+from ci_shepherd.delegations import (
+    CapacityEvidence,
+    DelegatedIssue,
+    DelegatedPullRequest,
+    PullRequestState,
+    normalize_agent_task,
+)
 from ci_shepherd.execution_state import ExecutionBudgetError
 from ci_shepherd.history import HistoryError
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
@@ -719,6 +725,267 @@ class PrototypeScriptTests(unittest.TestCase):
             status["capacity"],
         )
 
+    def test_delegation_retry_wakeup_is_recorded_once(self) -> None:
+        collect_script = load_script("collect")
+        artifact_root = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(artifact_root, ignore_errors=True)
+        try:
+            records = [
+                {
+                    "issueNumber": 75,
+                    "lifecycle": "association_pending",
+                    "nextWakeup": {
+                        "reason": "retry-backoff",
+                        "evaluateAt": "2026-09-02T19:15:00Z",
+                    },
+                }
+            ]
+
+            collect_script.record_delegation_wakeups(
+                artifact_root,
+                "owner/repo",
+                records,
+            )
+            collect_script.record_delegation_wakeups(
+                artifact_root,
+                "owner/repo",
+                records,
+            )
+
+            rows = [
+                json.loads(line)
+                for line in (
+                    artifact_root / "ledgers" / "review-wakeups.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                [
+                    {
+                        "schemaVersion": 1,
+                        "repository": "owner/repo",
+                        "targetKind": "issue",
+                        "targetNumber": 75,
+                        "evaluateAt": "2026-09-02T19:15:00Z",
+                        "reason": "retry-backoff",
+                    }
+                ],
+                rows,
+            )
+        finally:
+            shutil.rmtree(artifact_root, ignore_errors=True)
+
+    def test_merged_pull_stays_tracked_until_source_issue_reconciles(self) -> None:
+        collect_script = load_script("collect")
+        task = normalize_agent_task(
+            {
+                "id": "task-1",
+                "state": "completed",
+                "created_at": "2026-09-02T18:00:00Z",
+                "updated_at": "2026-09-02T18:30:00Z",
+                "artifacts": [
+                    {
+                        "type": "pull",
+                        "provider": "github",
+                        "data": {"id": 101, "global_id": "PR_101"},
+                    }
+                ],
+            }
+        )
+        observation = SimpleNamespace(
+            tasks=(task,),
+            pull_requests=(
+                DelegatedPullRequest(
+                    database_id=101,
+                    global_id="PR_101",
+                    state=PullRequestState.MERGED,
+                    is_draft=False,
+                    number=201,
+                    changed_files=4,
+                ),
+            ),
+            issues=(
+                DelegatedIssue(
+                    number=42,
+                    is_open=True,
+                    copilot_assigned=True,
+                ),
+            ),
+            evidence=CapacityEvidence(),
+        )
+        events = [
+            {
+                "eventType": "delegation-baseline",
+                "actionId": "action:1",
+                "recordedAt": "2026-09-02T18:00:00Z",
+                "operation": "assign-copilot",
+                "repository": "owner/repo",
+                "target": {"kind": "issue", "number": 42},
+                "taskIdsBefore": [],
+            },
+            {
+                "eventType": "terminal",
+                "actionId": "action:1",
+                "outcome": "executed",
+                "result": {"taskId": "task-1"},
+            },
+        ]
+
+        with patch.object(
+            collect_script,
+            "observe_delegations",
+            return_value=observation,
+        ):
+            status, retired_task_ids = collect_script.observe_delegation_status(
+                object(),
+                "owner/repo",
+                events=events,
+                now=datetime(2026, 9, 2, 19, tzinfo=UTC),
+            )
+
+        self.assertEqual("completed", status["records"][0]["lifecycle"])
+        self.assertEqual((), retired_task_ids)
+
+    def test_terminal_handoff_retires_after_issue_closure_or_unassignment(
+        self,
+    ) -> None:
+        collect_script = load_script("collect")
+        task = normalize_agent_task(
+            {
+                "id": "task-1",
+                "state": "completed",
+                "created_at": "2026-09-02T18:00:00Z",
+                "updated_at": "2026-09-02T18:30:00Z",
+                "artifacts": [],
+            }
+        )
+        events = [
+            {
+                "eventType": "delegation-baseline",
+                "actionId": "action:1",
+                "recordedAt": "2026-09-02T18:00:00Z",
+                "operation": "assign-copilot",
+                "repository": "owner/repo",
+                "target": {"kind": "issue", "number": 42},
+                "taskIdsBefore": [],
+            },
+            {
+                "eventType": "terminal",
+                "actionId": "action:1",
+                "outcome": "executed",
+                "result": {"taskId": "task-1"},
+            },
+        ]
+
+        for issue in (
+            DelegatedIssue(number=42, is_open=False, copilot_assigned=True),
+            DelegatedIssue(number=42, is_open=True, copilot_assigned=False),
+        ):
+            with self.subTest(issue=issue):
+                observation = SimpleNamespace(
+                    tasks=(task,),
+                    pull_requests=(),
+                    issues=(issue,),
+                    evidence=CapacityEvidence(),
+                )
+                with patch.object(
+                    collect_script,
+                    "observe_delegations",
+                    return_value=observation,
+                ):
+                    status, retired_task_ids = (
+                        collect_script.observe_delegation_status(
+                            object(),
+                            "owner/repo",
+                            events=events,
+                            now=datetime(2026, 9, 2, 19, tzinfo=UTC),
+                        )
+                    )
+
+                self.assertEqual(
+                    "handoff_required",
+                    status["records"][0]["lifecycle"],
+                )
+                self.assertEqual(("task-1",), retired_task_ids)
+
+    def test_unresolved_pull_evidence_blocks_terminal_handoff_retirement(
+        self,
+    ) -> None:
+        collect_script = load_script("collect")
+        task = normalize_agent_task(
+            {
+                "id": "task-1",
+                "state": "completed",
+                "created_at": "2026-09-02T18:00:00Z",
+                "updated_at": "2026-09-02T18:30:00Z",
+                "artifacts": [
+                    {
+                        "type": "pull",
+                        "provider": "github",
+                        "data": {"id": 101, "global_id": "PR_101"},
+                    }
+                ],
+            }
+        )
+        events = [
+            {
+                "eventType": "delegation-baseline",
+                "actionId": "action:1",
+                "recordedAt": "2026-09-02T18:00:00Z",
+                "operation": "assign-copilot",
+                "repository": "owner/repo",
+                "target": {"kind": "issue", "number": 42},
+                "taskIdsBefore": [],
+            },
+            {
+                "eventType": "terminal",
+                "actionId": "action:1",
+                "outcome": "executed",
+                "result": {"taskId": "task-1"},
+            },
+        ]
+
+        for pull_request in (
+            DelegatedPullRequest(
+                database_id=101,
+                global_id="PR_101",
+                state=PullRequestState.OPEN,
+                is_draft=True,
+                changed_files=0,
+            ),
+            DelegatedPullRequest(
+                database_id=101,
+                global_id="PR_101",
+                state=PullRequestState.UNKNOWN,
+                is_draft=True,
+            ),
+        ):
+            with self.subTest(state=pull_request.state):
+                observation = SimpleNamespace(
+                    tasks=(task,),
+                    pull_requests=(pull_request,),
+                    issues=(
+                        DelegatedIssue(
+                            number=42,
+                            is_open=True,
+                            copilot_assigned=False,
+                        ),
+                    ),
+                    evidence=CapacityEvidence(),
+                )
+                with patch.object(
+                    collect_script,
+                    "observe_delegations",
+                    return_value=observation,
+                ):
+                    _, retired_task_ids = collect_script.observe_delegation_status(
+                        object(),
+                        "owner/repo",
+                        events=events,
+                        now=datetime(2026, 9, 2, 19, tzinfo=UTC),
+                    )
+
+                self.assertEqual((), retired_task_ids)
+
     def test_tracked_delegations_stay_out_of_general_assessment_lanes(self) -> None:
         collect_script = load_script("collect")
         inventory = InventoryResult(
@@ -758,7 +1025,7 @@ class PrototypeScriptTests(unittest.TestCase):
             ],
         )
 
-    def test_handoff_delegation_returns_issue_to_general_assessment(self) -> None:
+    def test_handoff_delegation_remains_outside_general_assessment(self) -> None:
         collect_script = load_script("collect")
         inventory = InventoryResult(
             open_issues=[],
@@ -781,10 +1048,13 @@ class PrototypeScriptTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual([75], [issue["number"] for issue in retained.open_issues])
-        self.assertEqual([], retained.delegated_issues)
+        self.assertEqual([], retained.open_issues)
+        self.assertEqual(
+            [75],
+            [issue["number"] for issue in retained.delegated_issues],
+        )
 
-    def test_collect_releases_handoff_before_github_enrichment(self) -> None:
+    def test_collect_keeps_handoff_out_of_github_enrichment(self) -> None:
         collect_script = load_script("collect")
         seen: dict[str, object] = {}
 
@@ -879,8 +1149,149 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
-        self.assertEqual([75], seen["open"])
-        self.assertEqual((75,), seen["released"])
+        self.assertEqual([], seen["open"])
+        self.assertIsNone(seen["released"])
+
+    def test_collect_validates_delegation_lifecycle_fields_end_to_end(self) -> None:
+        collect_script = load_script("collect")
+
+        class FakeCollector:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def collect(self, **kwargs):
+                return InventoryResult([], [], {}, [], [], {})
+
+            def enrich_github_evidence(self, inventory, **kwargs):
+                return inventory
+
+            def enrich_ownership_evidence(self, inventory, **kwargs):
+                return inventory
+
+        class FakeEventStore:
+            def __init__(self, state_dir):
+                pass
+
+            def events(self, *, repository):
+                return []
+
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        state_dir = scratch / "state"
+        output_dir = scratch / "output"
+        shutil.rmtree(scratch, ignore_errors=True)
+        state_dir.mkdir(parents=True)
+        try:
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=object()),
+                patch.object(collect_script, "Collector", FakeCollector),
+                patch.object(collect_script, "ActionEventStore", FakeEventStore),
+                patch.object(collect_script, "load_current", return_value=None),
+                patch.object(
+                    collect_script,
+                    "observe_delegation_status",
+                    return_value=(
+                        {
+                            "status": "complete",
+                            "records": [
+                                {
+                                    "actionId": "action:75",
+                                    "repository": "owner/repo",
+                                    "issueNumber": 75,
+                                    "issueOpen": True,
+                                    "copilotAssigned": True,
+                                    "startedAt": "2026-09-04T19:00:00Z",
+                                    "taskId": "task-75",
+                                    "taskState": "completed",
+                                    "lifecycle": "association_pending",
+                                    "requiresHuman": False,
+                                    "nextWakeup": {
+                                        "reason": "retry-backoff",
+                                        "evaluateAt": "2026-09-04T19:15:00Z",
+                                    },
+                                    "pullRequests": [
+                                        {
+                                            "databaseId": 101,
+                                            "globalId": "PR_101",
+                                            "number": 201,
+                                            "state": "open",
+                                            "isDraft": True,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "actionId": "action:76",
+                                    "repository": "owner/repo",
+                                    "issueNumber": 76,
+                                    "issueOpen": True,
+                                    "copilotAssigned": True,
+                                    "startedAt": "2026-09-04T19:00:00Z",
+                                    "taskId": "task-76",
+                                    "taskState": "completed",
+                                    "lifecycle": "awaiting_pull_request",
+                                    "requiresHuman": False,
+                                    "pullRequests": [
+                                        {
+                                            "databaseId": 102,
+                                            "globalId": "PR_102",
+                                            "number": 202,
+                                            "state": "open",
+                                            "isDraft": True,
+                                            "changedFiles": 3,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "actionId": "action:77",
+                                    "repository": "owner/repo",
+                                    "issueNumber": 77,
+                                    "issueOpen": True,
+                                    "copilotAssigned": True,
+                                    "humanAssigned": False,
+                                    "startedAt": "2026-09-04T19:00:00Z",
+                                    "handoffStartedAt": "2026-09-04T20:00:00Z",
+                                    "taskId": "task-77",
+                                    "taskState": "completed",
+                                    "lifecycle": "handoff_required",
+                                    "requiresHuman": True,
+                                    "pullRequests": [],
+                                }
+                            ],
+                            "capacity": {
+                                "runningTasks": 0,
+                                "startsInRolling24h": 1,
+                                "openDelegatedPullRequests": 2,
+                                "repositoryRunningTasks": 0,
+                                "complete": True,
+                                "problems": [],
+                                "warnings": [],
+                            },
+                        },
+                        (),
+                    ),
+                ),
+            ):
+                collect_script.collect(
+                    "owner/repo",
+                    output_dir,
+                    None,
+                    state_dir=state_dir,
+                    repository_policy_path=(
+                        Path(__file__).parent
+                        / "fixtures"
+                        / "repository-policy-widget-v1.json"
+                    ),
+                )
+
+            snapshot = json.loads((output_dir / "input.json").read_text())
+            validate_snapshot(snapshot)
+            reminder = snapshot["delegationStatus"]["records"][2][
+                "handoffReminder"
+            ]
+            self.assertEqual("action:77:handoff", reminder["episodeId"])
+            self.assertEqual(1, reminder["ordinal"])
+            self.assertEqual("pending", reminder["state"])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def test_snapshot_binds_repository_policy_identity(self) -> None:
         collect_script = load_script("collect")

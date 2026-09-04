@@ -778,9 +778,15 @@ def validate_action_proposals(document: object) -> dict[str, object]:
             )
         if "productionPilotCapability" in document:
             capability = document["productionPilotCapability"]
+            expected_capability_fields = {"schemaVersion", "evidenceRound"}
+            if (
+                isinstance(capability, dict)
+                and "managedItemCoverage" in capability
+            ):
+                expected_capability_fields.add("managedItemCoverage")
             if (
                 not isinstance(capability, dict)
-                or set(capability) != {"schemaVersion", "evidenceRound"}
+                or set(capability) != expected_capability_fields
                 or capability.get("schemaVersion") != 1
                 or capability.get("evidenceRound") not in {0, 1}
                 or isinstance(capability.get("evidenceRound"), bool)
@@ -788,6 +794,21 @@ def validate_action_proposals(document: object) -> dict[str, object]:
                 raise ValueError(
                     "productionPilotCapability must identify a finalized "
                     "round-0 or round-1 proposal document."
+                )
+            managed_coverage = capability.get("managedItemCoverage")
+            if managed_coverage is not None and (
+                not isinstance(managed_coverage, dict)
+                or set(managed_coverage) != {"schemaVersion", "valid", "blockers"}
+                or managed_coverage.get("schemaVersion") != 1
+                or not isinstance(managed_coverage.get("valid"), bool)
+                or not isinstance(managed_coverage.get("blockers"), list)
+                or any(
+                    not isinstance(blocker, str) or not blocker
+                    for blocker in managed_coverage.get("blockers", [])
+                )
+            ):
+                raise ValueError(
+                    "productionPilotCapability.managedItemCoverage is invalid."
                 )
         blocked_recommendations = document.get("blockedRecommendations", [])
         if not isinstance(blocked_recommendations, list):

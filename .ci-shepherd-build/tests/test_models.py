@@ -1140,6 +1140,51 @@ class ModelsTests(unittest.TestCase):
             "collectionErrors\\[0\\]\\.scope\\.issueNumbers",
         ):
             validate_snapshot(snapshot)
+            validate_snapshot(snapshot)
+    def test_delegation_wakeup_requires_supported_reason_and_aware_time(
+            self,
+    ) -> None:
+            def snapshot_with_wakeup(reason: str, evaluate_at: str) -> dict[str, object]:
+                snapshot = minimal_snapshot()
+                snapshot["delegationStatus"] = {
+                    "status": "complete",
+                    "records": [
+                        {
+                            "actionId": "action:21",
+                            "repository": "owner/repo",
+                            "issueNumber": 21,
+                            "startedAt": "2026-09-04T19:00:00Z",
+                            "taskId": "task-21",
+                            "taskState": "completed",
+                            "lifecycle": "association_pending",
+                            "requiresHuman": False,
+                            "nextWakeup": {
+                                "reason": reason,
+                                "evaluateAt": evaluate_at,
+                            },
+                            "pullRequests": [],
+                        }
+                    ],
+                }
+                return snapshot
+
+            validate_snapshot(
+                snapshot_with_wakeup("retry-backoff", "2026-09-04T19:15:00Z")
+            )
+            validate_snapshot(
+                snapshot_with_wakeup(
+                    "retry-backoff",
+                    "2026-09-04T15:15:00-04:00",
+                )
+            )
+            for reason, evaluate_at in (
+                ("unsupported", "2026-09-04T19:15:00Z"),
+                ("retry-backoff", "not-a-time"),
+                ("retry-backoff", "2026-09-04T19:15:00"),
+            ):
+                with self.subTest(reason=reason, evaluate_at=evaluate_at):
+                    with self.assertRaises(ValidationError):
+                        validate_snapshot(snapshot_with_wakeup(reason, evaluate_at))
 
     def test_valid_expansion_manifests_pass_snapshot_validation(self) -> None:
         snapshot = minimal_snapshot()

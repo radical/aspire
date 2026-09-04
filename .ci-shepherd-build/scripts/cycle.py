@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -31,12 +31,21 @@ from ci_shepherd.investigations import (
     render_investigation_section,
 )
 from ci_shepherd.lifecycle import prepare_assessment
+from ci_shepherd.managed_coverage import (
+    block_policy_selection,
+    build_managed_item_coverage,
+    render_managed_item_coverage_section,
+)
 from ci_shepherd.models import stable_json, validate_snapshot
 from ci_shepherd.observations import build_observations
 from ci_shepherd.operation_policy import load_operation_policy_document
 from ci_shepherd.policy import load_policy
 from ci_shepherd.poc import build_compact_poc_input
-from ci_shepherd.poc_state import load_review_schedule, record_review_events
+from ci_shepherd.poc_state import (
+    load_review_schedule,
+    record_review_events,
+    record_review_wakeup,
+)
 from ci_shepherd.pull_requests import build_pull_request_handoff
 from ci_shepherd.pull_requests import (
     merge_pull_request_judgments,
@@ -59,7 +68,9 @@ from ci_shepherd.quarantine_reconciliation import (
     reconcile_quarantine_source,
     render_quarantine_source_reconciliation_section,
 )
+from ci_shepherd.repository_policy import load_embedded_repository_policy
 from ci_shepherd.review_selection import build_review_selection
+from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 from collect import collect
 from expand import expand_files
 from finalize import finalize
@@ -76,6 +87,57 @@ DEFAULT_REPOSITORY_POLICY_PATH = (
     / "repositories"
     / "aspire-v1.json"
 )
+
+
+def _schedule_positive_coverage_reviews(
+    state_dir: Path,
+    repository: str,
+    *,
+    observed_at: str,
+    selected_issue_numbers: set[int],
+    judgments: Mapping[str, Any],
+    observations: Mapping[str, Any],
+    interval_days: int,
+) -> None:
+    awaiting_coverage = {
+        int(occurrence["issueNumber"])
+        for occurrence in observations.get("occurrences", [])
+        if isinstance(occurrence, Mapping)
+        and isinstance(occurrence.get("issueNumber"), int)
+        and not isinstance(occurrence.get("issueNumber"), bool)
+        and occurrence.get("coverageState") == "needs-positive-coverage"
+    }
+    for judgment in judgments.get("issues", []):
+        if not isinstance(judgment, Mapping):
+            continue
+        issue_number = judgment.get("issueNumber")
+        recommendations = judgment.get("recommendations")
+        if (
+            not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number not in selected_issue_numbers
+            or issue_number not in awaiting_coverage
+            or not isinstance(recommendations, list)
+            or {
+                recommendation.get("disposition")
+                for recommendation in recommendations
+                if isinstance(recommendation, Mapping)
+            }
+            != {"no-action"}
+        ):
+            continue
+        evaluate_at = format_utc_z(
+            parse_aware_iso8601(observed_at, "snapshot collectedAt")
+            + timedelta(days=interval_days)
+        )
+        record_review_wakeup(
+            state_dir,
+            repository,
+            target_kind="issue",
+            target_number=issue_number,
+            evaluate_at=evaluate_at,
+            reason="positive-coverage-review",
+        )
 
 
 def _coordinator_stage(
@@ -493,11 +555,16 @@ def start_cycle(
     validate_snapshot(snapshot)
     if str(snapshot.get("repository", "")).casefold() != repository.casefold():
         raise ValueError("Snapshot repository does not match the requested repository.")
-    open_issue_numbers = [
+    open_issue_numbers = {
         number
         for number in snapshot.get("openIssues", [])
         if isinstance(number, int) and not isinstance(number, bool)
-    ]
+    }
+    active_delegated_issue_numbers = {
+        number
+        for number in snapshot.get("delegatedIssues", [])
+        if isinstance(number, int) and not isinstance(number, bool)
+    }
     open_pull_request_numbers = [
         number
         for number in snapshot.get("openPullRequests", [])
@@ -507,9 +574,10 @@ def start_cycle(
         state_dir,
         repository,
         str(snapshot["collectedAt"]),
-        issue_numbers=open_issue_numbers,
+        issue_numbers=sorted(open_issue_numbers | active_delegated_issue_numbers),
         pull_request_numbers=open_pull_request_numbers,
     )
+    _write_private_json(work_dir / "review-schedule.json", review_schedule)
     issue_reassessment_context = {
         int(number): context
         for number, context in review_schedule["issues"].items()
@@ -541,8 +609,19 @@ def start_cycle(
             else previous_open_pull_requests - set(pull_request_reassessment_context)
         )
 
+    due_delegated_issue_numbers = (
+        due_issue_numbers & active_delegated_issue_numbers
+    )
+    assessment_snapshot = snapshot
+    if due_delegated_issue_numbers:
+        assessment_snapshot = {
+            **snapshot,
+            "openIssues": sorted(
+                open_issue_numbers | due_delegated_issue_numbers
+            ),
+        }
     prepared = attach_latest_investigation_results(
-        prepare_assessment(snapshot),
+        prepare_assessment(assessment_snapshot),
         read_investigation_results(state_dir),
     )
     compact = build_compact_poc_input(prepared)
@@ -706,6 +785,8 @@ def finish_cycle(
         "quarantineReconciliation": work_dir / "quarantine-reconciliation.json",
         "quarantineEvidence": work_dir / "quarantine-evidence.json",
         "investigationPlan": work_dir / "investigation-plan.json",
+        "reviewSchedule": work_dir / "review-schedule.json",
+        "managedCoverage": work_dir / "managed-item-coverage.json",
     }
     finalize(
         agent_input_path=paths["defaults"],
@@ -822,6 +903,87 @@ def finish_cycle(
         },
     }
     _write_private_json(paths["proposals"], proposals)
+    review_selection = _load_json(paths["selection"], "review selection")
+    selected_issue_numbers = {
+        int(entry["issueNumber"])
+        for entry in review_selection["selected"]
+        if isinstance(entry, Mapping)
+        and isinstance(entry.get("issueNumber"), int)
+        and not isinstance(entry.get("issueNumber"), bool)
+    }
+    manual_policy = load_policy(DEFAULT_POLICY_PATH)
+    _schedule_positive_coverage_reviews(
+        state_dir,
+        repository,
+        observed_at=str(snapshot["collectedAt"]),
+        selected_issue_numbers=selected_issue_numbers,
+        judgments=final_judgments,
+        observations=quarantine_evidence,
+        interval_days=manual_policy.systemic_transient_window_days,
+    )
+    review_schedule = load_review_schedule(
+        state_dir,
+        repository,
+        str(snapshot["collectedAt"]),
+        issue_numbers=sorted(
+            {
+                *(
+                    int(number)
+                    for number in snapshot.get("openIssues", [])
+                    if isinstance(number, int) and not isinstance(number, bool)
+                ),
+                *(
+                    int(number)
+                    for number in snapshot.get("delegatedIssues", [])
+                    if isinstance(number, int) and not isinstance(number, bool)
+                ),
+            }
+        ),
+        pull_request_numbers=[
+            int(number)
+            for number in snapshot.get("openPullRequests", [])
+            if isinstance(number, int) and not isinstance(number, bool)
+        ],
+    )
+    _write_private_json(paths["reviewSchedule"], review_schedule)
+    embedded_repository_policy = snapshot.get("repositoryPolicy")
+    repository_policy = (
+        load_embedded_repository_policy(
+            embedded_repository_policy,
+            repository,
+        )
+        if isinstance(embedded_repository_policy, Mapping)
+        else None
+    )
+    managed_coverage = build_managed_item_coverage(
+        snapshot,
+        policy=repository_policy,
+        proposals=proposals,
+        investigation_plan=investigation_plan,
+        review_schedule=review_schedule,
+        observations=quarantine_evidence,
+        observation_error=(
+            str(quarantine_evidence["error"])
+            if isinstance(quarantine_evidence.get("error"), str)
+            else None
+        ),
+    )
+    _write_private_json(paths["managedCoverage"], managed_coverage)
+    capability = proposals.get("productionPilotCapability")
+    if not isinstance(capability, Mapping):
+        raise ValueError("Finalized proposals are missing production capability.")
+    proposals = {
+        **proposals,
+        "productionPilotCapability": {
+            **capability,
+            "managedItemCoverage": {
+                "schemaVersion": 1,
+                "valid": managed_coverage["valid"],
+                "blockers": managed_coverage["blockers"],
+            },
+        },
+    }
+    _write_private_json(paths["proposals"], proposals)
     comment_selection = build_comment_selection(
         proposals,
         max_comments=max_comments,
@@ -845,9 +1007,9 @@ def finish_cycle(
         action_events=ActionEventStore(state_dir).events(repository=repository),
         now=coordinator_now,
     )
+    policy_selection = block_policy_selection(policy_selection, managed_coverage)
     _write_private_json(paths["policySelection"], policy_selection)
     _write_private_json(paths["coordinatorProjection"], coordinator_projection)
-    review_selection = _load_json(paths["selection"], "review selection")
     visible_issue_numbers = {
         int(entry["issueNumber"])
         for entry in [
@@ -909,6 +1071,8 @@ def finish_cycle(
             snapshot.get("delegationStatus"),
             proposals,
         )
+        + "\n"
+        + render_managed_item_coverage_section(managed_coverage)
     )
     _write_private_text(paths["report"], report_markdown)
     dry_run = build_dry_run(proposals, action_id=None)
@@ -934,6 +1098,8 @@ def finish_cycle(
             paths["quarantineSession"],
             paths["quarantineReconciliation"],
             paths["investigationPlan"],
+            paths["reviewSchedule"],
+            paths["managedCoverage"],
             *[
                 path
                 for path in (
@@ -1031,6 +1197,8 @@ def finish_cycle(
         "activeInvestigationCount": len(
             investigation_plan["activeInvestigationIds"]
         ),
+        "managedItemCoverageValid": managed_coverage["valid"],
+        "managedItemCoverageBlockers": managed_coverage["blockers"],
     }
     _write_private_json(manifest_path, completed)
     return completed

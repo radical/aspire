@@ -6,8 +6,10 @@ from typing import Any, Mapping
 
 from ci_shepherd.comment_body import comment_bodies_materially_equal
 from ci_shepherd.eligibility import executable_ci_labels
+from ci_shepherd.handoff_reminders import reminder_action_identity
 from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
+from ci_shepherd.timeutils import parse_aware_iso8601
 
 
 _QUARANTINE_SOURCE_REVISION_RE = re.compile(
@@ -1376,6 +1378,11 @@ def _render_delegation_handoff_body(
         "",
         "**Delegation status:**",
     ]
+    latest_reminder = records[-1].get("handoffReminder") if records else None
+    if isinstance(latest_reminder, Mapping):
+        ordinal = latest_reminder.get("ordinal")
+        if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+            lines.extend(["", f"**Reminder:** {ordinal}"])
     for record in records:
         task_id = record.get("taskId") or "pending association"
         task_state = record.get("taskState") or record.get("lifecycle")
@@ -1592,6 +1599,10 @@ def build_action_proposals(
         int(issue_number)
         for issue_number in snapshot.get("openIssues", [])
     )
+    delegated_issue_numbers = frozenset(
+        int(issue_number)
+        for issue_number in snapshot.get("delegatedIssues", [])
+    )
     reconciliation_findings, reconciliation_revision = (
         _quarantine_reconciliation_findings(quarantine_reconciliation)
     )
@@ -1611,6 +1622,12 @@ def build_action_proposals(
     )
     if not isinstance(prepared, dict) or not isinstance(judgments, dict):
         raise TypeError("Prepared input and judgments must be objects.")
+    judgments_by_issue = {
+        issue.get("issueNumber"): issue
+        for issue in judgments.get("issues", [])
+        if isinstance(issue, Mapping)
+        and isinstance(issue.get("issueNumber"), int)
+    }
     action_clusters = _action_clusters(
         agent_input,
         snapshot_id=prepared.get("snapshotId"),
@@ -1701,29 +1718,90 @@ def build_action_proposals(
             )
             delegation_recommendation = None
         if delegation_recommendation is not None:
-            proposals.append(
-                {
-                    "actionId": (
-                        f"{prepared['snapshotId']}:issue:{issue_number}:"
-                        "assign-copilot"
-                    ),
-                    "issueNumber": issue_number,
-                    "issueUrl": prepared_issues[issue_number]["issueUrl"],
-                    "operation": "assign-copilot",
-                    "evidenceBasis": "ci-occurrence",
-                    "idempotencyKey": (
-                        f"issue:{issue_number}:copilot-assignment"
-                    ),
-                    "evidenceIds": list(
-                        delegation_recommendation["evidenceIds"]
-                    ),
-                    "expectedIssueState": "open",
-                    "targetRepository": snapshot["repository"],
-                    "baseBranch": _delegation_base_branch(prepared),
-                    "customInstructions": _delegation_instructions(issue_number),
-                    "model": "",
-                }
+            verified_quarantine = verified_quarantines.get(issue_number)
+            delegation_status = snapshot.get("delegationStatus")
+            episode_ordinals = (
+                delegation_status.get("episodeOrdinals", {})
+                if isinstance(delegation_status, Mapping)
+                else {}
             )
+            delegation_episode_ordinal = (
+                episode_ordinals.get(str(issue_number), 1)
+                if isinstance(episode_ordinals, Mapping)
+                else 1
+            )
+            if (
+                not isinstance(delegation_episode_ordinal, int)
+                or isinstance(delegation_episode_ordinal, bool)
+                or delegation_episode_ordinal <= 0
+            ):
+                raise ValueError("Delegation episode ordinal must be positive.")
+            proposal: dict[str, object] = {
+                "actionId": (
+                    f"{prepared['snapshotId']}:issue:{issue_number}:"
+                    "assign-copilot"
+                ),
+                "issueNumber": issue_number,
+                "issueUrl": prepared_issues[issue_number]["issueUrl"],
+                "operation": "assign-copilot",
+                "evidenceBasis": (
+                    "source-reconciliation"
+                    if verified_quarantine is not None
+                    else "ci-occurrence"
+                ),
+                "idempotencyKey": (
+                    f"issue:{issue_number}:copilot-assignment:"
+                    f"episode-{delegation_episode_ordinal}"
+                ),
+                "evidenceIds": list(delegation_recommendation["evidenceIds"]),
+                "expectedIssueState": "open",
+                "targetRepository": snapshot["repository"],
+                "baseBranch": _delegation_base_branch(prepared),
+                "customInstructions": _delegation_instructions(
+                    issue_number,
+                    (
+                        verified_quarantine.get("tests")
+                        if verified_quarantine is not None
+                        else None
+                    ),
+                ),
+                "model": "",
+            }
+            if verified_quarantine is not None:
+                if not isinstance(quarantine_reconciliation, dict):
+                    raise TypeError("Quarantine reconciliation must be an object.")
+                source_revision = quarantine_reconciliation.get("sourceRevision")
+                source_tree_digest = quarantine_reconciliation.get(
+                    "sourceTreeDigest"
+                )
+                inspector_tree_digest = quarantine_reconciliation.get(
+                    "inspectorTreeDigest"
+                )
+                if (
+                    not isinstance(source_revision, str)
+                    or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+                    or not isinstance(source_tree_digest, str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest)
+                    is None
+                    or not isinstance(inspector_tree_digest, str)
+                    or re.fullmatch(
+                        r"sha256:[0-9a-f]{64}", inspector_tree_digest
+                    )
+                    is None
+                ):
+                    raise ValueError(
+                        "Verified quarantine issues require pinned source evidence."
+                    )
+                proposal["sourceEvidenceFingerprint"] = {
+                    "sourceRevision": source_revision,
+                    "sourceTreeDigest": source_tree_digest,
+                    "inspectorTreeDigest": inspector_tree_digest,
+                    "findingDigest": "sha256:"
+                    + hashlib.sha256(
+                        stable_json(verified_quarantine).encode("utf-8")
+                    ).hexdigest(),
+                }
+            proposals.append(proposal)
         if status_recommendation is None:
             investigation = _selected_investigation_recommendation(issue)
             if investigation is not None:
@@ -1906,85 +1984,6 @@ def build_action_proposals(
             close["dependsOn"] = comment_action_id
         proposals.append(close)
 
-    if verified_quarantines:
-        if not isinstance(quarantine_reconciliation, dict):
-            raise TypeError("Quarantine reconciliation must be an object.")
-        source_revision = quarantine_reconciliation.get("sourceRevision")
-        source_tree_digest = quarantine_reconciliation.get("sourceTreeDigest")
-        if (
-            not isinstance(source_revision, str)
-            or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
-            or not isinstance(source_tree_digest, str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_tree_digest) is None
-        ):
-            raise ValueError(
-                "Verified quarantine issues require pinned source evidence."
-            )
-        proposed_issue_numbers = {
-            int(proposal["issueNumber"])
-            for proposal in proposals
-            if isinstance(proposal, dict)
-            and proposal.get("operation") == "assign-copilot"
-        }
-        closing_issue_numbers = {
-            int(proposal["issueNumber"])
-            for proposal in proposals
-            if isinstance(proposal, dict)
-            and proposal.get("operation") == "close-issue"
-        }
-        for issue_number, verified in sorted(verified_quarantines.items()):
-            if (
-                issue_number not in open_issue_numbers
-                or issue_number in delegation_handoffs
-                or issue_number in proposed_issue_numbers
-            ):
-                continue
-            if issue_number in closing_issue_numbers:
-                blocked_recommendations.append(
-                    {
-                        "issueNumber": issue_number,
-                        "disposition": "delegate-copilot",
-                        "blockingReasons": ["superseded-by-closure-review"],
-                        "evidenceIds": [f"issue:{issue_number}"],
-                    }
-                )
-                continue
-            finding_digest = "sha256:" + hashlib.sha256(
-                stable_json(verified).encode("utf-8")
-            ).hexdigest()
-            proposals.append(
-                {
-                    "actionId": (
-                        f"{prepared['snapshotId']}:issue:{issue_number}:"
-                        "assign-copilot"
-                    ),
-                    "issueNumber": issue_number,
-                    "issueUrl": prepared_issues[issue_number]["issueUrl"],
-                    "operation": "assign-copilot",
-                    "idempotencyKey": (
-                        f"issue:{issue_number}:copilot-assignment"
-                    ),
-                    "evidenceIds": [f"issue:{issue_number}"],
-                    "evidenceBasis": "source-reconciliation",
-                    "expectedIssueState": "open",
-                    "targetRepository": snapshot["repository"],
-                    "baseBranch": _delegation_base_branch(prepared),
-                    "customInstructions": _delegation_instructions(
-                        issue_number,
-                        verified.get("tests"),
-                    ),
-                    "model": "",
-                    "sourceEvidenceFingerprint": {
-                        "sourceRevision": source_revision,
-                        "sourceTreeDigest": source_tree_digest,
-                        "inspectorTreeDigest": quarantine_reconciliation[
-                            "inspectorTreeDigest"
-                        ],
-                        "findingDigest": finding_digest,
-                    },
-                }
-            )
-
     for issue_number, finding in sorted(reconciliation_findings.items()):
         prepared_issue = prepared_issues.get(issue_number)
         if not isinstance(prepared_issue, dict):
@@ -2055,8 +2054,49 @@ def build_action_proposals(
     for issue_number, records in sorted(delegation_handoffs.items()):
         if issue_number in reconciliation_issue_numbers:
             continue
-        if issue_number not in open_issue_numbers:
+        latest_record = records[-1]
+        if issue_number not in open_issue_numbers | delegated_issue_numbers:
             continue
+        if (
+            issue_number in delegated_issue_numbers
+            and latest_record.get("issueOpen") is not True
+        ):
+            continue
+        issue_judgment = judgments_by_issue.get(issue_number)
+        status_recommendation = (
+            _selected_status_recommendation(issue_judgment)
+            if isinstance(issue_judgment, dict)
+            else None
+        )
+        if (
+            status_recommendation is None
+            or status_recommendation.get("disposition") != "ping-human"
+        ):
+            blocked_recommendations.append(
+                {
+                    "issueNumber": issue_number,
+                    "disposition": "delegation-handoff",
+                    "blockingReasons": ["validated-ping-human-required"],
+                    "evidenceIds": [f"issue:{issue_number}"],
+                }
+            )
+            continue
+        reminder = latest_record.get("handoffReminder")
+        if isinstance(reminder, Mapping) and reminder.get("state") != "pending":
+            continue
+        if isinstance(reminder, Mapping):
+            next_wakeup = reminder.get("nextWakeup")
+            if not isinstance(next_wakeup, Mapping):
+                raise ValueError("Pending handoff reminder is missing nextWakeup.")
+            if parse_aware_iso8601(
+                next_wakeup.get("evaluateAt"),
+                "handoffReminder.nextWakeup.evaluateAt",
+            ) > parse_aware_iso8601(
+                snapshot.get("collectedAt"),
+                "snapshot.collectedAt",
+            ):
+                continue
+        reminder_identity = reminder_action_identity(records[-1])
         key = f"issue:{issue_number}:status"
         body = _render_delegation_handoff_body(issue_number, records)
         existing = _owned_status_comments(snapshot, issue_number, key)
@@ -2072,10 +2112,16 @@ def build_action_proposals(
             if isinstance(unchanged, list) and issue_number not in unchanged:
                 unchanged.append(issue_number)
             continue
+        action_suffix = "delegation-handoff-comment"
+        if reminder_identity is not None:
+            episode_id, ordinal = reminder_identity
+            action_suffix = (
+                f"ping-human-comment:{episode_id}:reminder-{ordinal}"
+            )
         proposal = {
             "actionId": (
                 f"{prepared['snapshotId']}:issue:{issue_number}:"
-                "delegation-handoff-comment"
+                f"{action_suffix}"
             ),
             "issueNumber": issue_number,
             "issueUrl": (
@@ -2085,7 +2131,7 @@ def build_action_proposals(
             "evidenceBasis": "delegation-state",
             "idempotencyKey": key,
             "body": body,
-            "evidenceIds": [f"issue:{issue_number}"],
+            "evidenceIds": list(status_recommendation["evidenceIds"]),
             "expectedIssueState": "open",
         }
         if existing:

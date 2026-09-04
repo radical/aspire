@@ -27,5 +27,16 @@
       "radical/aspire"
     ],
     "requiredApprovingReviews": 1
+  },
+  "handoffReminders": {
+    "intervalHours": 24,
+    "staleProgressHours": 168,
+    "maximum": 2
+  },
+  "managedAutomation": {
+    "issueProducers": [
+      "ci-failure-cause"
+    ],
+    "pullRequests": false
   }
 }

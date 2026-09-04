@@ -463,6 +463,16 @@ class InvestigationLifecycleTests(unittest.TestCase):
                 [request["investigationId"]],
                 active["activeInvestigationIds"],
             )
+            self.assertEqual(
+                [
+                    {
+                        "investigationId": request["investigationId"],
+                        "issueNumber": 21,
+                        "target": {"kind": "issue", "value": 21},
+                    }
+                ],
+                active["activeInvestigations"],
+            )
             self.assertEqual("started", started["status"])
 
             record_investigation_session_event(

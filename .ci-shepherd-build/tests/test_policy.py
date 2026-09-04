@@ -234,9 +234,29 @@ class RepositoryPolicyTests(unittest.TestCase):
                     "allowedHeadRepositories": ["radical/aspire"],
                     "requiredApprovingReviews": 1,
                 },
+                "handoffReminders": {
+                    "intervalHours": 24,
+                    "staleProgressHours": 168,
+                    "maximum": 2,
+                },
+                "managedAutomation": {
+                    "issueProducers": [
+                        "ci-failure-cause",
+                    ],
+                    "pullRequests": False,
+                },
             },
             policy.as_public_dict(),
         )
+        self.assertEqual(
+            frozenset(
+                {
+                    "ci-failure-cause",
+                }
+            ),
+            policy.managed_issue_producers,
+        )
+        self.assertFalse(policy.manages_pull_requests)
         self.assertRegex(policy.digest, r"^sha256:[0-9a-f]{64}$")
 
     def test_repository_policy_requires_at_least_one_quarantine_approval(
@@ -248,6 +268,21 @@ class RepositoryPolicyTests(unittest.TestCase):
         document["quarantinePullRequest"]["requiredApprovingReviews"] = 0
         with self.assertRaisesRegex(RepositoryPolicyError, "1 through 10"):
             load_repository_policy_document(document)
+
+    def test_repository_policy_strictly_validates_handoff_reminders(self) -> None:
+        for field, value in (
+            ("intervalHours", 0),
+            ("staleProgressHours", 0),
+            ("maximum", 0),
+            ("maximum", 11),
+        ):
+            with self.subTest(field=field, value=value):
+                document = json.loads(
+                    ASPIRE_REPOSITORY_POLICY_PATH.read_text(encoding="utf-8")
+                )
+                document["handoffReminders"][field] = value
+                with self.assertRaises(RepositoryPolicyError):
+                    load_repository_policy_document(document)
 
     @unittest.skipIf(os.name == "nt", "Windows symlink creation requires privileges.")
     def test_repository_policy_rejects_symlinked_files(self) -> None:

@@ -52,6 +52,7 @@ class TaskState(StrEnum):
 
 class TaskLifecycle(StrEnum):
     RUNNING = "running"
+    AWAITING_PULL_REQUEST = "awaiting_pull_request"
     COMPLETED = "completed"
     HANDOFF_REQUIRED = "handoff_required"
     ASSOCIATION_PENDING = "association_pending"
@@ -141,6 +142,8 @@ class DelegatedPullRequest:
     state: PullRequestState
     is_draft: bool
     number: int | None = None
+    changed_files: int | None = None
+    human_authored: bool | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -161,6 +164,17 @@ class DelegatedPullRequest:
             or self.number <= 0
         ):
             raise ValueError("number must be a positive integer when supplied.")
+        if self.changed_files is not None and (
+            not isinstance(self.changed_files, int)
+            or isinstance(self.changed_files, bool)
+            or self.changed_files < 0
+        ):
+            raise ValueError("changed_files must be nonnegative when supplied.")
+        if self.human_authored is not None and not isinstance(
+            self.human_authored,
+            bool,
+        ):
+            raise ValueError("human_authored must be a boolean when supplied.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +182,7 @@ class DelegatedIssue:
     number: int
     is_open: bool
     copilot_assigned: bool
+    human_assigned: bool | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -180,6 +195,11 @@ class DelegatedIssue:
             raise ValueError("is_open must be a boolean.")
         if not isinstance(self.copilot_assigned, bool):
             raise ValueError("copilot_assigned must be a boolean.")
+        if self.human_assigned is not None and not isinstance(
+            self.human_assigned,
+            bool,
+        ):
+            raise ValueError("human_assigned must be a boolean when supplied.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,8 +576,20 @@ def derive_delegation_tracking(
             "startedAt": started_at.isoformat().replace("+00:00", "Z"),
             "taskId": task_id,
         }
-        task = tasks_by_id.get(task_id) if task_id is not None else None
         live_issue = issues_by_number.get(issue_number)
+        if live_issue is not None:
+            common.update(
+                {
+                    "issueOpen": live_issue.is_open,
+                    "copilotAssigned": live_issue.copilot_assigned,
+                    **(
+                        {"humanAssigned": live_issue.human_assigned}
+                        if live_issue.human_assigned is not None
+                        else {}
+                    ),
+                }
+            )
+        task = tasks_by_id.get(task_id) if task_id is not None else None
         if task is None:
             tracking.append(
                 {
@@ -565,6 +597,7 @@ def derive_delegation_tracking(
                     "taskState": None,
                     "lifecycle": TaskLifecycle.HANDOFF_REQUIRED.value,
                     "requiresHuman": True,
+                    "handoffStartedAt": common["startedAt"],
                     "pullRequests": [],
                 }
             )
@@ -592,27 +625,42 @@ def derive_delegation_tracking(
                 associated_pulls.append(pull_request)
                 if pull_request.state in {
                     PullRequestState.UNKNOWN,
-                    PullRequestState.CLOSED,
                 }:
                     association = PullRequestAssociation.PENDING
-        lifecycle = derive_task_lifecycle(task, association=association)
-        issue_terminated = (
-            live_issue is not None
-            and task.state is TaskState.COMPLETED
-            and association is PullRequestAssociation.NONE
-            and (not live_issue.is_open or not live_issue.copilot_assigned)
+        lifecycle = derive_task_lifecycle(
+            task,
+            association=association,
+            pull_requests=associated_pulls,
         )
         tracking.append(
             {
                 **common,
                 "taskState": task.state.value,
-                "lifecycle": (
-                    TaskLifecycle.COMPLETED.value
-                    if issue_terminated
-                    else lifecycle.lifecycle.value
+                "lifecycle": lifecycle.lifecycle.value,
+                "requiresHuman": lifecycle.requires_handoff,
+                **(
+                    {
+                        "handoffStartedAt": task.updated_at.astimezone(UTC)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    }
+                    if lifecycle.requires_handoff
+                    else {}
                 ),
-                "requiresHuman": (
-                    False if issue_terminated else lifecycle.requires_handoff
+                **(
+                    {
+                        "nextWakeup": {
+                            "reason": "retry-backoff",
+                            "evaluateAt": (
+                                task.updated_at.astimezone(UTC)
+                                + timedelta(minutes=15)
+                            )
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                        }
+                    }
+                    if lifecycle.lifecycle is TaskLifecycle.ASSOCIATION_PENDING
+                    else {}
                 ),
                 "pullRequests": [
                     {
@@ -629,6 +677,16 @@ def derive_delegation_tracking(
                             if pull_request.number is not None
                             else {}
                         ),
+                        **(
+                            {"changedFiles": pull_request.changed_files}
+                            if pull_request.changed_files is not None
+                            else {}
+                        ),
+                        **(
+                            {"humanAuthored": pull_request.human_authored}
+                            if pull_request.human_authored is not None
+                            else {}
+                        ),
                     }
                     for pull_request in associated_pulls
                 ],
@@ -642,18 +700,37 @@ def derive_task_lifecycle(
     task: AgentTask,
     *,
     association: PullRequestAssociation,
+    pull_requests: Sequence[DelegatedPullRequest] = (),
 ) -> TaskLifecycleResult:
     """Derive task lifecycle after accounting for PR association evidence."""
     if task.state in {TaskState.QUEUED, TaskState.IN_PROGRESS}:
         lifecycle = TaskLifecycle.RUNNING
         requires_handoff = False
     elif task.state is TaskState.COMPLETED:
-        if association is PullRequestAssociation.ASSOCIATED:
-            lifecycle = TaskLifecycle.COMPLETED
-            requires_handoff = False
-        elif association is PullRequestAssociation.NONE:
+        if association is PullRequestAssociation.NONE:
             lifecycle = TaskLifecycle.HANDOFF_REQUIRED
             requires_handoff = True
+        elif (
+            association is PullRequestAssociation.PENDING
+            or not pull_requests
+            or len(pull_requests) != 1
+            or pull_requests[0].state is PullRequestState.UNKNOWN
+            or (
+                pull_requests[0].state is PullRequestState.OPEN
+                and pull_requests[0].changed_files is None
+            )
+        ):
+            lifecycle = TaskLifecycle.ASSOCIATION_PENDING
+            requires_handoff = False
+        elif pull_requests[0].state is PullRequestState.MERGED:
+            lifecycle = TaskLifecycle.COMPLETED
+            requires_handoff = False
+        elif (
+            pull_requests[0].state is PullRequestState.OPEN
+            and pull_requests[0].changed_files > 0
+        ):
+            lifecycle = TaskLifecycle.AWAITING_PULL_REQUEST
+            requires_handoff = False
         else:
             lifecycle = TaskLifecycle.HANDOFF_REQUIRED
             requires_handoff = True
@@ -731,14 +808,6 @@ def derive_capacity_usage(
     ]
 
     lifecycles: list[TaskLifecycleResult] = []
-    issue_by_number = {issue.number: issue for issue in issues}
-    issue_by_task_id = {
-        start.task_id: issue_by_number[start.issue_number]
-        for start in starts
-        if start.task_id is not None
-        and start.issue_number is not None
-        and start.issue_number in issue_by_number
-    }
     for task_id in sorted(recent_owned_task_ids):
         task = tasks_by_id.get(task_id)
         if task is None:
@@ -750,6 +819,7 @@ def derive_capacity_usage(
         if task is None:
             continue
         association = PullRequestAssociation.NONE
+        associated_pulls: list[DelegatedPullRequest] = []
         if (
             not evidence.owned_task_inventory_complete
             or not evidence.pull_request_inventory_complete
@@ -787,10 +857,8 @@ def derive_capacity_usage(
                 association = PullRequestAssociation.PENDING
                 continue
             pull_request = matches[0]
-            if pull_request.state in {
-                PullRequestState.UNKNOWN,
-                PullRequestState.CLOSED,
-            }:
+            associated_pulls.append(pull_request)
+            if pull_request.state is PullRequestState.UNKNOWN:
                 association = PullRequestAssociation.PENDING
                 continue
             if association is not PullRequestAssociation.PENDING:
@@ -799,35 +867,23 @@ def derive_capacity_usage(
                 open_pull_requests.add(
                     (pull_request.database_id, pull_request.global_id)
                 )
-        live_issue = issue_by_task_id.get(task.task_id)
-        if (
-            live_issue is not None
-            and task.state is TaskState.COMPLETED
-            and association is PullRequestAssociation.NONE
-            and (not live_issue.is_open or not live_issue.copilot_assigned)
-        ):
-            lifecycles.append(
-                TaskLifecycleResult(
-                    task_id=task.task_id,
-                    state=task.state,
-                    association=association,
-                    lifecycle=TaskLifecycle.COMPLETED,
-                    requires_handoff=False,
-                )
+        lifecycles.append(
+            derive_task_lifecycle(
+                task,
+                association=association,
+                pull_requests=associated_pulls,
             )
-        else:
-            lifecycles.append(
-                derive_task_lifecycle(task, association=association)
-            )
+        )
 
     return CapacityUsage(
         running_tasks=sum(
-            item.state is TaskState.IN_PROGRESS for item in lifecycles
+            item.state in {TaskState.QUEUED, TaskState.IN_PROGRESS}
+            for item in lifecycles
         ),
         starts_in_rolling_24h=starts_in_window,
         open_delegated_prs=len(open_pull_requests),
         repository_running_tasks=sum(
-            task.state is TaskState.IN_PROGRESS
+            task.state in {TaskState.QUEUED, TaskState.IN_PROGRESS}
             for task in tasks_by_id.values()
         ),
         task_lifecycles=tuple(lifecycles),
@@ -928,12 +984,24 @@ def render_delegation_status_section(
                 rendered_pulls.append(
                     f"{identity} ({pull_request.get('state')})"
                 )
+        lifecycle = record.get("lifecycle")
+        task_state = record.get("taskState")
+        rendered_state = lifecycle or task_state
+        if lifecycle and task_state and lifecycle != task_state:
+            rendered_state = f"{lifecycle} (task: {task_state})"
+        reminder = record.get("handoffReminder")
+        handoff = "required" if record.get("requiresHuman") else "no"
+        if isinstance(reminder, Mapping):
+            handoff = (
+                f"{reminder.get('state')} "
+                f"(reminder {reminder.get('ordinal')})"
+            )
         lines.append(
             f"| #{record.get('issueNumber')} "
             f"| `{record.get('taskId') or 'pending'}` "
-            f"| {record.get('taskState') or record.get('lifecycle')} "
+            f"| {rendered_state} "
             f"| {', '.join(rendered_pulls) or 'none'} "
-            f"| {'required' if record.get('requiresHuman') else 'no'} |"
+            f"| {handoff} |"
         )
     lines.append("")
     _append_delegation_proposals(lines, proposals_document)

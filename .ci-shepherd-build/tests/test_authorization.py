@@ -1261,6 +1261,24 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         self.assertEqual(self.proposals["snapshotId"], grant["snapshotId"])
 
+    def test_production_grant_accepts_managed_coverage_capability(self) -> None:
+        self._use_production_repository()
+        capability = self.proposals["productionPilotCapability"]
+        assert isinstance(capability, dict)
+        capability["managedItemCoverage"] = {
+            "schemaVersion": 1,
+            "valid": True,
+            "blockers": [],
+        }
+        self._write_proposals()
+
+        grant = self._generate(
+            action_ids=[self.comment_action_id],
+            allow_production_comment_pilot=True,
+        )
+
+        self.assertEqual(self.proposals["snapshotId"], grant["snapshotId"])
+
     def test_production_comment_pilot_allows_up_to_five_actions(
         self,
     ) -> None:

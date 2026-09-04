@@ -73,7 +73,23 @@ def observe_delegations(
                 )
             )
             for index, record in enumerate(client.get_pages(endpoint)):
-                pull_request = _normalize_pull_request(record, index=index)
+                summary = _normalize_pull_request(record, index=index)
+                assert summary.number is not None
+                pull_request = _normalize_pull_request(
+                    client.get(
+                        f"/repos/{repository}/pulls/{summary.number}"
+                    ),
+                    index=index,
+                )
+                if (
+                    pull_request.database_id != summary.database_id
+                    or pull_request.global_id != summary.global_id
+                    or pull_request.number != summary.number
+                ):
+                    raise ValueError(
+                        f"Pull request {summary.number} detail identity does not "
+                        "match its branch observation."
+                    )
                 previous = pull_requests.get(pull_request.database_id)
                 if previous is not None and previous != pull_request:
                     raise ValueError(
@@ -232,12 +248,23 @@ def _normalize_pull_request(
         or number <= 0
     ):
         raise ValueError(f"pull_requests[{index}].number must be a positive integer.")
+    changed_files = pull_request.get("changed_files")
+    if changed_files is not None and (
+        not isinstance(changed_files, int)
+        or isinstance(changed_files, bool)
+        or changed_files < 0
+    ):
+        raise ValueError(
+            f"pull_requests[{index}].changed_files must be nonnegative when supplied."
+        )
     return DelegatedPullRequest(
         database_id=database_id,
         global_id=global_id,
         state=state,
         is_draft=is_draft,
         number=number,
+        changed_files=changed_files,
+        human_authored=_human_identity(pull_request.get("user")),
     )
 
 
@@ -264,6 +291,14 @@ def _normalize_issue(
         if isinstance(assignee, Mapping)
         and isinstance(assignee.get("login"), str)
     }
+    human_identities = [_human_identity(assignee) for assignee in assignees]
+    human_assigned = (
+        True
+        if any(identity is True for identity in human_identities)
+        else None
+        if any(identity is None for identity in human_identities)
+        else False
+    )
     return DelegatedIssue(
         number=expected_number,
         is_open=state == "open",
@@ -276,7 +311,22 @@ def _normalize_issue(
                 "github-copilot[bot]",
             }
         ),
+        human_assigned=human_assigned,
     )
+
+
+def _human_identity(value: object) -> bool | None:
+    if not isinstance(value, Mapping):
+        return None
+    login = value.get("login")
+    account_type = value.get("type")
+    if (
+        not isinstance(login, str)
+        or not login
+        or account_type not in {"User", "Bot"}
+    ):
+        return None
+    return account_type == "User" and not login.casefold().endswith("[bot]")
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:

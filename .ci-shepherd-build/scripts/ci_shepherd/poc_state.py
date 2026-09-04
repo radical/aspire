@@ -20,7 +20,10 @@ REVIEW_WAKEUP_REASONS = frozenset(
     {
         "closure-without-recurrence",
         "escalation-reminder",
+        "human-stale-progress",
+        "operator-escalation",
         "pending-pr-timeout",
+        "positive-coverage-review",
         "retry-backoff",
     }
 )
@@ -231,6 +234,11 @@ def load_review_schedule(
         "pullRequests": {},
     }
     pending_wakeups: dict[tuple[str, int], tuple[datetime, str]] = {}
+    transactional_reasons = {
+        "escalation-reminder",
+        "human-stale-progress",
+        "operator-escalation",
+    }
     for row in read_ledger_rows(
         state_directory / "ledgers" / "review-wakeups.jsonl"
     ):
@@ -243,10 +251,16 @@ def load_review_schedule(
             evaluate_at = _parse_timestamp(row.get("evaluateAt"), "evaluateAt")
         except ValueError:
             continue
+        candidate = (evaluate_at, str(row["reason"]))
+        if row["reason"] in transactional_reasons:
+            # These wakeups represent durable pending lifecycle work. A review
+            # event cannot consume them; only a later lifecycle wakeup,
+            # produced after authoritative delivery or takeover, supersedes it.
+            pending_wakeups[key] = candidate
+            continue
         reviewed_at = latest.get(key)
         if reviewed_at is not None and evaluate_at <= reviewed_at:
             continue
-        candidate = (evaluate_at, str(row["reason"]))
         if candidate < pending_wakeups.get(
             key,
             (datetime.max.replace(tzinfo=UTC), ""),

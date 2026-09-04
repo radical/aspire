@@ -177,6 +177,28 @@ def _delegate_judgments() -> dict[str, object]:
     return judgments
 
 
+def _no_action_judgments() -> dict[str, object]:
+    judgments = _judgments()
+    issue = judgments["issues"][0]
+    assert isinstance(issue, dict)
+    issue["category"] = "unknown"
+    recommendations = issue["recommendations"]
+    assert isinstance(recommendations, list)
+    recommendation = recommendations[0]
+    assert isinstance(recommendation, dict)
+    recommendation.update(
+        {
+            "disposition": "no-action",
+            "target": {"kind": "issue", "value": 21},
+            "confidence": "low",
+            "summary": "The available evidence does not authorize an action.",
+            "missingEvidence": [],
+            "reassessWhen": "After material evidence changes.",
+        }
+    )
+    return judgments
+
+
 def _resolved_prepared() -> dict[str, object]:
     prepared = _prepared()
     issue = prepared["issues"][0]
@@ -355,6 +377,7 @@ class WatchActionTests(unittest.TestCase):
             "ankj",
         )
 
+        self.assertEqual(1, len(proposals["proposals"]))
         proposal = proposals["proposals"][0]
         self.assertEqual("assign-copilot", proposal["operation"])
         self.assertEqual("owner/repo", proposal["targetRepository"])
@@ -364,10 +387,56 @@ class WatchActionTests(unittest.TestCase):
         self.assertNotIn("Demo.Tests.Flaky", proposal["customInstructions"])
         self.assertNotIn("[QuarantinedTest]", proposal["customInstructions"])
         self.assertEqual(
-            "issue:21:copilot-assignment",
+            "issue:21:copilot-assignment:episode-1",
             proposal["idempotencyKey"],
         )
         build_dry_run(proposals, action_id=str(proposal["actionId"]))
+
+    def test_materially_new_delegation_uses_new_episode_identity(self) -> None:
+        prepared = _prepared()
+        prepared["repositoryPolicy"] = {
+            "quarantinePullRequest": {"baseRef": "main"},
+        }
+        prepared["issues"][0]["machineActionability"] = {
+            "status": "verified",
+            "kind": "deterministic-failure",
+            "fingerprint": "test:Demo.Tests.Broken",
+            "evidenceIds": ["issue:21", "run:777"],
+        }
+        first = build_action_proposals(
+            _snapshot(),
+            prepared,
+            _delegate_judgments(),
+            "ankj",
+        )
+        successor_snapshot = _snapshot()
+        successor_snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [],
+            "episodeOrdinals": {"21": 2},
+        }
+
+        successor = build_action_proposals(
+            successor_snapshot,
+            prepared,
+            _delegate_judgments(),
+            "ankj",
+        )
+        replay = build_action_proposals(
+            successor_snapshot,
+            prepared,
+            _delegate_judgments(),
+            "ankj",
+        )
+
+        self.assertNotEqual(
+            first["proposals"][0]["idempotencyKey"],
+            successor["proposals"][0]["idempotencyKey"],
+        )
+        self.assertEqual(
+            successor["proposals"][0]["idempotencyKey"],
+            replay["proposals"][0]["idempotencyKey"],
+        )
 
     def test_model_only_delegation_recommendation_is_blocked(self) -> None:
         prepared = _prepared()
@@ -388,7 +457,9 @@ class WatchActionTests(unittest.TestCase):
             proposals["blockedRecommendations"][0]["blockingReasons"],
         )
 
-    def test_verified_quarantine_proposes_copilot_assignment(self) -> None:
+    def test_no_action_with_verified_quarantine_does_not_propose_assignment(
+        self,
+    ) -> None:
         prepared = _prepared()
         prepared["repositoryPolicy"] = {
             "quarantinePullRequest": {"baseRef": "main"},
@@ -397,25 +468,140 @@ class WatchActionTests(unittest.TestCase):
         proposals = build_action_proposals(
             _snapshot(),
             prepared,
-            _judgments(),
+            _no_action_judgments(),
             "ankj",
             quarantine_reconciliation=_verified_reconciliation(),
         )
 
-        assignment = next(
-            proposal
-            for proposal in proposals["proposals"]
-            if proposal["operation"] == "assign-copilot"
+        self.assertEqual(
+            [],
+            [
+                proposal
+                for proposal in proposals["proposals"]
+                if proposal["operation"] == "assign-copilot"
+            ],
         )
-        self.assertEqual("source-reconciliation", assignment["evidenceBasis"])
-        self.assertTrue(assignment["executionEligibility"]["eligible"])
-        self.assertIn(
-            "`Demo.Tests.Flaky` at `tests/Demo.Tests/Tests.cs:31`",
-            assignment["customInstructions"],
+
+    def test_frozen_prior_live_quarantine_replay_preserves_comment_bytes(
+        self,
+    ) -> None:
+        baseline = build_action_proposals(
+            _snapshot(),
+            _prepared(),
+            _judgments(),
+            "ankj",
         )
-        self.assertIn(
-            "Do not modify or remove the `[QuarantinedTest]` attribute",
-            assignment["customInstructions"],
+        snapshot = _snapshot()
+        prepared = _prepared()
+        judgments = _judgments()
+        reconciliation = _verified_reconciliation()
+        reconciliation["verifiedIssues"] = [
+            {
+                "issueNumber": 6866,
+                "issueUrl": "https://github.com/microsoft/aspire/issues/6866",
+                "tests": [
+                    {
+                        "file": "Aspire.Playground.Tests/AppHostTests.cs",
+                        "line": 33,
+                        "testName": (
+                            "Aspire.Playground.Tests.AppHostTests."
+                            "TestEndpointsReturnOk"
+                        ),
+                    }
+                ],
+            },
+            {
+                "issueNumber": 8728,
+                "issueUrl": "https://github.com/microsoft/aspire/issues/8728",
+                "tests": [
+                    {
+                        "file": (
+                            "Aspire.Hosting.Tests/"
+                            "DistributedApplicationTests.cs"
+                        ),
+                        "line": 1708,
+                        "testName": (
+                            "Aspire.Hosting.Tests.DistributedApplicationTests."
+                            "ProxylessEndpointWorks"
+                        ),
+                    }
+                ],
+            },
+        ]
+        for issue_number in (6866, 8728):
+            snapshot["openIssues"].append(issue_number)
+            snapshot["issues"].append({"number": issue_number, "state": "open"})
+            snapshot["evidence"][f"issue:{issue_number}"] = {
+                "kind": "issue-event",
+                "url": f"https://github.com/microsoft/aspire/issues/{issue_number}",
+                "availability": "available",
+                "payload": {
+                    "number": issue_number,
+                    "state": "open",
+                    "updatedAt": "2026-09-04T18:40:55Z",
+                    "labels": [{"name": "test-failure"}],
+                    "occurrences": [],
+                    "facts": [],
+                },
+            }
+            prepared["issues"].append(
+                {
+                    "issueNumber": issue_number,
+                    "issueUrl": (
+                        f"https://github.com/microsoft/aspire/issues/{issue_number}"
+                    ),
+                    "title": "Frozen prior-live no-action issue",
+                    "evidenceBundle": [
+                        {
+                            "id": f"issue:{issue_number}",
+                            "kind": "issue-event",
+                        }
+                    ],
+                }
+            )
+            judgments["issues"].append(
+                {
+                    "category": "unknown",
+                    "issueNumber": issue_number,
+                    "recommendations": [
+                        {
+                            "confidence": "medium",
+                            "disposition": "no-action",
+                            "evidenceIds": [f"issue:{issue_number}"],
+                            "missingEvidence": ["recognized-producer-ledger"],
+                            "reassessWhen": (
+                                "When automation ownership or blockers change."
+                            ),
+                            "summary": "No shepherd action is needed.",
+                            "target": {
+                                "kind": "issue",
+                                "value": issue_number,
+                            },
+                        }
+                    ],
+                }
+            )
+
+        replay = build_action_proposals(
+            snapshot,
+            prepared,
+            judgments,
+            "ankj",
+            quarantine_reconciliation=reconciliation,
+        )
+
+        self.assertEqual(
+            stable_json(baseline["proposals"]),
+            stable_json(replay["proposals"]),
+        )
+        self.assertEqual(
+            [],
+            [
+                proposal
+                for proposal in replay["proposals"]
+                if proposal["issueNumber"] in {6866, 8728}
+                and proposal["operation"] == "assign-copilot"
+            ],
         )
 
     def test_delegate_copilot_rejects_flake_classification(self) -> None:
@@ -1011,7 +1197,7 @@ class WatchActionTests(unittest.TestCase):
         self.assertEqual("duplicate", close["closeReason"])
         self.assertEqual(comment["actionId"], close["dependsOn"])
 
-    def test_superseded_duplicate_close_suppresses_verified_quarantine_assignment(
+    def test_verified_quarantine_does_not_manufacture_blocked_delegation(
         self,
     ) -> None:
         prepared = _prepared()
@@ -1032,17 +1218,7 @@ class WatchActionTests(unittest.TestCase):
             ["create-comment", "close-issue"],
             [proposal["operation"] for proposal in result["proposals"]],
         )
-        self.assertEqual(
-            [
-                {
-                    "issueNumber": 21,
-                    "disposition": "delegate-copilot",
-                    "blockingReasons": ["superseded-by-closure-review"],
-                    "evidenceIds": ["issue:21"],
-                }
-            ],
-            result["blockedRecommendations"],
-        )
+        self.assertEqual([], result["blockedRecommendations"])
 
     def test_superseded_duplicate_close_suppresses_model_delegation(self) -> None:
         prepared = _prepared()
@@ -1336,8 +1512,11 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
         self.assertEqual([], proposals["proposals"])
 
-    def test_terminal_delegation_proposes_one_canonical_human_handoff(self) -> None:
+    def test_delegated_issue_proposes_one_due_canonical_human_handoff(self) -> None:
         snapshot = _snapshot()
+        snapshot["openIssues"] = []
+        snapshot["issues"] = []
+        snapshot["delegatedIssues"] = [21]
         snapshot["delegationStatus"] = {
             "status": "complete",
             "records": [
@@ -1350,6 +1529,22 @@ class DelegationHandoffActionTests(unittest.TestCase):
                     "taskState": "waiting_for_user",
                     "lifecycle": "handoff_required",
                     "requiresHuman": True,
+                    "issueOpen": True,
+                    "copilotAssigned": True,
+                    "handoffStartedAt": "2026-08-21T15:00:00Z",
+                    "nextWakeup": {
+                        "reason": "escalation-reminder",
+                        "evaluateAt": "2026-08-21T15:00:00Z",
+                    },
+                    "handoffReminder": {
+                        "episodeId": "assignment:21:handoff",
+                        "ordinal": 1,
+                        "state": "pending",
+                        "nextWakeup": {
+                            "reason": "escalation-reminder",
+                            "evaluateAt": "2026-08-21T15:00:00Z",
+                        },
+                    },
                     "pullRequests": [
                         {
                             "databaseId": 101,
@@ -1366,7 +1561,7 @@ class DelegationHandoffActionTests(unittest.TestCase):
         proposals = build_action_proposals(
             snapshot,
             _prepared(),
-            _judgments(),
+            _ping_human_judgments(),
             "ankj",
         )
 
@@ -1374,14 +1569,111 @@ class DelegationHandoffActionTests(unittest.TestCase):
         proposal = proposals["proposals"][0]
         self.assertEqual(
             "snapshot:owner/repo:2026-08-21T16:00:00Z:"
-            "issue:21:delegation-handoff-comment",
+            "issue:21:ping-human-comment:"
+            "assignment:21:handoff:reminder-1",
             proposal["actionId"],
         )
         self.assertEqual("create-comment", proposal["operation"])
         self.assertIn("Task `task-21`: waiting_for_user", proposal["body"])
         self.assertIn("PR #22 (open)", proposal["body"])
+        self.assertIn("**Reminder:** 1", proposal["body"])
         self.assertNotIn("watch-comment", proposal["actionId"])
         build_dry_run(proposals, action_id=proposal["actionId"])
+        replay_snapshot = _with_owned_comment(snapshot, str(proposal["body"]))
+
+        replay = build_action_proposals(
+            replay_snapshot,
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], replay["proposals"])
+        self.assertEqual([21], replay["unchangedIssueNumbers"])
+
+    def test_pending_reminder_before_its_wakeup_does_not_propose(self) -> None:
+        snapshot = _snapshot()
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [
+                {
+                    "actionId": "assignment:21",
+                    "repository": "owner/repo",
+                    "issueNumber": 21,
+                    "startedAt": "2026-08-21T15:00:00Z",
+                    "taskId": "task-21",
+                    "taskState": "waiting_for_user",
+                    "lifecycle": "handoff_required",
+                    "requiresHuman": True,
+                    "handoffStartedAt": "2026-08-21T15:00:00Z",
+                    "handoffReminder": {
+                        "episodeId": "assignment:21:handoff",
+                        "ordinal": 2,
+                        "state": "pending",
+                        "nextWakeup": {
+                            "reason": "escalation-reminder",
+                            "evaluateAt": "2026-08-22T15:00:00Z",
+                        },
+                    },
+                    "pullRequests": [],
+                }
+            ],
+        }
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _ping_human_judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], proposals["proposals"])
+
+    def test_handoff_wakeup_without_ping_human_judgment_cannot_propose(self) -> None:
+        snapshot = _snapshot()
+        snapshot["delegationStatus"] = {
+            "status": "complete",
+            "records": [
+                {
+                    "actionId": "assignment:21",
+                    "repository": "owner/repo",
+                    "issueNumber": 21,
+                    "startedAt": "2026-08-21T15:00:00Z",
+                    "taskId": "task-21",
+                    "taskState": "completed",
+                    "lifecycle": "handoff_required",
+                    "requiresHuman": True,
+                    "handoffStartedAt": "2026-08-21T15:00:00Z",
+                    "nextWakeup": {
+                        "reason": "escalation-reminder",
+                        "evaluateAt": "2026-08-22T15:00:00Z",
+                    },
+                    "handoffReminder": {
+                        "episodeId": "assignment:21:handoff",
+                        "ordinal": 1,
+                        "state": "pending",
+                        "nextWakeup": {
+                            "reason": "escalation-reminder",
+                            "evaluateAt": "2026-08-22T15:00:00Z",
+                        },
+                    },
+                    "pullRequests": [],
+                }
+            ],
+        }
+
+        proposals = build_action_proposals(
+            snapshot,
+            _prepared(),
+            _judgments(),
+            "ankj",
+        )
+
+        self.assertEqual([], proposals["proposals"])
+        self.assertEqual(
+            ["validated-ping-human-required"],
+            proposals["blockedRecommendations"][0]["blockingReasons"],
+        )
 
     def test_delegation_handoff_without_ci_label_is_not_executable(self) -> None:
         snapshot = _snapshot()
@@ -1410,7 +1702,7 @@ class DelegationHandoffActionTests(unittest.TestCase):
         proposals = build_action_proposals(
             snapshot,
             _prepared(),
-            _judgments(),
+            _ping_human_judgments(),
             "ankj",
         )
 

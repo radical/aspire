@@ -377,6 +377,64 @@ class LifecycleAssessmentTests(unittest.TestCase):
         self.assertIn("recommend-close", candidate["allowedActions"])
         self.assertIn("autoclose-policy-does-not-permit-shepherd", candidate["blockers"])
 
+    def test_main_scoped_failure_is_not_retired_by_a_named_merged_pull_request(self) -> None:
+        issue_number = 13
+        payload = issue_payload(
+            issue_number,
+            producer="ci-failure-cause",
+            autoclose=None,
+            ledger=complete_ledger(100),
+            updated_at="2026-08-09T00:00:00Z",
+        )
+        referenced_by = [{"sourceIssueNumber": issue_number}]
+        source_run = evidence(
+            "run:100",
+            "workflow-run",
+            {
+                "runId": 100,
+                "targetRepository": REPOSITORY,
+                "event": "push",
+                "branch": "main",
+                "headSha": "b" * 40,
+                "conclusion": "failure",
+                "referencedBy": referenced_by,
+            },
+        )
+        pr = evidence(
+            "pr:20",
+            "pull-request",
+            {
+                "number": 20,
+                "state": "closed",
+                "mergedAt": "2026-08-10T10:00:00Z",
+                "mergeCommitSha": "a" * 40,
+                "referencedBy": referenced_by,
+            },
+        )
+        recovery_run = evidence(
+            "run:200",
+            "workflow-run",
+            {
+                "runId": 200,
+                "targetRepository": REPOSITORY,
+                "event": "push",
+                "branch": "main",
+                "headSha": "a" * 40,
+                "conclusion": "success",
+                "runStartedAt": "2026-08-10T10:01:00Z",
+                "referencedBy": referenced_by,
+            },
+        )
+
+        candidate = candidate_for(
+            prepare_assessment(snapshot(payload, source_run, pr, recovery_run)),
+            issue_number,
+        )
+
+        self.assertEqual("observing", candidate["candidateState"])
+        self.assertEqual("wait", candidate["candidateAction"])
+        self.assertEqual({}, candidate["resolutionEvidence"])
+
     def test_commit_anchored_recovery_uses_run_time_for_same_day_occurrence(self) -> None:
         issue_number = 16
         payload = issue_payload(

@@ -44,6 +44,7 @@ from ci_shepherd.coordinator_state import (
     make_lock_free_durable_intent_reader,
 )
 from ci_shepherd.execution_state import ActionEventStore
+from ci_shepherd.managed_coverage import block_policy_selection
 from ci_shepherd.models import stable_json
 from ci_shepherd.operation_policy import (
     OPERATION_CLASSES,
@@ -317,13 +318,22 @@ def _build_selection(
     _validate_cycle_run_id(proposals_document, run_id)
     projection = store.projection(repository, now=now)
     action_events = _build_action_event_store(state_dir).events(repository=repository)
-    return build_policy_selection(
+    selection = build_policy_selection(
         proposals_document,
         run_id=run_id,
         policy_projection=projection,
         action_events=action_events,
         now=now,
     )
+    capability = proposals_document.get("productionPilotCapability")
+    managed_coverage = (
+        capability.get("managedItemCoverage")
+        if isinstance(capability, Mapping)
+        else None
+    )
+    if isinstance(managed_coverage, Mapping):
+        selection = block_policy_selection(selection, managed_coverage)
+    return selection
 
 
 def _validate_cycle_run_id(

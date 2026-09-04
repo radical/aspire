@@ -1136,6 +1136,36 @@ class DecisionCommandTests(CoordinatorCliTestCase):
 
 
 class SelectCommandTests(CoordinatorCliTestCase):
+    def test_managed_coverage_blocker_survives_live_reselection(self) -> None:
+        self._activate_policy()
+        action_id = "snapshot:test:1:issue:1:comment"
+        document = self._write_proposals(
+            [_comment_proposal(action_id=action_id, issue_number=1)],
+            unchanged_issue_numbers=[],
+        )
+        capability = document["productionPilotCapability"]
+        assert isinstance(capability, dict)
+        capability["managedItemCoverage"] = {
+            "schemaVersion": 1,
+            "valid": False,
+            "blockers": ["issue:1:uncovered"],
+        }
+        self._write_json(self.proposals_path, document)
+
+        output_path = self._select()
+
+        selection = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual([], selection["selectedActionIds"])
+        self.assertTrue(selection["mutationBlocked"])
+        self.assertEqual(
+            ["issue:1:uncovered"],
+            selection["mutationBlockers"],
+        )
+        self.assertEqual(
+            {"thisRun": 0, "rolling24h": 0},
+            selection["maximumWriteExposure"],
+        )
+
     def test_rejects_run_id_not_bound_to_proposal_snapshot(self) -> None:
         self._activate_policy()
         self._write_proposals(

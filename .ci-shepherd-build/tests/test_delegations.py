@@ -88,7 +88,7 @@ class TaskLifecycleTests(unittest.TestCase):
             (
                 TaskState.COMPLETED,
                 PullRequestAssociation.ASSOCIATED,
-                TaskLifecycle.COMPLETED,
+                TaskLifecycle.ASSOCIATION_PENDING,
                 False,
             ),
             (
@@ -100,8 +100,8 @@ class TaskLifecycleTests(unittest.TestCase):
             (
                 TaskState.COMPLETED,
                 PullRequestAssociation.PENDING,
-                TaskLifecycle.HANDOFF_REQUIRED,
-                True,
+                TaskLifecycle.ASSOCIATION_PENDING,
+                False,
             ),
             *[
                 (
@@ -132,6 +132,67 @@ class TaskLifecycleTests(unittest.TestCase):
                 )
                 self.assertEqual(lifecycle, result.lifecycle)
                 self.assertEqual(requires_handoff, result.requires_handoff)
+
+    def test_completed_task_with_zero_file_pull_request_requires_handoff(
+        self,
+    ) -> None:
+        task = normalize_agent_task(
+            {
+                "id": "task-1",
+                "state": "completed",
+                "created_at": "2026-08-31T12:00:00Z",
+                "updated_at": "2026-09-01T12:00:00Z",
+                "session_count": 1,
+                "artifacts": [],
+            }
+        )
+
+        result = derive_task_lifecycle(
+            task,
+            association=PullRequestAssociation.ASSOCIATED,
+            pull_requests=[
+                DelegatedPullRequest(
+                    database_id=101,
+                    global_id="PR_101",
+                    state=PullRequestState.OPEN,
+                    is_draft=True,
+                    changed_files=0,
+                )
+            ],
+        )
+
+        self.assertEqual(TaskLifecycle.HANDOFF_REQUIRED, result.lifecycle)
+        self.assertTrue(result.requires_handoff)
+
+    def test_completed_task_with_incomplete_pull_evidence_remains_pending(
+        self,
+    ) -> None:
+        task = normalize_agent_task(
+            {
+                "id": "task-1",
+                "state": "completed",
+                "created_at": "2026-08-31T12:00:00Z",
+                "updated_at": "2026-09-01T12:00:00Z",
+                "session_count": 1,
+                "artifacts": [],
+            }
+        )
+
+        result = derive_task_lifecycle(
+            task,
+            association=PullRequestAssociation.ASSOCIATED,
+            pull_requests=[
+                DelegatedPullRequest(
+                    database_id=101,
+                    global_id="PR_101",
+                    state=PullRequestState.OPEN,
+                    is_draft=True,
+                )
+            ],
+        )
+
+        self.assertEqual(TaskLifecycle.ASSOCIATION_PENDING, result.lifecycle)
+        self.assertFalse(result.requires_handoff)
 
 
 class TaskAssociationTests(unittest.TestCase):
@@ -276,6 +337,7 @@ class DelegationEventTests(unittest.TestCase):
             global_id="PR_101",
             state=PullRequestState.OPEN,
             is_draft=True,
+            changed_files=3,
         )
         events = [
             {
@@ -309,7 +371,7 @@ class DelegationEventTests(unittest.TestCase):
                 "startedAt": "2026-09-01T14:00:00Z",
                 "taskId": "task-1",
                 "taskState": "completed",
-                "lifecycle": "completed",
+                "lifecycle": "awaiting_pull_request",
                 "requiresHuman": False,
                 "pullRequests": [
                     {
@@ -317,13 +379,14 @@ class DelegationEventTests(unittest.TestCase):
                         "globalId": "PR_101",
                         "state": "open",
                         "isDraft": True,
+                        "changedFiles": 3,
                     }
                 ],
             },
             tracking[0],
         )
 
-    def test_completed_task_with_unknown_pull_state_requires_handoff(self) -> None:
+    def test_completed_task_with_unknown_pull_state_schedules_retry(self) -> None:
         task_record = normalize_agent_task(
             {
                 "id": "task-1",
@@ -369,8 +432,15 @@ class DelegationEventTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual("handoff_required", tracking[0]["lifecycle"])
-        self.assertTrue(tracking[0]["requiresHuman"])
+        self.assertEqual("association_pending", tracking[0]["lifecycle"])
+        self.assertFalse(tracking[0]["requiresHuman"])
+        self.assertEqual(
+            {
+                "reason": "retry-backoff",
+                "evaluateAt": "2026-09-01T14:15:00Z",
+            },
+            tracking[0]["nextWakeup"],
+        )
 
     def test_completed_task_with_closed_unmerged_pull_requires_handoff(
         self,
@@ -512,7 +582,58 @@ class DelegationEventTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("| #42 | `task-1` | failed | none | required |", report)
+        self.assertIn(
+            "| #42 | `task-1` | handoff_required (task: failed) "
+            "| none | required |",
+            report,
+        )
+
+    def test_report_surfaces_pending_lifecycle_before_raw_task_state(self) -> None:
+        for lifecycle in ("association_pending", "awaiting_pull_request"):
+            with self.subTest(lifecycle=lifecycle):
+                report = render_delegation_status_section(
+                    {
+                        "status": "complete",
+                        "records": [
+                            {
+                                "issueNumber": 42,
+                                "taskId": "task-1",
+                                "taskState": "completed",
+                                "lifecycle": lifecycle,
+                                "requiresHuman": False,
+                                "pullRequests": [],
+                            }
+                        ],
+                    }
+                )
+
+                self.assertIn(
+                    f"| {lifecycle} (task: completed) |",
+                    report,
+                )
+
+    def test_report_surfaces_bounded_handoff_operator_escalation(self) -> None:
+        report = render_delegation_status_section(
+            {
+                "status": "complete",
+                "records": [
+                    {
+                        "issueNumber": 42,
+                        "taskId": "task-1",
+                        "taskState": "completed",
+                        "lifecycle": "handoff_required",
+                        "requiresHuman": True,
+                        "handoffReminder": {
+                            "state": "operator-escalation",
+                            "ordinal": 3,
+                        },
+                        "pullRequests": [],
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("| operator-escalation (reminder 3) |", report)
 
     def test_report_surfaces_capacity_without_owned_delegations(self) -> None:
         report = render_delegation_status_section(
@@ -772,9 +893,9 @@ class CapacityAccountingTests(unittest.TestCase):
         )
 
         self.assertEqual(("completed-without-pr",), reconciled.handoff_task_ids)
-        self.assertEqual(("completed-without-pr",), pending.handoff_task_ids)
+        self.assertEqual((), pending.handoff_task_ids)
         self.assertEqual(
-            TaskLifecycle.HANDOFF_REQUIRED,
+            TaskLifecycle.ASSOCIATION_PENDING,
             pending.task_lifecycles[0].lifecycle,
         )
         self.assertFalse(pending.complete)
@@ -1004,7 +1125,7 @@ class CapacityAccountingTests(unittest.TestCase):
             usage.task_lifecycles[0].lifecycle,
         )
 
-    def test_queued_tasks_do_not_consume_active_session_capacity(self) -> None:
+    def test_queued_task_at_repository_running_cap_blocks_new_start(self) -> None:
         now = datetime(2026, 9, 1, 16, tzinfo=UTC)
         queued = normalize_agent_task(
             {
@@ -1025,7 +1146,18 @@ class CapacityAccountingTests(unittest.TestCase):
         )
 
         self.assertEqual(0, usage.running_tasks)
-        self.assertEqual(0, usage.repository_running_tasks)
+        self.assertEqual(1, usage.repository_running_tasks)
+        decision = decide_new_start(
+            usage,
+            CapacityLimits(
+                max_running_tasks=10,
+                max_starts_per_rolling_24h=10,
+                max_open_delegated_prs=10,
+                max_repository_running_tasks=1,
+            ),
+        )
+        self.assertFalse(decision.permitted)
+        self.assertEqual(("max_repository_running_tasks",), decision.blocked_by)
 
     def test_recent_retired_start_counts_without_blocking_on_association(
         self,

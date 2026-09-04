@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -15,7 +17,7 @@ from ci_shepherd.investigations import (
     record_investigation_result,
     record_investigation_session_event,
 )
-from ci_shepherd.poc_state import record_review_wakeup
+from ci_shepherd.poc_state import load_review_schedule, record_review_wakeup
 from ci_shepherd.repository_policy import load_repository_policy
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -289,6 +291,142 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_no_action_case_needing_positive_coverage_gets_one_durable_wakeup(
+        self,
+    ) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            state = Path(scratch) / "state"
+            arguments = {
+                "state_dir": state,
+                "repository": "owner/repo",
+                "observed_at": "2026-08-28T20:00:00Z",
+                "selected_issue_numbers": {1},
+                "judgments": {
+                    "issues": [
+                        {
+                            "issueNumber": 1,
+                            "recommendations": [{"disposition": "no-action"}],
+                        }
+                    ]
+                },
+                "observations": {
+                    "occurrences": [
+                        {
+                            "issueNumber": 1,
+                            "coverageState": "needs-positive-coverage",
+                        }
+                    ]
+                },
+                "interval_days": 14,
+            }
+
+            cycle_script._schedule_positive_coverage_reviews(**arguments)
+            cycle_script._schedule_positive_coverage_reviews(**arguments)
+
+            schedule = load_review_schedule(
+                state,
+                "owner/repo",
+                "2026-08-28T20:00:00Z",
+                issue_numbers=[1],
+                pull_request_numbers=[],
+            )
+            self.assertEqual(
+                {
+                    "reassessAt": "2026-09-11T20:00:00Z",
+                    "wakeReason": "positive-coverage-review",
+                },
+                schedule["issues"]["1"],
+            )
+            rows = (
+                state / "ledgers" / "review-wakeups.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(1, len(rows))
+
+    def test_unknown_verified_run_scope_blocks_mutation_and_still_reports(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            input_path = root / "input.json"
+            input_snapshot = snapshot("2026-08-28T20:00:00Z")
+            issue_payload = input_snapshot["evidence"]["issue:1"]["payload"]
+            issue_payload["producer"] = "ci-failure-cause"
+            add_class_a_retry_evidence(
+                input_snapshot,
+                "Namespace.Type.FlakyTest",
+            )
+            input_snapshot["evidence"]["run:200"]["payload"]["event"] = "pull_request"
+            managed_policy = replace(
+                REPOSITORY_POLICY,
+                managed_issue_producers=frozenset({"ci-failure-cause"}),
+                managed_automation_explicit=True,
+            )
+            input_snapshot["repositoryPolicy"] = {
+                **managed_policy.as_public_dict(),
+                "digest": managed_policy.digest,
+            }
+            input_path.write_text(json.dumps(input_snapshot), encoding="utf-8")
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+
+            completed = cycle_script.finish_cycle(
+                work_dir=work,
+                agent_judgments_path=work / "agent-judgments.json",
+            )
+
+            self.assertFalse(completed["managedItemCoverageValid"])
+            policy_selection = json.loads(
+                (work / "policy-selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual([], policy_selection["selectedActionIds"])
+            self.assertTrue(policy_selection["mutationBlocked"])
+            report = (work / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Managed active-item coverage", report)
+            self.assertIn("verified workflow-run scope is unknown", report)
+            first_coverage = (work / "managed-item-coverage.json").read_bytes()
+            ledgers = state / "ledgers"
+            first_ledger_bytes = {
+                path.name: path.read_bytes()
+                for path in ledgers.glob("*.jsonl")
+            }
+
+            second_input = root / "input-2.json"
+            second_snapshot = copy.deepcopy(input_snapshot)
+            second_snapshot["collectedAt"] = "2026-08-28T20:00:01Z"
+            second_input.write_text(json.dumps(second_snapshot), encoding="utf-8")
+            second_work = root / "work-2"
+            repeated = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=second_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=second_input,
+            )
+
+            self.assertEqual("completed", repeated["stage"])
+            self.assertEqual(
+                first_coverage,
+                (second_work / "managed-item-coverage.json").read_bytes(),
+            )
+            self.assertEqual(
+                first_ledger_bytes,
+                {
+                    path.name: path.read_bytes()
+                    for path in ledgers.glob("*.jsonl")
+                },
+            )
+
     def test_coordinator_stage_requires_active_policy_or_selected_action(
         self,
     ) -> None:
@@ -494,7 +632,15 @@ class CycleTests(unittest.TestCase):
                 (work / "action-proposals.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
-                {"schemaVersion": 1, "evidenceRound": 1},
+                {
+                    "schemaVersion": 1,
+                    "evidenceRound": 1,
+                    "managedItemCoverage": {
+                        "schemaVersion": 1,
+                        "valid": True,
+                        "blockers": [],
+                    },
+                },
                 completed_proposals["productionPilotCapability"],
             )
             self.assertTrue(
@@ -1261,8 +1407,12 @@ class CycleTests(unittest.TestCase):
             )
 
             due_input = root / "input-2.json"
+            due_snapshot = snapshot("2026-08-27T12:00:00Z")
+            due_snapshot["openIssues"] = []
+            due_snapshot["delegatedIssues"] = [1]
+            due_snapshot["delegatedIssueDetails"] = [{"number": 1}]
             due_input.write_text(
-                json.dumps(snapshot("2026-08-27T12:00:00Z")),
+                json.dumps(due_snapshot),
                 encoding="utf-8",
             )
             due_work = root / "work-2"
@@ -1368,7 +1518,15 @@ class CycleTests(unittest.TestCase):
                 (first_work / "action-proposals.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
-                {"schemaVersion": 1, "evidenceRound": 0},
+                {
+                    "schemaVersion": 1,
+                    "evidenceRound": 0,
+                    "managedItemCoverage": {
+                        "schemaVersion": 1,
+                        "valid": True,
+                        "blockers": [],
+                    },
+                },
                 proposals["productionPilotCapability"],
             )
             report = (first_work / "report.md").read_text(encoding="utf-8")
