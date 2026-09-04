@@ -216,11 +216,12 @@ class CoordinatorPolicyBudgetValidator:
         class_events = [
             event for event in repo_events if event.get("operationClass") == op_class
         ]
+        run_id = intent.get("runId")
         class_used_this_run = len(
             {
                 event.get("actionId")
                 for event in class_events
-                if event.get("snapshotId") == snapshot_id
+                if event.get("runId") == run_id
             }
         )
         if class_used_this_run + 1 > class_policy.max_per_run:
@@ -416,9 +417,10 @@ def _autonomous_grant(
     satisfied_prerequisites: tuple[tuple[str, str], ...] = (),
     proposals_digest: str = "sha256:" + ("0" * 64),
     selection_state_revision: int = 1,
+    run_id: str = "run-1",
 ) -> AuthorizationGrant:
     license_ = AutonomousPolicyLicense(
-        run_id="run-1",
+        run_id=run_id,
         operation_class=operation_class,
         selection_digest="sha256:" + ("a" * 64),
         selection_state_revision=selection_state_revision,
@@ -1119,6 +1121,66 @@ class PolicyBudgetValidatorTests(unittest.TestCase):
         self.assertEqual(1, len(intents))
         self.assertEqual(successes[0], intents[0]["actionId"])
         self.assertEqual("edit-comment", intents[0]["operationClass"])
+
+    def test_class_per_run_cap_is_scoped_by_run_id_not_snapshot(self) -> None:
+        # policy_selection.py's own per-run accounting buckets usage by
+        # ``event["runId"] == run_id`` (see the ``this_run_ids`` grouping in
+        # its class-capacity computation), not by snapshotId. Two runs that
+        # share the exact same repository snapshot -- e.g. a rerun of the
+        # same scan -- each mint their own AutonomousPolicyLicense with
+        # their own runId, so each must receive its own, independent
+        # standing per-class per-run slot. Scoping the guard's counter by
+        # snapshotId instead would incorrectly starve the second run.
+        coordinator_store = _coordinator_store(self.state_dir)
+        self._activate_policy(coordinator_store, max_per_run=1, max_rolling_24h=5)
+        store = _validated_store(self.state_dir, coordinator_store)
+
+        at = datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+        r0_first = self._reserve(
+            store,
+            self._grant("action:r0-1", license_source="policy:1", run_id="r0"),
+            "action:r0-1",
+            at=at,
+        )
+        self.assertEqual("execute", r0_first.mode)
+
+        # r0's single per-run slot for this class is now exhausted.
+        with self.assertRaises(ExecutionBudgetError):
+            self._reserve(
+                store,
+                self._grant("action:r0-2", license_source="policy:1", run_id="r0"),
+                "action:r0-2",
+                at=at,
+            )
+
+        # r1 shares the exact same snapshot as r0 but is a distinct run, and
+        # must receive its own per-class per-run slot rather than being
+        # rejected because r0 already used the snapshot's "slot".
+        r1_first = self._reserve(
+            store,
+            self._grant("action:r1-1", license_source="policy:1", run_id="r1"),
+            "action:r1-1",
+            at=at,
+        )
+        self.assertEqual("execute", r1_first.mode)
+
+        ledger = self._read_ledger()
+        intents = [event for event in ledger if event["eventType"] == "intent"]
+        self.assertEqual(2, len(intents))
+        self.assertEqual({"r0", "r1"}, {intent["runId"] for intent in intents})
+        self.assertEqual(
+            {"action:r0-1", "action:r1-1"},
+            {intent["actionId"] for intent in intents},
+        )
+
+        # r0 remains exhausted even after r1's independent slot was granted.
+        with self.assertRaises(ExecutionBudgetError):
+            self._reserve(
+                store,
+                self._grant("action:r0-3", license_source="policy:1", run_id="r0"),
+                "action:r0-3",
+                at=at,
+            )
 
     def test_restart_reconstructs_usage_from_durable_intents(self) -> None:
         coordinator_store = _coordinator_store(self.state_dir)
