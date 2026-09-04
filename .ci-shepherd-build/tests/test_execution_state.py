@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -8,7 +7,6 @@ from pathlib import Path
 import shutil
 import threading
 import unittest
-from typing import Any, Iterator, Mapping, Sequence
 from unittest.mock import patch
 
 from ci_shepherd.authorization import (
@@ -32,279 +30,10 @@ from ci_shepherd.operation_policy import (
     HARD_MAX_PER_RUN,
     HARD_MAX_ROLLING_24H,
     OPERATION_CLASSES,
-    OperationPolicyError,
-    load_operation_policy_document,
 )
-from ci_shepherd.timeutils import parse_aware_iso8601
+from ci_shepherd.policy_budget import CoordinatorPolicyBudgetValidator
 
 
-_ROLLING_WINDOW = timedelta(hours=24)
-
-
-class CoordinatorPolicyBudgetValidator:
-    """Reference ``PolicyBudgetValidator`` backed by a ``CoordinatorStateStore``.
-
-    This is the concrete implementation these tests exercise end-to-end
-    (a real coordinator CLI arrives in a later task); it implements the
-    exact ``reservation_guard`` contract ``ActionEventStore`` calls, so it
-    can prove the Task 5 invariants for real rather than against a mock:
-
-    - it acquires the coordinator's own policy lock only after the
-      caller's action-events lock is already held (the caller always
-      invokes ``reservation_guard`` from inside ``ActionEventStore``'s own
-      ``with self._locked():`` block), matching the fixed single-machine
-      order ``action-events.lock -> policy-events.lock``;
-    - it re-reads the current policy/decision projection from scratch
-      under that lock rather than trusting any cached view, so a
-      just-completed revocation is always visible;
-    - it keeps the lock held until the caller has durably appended (and
-      fsynced) the new intent, closing the validate-then-revoke gap.
-    """
-
-    def __init__(self, coordinator_store: CoordinatorStateStore) -> None:
-        self._coordinator_store = coordinator_store
-
-    @contextmanager
-    def reservation_guard(
-        self,
-        *,
-        grant: AuthorizationGrant,
-        action_events: Sequence[Mapping[str, Any]],
-        intent: Mapping[str, Any],
-        at: datetime,
-    ) -> Iterator[None]:
-        with self._coordinator_store._locked():
-            events = self._coordinator_store._load_events()
-            projection = self._coordinator_store._project_from_events(
-                events, grant.repository, at
-            )
-            self._validate(
-                grant=grant,
-                action_events=action_events,
-                intent=intent,
-                at=at,
-                projection=projection,
-            )
-            yield
-
-    def _validate(
-        self,
-        *,
-        grant: AuthorizationGrant,
-        action_events: Sequence[Mapping[str, Any]],
-        intent: Mapping[str, Any],
-        at: datetime,
-        projection: Mapping[str, Any],
-    ) -> None:
-        repository = grant.repository
-        snapshot_id = intent["snapshotId"]
-        repo_events = [
-            event
-            for event in action_events
-            if event.get("repository") == repository
-            and event.get("eventType") in ("intent", "terminal")
-        ]
-
-        # Repository-wide hard ceilings bind every intent, autonomous or
-        # legacy alike. "This run" is scoped by snapshotId -- the one
-        # identifier every intent carries regardless of licensing, since it
-        # is minted once per repository scan -- and the rolling window uses
-        # intent.recordedAt per the Task 5 contract, so a crash mid-flight
-        # cannot reopen a slot once the intent is durable.
-        used_this_run = len(
-            {
-                event.get("actionId")
-                for event in repo_events
-                if event.get("snapshotId") == snapshot_id
-            }
-        )
-        if used_this_run + 1 > HARD_MAX_PER_RUN:
-            raise ExecutionBudgetError(
-                "Repository hard ceiling for this run is exhausted."
-            )
-
-        window_start = at - _ROLLING_WINDOW
-        used_rolling = len(
-            {
-                event.get("actionId")
-                for event in repo_events
-                if _recorded_within(event.get("recordedAt"), window_start, at)
-            }
-        )
-        if used_rolling + 1 > HARD_MAX_ROLLING_24H:
-            raise ExecutionBudgetError(
-                "Repository hard ceiling for the rolling 24h window is exhausted."
-            )
-
-        license_ = grant.autonomous_policy_license
-        if license_ is None:
-            return  # Legacy/production-pilot grant: no standing per-class caps.
-
-        policy = _load_effective_policy(projection)
-        action_id = intent["actionId"]
-        target = intent["target"]
-        target_key = f"{target['kind']}:{target['number']}"
-        if policy is not None and policy.active_at(at):
-            if (
-                action_id in policy.denied_action_ids
-                or target_key in policy.denied_targets
-            ):
-                raise ExecutionStateError(
-                    f"Standing policy denies actionId {action_id!r}."
-                )
-
-        matching_decision = _find_exact_decision(
-            projection, action_id=action_id, proposals_digest=grant.proposals_digest
-        )
-        if (
-            matching_decision is not None
-            and matching_decision.get("decision") == "reject-once"
-        ):
-            raise ExecutionStateError(
-                f"Exact decision rejects actionId {action_id!r}."
-            )
-
-        license_source = license_.license_source
-        is_exact_approval = license_source.startswith("decision:")
-        if license_source.startswith("policy:"):
-            if (
-                policy is None
-                or policy.revision_id != license_source
-                or policy.status != "active"
-                or not policy.active_at(at)
-            ):
-                raise ExecutionBudgetError(
-                    f"Licensing policy revision {license_source!r} is no "
-                    "longer effective."
-                )
-        elif is_exact_approval:
-            if (
-                matching_decision is None
-                or matching_decision.get("decision") != "approve-once"
-                or f"decision:{matching_decision.get('eventRevision')}"
-                != license_source
-            ):
-                raise ExecutionBudgetError(
-                    f"Exact approval {license_source!r} is no longer effective."
-                )
-        else:
-            raise ExecutionStateError(
-                f"Unsupported licenseSource {license_source!r}."
-            )
-
-        for prerequisite in intent.get("satisfiedPrerequisites") or ():
-            _revalidate_prerequisite(prerequisite, action_events)
-
-        if is_exact_approval:
-            # Exact approval bypasses standing per-class caps, but the
-            # intent it licenses still carries operationClass and is still
-            # counted by future usage aggregation below -- it is a bypass
-            # of the cap check, not an exemption from being counted.
-            return
-
-        if policy is None or not policy.active_at(at):
-            raise ExecutionBudgetError(
-                "No active standing policy licenses this operation class."
-            )
-        op_class = license_.operation_class
-        class_policy = policy.operation_classes[op_class]
-        if not class_policy.enabled:
-            raise ExecutionBudgetError(
-                f"Operation class {op_class!r} is disabled by standing policy."
-            )
-
-        class_events = [
-            event for event in repo_events if event.get("operationClass") == op_class
-        ]
-        run_id = intent.get("runId")
-        class_used_this_run = len(
-            {
-                event.get("actionId")
-                for event in class_events
-                if event.get("runId") == run_id
-            }
-        )
-        if class_used_this_run + 1 > class_policy.max_per_run:
-            raise ExecutionBudgetError(
-                f"Standing per-run cap exhausted for class {op_class!r}."
-            )
-        class_used_rolling = len(
-            {
-                event.get("actionId")
-                for event in class_events
-                if _recorded_within(event.get("recordedAt"), window_start, at)
-            }
-        )
-        if class_used_rolling + 1 > class_policy.max_rolling_24h:
-            raise ExecutionBudgetError(
-                f"Standing rolling-24h cap exhausted for class {op_class!r}."
-            )
-
-
-def _recorded_within(
-    recorded_at: object, window_start: datetime, at: datetime
-) -> bool:
-    if not isinstance(recorded_at, str):
-        return False
-    try:
-        recorded = parse_aware_iso8601(recorded_at, "recordedAt")
-    except ValueError:
-        return False
-    return window_start <= recorded <= at
-
-
-def _load_effective_policy(projection: Mapping[str, Any]):
-    raw = projection.get("effectivePolicy")
-    if raw is None:
-        return None
-    # `effectivePolicy` is the strict policy document plus a projection-only
-    # `policyDigest` field; strip it before strict re-parsing.
-    stripped = {key: value for key, value in raw.items() if key != "policyDigest"}
-    try:
-        return load_operation_policy_document(stripped)
-    except OperationPolicyError as exc:
-        raise ExecutionStateError(
-            f"Coordinator effective policy is invalid: {exc}"
-        ) from exc
-
-
-def _find_exact_decision(
-    projection: Mapping[str, Any], *, action_id: str, proposals_digest: str
-) -> Mapping[str, Any] | None:
-    for entry in projection.get("exactDecisions", []):
-        if (
-            entry.get("actionId") == action_id
-            and entry.get("proposalDigest") == proposals_digest
-        ):
-            return entry
-    return None
-
-
-def _revalidate_prerequisite(
-    prerequisite: Mapping[str, Any], action_events: Sequence[Mapping[str, Any]]
-) -> None:
-    dependency_action_id = prerequisite["actionId"]
-    expected_digest = prerequisite["eventDigest"]
-    terminal_events = [
-        event
-        for event in action_events
-        if event.get("eventType") == "terminal"
-        and event.get("actionId") == dependency_action_id
-    ]
-    if not terminal_events:
-        raise ExecutionBudgetError(
-            f"Prerequisite {dependency_action_id!r} is no longer terminal."
-        )
-    latest_terminal = max(
-        terminal_events, key=lambda event: event.get("recordedAt", "")
-    )
-    actual_digest = "sha256:" + hashlib.sha256(
-        stable_json(latest_terminal).encode("utf-8")
-    ).hexdigest()
-    if actual_digest != expected_digest:
-        raise ExecutionBudgetError(
-            f"Prerequisite {dependency_action_id!r} terminal digest changed."
-        )
 
 
 def _coordinator_store(state_dir: Path) -> CoordinatorStateStore:
@@ -485,6 +214,7 @@ def _seed_raw_event(
     event_type: str = "intent",
     operation_class: str | None = None,
     outcome: str | None = None,
+    run_id: str | None = None,
 ) -> None:
     # Writes the minimal raw ledger shape directly (bypassing
     # ActionEventStore) so hard-ceiling tests can cheaply seed the O(100)
@@ -503,6 +233,8 @@ def _seed_raw_event(
         event["outcome"] = outcome
     if operation_class is not None:
         event["operationClass"] = operation_class
+    if run_id is not None:
+        event["runId"] = run_id
     with events_path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(event, separators=(",", ":"), sort_keys=True) + "\n")
 
@@ -980,12 +712,16 @@ class PolicyBudgetValidatorTests(unittest.TestCase):
         shutil.rmtree(self.scratch, ignore_errors=True)
 
     def _grant(self, action_id: str, *, license_source: str, **kwargs: object):
+        # Most tests share one snapshot; F2's run-identity tests pass an
+        # explicit override to prove two runIds sharing (or not sharing)
+        # a snapshot are scoped correctly.
+        snapshot_id = kwargs.pop("snapshot_id", self.snapshot_id)
         return _autonomous_grant(
             state_dir=self.state_dir,
             action_id=action_id,
             license_source=license_source,
             repository=self.repository,
-            snapshot_id=self.snapshot_id,
+            snapshot_id=snapshot_id,
             **kwargs,
         )
 
@@ -1051,6 +787,7 @@ class PolicyBudgetValidatorTests(unittest.TestCase):
         count: int,
         snapshot_id: str | None = None,
         recorded_at: datetime | None = None,
+        run_id: str | None = None,
     ) -> None:
         snapshot_id = snapshot_id or self.snapshot_id
         recorded_at = recorded_at or datetime(2026, 9, 3, 15, 0, tzinfo=UTC)
@@ -1062,6 +799,7 @@ class PolicyBudgetValidatorTests(unittest.TestCase):
                 action_id=f"seed:{index}",
                 recorded_at=recorded_at,
                 event_type="intent",
+                run_id=run_id,
             )
 
     def test_two_threads_racing_for_last_class_slot_append_exactly_one_intent(
@@ -1653,6 +1391,250 @@ class PolicyBudgetValidatorTests(unittest.TestCase):
                 "action:new",
                 at=at,
             )
+
+    def test_rolling_window_class_cap_ignores_later_terminal_recorded_at(
+        self,
+    ) -> None:
+        # F1: an action's rolling-window occurrence time must be its own
+        # intent.recordedAt, not whichever of {intent, terminal} happens to
+        # be most recent. A terminal recorded 24h later than its own intent
+        # (e.g. a slow retry/reconciliation) must not "refresh" that action
+        # back into the window and wrongly consume the next reservation's
+        # standing per-class rolling slot.
+        coordinator_store = _coordinator_store(self.state_dir)
+        self._activate_policy(coordinator_store, max_per_run=10, max_rolling_24h=1)
+        at = datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+        _seed_raw_event(
+            self.events_path,
+            repository=self.repository,
+            snapshot_id="snapshot:microsoft/aspire:prior-run",
+            action_id="seed:old",
+            recorded_at=at - timedelta(hours=25),
+            event_type="intent",
+            operation_class="edit-comment",
+        )
+        _seed_raw_event(
+            self.events_path,
+            repository=self.repository,
+            snapshot_id="snapshot:microsoft/aspire:prior-run",
+            action_id="seed:old",
+            recorded_at=at - timedelta(hours=1),
+            event_type="terminal",
+            operation_class="edit-comment",
+            outcome="failed",
+        )
+        store = _validated_store(self.state_dir, coordinator_store)
+
+        reservation = self._reserve(
+            store,
+            self._grant("action:new", license_source="policy:1"),
+            "action:new",
+            at=at,
+        )
+        self.assertEqual("execute", reservation.mode)
+
+    def test_rolling_window_repository_hard_ceiling_ignores_later_terminal_recorded_at(
+        self,
+    ) -> None:
+        # F1, repository-hard-ceiling variant of the same bug: pad with
+        # HARD_MAX_ROLLING_24H - 1 unambiguous recent actions, then add one
+        # more action whose intent is 25h old but whose terminal is 1h old.
+        # Under the union-of-{intent,terminal} bug this 300th action wrongly
+        # counts as "recent" and exhausts the ceiling; the fix must exclude
+        # it because its own intent.recordedAt falls outside the window.
+        at = datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+        for index in range(HARD_MAX_ROLLING_24H - 1):
+            _seed_raw_event(
+                self.events_path,
+                repository=self.repository,
+                snapshot_id=f"snapshot:microsoft/aspire:seed-{index}",
+                action_id=f"seed:{index}",
+                recorded_at=at - timedelta(hours=1),
+            )
+        _seed_raw_event(
+            self.events_path,
+            repository=self.repository,
+            snapshot_id="snapshot:microsoft/aspire:prior-run",
+            action_id="seed:paired",
+            recorded_at=at - timedelta(hours=25),
+            event_type="intent",
+        )
+        _seed_raw_event(
+            self.events_path,
+            repository=self.repository,
+            snapshot_id="snapshot:microsoft/aspire:prior-run",
+            action_id="seed:paired",
+            recorded_at=at - timedelta(hours=1),
+            event_type="terminal",
+            outcome="failed",
+        )
+        store = _validated_store(self.state_dir)
+
+        reservation = self._reserve(
+            store,
+            self._legacy("action:new"),
+            "action:new",
+            at=at,
+        )
+        self.assertEqual("execute", reservation.mode)
+
+    def test_rolling_window_terminal_only_legacy_import_consumes_repository_hard_ceiling(
+        self,
+    ) -> None:
+        # Regression/documentation companion to the two tests above: an
+        # action that only ever has a terminal event (a legacy import with
+        # no recorded intent) must still fall back to that terminal's own
+        # recordedAt for rolling-window purposes -- it is not simply
+        # excluded because it lacks an intent.
+        at = datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+        for index in range(HARD_MAX_ROLLING_24H - 1):
+            _seed_raw_event(
+                self.events_path,
+                repository=self.repository,
+                snapshot_id=f"snapshot:microsoft/aspire:seed-{index}",
+                action_id=f"seed:{index}",
+                recorded_at=at - timedelta(hours=1),
+            )
+        _seed_raw_event(
+            self.events_path,
+            repository=self.repository,
+            snapshot_id="snapshot:microsoft/aspire:legacy-import",
+            action_id="seed:legacy-terminal-only",
+            recorded_at=at - timedelta(hours=1),
+            event_type="terminal",
+            outcome="failed",
+        )
+        store = _validated_store(self.state_dir)
+
+        with self.assertRaises(ExecutionBudgetError):
+            self._reserve(
+                store,
+                self._legacy("action:new"),
+                "action:new",
+                at=at,
+            )
+
+    def test_repository_hard_ceiling_same_run_id_persists_across_snapshot_change(
+        self,
+    ) -> None:
+        # F2: the repository-wide "this run" hard ceiling must be scoped by
+        # the autonomous intent's own runId, not by snapshotId. A rescan
+        # that mints a new snapshotId for the same run must not reopen the
+        # run's exhausted hard-ceiling slot. A standing policy is activated
+        # (as the sibling hard-ceiling tests do) so the rejection under
+        # test is unambiguously the hard ceiling, not an absent policy.
+        coordinator_store = _coordinator_store(self.state_dir)
+        self._activate_policy(coordinator_store, max_per_run=50, max_rolling_24h=90)
+        self._seed_hard_ceiling(
+            count=HARD_MAX_PER_RUN,
+            run_id="r0",
+            recorded_at=datetime(2026, 9, 3, 15, 59, tzinfo=UTC),
+        )
+        store = _validated_store(self.state_dir, coordinator_store)
+        rescanned_grant = self._grant(
+            "action:r0-rescan",
+            license_source="policy:1",
+            snapshot_id="snapshot:microsoft/aspire:2026-09-03T16:10:00Z",
+            run_id="r0",
+        )
+
+        with self.assertRaises(ExecutionBudgetError):
+            self._reserve(
+                store,
+                rescanned_grant,
+                "action:r0-rescan",
+                at=datetime(2026, 9, 3, 16, 15, tzinfo=UTC),
+            )
+        self.assertEqual(HARD_MAX_PER_RUN, len(self._read_ledger()))
+
+    def test_repository_hard_ceiling_different_run_id_resets_on_shared_snapshot(
+        self,
+    ) -> None:
+        # F2, converse case: a distinct runId that happens to share the
+        # exact same snapshotId as an exhausted run must receive its own,
+        # independent repository hard-ceiling slot.
+        coordinator_store = _coordinator_store(self.state_dir)
+        self._activate_policy(coordinator_store, max_per_run=50, max_rolling_24h=90)
+        self._seed_hard_ceiling(
+            count=HARD_MAX_PER_RUN,
+            run_id="r0",
+            recorded_at=datetime(2026, 9, 3, 15, 59, tzinfo=UTC),
+        )
+        store = _validated_store(self.state_dir, coordinator_store)
+        r1_grant = self._grant(
+            "action:r1-first",
+            license_source="policy:1",
+            snapshot_id=self.snapshot_id,
+            run_id="r1",
+        )
+
+        reservation = self._reserve(
+            store,
+            r1_grant,
+            "action:r1-first",
+            at=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+        )
+        self.assertEqual("execute", reservation.mode)
+
+    def test_300_malformed_recorded_at_values_fail_reservation_closed(self) -> None:
+        # F3: unusable recordedAt values must raise a typed failure before
+        # reservation, not silently be treated as "not within the rolling
+        # window" (which would fail OPEN by undercounting usage). Every
+        # seeded event here has a distinct snapshotId so none of them touch
+        # the (unrelated) per-run hard ceiling -- only the malformed-time
+        # handling itself can make this reservation succeed or fail.
+        at = datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for index in range(300):
+            event = {
+                "schemaVersion": 1,
+                "eventType": "intent",
+                "recordedAt": f"not-a-real-timestamp-{index}",
+                "repository": self.repository,
+                "snapshotId": f"snapshot:microsoft/aspire:seed-{index}",
+                "actionId": f"seed:{index}",
+            }
+            lines.append(json.dumps(event, sort_keys=True))
+        self.events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        store = _validated_store(self.state_dir)
+
+        with self.assertRaises(ExecutionStateError) as raised:
+            self._reserve(store, self._legacy("action:new"), "action:new", at=at)
+        self.assertIs(ExecutionStateError, type(raised.exception))
+        self.assertEqual(
+            300, len(self.events_path.read_text(encoding="utf-8").splitlines())
+        )
+
+    def test_missing_or_invalid_action_ids_fail_reservation_closed(self) -> None:
+        # F3: a missing/None/non-string actionId must not silently collapse
+        # into one falsy `None` bucket entry (which would undercount how
+        # many distinct actions are actually present); it must raise a
+        # typed failure before reservation instead.
+        at = datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        base = {
+            "schemaVersion": 1,
+            "eventType": "intent",
+            "recordedAt": at.isoformat().replace("+00:00", "Z"),
+            "repository": self.repository,
+        }
+        events = [
+            {**base, "snapshotId": "snapshot:microsoft/aspire:seed-0"},
+            {**base, "snapshotId": "snapshot:microsoft/aspire:seed-1", "actionId": None},
+            {**base, "snapshotId": "snapshot:microsoft/aspire:seed-2", "actionId": 42},
+            {**base, "snapshotId": "snapshot:microsoft/aspire:seed-3", "actionId": ""},
+        ]
+        lines = [json.dumps(event, sort_keys=True) for event in events]
+        self.events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        store = _validated_store(self.state_dir)
+
+        with self.assertRaises(ExecutionStateError) as raised:
+            self._reserve(store, self._legacy("action:new"), "action:new", at=at)
+        self.assertIs(ExecutionStateError, type(raised.exception))
+        self.assertEqual(
+            4, len(self.events_path.read_text(encoding="utf-8").splitlines())
+        )
 
     def test_dependent_close_intent_revalidates_matching_prerequisite_digest(
         self,

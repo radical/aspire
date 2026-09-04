@@ -180,6 +180,32 @@ class CoordinatorStateStore:
             events = self._load_events()
             return self._project_from_events(events, repository, now)
 
+    @contextmanager
+    def reservation_projection(
+        self, repository: str, *, now: datetime | None = None
+    ) -> Iterator[dict[str, object]]:
+        """Acquire the policy lock, project, and hold the lock through the caller's use.
+
+        This is the seam Task 5's action-reservation budget guard uses: unlike
+        ``projection()``, which releases the policy lock before returning, this
+        keeps the policy lock held for the duration of the ``with`` block so a
+        concurrent policy write (revocation, replacement) cannot interleave
+        between reading the projection and the caller's own durable append.
+
+        The required single-machine lock order is always
+        ``action-events.lock -> policy-events.lock``: the caller MUST already
+        hold the action-events lock before entering this context manager, and
+        MUST NOT acquire the action-events lock from within it. This class has
+        no way to verify that externally; callers are responsible for the
+        ordering.
+        """
+        repository = _require_repository(repository)
+        now = _require_optional_now(now)
+
+        with self._locked():
+            events = self._load_events()
+            yield self._project_from_events(events, repository, now)
+
     def _project_from_events(
         self, events: list[dict[str, Any]], repository: str, now: datetime
     ) -> dict[str, object]:

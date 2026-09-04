@@ -21,13 +21,14 @@ from ci_shepherd.coordinator_state import (
 )
 from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.operation_policy import DEFAULT_CAPS, DEFAULT_EXPIRY_DAYS, OPERATION_CLASSES
+from ci_shepherd.policy_budget import CoordinatorPolicyBudgetValidator
 
-# Task 5's concrete PolicyBudgetValidator is deliberately not reimplemented
-# here: it is exercised end-to-end (including every budget/revocation
-# invariant) in tests.test_execution_state, so this module only reuses it,
-# via a thin pausing wrapper, to prove the real single-machine lock order
-# and the absence of a validate-then-revoke gap.
-from tests.test_execution_state import CoordinatorPolicyBudgetValidator, _autonomous_grant
+# The concrete CoordinatorPolicyBudgetValidator above is exercised
+# end-to-end (including every budget/revocation invariant) in
+# tests.test_execution_state; this module reuses it, via a thin pausing
+# wrapper, to prove the real single-machine lock order and the absence of a
+# validate-then-revoke gap.
+from tests.test_execution_state import _autonomous_grant
 
 
 REPOSITORY = "microsoft/aspire"

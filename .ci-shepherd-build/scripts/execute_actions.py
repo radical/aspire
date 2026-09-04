@@ -11,6 +11,10 @@ from typing import Sequence
 
 from ci_shepherd.actor import build_dry_run, execute_action, reconcile_action
 from ci_shepherd.authorization import load_authorized_execution
+from ci_shepherd.coordinator_state import (
+    CoordinatorStateStore,
+    make_lock_free_durable_intent_reader,
+)
 from ci_shepherd.delegation_execution import (
     finalize_delegation_result,
     reserve_delegation_start,
@@ -19,6 +23,7 @@ from ci_shepherd.delegations import CapacityLimits
 from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.github import GitHubClient
 from ci_shepherd.github_actor import GitHubActorClient
+from ci_shepherd.policy_budget import CoordinatorPolicyBudgetValidator
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -142,7 +147,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if isinstance(body, str)
         else None
     )
-    store = ActionEventStore(state_dir)
+    store = ActionEventStore(
+        state_dir,
+        policy_budget_validator=CoordinatorPolicyBudgetValidator(
+            CoordinatorStateStore(
+                state_dir,
+                durable_intent_reader=make_lock_free_durable_intent_reader(
+                    state_dir / "action-events.jsonl"
+                ),
+            )
+        ),
+    )
     store.migrate_legacy_results()
     with store.transaction(
         authorized.grant,

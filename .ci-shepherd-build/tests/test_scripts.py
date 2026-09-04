@@ -2761,6 +2761,189 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def test_execute_actions_wires_a_production_policy_budget_validator(
+        self,
+    ) -> None:
+        # F4: execute_actions.py must construct its ActionEventStore with a
+        # real, non-None PolicyBudgetValidator wired to a
+        # CoordinatorStateStore over this run's own action-events ledger --
+        # not merely offer the capability. Even a legacy (non-autonomous)
+        # grant is still subject to repository hard-ceiling enforcement, so
+        # pre-exhausting the repository's per-run hard ceiling must reject
+        # the reservation before any actor mutation is attempted. This is
+        # the only reliable way to observe (from outside) that a validator
+        # is actually wired, as opposed to merely constructible.
+        from ci_shepherd.operation_policy import HARD_MAX_PER_RUN
+
+        execute_script = load_script("execute_actions")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        proposals_path = scratch / "action-proposals.json"
+        authorization_path = scratch / "authorization-grant.json"
+        state_path = (scratch / "state").resolve()
+        generated_at = datetime.now(UTC)
+        repository = "radical/aspire"
+        snapshot_id = "snapshot:radical/aspire:hard-ceiling-test"
+        action_id = "action:hard-ceiling-new"
+        proposals = {
+            "schemaVersion": 2,
+            "repository": repository,
+            "snapshotId": snapshot_id,
+            "shepherdAuthor": "radical",
+            "generatedAtUtc": generated_at.isoformat().replace("+00:00", "Z"),
+            "proposalTtlHours": 1,
+            "maxProposalsPerIssue": 2,
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [
+                {
+                    "actionId": action_id,
+                    "issueNumber": 1,
+                    "issueUrl": "https://github.com/radical/aspire/issues/1",
+                    "operation": "create-comment",
+                    "idempotencyKey": "issue:1:status",
+                    "body": (
+                        "[automated] Watching.\n\n"
+                        "<!-- ci-shepherd:idempotency-key=issue:1:status -->"
+                    ),
+                    "evidenceIds": ["issue:1"],
+                    "evidenceBasis": "ci-occurrence",
+                    "expectedIssueState": "open",
+                    "executionEligibility": {
+                        "eligible": True,
+                        "evidenceBasis": "ci-occurrence",
+                        "ciLabels": ["ci-failure-cause"],
+                        "occurrenceCount": 1,
+                        "collectionComplete": True,
+                        "unavailableEvidenceIds": [],
+                        "untrustedReferenceEvidenceIds": [],
+                        "blockingReasons": [],
+                    },
+                    "sourceEvidenceFingerprint": {
+                        "issueUpdatedAt": generated_at.isoformat().replace(
+                            "+00:00",
+                            "Z",
+                        )
+                    },
+                }
+            ],
+            "unchangedIssueNumbers": [],
+        }
+        proposal_bytes = json.dumps(proposals).encode()
+        proposals_path.write_bytes(proposal_bytes)
+        authorization_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "grantId": "grant:hard-ceiling-test",
+                    "repository": repository,
+                    "stateDirectory": str(state_path),
+                    "issuedAtUtc": generated_at.isoformat().replace("+00:00", "Z"),
+                    "expiresAtUtc": (
+                        generated_at + timedelta(minutes=15)
+                    ).isoformat().replace("+00:00", "Z"),
+                    "snapshotId": snapshot_id,
+                    "proposalsDigest": (
+                        f"sha256:{hashlib.sha256(proposal_bytes).hexdigest()}"
+                    ),
+                    "allowedActionIds": [action_id],
+                    "allowedOperations": ["create-comment"],
+                    "allowedTargets": [{"kind": "issue", "number": 1}],
+                    "allowedChainRoots": [action_id],
+                    "overrideSuppressionForActionIds": [],
+                    "budget": {
+                        "maxMutationAttempts": 1,
+                        "maxChains": 1,
+                        "maxRunningCopilotTasks": 2,
+                        "maxCopilotStartsPerRolling24h": 3,
+                        "maxOpenDelegatedPullRequests": 5,
+                        "maxRepositoryRunningCopilotTasks": 100,
+                    },
+                    "productionCommentPilot": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Pre-exhaust the repository's per-run hard ceiling directly on the
+        # durable ledger this run will read, as a legacy (pre-Task-5) writer
+        # would have: no runId/operationClass, just repository+snapshotId.
+        state_path.mkdir(parents=True)
+        events_path = state_path / "action-events.jsonl"
+        seeded_lines = [
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "eventType": "intent",
+                    "recordedAt": generated_at.isoformat().replace("+00:00", "Z"),
+                    "repository": repository,
+                    "snapshotId": snapshot_id,
+                    "actionId": f"seed:{index}",
+                },
+                sort_keys=True,
+            )
+            for index in range(HARD_MAX_PER_RUN)
+        ]
+        events_path.write_text("\n".join(seeded_lines) + "\n", encoding="utf-8")
+
+        def execute_result(
+            _proposals: object,
+            *,
+            action_id: str,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            return {
+                "actionId": action_id,
+                "attemptedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "outcome": "executed",
+            }
+
+        def argv() -> list[str]:
+            return [
+                "--proposals",
+                str(proposals_path),
+                "--state-dir",
+                str(state_path),
+                "--authorization",
+                str(authorization_path),
+                "--action-id",
+                action_id,
+                "--execute",
+            ]
+
+        try:
+            with (
+                patch.object(
+                    execute_script,
+                    "GitHubActorClient",
+                    return_value=object(),
+                ) as client_factory,
+                patch.object(
+                    execute_script,
+                    "execute_action",
+                    side_effect=execute_result,
+                ) as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaisesRegex(
+                    ExecutionBudgetError,
+                    "Repository hard ceiling for this run is exhausted",
+                ):
+                    execute_script.main(argv())
+
+            # The rejection must occur before any actor mutation: the
+            # validator runs ahead of, not alongside or after, the actual
+            # GitHub call.
+            self.assertEqual(0, client_factory.call_count)
+            self.assertEqual(0, execute.call_count)
+
+            # And the rejection must be genuinely closed: no new intent
+            # appended alongside the pre-seeded legacy ones.
+            ledger_lines = events_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(HARD_MAX_PER_RUN, len(ledger_lines))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     def test_production_comment_pilot_recovers_intent_without_remutating(self) -> None:
         execute_script = load_script("execute_actions")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
