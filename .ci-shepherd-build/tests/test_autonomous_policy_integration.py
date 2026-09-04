@@ -34,13 +34,23 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 import ci_shepherd.policy_selection as ps  # noqa: E402
 from ci_shepherd.authorization import (  # noqa: E402
+    AuthorizationBudget,
     AuthorizationError,
+    AuthorizationGrant,
+    AuthorizedExecution,
+    AutonomousPolicyLicense,
     generate_authorization_grant,
     write_authorization_grant,
 )
 from ci_shepherd.coordinator_state import CoordinatorStateStore  # noqa: E402
 from ci_shepherd.execution_state import ExecutionBudgetError  # noqa: E402
 from ci_shepherd.operation_policy import DEFAULT_CAPS, OPERATION_CLASSES  # noqa: E402
+
+# Reuses test_actor.py's own runner-level fakes -- the same convention as
+# test_review_selection.py's `from test_poc import ...` -- so these tests
+# construct the REAL GitHubActorClient (not a stand-in for it) and fake only
+# the outermost `gh api` subprocess boundary.
+from test_actor import SequencedRunner  # noqa: E402
 
 
 def load_script(name: str):
@@ -718,6 +728,371 @@ class AutonomousPolicyExecutionBoundaryTests(unittest.TestCase):
 
         events = self._events()
         self.assertEqual(100, len(events))  # No new intent was appended.
+
+
+class AutonomousProtectedOverrideMappingTests(unittest.TestCase):
+    """Proves execute_actions.py routes an autonomous grant's *revalidated*
+    operation class -- never the `--autonomous-policy` CLI flag alone -- into
+    `GitHubActorClient`'s `protected_comment_repositories` /
+    `protected_delegation_repositories` override sets.
+
+    Unlike `AutonomousPolicyExecutionBoundaryTests` above, these tests
+    construct the REAL `GitHubActorClient` (not `RecordingActor`) and fake
+    only the outermost `gh api` subprocess runner, reusing test_actor.py's
+    own `SequencedRunner`. This proves a valid autonomous create-comment
+    grant genuinely reaches GitHub's HTTP boundary on the protected
+    microsoft/aspire repository -- the actual live-pilot blocker this commit
+    fixes -- and that autonomous close-issue there still is not.
+    """
+
+    def setUp(self) -> None:
+        self.execute_script = load_script("execute_actions")
+        self.scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.scratch.mkdir(parents=True)
+        self.state_dir = (self.scratch / "state").resolve()
+        self.proposals_path = self.scratch / "action-proposals.json"
+        self.policy_selection_path = self.scratch / "policy-selection.json"
+        self.authorization_path = self.scratch / "authorization-grant.json"
+
+        self.repository = "microsoft/aspire"
+        self.login = "radical"
+        self.run_id = "run-autonomous-override-1"
+        self.now = datetime.now(UTC)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+    # -- fixture plumbing (mirrors AutonomousPolicyExecutionBoundaryTests, ---
+    # -- generalized across operations so a genuine, freshly-minted grant ---
+    # -- can be built for create-comment, close-issue, or assign-copilot. ---
+
+    def _mint_fixture(
+        self,
+        *,
+        operation: str,
+        enabled_classes: frozenset[str],
+        proposal_extra: dict[str, object],
+        idempotency_key: str,
+    ) -> str:
+        collected_at = _rfc3339(self.now)
+        snapshot_id = f"snapshot:{self.repository}:{collected_at}:r1"
+        action_id = f"snapshot:{self.repository}:{collected_at}:issue:777:{operation}"
+        proposal: dict[str, object] = {
+            "actionId": action_id,
+            "issueNumber": 777,
+            "issueUrl": f"https://github.com/{self.repository}/issues/777",
+            "operation": operation,
+            "idempotencyKey": idempotency_key,
+            "evidenceIds": ["issue:777", "run:1"],
+            "evidenceBasis": "ci-occurrence",
+            "expectedIssueState": "open",
+            "executionEligibility": {
+                "eligible": True,
+                "evidenceBasis": "ci-occurrence",
+                "ciLabels": ["ci-failure-cause"],
+                "occurrenceCount": 3,
+                "collectionComplete": True,
+                "unavailableEvidenceIds": [],
+                "untrustedReferenceEvidenceIds": [],
+                "blockingReasons": [],
+            },
+            "sourceEvidenceFingerprint": {"issueUpdatedAt": collected_at},
+        }
+        proposal.update(proposal_extra)
+        proposals: dict[str, object] = {
+            "schemaVersion": 2,
+            "repository": self.repository,
+            "snapshotId": snapshot_id,
+            "shepherdAuthor": self.login,
+            "generatedAtUtc": collected_at,
+            "proposalTtlHours": 1,
+            "maxProposalsPerIssue": 2,
+            "productionPilotCapability": {"schemaVersion": 1, "evidenceRound": 1},
+            "executionEligibility": {"status": "eligible", "violations": []},
+            "proposals": [proposal],
+            "unchangedIssueNumbers": [],
+        }
+        self.proposals_path.write_bytes(
+            (json.dumps(proposals, indent=2, sort_keys=True) + "\n").encode()
+        )
+
+        store = CoordinatorStateStore(
+            self.state_dir, durable_intent_reader=_no_durable_intent
+        )
+        expected_revision = store.projection(self.repository, now=self.now)[
+            "stateRevision"
+        ]
+        store.append_policy_revision(
+            repository=self.repository,
+            expected_revision=expected_revision,
+            document=_policy_document(
+                repository=self.repository,
+                revision=1,
+                created_at_utc=self.now - timedelta(days=1),
+                expires_at_utc=self.now + timedelta(days=30),
+                enabled_classes=enabled_classes,
+            ),
+        )
+        projection = store.projection(self.repository, now=self.now)
+        selection = ps.build_policy_selection(
+            proposals,
+            run_id=self.run_id,
+            policy_projection=projection,
+            action_events=[],
+            now=self.now,
+        )
+        self.policy_selection_path.write_bytes(
+            (json.dumps(selection, indent=2, sort_keys=True) + "\n").encode()
+        )
+
+        grant = generate_authorization_grant(
+            self.proposals_path,
+            action_ids=[action_id],
+            state_dir=self.state_dir,
+            allow_autonomous_policy=True,
+            policy_selection_path=self.policy_selection_path,
+            policy_action_id=action_id,
+            now=self.now,
+        )
+        write_authorization_grant(grant, self.authorization_path)
+        return action_id
+
+    def _argv(self, action_id: str, *, autonomous_policy: bool = True) -> list[str]:
+        argv = [
+            "--proposals",
+            str(self.proposals_path),
+            "--state-dir",
+            str(self.state_dir),
+            "--authorization",
+            str(self.authorization_path),
+            "--action-id",
+            action_id,
+            "--execute",
+        ]
+        if autonomous_policy:
+            argv.append("--autonomous-policy")
+        argv += ["--policy-selection", str(self.policy_selection_path)]
+        return argv
+
+    def _real_client_factory(self, runner: SequencedRunner):
+        """Constructs the REAL `GitHubActorClient` execute_actions.py would,
+        forwarding every kwarg it receives, and only substitutes the runner
+        (the final `gh api` subprocess boundary) -- never the class itself.
+        """
+
+        real_client_class = self.execute_script.GitHubActorClient
+
+        def factory(**kwargs: object):
+            return real_client_class(runner=runner, **kwargs)
+
+        return factory
+
+    @staticmethod
+    def _call_method(call: tuple[list[str], object]) -> str:
+        command, _payload = call
+        return command[command.index("--method") + 1]
+
+    def _events(self) -> list[dict[str, object]]:
+        events_path = self.state_dir / "action-events.jsonl"
+        if not events_path.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    # -- the actual live-pilot blocker: create-comment reaches the runner ---
+
+    def test_autonomous_create_comment_grant_reaches_permitted_runner_boundary_on_protected_repository(
+        self,
+    ) -> None:
+        idempotency_key = "issue:777:override-watch"
+        body = (
+            "[automated] Watching this failure.\n\n"
+            f"<!-- ci-shepherd:idempotency-key={idempotency_key} -->"
+        )
+        action_id = self._mint_fixture(
+            operation="create-comment",
+            enabled_classes=frozenset({"create-comment"}),
+            proposal_extra={"body": body},
+            idempotency_key=idempotency_key,
+        )
+        collected_at = _rfc3339(self.now)
+        comment_id = 6001
+        issue_payload = {
+            "state": "open",
+            "updated_at": collected_at,
+            "html_url": f"https://github.com/{self.repository}/issues/777",
+            "labels": [{"name": "ci-failure-cause"}],
+        }
+        comment_payload = {
+            "body": body,
+            "html_url": (
+                f"https://github.com/{self.repository}/issues/777"
+                f"#issuecomment-{comment_id}"
+            ),
+            "user": {"login": self.login},
+        }
+        # Exact call order execute_action's create-comment path issues:
+        # get_issue, get_authenticated_login, list_comments (one empty
+        # page), create_comment (the mutation under test), get_comment,
+        # get_issue again (schemaVersion 2's sourceIssueUpdatedAt).
+        runner = SequencedRunner(
+            [
+                issue_payload,
+                {"login": self.login},
+                [],
+                {"id": comment_id},
+                comment_payload,
+                issue_payload,
+            ]
+        )
+
+        stdout = io.StringIO()
+        with (
+            patch.object(
+                self.execute_script,
+                "GitHubActorClient",
+                new=self._real_client_factory(runner),
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            code = self.execute_script.main(self._argv(action_id))
+        result = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, code)
+        self.assertEqual("executed", result["outcome"], result)
+        self.assertEqual(comment_id, result["result"]["commentId"])
+
+        methods = [self._call_method(call) for call in runner.calls]
+        mutating_indices = [
+            index for index, method in enumerate(methods) if method != "GET"
+        ]
+        self.assertEqual(1, len(mutating_indices), methods)
+        mutating_index = mutating_indices[0]
+        self.assertEqual("POST", methods[mutating_index])
+        mutating_command, mutating_payload = runner.calls[mutating_index]
+        self.assertTrue(
+            mutating_command[-1].endswith("/issues/777/comments"),
+            mutating_command[-1],
+        )
+        self.assertEqual(body, mutating_payload["body"])
+
+        events = self._events()
+        self.assertEqual(["intent", "terminal"], [e["eventType"] for e in events])
+
+    def test_autonomous_create_comment_grant_without_autonomous_policy_flag_reaches_zero_runner_calls(
+        self,
+    ) -> None:
+        idempotency_key = "issue:777:override-watch-2"
+        body = (
+            "[automated] Watching this failure.\n\n"
+            f"<!-- ci-shepherd:idempotency-key={idempotency_key} -->"
+        )
+        action_id = self._mint_fixture(
+            operation="create-comment",
+            enabled_classes=frozenset({"create-comment"}),
+            proposal_extra={"body": body},
+            idempotency_key=idempotency_key,
+        )
+        runner = SequencedRunner([])
+
+        with (
+            patch.object(
+                self.execute_script,
+                "GitHubActorClient",
+                new=self._real_client_factory(runner),
+            ),
+            self.assertRaisesRegex(AuthorizationError, "protected during remediation"),
+        ):
+            self.execute_script.main(self._argv(action_id, autonomous_policy=False))
+
+        self.assertEqual([], runner.calls)
+        self.assertEqual([], self._events())
+
+    # -- constructor-level proof for delegate-copilot (no live task launch) -
+
+    def test_delegate_copilot_autonomous_grant_maps_delegation_override_only(
+        self,
+    ) -> None:
+        action_id = self._mint_fixture(
+            operation="assign-copilot",
+            enabled_classes=frozenset({"delegate-copilot"}),
+            proposal_extra={
+                "targetRepository": self.repository,
+                "baseBranch": "main",
+                "customInstructions": "Fix issue #777.",
+                "model": "",
+            },
+            idempotency_key="issue:777:assign",
+        )
+
+        class _StoppedBeforeDelegationLaunch(Exception):
+            """Sentinel proving nothing beyond client construction ran."""
+
+        with (
+            patch.object(self.execute_script, "GitHubActorClient") as client_cls,
+            patch.object(
+                self.execute_script,
+                "reserve_delegation_start",
+                side_effect=_StoppedBeforeDelegationLaunch(),
+            ),
+            self.assertRaises(_StoppedBeforeDelegationLaunch),
+        ):
+            self.execute_script.main(self._argv(action_id))
+
+        client_cls.assert_called_once()
+        kwargs = client_cls.call_args.kwargs
+        self.assertEqual(
+            {self.repository}, kwargs["protected_delegation_repositories"]
+        )
+        self.assertEqual(set(), kwargs["protected_comment_repositories"])
+
+    # -- deliberately NOT mapped: close-issue stays denied ------------------
+
+    def test_autonomous_close_issue_grant_remains_blocked_on_protected_repository_with_zero_runner_calls(
+        self,
+    ) -> None:
+        action_id = self._mint_fixture(
+            operation="close-issue",
+            enabled_classes=frozenset({"close-issue"}),
+            proposal_extra={"closeReason": "completed"},
+            idempotency_key="issue:777:close",
+        )
+        collected_at = _rfc3339(self.now)
+        issue_payload = {
+            "state": "open",
+            "updated_at": collected_at,
+            "html_url": f"https://github.com/{self.repository}/issues/777",
+            "labels": [{"name": "ci-failure-cause"}],
+        }
+        # Only the common preflight (get_issue, get_authenticated_login)
+        # reaches the runner; the close_issue PATCH must never get there.
+        runner = SequencedRunner([issue_payload, {"login": self.login}])
+
+        stdout = io.StringIO()
+        with (
+            patch.object(
+                self.execute_script,
+                "GitHubActorClient",
+                new=self._real_client_factory(runner),
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            code = self.execute_script.main(self._argv(action_id))
+        result = json.loads(stdout.getvalue())
+
+        self.assertEqual(0, code)
+        self.assertEqual("indeterminate", result["outcome"], result)
+        self.assertIn("protected", result["reason"])
+
+        methods = [self._call_method(call) for call in runner.calls]
+        self.assertEqual(["GET", "GET"], methods)
+
+        events = self._events()
+        self.assertEqual(["intent", "terminal"], [e["eventType"] for e in events])
 
 
 if __name__ == "__main__":

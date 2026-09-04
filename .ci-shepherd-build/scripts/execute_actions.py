@@ -214,9 +214,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(result)
             return 0
 
+        # Autonomous execution is authorized through a different capability
+        # than the legacy production-pilot booleans, but reaching the same
+        # protected-repository comment/assignee endpoints still requires the
+        # matching `GitHubActorClient` override. The class here is the
+        # grant's own re-derived `autonomous_policy_license.operation_class`
+        # (never `args.autonomous_policy` directly), so a grant that was
+        # validated for a different class cannot widen its own override.
+        autonomous_license = authorized.grant.autonomous_policy_license
+        autonomous_operation_class = (
+            autonomous_license.operation_class
+            if authorized.grant.autonomous_policy and autonomous_license is not None
+            else None
+        )
         production_comment_overrides = (
             {authorized.grant.repository}
             if authorized.grant.production_comment_pilot
+            or autonomous_operation_class in {"create-comment", "edit-comment"}
             else set()
         )
         production_delegation_overrides = (
@@ -224,6 +238,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (
                 authorized.grant.production_delegation_pilot
                 or authorized.grant.production_delegation_steady_state
+                or autonomous_operation_class == "delegate-copilot"
             )
             else set()
         )
