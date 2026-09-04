@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -18,7 +19,15 @@ from ci_shepherd.coordinator_state import (
     CoordinatorStateStore,
     make_lock_free_durable_intent_reader,
 )
+from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.operation_policy import DEFAULT_CAPS, DEFAULT_EXPIRY_DAYS, OPERATION_CLASSES
+
+# Task 5's concrete PolicyBudgetValidator is deliberately not reimplemented
+# here: it is exercised end-to-end (including every budget/revocation
+# invariant) in tests.test_execution_state, so this module only reuses it,
+# via a thin pausing wrapper, to prove the real single-machine lock order
+# and the absence of a validate-then-revoke gap.
+from tests.test_execution_state import CoordinatorPolicyBudgetValidator, _autonomous_grant
 
 
 REPOSITORY = "microsoft/aspire"
@@ -1244,6 +1253,250 @@ class CoordinatorStateStoreTests(unittest.TestCase):
         release_action_lock.set()
         thread.join(timeout=5)
         self.assertTrue(reservation_finished.is_set())
+
+
+class _PausingPolicyBudgetValidator:
+    """Wraps a real ``CoordinatorPolicyBudgetValidator``, pausing after the
+    inner guard has validated (and is holding the coordinator's policy
+    lock) but before letting the caller append and fsync the intent.
+
+    This lets a test prove the lock is genuinely held across that window
+    using a deterministic ``threading.Event`` handshake rather than a
+    wall-clock race.
+    """
+
+    def __init__(
+        self,
+        inner: CoordinatorPolicyBudgetValidator,
+        *,
+        entered: threading.Event,
+        release: threading.Event,
+    ) -> None:
+        self._inner = inner
+        self._entered = entered
+        self._release = release
+
+    @contextmanager
+    def reservation_guard(self, **kwargs: object):
+        with self._inner.reservation_guard(**kwargs):
+            self._entered.set()
+            if not self._release.wait(timeout=5):
+                raise AssertionError("release event was never set")
+            yield
+
+
+class PolicyBudgetLockOrderTests(unittest.TestCase):
+    """Task 5: the real reservation path holds the policy lock, acquired
+    after the action lock, through the durable intent append -- so a
+    concurrent revocation cannot open a validate-then-revoke gap, and an
+    intent that already committed under a since-revoked license is neither
+    erased nor re-validated as new.
+    """
+
+    def setUp(self) -> None:
+        self.scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.scratch.mkdir(parents=True)
+        self.state_dir = (self.scratch / "state").resolve()
+        self.events_path = self.state_dir / "action-events.jsonl"
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+    def _coordinator_store(self, **kwargs: object) -> CoordinatorStateStore:
+        return CoordinatorStateStore(
+            self.state_dir,
+            durable_intent_reader=make_lock_free_durable_intent_reader(
+                self.events_path
+            ),
+            **kwargs,
+        )
+
+    def _reserve(self, store: ActionEventStore, grant, *, at: datetime):
+        return store.reserve(
+            grant,
+            action_id="action:1",
+            chain_root="action:1",
+            operation="edit-comment",
+            target_kind="issue",
+            target_number=7,
+            idempotency_key="action:1:body",
+            body_digest=None,
+            expected_actor_login="radical",
+            at=at,
+        )
+
+    @unittest.skipIf(
+        os.name == "nt", "Test uses fcntl-based POSIX advisory locking directly."
+    )
+    def test_reservation_guard_holds_policy_lock_through_append_blocking_concurrent_revocation(
+        self,
+    ) -> None:
+        coordinator_store = self._coordinator_store()
+        coordinator_store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+
+        entered = threading.Event()
+        release = threading.Event()
+        pausing_validator = _PausingPolicyBudgetValidator(
+            CoordinatorPolicyBudgetValidator(coordinator_store),
+            entered=entered,
+            release=release,
+        )
+        store = ActionEventStore(
+            self.state_dir, policy_budget_validator=pausing_validator
+        )
+        grant = _autonomous_grant(
+            state_dir=self.state_dir,
+            action_id="action:1",
+            license_source="policy:1",
+            repository=REPOSITORY,
+        )
+
+        reservation_result: dict[str, object] = {}
+
+        def _reserve_in_background() -> None:
+            try:
+                reservation = self._reserve(
+                    store, grant, at=datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+                )
+                reservation_result["mode"] = reservation.mode
+            except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                reservation_result["error"] = exc
+
+        thread = threading.Thread(target=_reserve_in_background)
+        thread.start()
+        self.assertTrue(entered.wait(timeout=5))
+
+        # While the guard holds the policy lock (validated, not yet
+        # appended), a concurrent revocation attempt using a short lock
+        # timeout must time out -- proving the lock is genuinely held
+        # across that window, not merely documented as being held.
+        racing_store = self._coordinator_store(lock_timeout_seconds=0.2)
+        with self.assertRaises(CoordinatorStateError) as raised:
+            racing_store.append_policy_revision(
+                repository=REPOSITORY,
+                expected_revision=1,
+                document=policy_document(
+                    revision=2, replaces="policy:1", status="revoked"
+                ),
+            )
+        self.assertIn(
+            "Timed out acquiring the policy-event lock", str(raised.exception)
+        )
+
+        release.set()
+        thread.join(timeout=5)
+        self.assertEqual("execute", reservation_result.get("mode"), reservation_result)
+
+        # Now that the reservation has durably appended (and released the
+        # lock), the very same revocation succeeds -- proving it was
+        # blocked by the lock, not permanently rejected by some other
+        # check.
+        coordinator_store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=1,
+            document=policy_document(
+                revision=2, replaces="policy:1", status="revoked"
+            ),
+        )
+        projection = coordinator_store.projection(REPOSITORY)
+        self.assertEqual("revoked", projection["effectivePolicy"]["status"])
+
+        # The intent that committed under the (now-revoked) license is
+        # neither erased nor reopened: replaying the same grant reconciles
+        # against it rather than being treated as a new, now-unlicensed
+        # reservation attempt.
+        ledger_before_replay = self.events_path.read_text(encoding="utf-8")
+        replay = self._reserve(
+            store, grant, at=datetime(2026, 9, 3, 16, 6, tzinfo=UTC)
+        )
+        self.assertEqual("reconcile", replay.mode)
+        self.assertEqual(
+            ledger_before_replay, self.events_path.read_text(encoding="utf-8")
+        )
+
+    @unittest.skipIf(
+        os.name == "nt", "Test uses fcntl-based POSIX advisory locking directly."
+    )
+    def test_reservation_guard_holds_policy_lock_through_the_intent_fsync_itself(
+        self,
+    ) -> None:
+        # The previous test proves the lock is held from validation up to
+        # the moment ``_append_event`` is invoked. This test proves the
+        # stronger, literal requirement: the lock stays held while
+        # ``_append_event`` is writing and fsyncing, not merely up to the
+        # point the call begins. A regression that exited the guard's
+        # context before the write/fsync completed (for example, by moving
+        # the append outside the ``with`` block) would let this concurrent
+        # revocation attempt succeed instead of timing out.
+        coordinator_store = self._coordinator_store()
+        coordinator_store.append_policy_revision(
+            repository=REPOSITORY,
+            expected_revision=0,
+            document=policy_document(revision=1, replaces=None),
+        )
+        store = ActionEventStore(
+            self.state_dir,
+            policy_budget_validator=CoordinatorPolicyBudgetValidator(
+                coordinator_store
+            ),
+        )
+        grant = _autonomous_grant(
+            state_dir=self.state_dir,
+            action_id="action:1",
+            license_source="policy:1",
+            repository=REPOSITORY,
+        )
+
+        entered_fsync = threading.Event()
+        release_fsync = threading.Event()
+        paused_once = threading.Event()
+        real_fsync = os.fsync
+
+        def _pausing_fsync(descriptor: int) -> None:
+            if not paused_once.is_set():
+                paused_once.set()
+                entered_fsync.set()
+                if not release_fsync.wait(timeout=5):
+                    raise AssertionError("release_fsync event was never set")
+            real_fsync(descriptor)
+
+        reservation_result: dict[str, object] = {}
+
+        def _reserve_in_background() -> None:
+            try:
+                with mock.patch("os.fsync", side_effect=_pausing_fsync):
+                    reservation = self._reserve(
+                        store, grant, at=datetime(2026, 9, 3, 16, 5, tzinfo=UTC)
+                    )
+                reservation_result["mode"] = reservation.mode
+            except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                reservation_result["error"] = exc
+
+        thread = threading.Thread(target=_reserve_in_background)
+        thread.start()
+        self.assertTrue(entered_fsync.wait(timeout=5))
+
+        racing_store = self._coordinator_store(lock_timeout_seconds=0.2)
+        with self.assertRaises(CoordinatorStateError) as raised:
+            racing_store.append_policy_revision(
+                repository=REPOSITORY,
+                expected_revision=1,
+                document=policy_document(
+                    revision=2, replaces="policy:1", status="revoked"
+                ),
+            )
+        self.assertIn(
+            "Timed out acquiring the policy-event lock", str(raised.exception)
+        )
+
+        release_fsync.set()
+        thread.join(timeout=5)
+        self.assertEqual("execute", reservation_result.get("mode"), reservation_result)
 
 
 class MakeLockFreeDurableIntentReaderTests(unittest.TestCase):

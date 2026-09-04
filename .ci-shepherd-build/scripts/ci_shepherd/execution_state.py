@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import tempfile
 import time
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Protocol, Sequence
 
 from .authorization import AuthorizationGrant
 
@@ -22,6 +22,45 @@ class ExecutionStateError(RuntimeError):
 
 class ExecutionBudgetError(ExecutionStateError):
     """Raised before an authorized grant would exceed its persisted budget."""
+
+
+class PolicyBudgetValidator(Protocol):
+    """Optional hook consulted immediately before a brand-new intent is
+    durably appended, so standing-policy per-class caps and repository-wide
+    hard ceilings are enforced atomically with the append rather than only
+    advisory at grant-mint time.
+
+    ``ActionEventStore`` invokes ``reservation_guard`` only on the path that
+    is about to persist a genuinely new intent -- never for an idempotent
+    replay of an already-durable intent, and never once a terminal event
+    exists for the action -- and always from *inside* its own
+    ``action-events.lock`` critical section. An implementation that must
+    also consult a separate policy/decision ledger (for example a
+    ``CoordinatorStateStore``-backed validator) is REQUIRED to acquire that
+    ledger's own lock only after the caller's action-events lock is already
+    held, and to keep it held for the entire duration the returned context
+    manager is open -- i.e. through ``ActionEventStore``'s subsequent
+    durable append and fsync of ``intent``. The fixed, single-machine lock
+    order is therefore always:
+
+        action-events.lock -> policy-events.lock
+
+    No policy-mutating command may acquire the action-events lock while it
+    holds the policy-events lock; the reverse order is what lets a
+    revocation block until an in-flight reservation either durably commits
+    while still licensed, or loses the race and fails closed -- there is no
+    validate-then-revoke gap.
+    """
+
+    @contextmanager
+    def reservation_guard(
+        self,
+        *,
+        grant: AuthorizationGrant,
+        action_events: Sequence[Mapping[str, Any]],
+        intent: Mapping[str, Any],
+        at: datetime,
+    ) -> Iterator[None]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +129,7 @@ class ActionEventStore:
         state_dir: Path,
         *,
         lock_timeout_seconds: float = 5.0,
+        policy_budget_validator: PolicyBudgetValidator | None = None,
     ) -> None:
         self._state_dir = state_dir.expanduser()
         if self._state_dir.is_symlink() or any(
@@ -103,6 +143,7 @@ class ActionEventStore:
             self._state_dir / "action-results-migration-v1.json"
         )
         self._lock_timeout_seconds = lock_timeout_seconds
+        self._policy_budget_validator = policy_budget_validator
 
     def migrate_legacy_results(self) -> None:
         with self._locked():
@@ -269,7 +310,7 @@ class ActionEventStore:
             at=at,
         )
         with self._locked():
-            return self._reserve_locked(grant, intent)
+            return self._reserve_locked(grant, intent, at=at)
 
     @contextmanager
     def transaction(
@@ -299,7 +340,7 @@ class ActionEventStore:
             at=at,
         )
         with self._locked():
-            reservation = self._reserve_locked(grant, intent)
+            reservation = self._reserve_locked(grant, intent, at=at)
             yield ActionExecution(reservation, self, grant, action_id)
 
     def _prepare_intent(
@@ -324,7 +365,7 @@ class ActionEventStore:
             raise ExecutionStateError("Action is not enumerated by the grant.")
         if chain_root not in grant.allowed_chain_roots:
             raise ExecutionStateError("Action chain root is not allowed by the grant.")
-        return {
+        intent: dict[str, Any] = {
             "schemaVersion": 1,
             "eventType": "intent",
             "recordedAt": _timestamp(at),
@@ -342,11 +383,37 @@ class ActionEventStore:
             "bodyDigest": body_digest,
             "expectedActorLogin": expected_actor_login,
         }
+        autonomous_license = grant.autonomous_policy_license
+        if autonomous_license is not None:
+            # Autonomous intents additionally carry the license they were
+            # minted under, so a PolicyBudgetValidator (and later readers,
+            # such as Task 6's coordinator CLI) can attribute usage to the
+            # right run/class and re-verify satisfied prerequisites without
+            # needing to consult the policy-selection artifact that
+            # originally produced the grant, which may since have rotated.
+            # Legacy (non-autonomous) grants never reach this branch, so
+            # their intent schema is unchanged.
+            intent["runId"] = autonomous_license.run_id
+            intent["operationClass"] = autonomous_license.operation_class
+            intent["policySelectionDigest"] = grant.policy_selection_digest
+            intent["coordinatorStateRevision"] = (
+                autonomous_license.selection_state_revision
+            )
+            intent["licenseSource"] = autonomous_license.license_source
+            intent["satisfiedPrerequisites"] = [
+                {"actionId": prerequisite_action_id, "eventDigest": event_digest}
+                for prerequisite_action_id, event_digest in (
+                    autonomous_license.satisfied_prerequisites
+                )
+            ]
+        return intent
 
     def _reserve_locked(
         self,
         grant: AuthorizationGrant,
         intent: Mapping[str, Any],
+        *,
+        at: datetime,
     ) -> ActionReservation:
         events = self._load_events()
         action_id = str(intent["actionId"])
@@ -416,7 +483,21 @@ class ActionEventStore:
                 "Authorization grant chain budget is exhausted."
             )
 
-        self._append_event(intent)
+        if self._policy_budget_validator is None:
+            self._append_event(intent)
+        else:
+            # The guard is consulted only on this "genuinely new intent"
+            # path (never for an idempotent replay above, and never once a
+            # terminal exists), and its context is kept open across the
+            # durable append + fsync below so that a concurrent policy
+            # revocation cannot slip in between "validated" and "durable".
+            with self._policy_budget_validator.reservation_guard(
+                grant=grant,
+                action_events=events,
+                intent=intent,
+                at=at,
+            ):
+                self._append_event(intent)
         return ActionReservation(mode="execute")
 
     def append_terminal(
