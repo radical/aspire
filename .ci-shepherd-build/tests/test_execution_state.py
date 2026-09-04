@@ -1576,6 +1576,32 @@ class PolicyBudgetValidatorTests(unittest.TestCase):
         )
         self.assertEqual("execute", reservation.mode)
 
+    def test_repository_hard_ceiling_new_legacy_intent_counts_prior_autonomous_use(
+        self,
+    ) -> None:
+        # Critical: a NEW legacy/production-pilot intent (no runId of its
+        # own) must count every prior record on its exact snapshot toward
+        # the repository-wide hard ceiling, autonomous or legacy alike. The
+        # buggy predicate only counted prior records that *also* had no
+        # runId, so HARD_MAX_PER_RUN autonomous intents on this snapshot
+        # left the ceiling looking untouched to a legacy reservation and
+        # admitted a 101st action.
+        self._seed_hard_ceiling(
+            count=HARD_MAX_PER_RUN,
+            run_id="r0",
+            recorded_at=datetime(2026, 9, 3, 15, 59, tzinfo=UTC),
+        )
+        store = _validated_store(self.state_dir)
+
+        with self.assertRaises(ExecutionBudgetError):
+            self._reserve(
+                store,
+                self._legacy("action:legacy-101st"),
+                "action:legacy-101st",
+                at=datetime(2026, 9, 3, 16, 5, tzinfo=UTC),
+            )
+        self.assertEqual(HARD_MAX_PER_RUN, len(self._read_ledger()))
+
     def test_300_malformed_recorded_at_values_fail_reservation_closed(self) -> None:
         # F3: unusable recordedAt values must raise a typed failure before
         # reservation, not silently be treated as "not within the rolling

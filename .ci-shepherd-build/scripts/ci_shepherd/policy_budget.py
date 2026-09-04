@@ -111,25 +111,37 @@ class CoordinatorPolicyBudgetValidator:
         # recordedAt above, so a crash mid-flight cannot reopen a slot once
         # the intent is durable.
         #
-        # "This run" is scoped by the new intent's own runId when it has
-        # one (autonomous intents always do): a record counts toward this
-        # run's ceiling only if it shares that exact runId, so a rescan
-        # that mints a new snapshotId for the same run does not reopen the
-        # run's exhausted slot, and a distinct run that happens to share a
-        # snapshotId gets its own independent slot. Legacy/production-pilot
-        # intents carry no runId at all, so they fall back to grouping by
-        # snapshotId -- the one identifier every intent carries regardless
-        # of licensing -- rather than either disappearing from hard-ceiling
-        # accounting or being counted globally forever.
+        # "This run" is scoped differently depending on whether the NEW
+        # intent itself is autonomous or legacy, because only autonomous
+        # intents carry a runId at all:
+        #
+        # - a new autonomous intent (has its own runId) is scoped by that
+        #   exact runId, PLUS any legacy record sharing its snapshotId --
+        #   so a rescan that mints a new snapshotId for the same run does
+        #   not reopen the run's exhausted slot, a distinct run that
+        #   happens to share a snapshotId gets its own independent slot,
+        #   and a legacy record on that same snapshot is still visible to
+        #   it;
+        # - a new legacy/production-pilot intent (no runId of its own) is
+        #   scoped by its snapshotId alone, counting EVERY prior record on
+        #   that snapshot regardless of whether that prior record has a
+        #   runId -- otherwise HARD_MAX_PER_RUN prior autonomous intents on
+        #   the same snapshot would be invisible to legacy hard-ceiling
+        #   accounting and a 101st action would be admitted.
         new_run_id = intent.get("runId")
-        used_this_run = sum(
-            1
-            for record in canonical.values()
-            if (
-                (new_run_id is not None and record["runId"] == new_run_id)
+        if new_run_id is not None:
+            used_this_run = sum(
+                1
+                for record in canonical.values()
+                if record["runId"] == new_run_id
                 or (record["runId"] is None and record["snapshotId"] == snapshot_id)
             )
-        )
+        else:
+            used_this_run = sum(
+                1
+                for record in canonical.values()
+                if record["snapshotId"] == snapshot_id
+            )
         if used_this_run + 1 > HARD_MAX_PER_RUN:
             raise ExecutionBudgetError(
                 "Repository hard ceiling for this run is exhausted."
