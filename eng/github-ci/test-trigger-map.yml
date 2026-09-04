@@ -24,6 +24,7 @@
 #   job:homebrew-installer     tests.yml prepare_homebrew_installer_artifacts
 #   job:nix-package            tests.yml nix_package
 #   job:cli-starter-validation tests.yml cli_starter_validation_* (6 platforms)
+#   job:new-validation         tests.yml -> new-validation.yml
 #   job:deployment-e2e         deployment-tests.yml      (schedule/dispatch-only today)
 #   ALL                        full test matrix + all jobs
 #   <GROUP_NAME>               a named group (see groups:) expanding recursively to its members
@@ -375,8 +376,8 @@ path_rules:
       - eng/github-ci/test-trigger-map.yml
       - eng/github-ci/ci-skip-entirely-patterns.txt
       - .github/skills/**
-    targets: [test:Infrastructure.Tests]
-    reason: SelectTests acceptance/behavior tests live in Infrastructure.Tests/TestTriggerMap; the same project's verifier validates eng/github-ci/test-trigger-map.yml, reads eng/github-ci/ci-skip-entirely-patterns.txt (the prefilter source), and validates the .github/skills review-skill packaging and eval corpus, so a change to any of them must run it
+    targets: [test:Infrastructure.Tests, job:new-validation]
+    reason: SelectTests acceptance/behavior tests live in Infrastructure.Tests/TestTriggerMap; the same project's verifier validates the selector sources, configuration, and .github/skills review-skill packaging, while the targeted validation workflow covers selector changes
   - paths:
       - .github/workflows/**
       - eng/pipelines/**

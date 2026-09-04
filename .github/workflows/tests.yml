@@ -48,6 +48,7 @@ jobs:
       run_homebrew_installer: ${{ fromJSON(steps.select_tests.outputs.selection).run_homebrew_installer }}
       run_nix_package: ${{ fromJSON(steps.select_tests.outputs.selection).run_nix_package }}
       run_cli_starter_validation: ${{ fromJSON(steps.select_tests.outputs.selection).run_cli_starter_validation }}
+      run_new_validation: ${{ fromJSON(steps.select_tests.outputs.selection).run_new_validation }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         # This job runs PR-authored code; don't leave the checkout's GITHUB_TOKEN persisted in
@@ -655,6 +656,12 @@ jobs:
     if: ${{ needs.setup_for_tests.outputs.run_typescript_api_compat == 'true' }}
     uses: ./.github/workflows/typescript-api-compat.yml
 
+  new_validation:
+    name: Test Selection Validation
+    needs: [setup_for_tests]
+    if: ${{ needs.setup_for_tests.outputs.run_typescript_sdk == 'true' }}
+    uses: ./.github/workflows/new-validation.yml
+
   results:
     if: ${{ always() && github.repository_owner == 'microsoft' }}
     runs-on: ubuntu-latest
@@ -683,6 +690,7 @@ jobs:
       cli_starter_validation_macos_arm64,
       typescript_sdk_tests,
       typescript_api_compat,
+      new_validation,
       tests_no_nugets,
       tests_requires_nugets_linux,
       tests_requires_nugets_windows,
@@ -764,6 +772,7 @@ jobs:
         #   Aspire CLI, or the extension E2E workflow wiring.
         # - polyglot_validation: this job runs for pull requests and main branch builds; it is
         #   expected to be skipped for other workflow events.
+        # - new_validation: this job runs when the selector routes the change to job:new-validation.
         # All other jobs in this gate are required, and a 'skipped' result is treated as a failure.
         if: >-
           ${{ always() &&
@@ -784,6 +793,8 @@ jobs:
                   (needs.setup_for_tests.outputs.run_typescript_sdk == 'true')) ||
                  (needs.typescript_api_compat.result == 'skipped' &&
                   (needs.setup_for_tests.outputs.run_typescript_api_compat == 'true')) ||
+                 (needs.new_validation.result == 'skipped' &&
+                  (needs.setup_for_tests.outputs.run_new_validation == 'true')) ||
                  needs.build_cli_archive_macos_x64.result == 'skipped' ||
                  (needs.prepare_winget_installer_artifacts.result == 'skipped' && (needs.setup_for_tests.outputs.run_winget_installer == 'true')) ||
                  (needs.prepare_homebrew_installer_artifacts.result == 'skipped' && (needs.setup_for_tests.outputs.run_homebrew_installer == 'true')) ||
@@ -807,6 +818,8 @@ jobs:
                   needs.extension_e2e_tests.result == 'skipped') ||
                  (needs.typescript_sdk_tests.result == 'skipped' &&
                   (needs.setup_for_tests.outputs.run_typescript_sdk == 'true')) ||
+                 (needs.new_validation.result == 'skipped' &&
+                  (needs.setup_for_tests.outputs.run_new_validation == 'true')) ||
                  needs.build_cli_archive_macos_x64.result == 'skipped' ||
                  (needs.prepare_winget_installer_artifacts.result == 'skipped' && (needs.setup_for_tests.outputs.run_winget_installer == 'true')) ||
                  (needs.prepare_homebrew_installer_artifacts.result == 'skipped' && (needs.setup_for_tests.outputs.run_homebrew_installer == 'true')) ||
