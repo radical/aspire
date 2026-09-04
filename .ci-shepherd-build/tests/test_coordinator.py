@@ -73,6 +73,8 @@ def _policy_document(
     expires_at_utc: datetime,
     enabled_classes: frozenset[str] = frozenset({"create-comment"}),
     actor: str = "github:radical",
+    denied_action_ids: list[str] | None = None,
+    denied_targets: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "schemaVersion": 1,
@@ -85,8 +87,8 @@ def _policy_document(
         "actor": actor,
         "replacesRevisionId": replaces,
         "operationClasses": _caps_document(enabled_classes=enabled_classes),
-        "deniedActionIds": [],
-        "deniedTargets": [],
+        "deniedActionIds": list(denied_action_ids or []),
+        "deniedTargets": list(denied_targets or []),
     }
 
 
@@ -596,6 +598,123 @@ class PolicyActivateCommandTests(CoordinatorCliTestCase):
         error = json.loads(stderr)
         self.assertTrue(error["error"])
 
+    def test_cap_and_expiry_refresh_preserves_denied_action_ids_and_targets(
+        self,
+    ) -> None:
+        # Kill switches (deniedActionIds/deniedTargets) are the standing
+        # policy's own emergency brake. A routine cap/expiry refresh must
+        # never silently clear them: refreshing operationClasses and the
+        # expiry window is expected, but a denied action id or target must
+        # remain denied across that refresh with no operator input at all.
+        denied_by_id_action = "action:denied-by-id"
+        denied_by_target_action = "action:denied-by-target"
+        self._write_proposals(
+            [
+                _comment_proposal(action_id=denied_by_id_action, issue_number=1),
+                _comment_proposal(action_id=denied_by_target_action, issue_number=2),
+            ],
+            unchanged_issue_numbers=[],
+        )
+        document_path = self.scratch / "policy.json"
+        self._write_json(
+            document_path,
+            _policy_document(
+                revision=1,
+                replaces=None,
+                created_at_utc=self.now,
+                expires_at_utc=self.now + timedelta(days=30),
+                denied_action_ids=[denied_by_id_action],
+                denied_targets=["issue:2"],
+            ),
+        )
+        code, _stdout, stderr = self._run(
+            [
+                "policy-append",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--expected-revision", "0",
+                "--document", str(document_path),
+            ]
+        )
+        self.assertEqual(0, code, stderr)
+
+        def _assert_both_actions_are_denied() -> None:
+            selection_path = self._select()
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+            self.assertEqual([], selection["automaticActionIds"])
+            self.assertEqual([], selection["exactActionIds"])
+            candidates_by_action_id = {
+                candidate["actionId"]: candidate
+                for candidate in selection["candidates"]
+            }
+            self.assertEqual(
+                "denied", candidates_by_action_id[denied_by_id_action]["status"]
+            )
+            self.assertEqual(
+                "policy-denied-action-id",
+                candidates_by_action_id[denied_by_id_action]["reason"],
+            )
+            self.assertEqual(
+                "denied", candidates_by_action_id[denied_by_target_action]["status"]
+            )
+            self.assertEqual(
+                "policy-denied-target",
+                candidates_by_action_id[denied_by_target_action]["reason"],
+            )
+
+            grant_output_path = self.scratch / "grant.json"
+            code, stdout, stderr = self._run(
+                [
+                    "grant-next",
+                    "--repository", self.repository,
+                    "--state-dir", str(self.state_dir),
+                    "--proposals", str(self.proposals_path),
+                    "--selection", str(selection_path),
+                    "--output", str(grant_output_path),
+                    "--now", self._now_arg(),
+                ]
+            )
+            self.assertEqual(0, code, stderr)
+            result = json.loads(stdout)
+            self.assertFalse(result["granted"])
+            self.assertFalse(grant_output_path.exists())
+
+        _assert_both_actions_are_denied()
+
+        refreshed = self._activate_policy(expires_in_days=45)
+        self.assertEqual("policy:2", refreshed["effectivePolicy"]["revisionId"])
+        self.assertEqual(
+            [denied_by_id_action],
+            refreshed["effectivePolicy"]["deniedActionIds"],
+        )
+        self.assertEqual(
+            ["issue:2"], refreshed["effectivePolicy"]["deniedTargets"]
+        )
+        self.assertEqual(
+            _rfc3339(self.now + timedelta(days=45)),
+            refreshed["effectivePolicy"]["expiresAtUtc"],
+        )
+
+        code, stdout, stderr = self._run(
+            [
+                "projection",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--now", self._now_arg(),
+            ]
+        )
+        self.assertEqual(0, code, stderr)
+        projection = json.loads(stdout)
+        self.assertEqual(
+            [denied_by_id_action],
+            projection["effectivePolicy"]["deniedActionIds"],
+        )
+        self.assertEqual(
+            ["issue:2"], projection["effectivePolicy"]["deniedTargets"]
+        )
+
+        _assert_both_actions_are_denied()
+
 
 class PolicyPauseRevokeCommandTests(CoordinatorCliTestCase):
     def test_pause_transitions_status_and_preserves_caps(self) -> None:
@@ -1104,6 +1223,109 @@ class GrantNextCommandTests(CoordinatorCliTestCase):
         self.assertFalse(result["granted"])
         self.assertIn("reason", result)
         self.assertFalse(output_path.exists())
+
+    def test_no_action_result_removes_a_stale_grant_left_at_output(self) -> None:
+        # grant-next's --output is meant to hold at most one currently-valid
+        # grant. A prior run may have written a real grant there; if a
+        # later run finds nothing eligible, that stale grant must not be
+        # left behind for a caller to mistakenly treat as still valid.
+        action_id = "snapshot:test:1:issue:1:comment"
+        self._write_proposals(
+            [_comment_proposal(action_id=action_id, issue_number=1)],
+            unchanged_issue_numbers=[],
+        )
+        self._activate_policy()
+        selection_path = self._select()
+        output_path = self.scratch / "grant.json"
+
+        code, stdout, stderr = self._run(
+            [
+                "grant-next",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--proposals", str(self.proposals_path),
+                "--selection", str(selection_path),
+                "--output", str(output_path),
+                "--now", self._now_arg(),
+            ]
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertTrue(json.loads(stdout)["granted"])
+        self.assertTrue(output_path.exists())
+
+        # Revoke the policy: the same action id is now denied
+        # ("no-active-policy"), so a fresh selection has no eligible action.
+        code, _stdout, stderr = self._run(
+            [
+                "policy-revoke",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--expected-revision", str(self._current_state_revision()),
+                "--actor", "github:radical",
+                "--now", self._now_arg(),
+            ]
+        )
+        self.assertEqual(0, code, stderr)
+        selection_path = self._select(run_id="run-2")
+
+        code, stdout, stderr = self._run(
+            [
+                "grant-next",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--proposals", str(self.proposals_path),
+                "--selection", str(selection_path),
+                "--output", str(output_path),
+                "--now", self._now_arg(),
+            ]
+        )
+
+        self.assertEqual(0, code, stderr)
+        result = json.loads(stdout)
+        self.assertFalse(result["granted"])
+        self.assertFalse(
+            output_path.exists(),
+            "grant-next must not leave a prior valid grant behind when "
+            "nothing is eligible",
+        )
+
+    def test_rejects_symlinked_output_without_deleting_its_target_when_no_action_is_permitted(
+        self,
+    ) -> None:
+        self._write_proposals(
+            [_comment_proposal(action_id="a:1", issue_number=1)],
+            unchanged_issue_numbers=[],
+        )
+        # No policy has ever been activated, so the only candidate is
+        # denied and grant-next takes the no-action path, which is exactly
+        # the path that must reject (rather than unlink through) a
+        # symlinked --output.
+        selection_path = self._select()
+        real_output_path = self.scratch / "real-grant.json"
+        real_output_path.write_text("not a grant, just a sentinel", encoding="utf-8")
+        symlinked_output_path = self.scratch / "linked-grant.json"
+        symlinked_output_path.symlink_to(real_output_path)
+
+        code, _stdout, stderr = self._run(
+            [
+                "grant-next",
+                "--repository", self.repository,
+                "--state-dir", str(self.state_dir),
+                "--proposals", str(self.proposals_path),
+                "--selection", str(selection_path),
+                "--output", str(symlinked_output_path),
+                "--now", self._now_arg(),
+            ]
+        )
+
+        self.assertNotEqual(0, code)
+        error = json.loads(stderr)
+        self.assertTrue(error["error"])
+        self.assertTrue(real_output_path.exists())
+        self.assertEqual(
+            "not a grant, just a sentinel",
+            real_output_path.read_text(encoding="utf-8"),
+        )
 
     def test_rejects_selection_repository_mismatch(self) -> None:
         self._write_proposals(

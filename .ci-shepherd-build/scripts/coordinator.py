@@ -206,6 +206,31 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _clear_stale_grant_output(output_path: Path, description: str) -> None:
+    """Remove a prior grant left at ``output_path`` before a no-grant result.
+
+    ``grant-next``'s ``--output`` is meant to hold at most one currently
+    valid grant. When a run finds nothing eligible, any grant a previous
+    run left there is now stale and must not be mistaken by a caller for
+    a still-valid one, so it is unlinked here (reusing the same
+    symlink rejection used by ``_write_json_atomic`` -- a symlinked
+    output fails closed rather than being unlinked through, since that
+    would delete whatever real file the symlink points at).
+
+    A missing path is a clean no-op: there is nothing stale to remove.
+    """
+
+    expanded = Path(output_path).expanduser()
+    if expanded.is_symlink() or any(parent.is_symlink() for parent in expanded.parents):
+        raise _CoordinatorCliError("invalid-argument", f"{description} cannot traverse a symlink.")
+    if not expanded.exists():
+        return
+    if not expanded.is_file():
+        raise _CoordinatorCliError("invalid-argument", f"{description} must be a regular file.")
+    expanded.unlink()
+    _fsync_directory(expanded.parent)
+
+
 def _build_coordinator_store(state_dir: Path) -> CoordinatorStateStore:
     return CoordinatorStateStore(
         state_dir,
@@ -336,15 +361,24 @@ def _derive_activated_policy_document(
     Every other field -- revision, revisionId, replacesRevisionId,
     createdAtUtc, expiresAtUtc, status -- is computed here so a caller can
     never smuggle an internal identity or timestamp in directly.
+
+    deniedActionIds/deniedTargets are the standing policy's kill switches,
+    not part of a routine cap/expiry refresh: they carry forward from the
+    current effective policy unchanged (empty only for a genuine first
+    activation, when there is no prior policy to carry them from).
     """
 
     expires_in_days = _require_positive_expiry_days(expires_in_days)
     if current_effective_policy is None:
         revision = 1
         replaces_revision_id = None
+        denied_action_ids: list[object] = []
+        denied_targets: list[object] = []
     else:
         revision = int(current_effective_policy["revision"]) + 1
         replaces_revision_id = current_effective_policy["revisionId"]
+        denied_action_ids = current_effective_policy["deniedActionIds"]
+        denied_targets = current_effective_policy["deniedTargets"]
     return {
         "schemaVersion": 1,
         "repository": repository,
@@ -356,8 +390,8 @@ def _derive_activated_policy_document(
         "actor": actor,
         "replacesRevisionId": replaces_revision_id,
         "operationClasses": operation_classes,
-        "deniedActionIds": [],
-        "deniedTargets": [],
+        "deniedActionIds": denied_action_ids,
+        "deniedTargets": denied_targets,
     }
 
 
@@ -599,6 +633,7 @@ def _cmd_grant_next(args: argparse.Namespace) -> dict[str, object]:
     elif automatic_ids:
         chosen = automatic_ids[0]
     else:
+        _clear_stale_grant_output(args.output, "grant output")
         return {
             "granted": False,
             "reason": "no-eligible-action",
