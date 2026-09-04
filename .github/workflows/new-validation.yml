@@ -1,0 +1,21 @@
+name: Test Selection Validation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate_test_selection:
+    name: Build test selector
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Restore
+        run: ./restore.sh
+
+      - name: Build test selector
+        run: ./dotnet.sh build tools/SelectTests/SelectTests.csproj --configuration Release
