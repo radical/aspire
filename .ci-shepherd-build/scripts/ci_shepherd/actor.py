@@ -21,8 +21,10 @@ KNOWN_OPERATIONS = frozenset(
 )
 KNOWN_CLOSE_REASONS = frozenset({"completed", "not_planned", "duplicate"})
 KNOWN_ISSUE_STATES = frozenset({"open", "closed"})
+# Match build_action_proposals: blocked actions, displaced status judgments,
+# and handoffs awaiting a validated ping-human judgment remain reportable.
 KNOWN_BLOCKED_RECOMMENDATION_DISPOSITIONS = frozenset(
-    {"delegate-copilot", "review-close"}
+    {"delegate-copilot", "delegation-handoff", "ping-human", "review-close", "watch"}
 )
 REPOSITORY_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 LEGACY_COMMON_PROPOSAL_FIELDS = frozenset(

@@ -5,7 +5,7 @@ import hashlib
 import unittest
 
 from ci_shepherd.actions import build_action_proposals, build_watch_proposals
-from ci_shepherd.actor import build_dry_run
+from ci_shepherd.actor import build_dry_run, validate_action_proposals
 from ci_shepherd.models import stable_json
 from ci_shepherd.quarantine_reconciliation import reconcile_quarantine_source
 from ci_shepherd.lifecycle import prepare_assessment
@@ -1186,6 +1186,7 @@ class WatchActionTests(unittest.TestCase):
             ],
             result["blockedRecommendations"],
         )
+        self.assertEqual(result, validate_action_proposals(result))
 
     def test_build_action_proposals_renders_superseded_duplicate_close(self) -> None:
         result = build_action_proposals(
@@ -1285,6 +1286,7 @@ class WatchActionTests(unittest.TestCase):
             ],
             result["blockedRecommendations"],
         )
+        self.assertEqual(result, validate_action_proposals(result))
 
     def test_build_watch_proposals_renders_new_status_comment(self) -> None:
         result = build_watch_proposals(
@@ -1762,6 +1764,38 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
 
 class QuarantineSourceReconciliationActionTests(unittest.TestCase):
+    def test_superseded_status_recommendations_pass_action_validation(self) -> None:
+        for disposition, judgments in (
+            ("watch", _judgments()),
+            ("ping-human", _ping_human_judgments()),
+            ("review-close", _close_judgments()),
+        ):
+            with self.subTest(disposition=disposition):
+                result = build_action_proposals(
+                    _recovery_snapshot(),
+                    _resolved_prepared(),
+                    judgments,
+                    "ankj",
+                    quarantine_reconciliation=_reconciliation(),
+                )
+
+                self.assertEqual(
+                    [{
+                        "issueNumber": 21,
+                        "disposition": disposition,
+                        "blockingReasons": [
+                            "superseded-by-quarantine-source-reconciliation"
+                        ],
+                        "evidenceIds": judgments["issues"][0]["recommendations"][0]["evidenceIds"],
+                    }],
+                    result["blockedRecommendations"],
+                )
+                self.assertEqual(
+                    ["source-reconciliation"],
+                    [proposal["evidenceBasis"] for proposal in result["proposals"]],
+                )
+                self.assertEqual(result, validate_action_proposals(result))
+
     def test_source_reconciliation_comment_does_not_require_ci_occurrences(
         self,
     ) -> None:

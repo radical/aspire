@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from datetime import UTC, datetime, timedelta
 
 from ci_shepherd.actions import build_action_proposals
+from ci_shepherd.actor import validate_action_proposals
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.poc import build_compact_poc_input, validate_poc_judgments, validate_poc_projectability
 from ci_shepherd.investigations import (
@@ -488,6 +489,29 @@ def handoff_snapshot(*, changed_files: int | None = 0, events: list | None = Non
 
 
 class HandoffPipelineTests(unittest.TestCase):
+    def test_unassessed_delegated_handoff_remains_valid_blocked_work(self) -> None:
+        value = handoff_snapshot()
+        value["delegatedIssues"] = [21]
+        value["delegatedIssueDetails"] = value["issues"]
+        value["openIssues"] = []
+        value["issues"] = []
+
+        _, compact, judgments, proposals = assess(value)
+
+        self.assertEqual([], compact["issues"])
+        self.assertEqual([], judgments["issues"])
+        self.assertEqual([], proposals["proposals"])
+        self.assertEqual(
+            [{
+                "issueNumber": 21,
+                "disposition": "delegation-handoff",
+                "blockingReasons": ["validated-ping-human-required"],
+                "evidenceIds": ["issue:21"],
+            }],
+            proposals["blockedRecommendations"],
+        )
+        self.assertEqual(proposals, validate_action_proposals(proposals))
+
     def test_comment_activity_is_context_not_human_takeover(self) -> None:
         value = handoff_snapshot()
         value["evidence"]["issue:21:comment:99"] = {

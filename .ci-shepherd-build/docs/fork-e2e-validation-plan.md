@@ -367,6 +367,15 @@ defect reproductions.
 | L8 | Legacy schema v1 proposal document | Never executable | `wouldExecute: false` for every action | none | Legacy document execution | L |
 | L9 | Dry run with a state directory present | No ledger side effects | `action-events.jsonl` is neither created nor modified | none | Dry run mutating state | L |
 | L10 | Grant consumed, then replayed after a state directory restore from backup | Refuse | Consumption is derived from the grant ID in the restored ledger | Restore state | Budget reset by restoring an older state snapshot | L |
+| L11 | Real proposal generation reports a blocked delegation handoff or a status superseded by source reconciliation | Proposal validation accepts the report without turning the blocked entry into an action | Unknown blocked dispositions still fail validation | none | Producer/consumer vocabulary drift aborting a cycle on legitimate blocked work | L |
+
+The explicit blocked-disposition allowlist in
+`.ci-shepherd-build/scripts/ci_shepherd/actor.py` matches the values emitted by
+`.ci-shepherd-build/scripts/ci_shepherd/actions.py`: `delegate-copilot`,
+`delegation-handoff`, `ping-human`, `review-close`, and `watch`. These describe
+blocked work, not executable operations. Producer-to-validator tests cover
+missing handoff judgments and all status dispositions displaced by source
+reconciliation; other judgment dispositions and unknown strings remain invalid.
 
 ### 4.13 Suite M — Evidence classification and lane equivalence (P0)
 

@@ -1769,6 +1769,30 @@ class ActorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported operation"):
             build_dry_run(proposals, action_id=None)
 
+    def test_dry_run_rejects_unsupported_blocked_recommendation_dispositions(self) -> None:
+        for disposition in (
+            "unknown-disposition",
+            "investigate",
+            "no-action",
+            "review-quarantine",
+            "delegation_handoff",
+            "",
+        ):
+            with self.subTest(disposition=disposition):
+                proposals = _assignment_proposals()
+                proposals["blockedRecommendations"] = [{
+                    "issueNumber": 21,
+                    "disposition": disposition,
+                    "blockingReasons": ["validated-ping-human-required"],
+                    "evidenceIds": ["issue:21"],
+                }]
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"blockedRecommendations\[0\]\.disposition is unsupported\.",
+                ):
+                    build_dry_run(proposals, action_id=None)
+
     def test_dry_run_rejects_unknown_proposal_fields(self) -> None:
         proposals = _proposals()
         action = proposals["proposals"][0]
