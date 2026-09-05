@@ -586,15 +586,18 @@ def start_cycle(
         pull_request_numbers=open_pull_request_numbers,
     )
     _write_private_json(work_dir / "review-schedule.json", review_schedule)
+    due_issue_numbers = set(review_schedule["dueIssueNumbers"])
+    # The durable schedule includes passive delegations, but selection metadata
+    # must match assessment: open issues plus delegated issues whose wakeup is due.
     issue_reassessment_context = {
         int(number): context
         for number, context in review_schedule["issues"].items()
+        if int(number) in open_issue_numbers or int(number) in due_issue_numbers
     }
     pull_request_reassessment_context = {
         int(number): context
         for number, context in review_schedule["pullRequests"].items()
     }
-    due_issue_numbers = set(review_schedule["dueIssueNumbers"])
     due_pull_request_numbers = set(review_schedule["duePullRequestNumbers"])
     reviewed_known_issue_numbers = (
         None

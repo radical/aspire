@@ -1383,6 +1383,108 @@ class CycleTests(unittest.TestCase):
                 selection["selected"][0]["reviewReasons"],
             )
 
+    def test_known_delegated_issue_waits_for_future_wakeup_outside_assessment(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            first_snapshot = snapshot("2026-08-20T12:00:00Z")
+            first_snapshot["openIssues"] = [1, 2]
+            second_issue = copy.deepcopy(first_snapshot["evidence"]["issue:1"])
+            second_issue["url"] = "https://github.com/owner/repo/issues/2"
+            second_issue["payload"].update(
+                number=2,
+                url=second_issue["url"],
+            )
+            first_snapshot["evidence"]["issue:2"] = second_issue
+            first_input = root / "input-1.json"
+            first_input.write_text(json.dumps(first_snapshot), encoding="utf-8")
+            first_work = root / "work-1"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=first_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=first_input,
+            )
+            cycle_script.finish_cycle(
+                work_dir=first_work,
+                agent_judgments_path=first_work / "agent-judgments.json",
+            )
+            record_review_wakeup(
+                state,
+                "owner/repo",
+                target_kind="issue",
+                target_number=1,
+                evaluate_at="2026-08-27T12:00:00Z",
+                reason="human-stale-progress",
+            )
+            wakeups_path = state / "ledgers" / "review-wakeups.jsonl"
+            wakeups_before = wakeups_path.read_bytes()
+
+            next_snapshot = copy.deepcopy(first_snapshot)
+            next_snapshot.update(
+                collectedAt="2026-08-21T12:00:00Z",
+                openIssues=[2],
+                delegatedIssues=[1],
+                delegatedIssueDetails=[{"number": 1}],
+            )
+            next_input = root / "input-2.json"
+            next_input.write_text(json.dumps(next_snapshot), encoding="utf-8")
+            next_work = root / "work-2"
+            completed = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=next_work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=next_input,
+            )
+
+            self.assertEqual("completed", completed["stage"])
+            self.assertEqual(0, completed["issueReviewCount"])
+            for filename, expected_numbers in (
+                ("assessment-input.json", [2]),
+                ("assessment-defaults.json", [2]),
+                ("agent-input.json", []),
+                ("judgments.json", [2]),
+            ):
+                with self.subTest(filename=filename):
+                    document = json.loads(
+                        (next_work / filename).read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(
+                        expected_numbers,
+                        [issue["issueNumber"] for issue in document["issues"]],
+                    )
+            selection = json.loads(
+                (next_work / "review-selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual([], selection["selected"])
+            self.assertEqual([2], [issue["issueNumber"] for issue in selection["omitted"]])
+            expected_context = {
+                "lastReviewedAt": "2026-08-20T12:00:00Z",
+                "reassessAt": "2026-08-27T12:00:00Z",
+                "wakeReason": "human-stale-progress",
+            }
+            schedule = json.loads(
+                (next_work / "review-schedule.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual([], schedule["dueIssueNumbers"])
+            self.assertEqual(expected_context, schedule["issues"]["1"])
+            self.assertEqual(wakeups_before, wakeups_path.read_bytes())
+            due_schedule = load_review_schedule(
+                state,
+                "owner/repo",
+                "2026-08-27T12:00:00Z",
+                issue_numbers=[1, 2],
+                pull_request_numbers=[],
+            )
+            self.assertEqual([1], due_schedule["dueIssueNumbers"])
+            self.assertEqual(expected_context, due_schedule["issues"]["1"])
+
     def test_reselects_an_unchanged_case_when_its_typed_wakeup_becomes_due(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)

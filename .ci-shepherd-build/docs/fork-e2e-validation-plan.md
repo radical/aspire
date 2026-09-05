@@ -427,6 +427,20 @@ than accidental properties of the generic engine.
 | O6 | Agent Task is `waiting_for_user`, `idle`, `failed`, `timed_out`, or `cancelled` | none | Running slot is free and a human handoff is exposed | Task remains linked to its issue and PR artifacts | Resolve fixture | Stalled delegation disappearing from tracking | L |
 | O7 | Copilot-created PR is closed without merge while its source issue stays open | none | Issue remains active | No issue closure is inferred from PR closure alone | Reopen or discard fixture | Closed PR incorrectly resolving source issue | L+E |
 | O8 | Task completes and creates an open PR | Run the next collection | Delegated issue, task, and PR remain in passive inventory | General assessment does not comment on Copilot-owned work | Close fixture PR | Self-interference or dropped delegated work | L+E |
+| O9 | Previously reviewed issue leaves open inventory for delegated inventory with a future typed wakeup | Run the next local cycle before the wakeup | Cycle completes without selecting or assessing the delegated issue | Full review schedule and wakeup ledger retain its future wakeup; it becomes due at the recorded time | none | Passive schedule metadata rejected as outside the assessment compact | L |
+
+The cycle keeps open issues and all active delegated issues in the durable
+review schedule. Assessment and review-selection metadata include only open
+issues and due delegated issues. Filtering belongs in
+`.ci-shepherd-build/scripts/cycle.py`, not in the selection validator: unknown
+issue references must still fail validation.
+
+Raw API evidence can contain terminal escape sequences in workflow logs or
+binary artifacts. The shared GET command in
+`.ci-shepherd-build/scripts/ci_shepherd/github.py` uses
+`--allow-escape-sequences` so `gh` does not reject successful responses.
+`test_github.py` checks both the flag and unchanged ANSI-bearing text and bytes;
+binary reads still omit HTTP headers, and existing size bounds still apply.
 
 ## 5. Local versus live placement
 

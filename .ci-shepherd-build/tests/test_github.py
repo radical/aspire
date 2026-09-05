@@ -589,6 +589,7 @@ class GitHubClientTests(unittest.TestCase):
                 "--hostname",
                 "github.com",
                 "--include",
+                "--allow-escape-sequences",
                 "-H",
                 "Accept: application/vnd.github+json",
                 "-H",
@@ -636,6 +637,21 @@ class GitHubClientTests(unittest.TestCase):
         command = popen_factory.calls[0][0]
         self.assertNotIn("--include", command)
         self.assertIn("Accept: application/vnd.github+json", command)
+
+    def test_get_bytes_allows_and_preserves_terminal_escape_sequences(self) -> None:
+        payload = b"PK\x03\x04\x00\xff\x1b[31marchive\x1b[0m"
+        popen_factory = FakePopenFactory([FakeProcess(payload)])
+        client = self.make_client(FakeRunner([]), popen_factory=popen_factory)
+
+        result = client.get_bytes(
+            "/repos/owner/repo/actions/artifacts/123/zip",
+            max_bytes=1024,
+        )
+
+        self.assertEqual(payload, result)
+        command = popen_factory.calls[0][0]
+        self.assertIn("--allow-escape-sequences", command)
+        self.assertNotIn("--include", command)
 
     def test_get_bytes_rejects_oversized_response(self) -> None:
         process = FakeProcess(b"12345")
@@ -689,6 +705,20 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual("cat", env["GH_PAGER"])
         self.assertEqual("--method", command[2])
         self.assertEqual("GET", command[3])
+
+    def test_get_text_allows_and_preserves_terminal_escape_sequences(self) -> None:
+        body = "\x1b[31merror CS1002: ; expected\x1b[0m\n"
+        popen_factory = FakePopenFactory(
+            [FakeProcess(build_response(200, body).encode("utf-8"))]
+        )
+        client = self.make_client(FakeRunner([]), popen_factory=popen_factory)
+
+        result = client.get_text("/repos/owner/repo/actions/jobs/123/logs")
+
+        self.assertEqual(200, result.status)
+        self.assertFalse(result.truncated)
+        self.assertEqual(body, result.text)
+        self.assertIn("--allow-escape-sequences", popen_factory.calls[0][0])
 
     def test_get_text_treats_http_lines_after_body_start_as_body_content(self) -> None:
         stdout = build_response(

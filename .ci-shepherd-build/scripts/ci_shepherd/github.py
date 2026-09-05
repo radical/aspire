@@ -384,6 +384,8 @@ class GitHubClient:
         if not endpoint or endpoint.startswith(("http://", "https://")):
             raise ValueError("endpoint must be a GitHub API path")
 
+        # Capture raw evidence, not terminal output: gh otherwise rejects ANSI
+        # sequences in successful log and binary responses even when piped.
         return [
             "gh",
             "api",
@@ -392,6 +394,7 @@ class GitHubClient:
             "--hostname",
             "github.com",
             "--include",
+            "--allow-escape-sequences",
             "-H",
             "Accept: application/vnd.github+json",
             "-H",
