@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import re
+import copy
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
-from ci_shepherd.observations import is_annotation_evidence_id, is_scoped_to_issue
+from ci_shepherd.investigations import _fingerprint
+from ci_shepherd.models import (
+    WORKFLOW_LOG_FACT_FIELDS, WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT,
+    stable_json, validate_workflow_log_payload,
+)
+from ci_shepherd.observations import build_observations, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue
+from ci_shepherd.policy import load_policy
 from ci_shepherd.run_scope import verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 
@@ -158,6 +166,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "attempt",
         "jobId",
         "errorCategory",
+        "truncated",
         "referencedBy",
         "targetRepository",
         "role",
@@ -232,15 +241,27 @@ def prepare_assessment(
     if not isinstance(issue_numbers, list):
         raise ValueError("Snapshot openIssues must be an array.")
 
+    try:
+        observations = build_observations(
+            snapshot,
+            policy=load_policy(Path(__file__).resolve().parents[2] / "policies/manual-v1.json"),
+        )
+    except ValueError as error:
+        observations = {"occurrences": [], "coverage": [], "fingerprints": [], "error": str(error)}
     candidates = [
         _build_candidate(
             snapshot,
             evidence,
             issue_number,
             max_bundle_records=max_bundle_records,
+            recovery=issue_recovery(snapshot, observations, issue_number),
         )
         for issue_number in sorted(issue_numbers)
     ]
+    for candidate in candidates:
+        context = delegation_context(snapshot, candidate["issueNumber"])
+        if context is not None:
+            candidate["delegationContext"] = context
     snapshot_id = snapshot_id_for(snapshot)
     prepared = {
         "schemaVersion": ASSESSMENT_SCHEMA_VERSION,
@@ -249,6 +270,7 @@ def prepare_assessment(
         "snapshotId": snapshot_id,
         "maxBundleRecords": max_bundle_records,
         "issues": candidates,
+        "observations": observations,
         "summary": {
             "issueCount": len(candidates),
             "candidateActionCounts": dict(
@@ -299,12 +321,73 @@ def candidate_for(
     return matches[0]
 
 
+def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[str, Any] | None:
+    status = snapshot.get("delegationStatus")
+    if not isinstance(status, Mapping):
+        return None
+    records = [
+        copy.deepcopy(record) for record in status.get("records", [])
+        if record.get("issueNumber") == issue_number
+        and record.get("repository") == snapshot.get("repository")
+        and record.get("lifecycle") not in {"retired", "completed"}
+    ]
+    if not records:
+        return None
+    decision = False
+    reason = "delegation-evidence-incomplete"
+    if status.get("status") == "complete" and len(records) == 1:
+        record = records[0]
+        reminder = record.get("handoffReminder", {})
+        reason = str(record.get("lifecycle") or reason)
+        if (
+            record.get("lifecycle") == "handoff_required"
+            and record.get("requiresHuman") is True
+            and record.get("taskState") is not None
+            and record.get("issueOpen") is True
+            and record.get("copilotAssigned") is True
+            and record.get("humanAssigned") is False
+            and reminder.get("state") == "pending"
+            and reminder.get("episodeId") == f"{record.get('actionId')}:handoff"
+            and type(reminder.get("ordinal")) is int and reminder["ordinal"] > 0
+        ):
+            due = reminder.get("nextWakeup", {}).get("evaluateAt")
+            decision = isinstance(due, str) and parse_aware_iso8601(due, "handoff due") <= parse_aware_iso8601(snapshot["collectedAt"], "collectedAt")
+            reason = (
+                "completed-task-empty-pull-request"
+                if record.get("taskState") == "completed" and any(
+                    pr.get("state") == "open" and pr.get("changedFiles") == 0
+                    for pr in record.get("pullRequests", [])
+                ) else "delegation-needs-human-decision"
+            )
+    return {
+        "status": status.get("status"), "records": records,
+        "decisionRequired": decision, "decisionReason": reason,
+        # Activity is contextual, not verified ownership. In particular, a
+        # comment must never suppress the pending unowned handoff.
+        "activity": {
+            "issueUpdatedAt": snapshot["evidence"].get(f"issue:{issue_number}", {}).get("payload", {}).get("updatedAt"),
+            "comments": [
+                {"evidenceId": evidence_id, **{
+                    key: record["payload"].get(key)
+                    for key in ("author", "createdAt", "updatedAt")
+                }}
+                for evidence_id, record in sorted(snapshot["evidence"].items())
+                if record.get("kind") == "issue-comment"
+                and record.get("availability") == "available"
+                and is_scoped_to_issue(evidence_id, record, issue_number)
+                and not record.get("payload", {}).get("shepherdStatus", {}).get("owned")
+            ],
+        },
+    }
+
+
 def _build_candidate(
     snapshot: Mapping[str, Any],
     evidence: Mapping[str, Any],
     issue_number: int,
     *,
     max_bundle_records: int,
+    recovery: Mapping[str, Any],
 ) -> dict[str, Any]:
     issue_record = evidence.get(f"issue:{issue_number}")
     if not isinstance(issue_record, dict):
@@ -326,6 +409,8 @@ def _build_candidate(
             item[0],
         )
     )
+    proof_ids = set(recovery["evidenceIds"]) if recovery["status"] == "verified" else set()
+    scoped.sort(key=lambda item: item[0] not in proof_ids)
     selected = scoped[:max_bundle_records]
     excluded = scoped[max_bundle_records:]
 
@@ -342,7 +427,6 @@ def _build_candidate(
             "complete": False,
             "rows": [],
         }
-
     identity = summarize_identity_facts(payload)
     decision = _lifecycle_decision(
         snapshot=snapshot,
@@ -353,6 +437,7 @@ def _build_candidate(
         episodes_complete=payload.get("episodesComplete") is True,
         updated_at=payload.get("updatedAt"),
         scoped=scoped,
+        recovery_verified=recovery["status"] == "verified",
     )
 
     excluded_counts = Counter(
@@ -367,6 +452,7 @@ def _build_candidate(
         "ledger": ledger,
         "episodesComplete": payload.get("episodesComplete") is True,
         "identity": identity,
+        "recovery": dict(recovery),
         **decision,
         "evidenceBundle": [
             {
@@ -479,8 +565,31 @@ def _compact_payload(evidence_id: str, record: Mapping[str, Any]) -> dict[str, A
             dashboard_context["mentions"] = mentions
         if dashboard_context:
             compact["dashboardContext"] = dashboard_context
-    if kind == "workflow-log" and isinstance(payload.get("errorMessage"), str):
-        compact["errorMessage"] = payload["errorMessage"][:4_000]
+    if kind == "workflow-log":
+        validate_workflow_log_payload(payload, bounded=False)
+        # The collector already bounds fetched logs. Fingerprint that complete
+        # collected diagnostic before shortening its display, so a changed path
+        # or message outside the preview still invalidates prior investigations.
+        compact["diagnosticFingerprint"] = _fingerprint({
+            field: payload[field]
+            for field in ("excerpt", "errorMessage", "facts", "truncated")
+            if field in payload
+        })
+        for field in ("excerpt", "errorMessage"):
+            text = payload.get(field)
+            if isinstance(text, str):
+                compact[field] = text[:WORKFLOW_LOG_TEXT_LIMIT]
+                compact[f"{field}Truncated"] = len(text) > WORKFLOW_LOG_TEXT_LIMIT
+        facts = payload.get("facts")
+        if isinstance(facts, list):
+            compact["facts"] = []
+            for fact in facts[:WORKFLOW_LOG_FACT_LIMIT]:
+                projected = {field: fact[field] for field in WORKFLOW_LOG_FACT_FIELDS if field in fact}
+                candidate_facts = [*compact["facts"], projected]
+                if len(stable_json(candidate_facts)) > WORKFLOW_LOG_TEXT_LIMIT:
+                    break
+                compact["facts"] = candidate_facts
+            compact["factsTruncated"] = len(compact["facts"]) != len(facts)
     if kind == "workflow-job" and isinstance(payload.get("steps"), list):
         compact["steps"] = [
             {
@@ -536,6 +645,7 @@ def _lifecycle_decision(
     episodes_complete: bool,
     updated_at: object,
     scoped: list[tuple[str, Mapping[str, Any]]],
+    recovery_verified: bool,
 ) -> dict[str, Any]:
     blockers: list[str] = []
     missing_prerequisites: list[str] = []
@@ -609,7 +719,7 @@ def _lifecycle_decision(
             missing_prerequisites=missing_prerequisites,
         )
 
-    recovery = _commit_anchored_recovery(scoped, rows)
+    recovery = _commit_anchored_recovery(scoped, rows) if recovery_verified else None
     if recovery is not None:
         blockers.append("autoclose-policy-does-not-permit-shepherd")
         if not episodes_complete:

@@ -306,6 +306,26 @@ Each request has a deterministic `investigationId`, the issue URL, evidence
 IDs, the already-collected payloads and exact URLs for only those evidence IDs,
 missing evidence, stop condition, attempt limit, and an exact `workerPrompt`.
 
+For issue-scoped code-change investigations, the request also includes the
+failed execution's diagnostic citations from the bounded prepared bundle.
+Compact summary citations alone may omit the job or log needed for a fix
+handoff. Evidence outside that bundle remains missing, and results still may
+cite only records in the frozen request.
+
+Workflow-log evidence carries bounded diagnostic text and structured facts.
+`WORKFLOW_LOG_TEXT_LIMIT` and `WORKFLOW_LOG_FACT_LIMIT` in
+`scripts/ci_shepherd/models.py` cap each text preview at 4,000 characters and
+facts at 20 entries within a 4,000-character serialized budget. Diagnostic
+field types and prepared bounds are validated.
+
+`diagnosticFingerprint` binds investigation freshness to the collected excerpt,
+error message, facts, and collection truncation flag, including content outside
+the display limits. A changed path or message invalidates old results even when
+the evidence ID and error code are unchanged. `excerptTruncated`,
+`errorMessageTruncated`, and `factsTruncated` indicate partial previews; they
+are distinct from collector `truncated`. A digest is not a substitute for
+missing diagnostic contents.
+
 Create each new request in a fresh read-only agent, then record its `started`
 session before sending the exact worker prompt:
 
@@ -362,6 +382,14 @@ requests and the stale results are not shown to the assessment agent. A
 `fixable` result is only a structured handoff candidate; it does not authorize
 code changes, assignment, or a pull request. Record a `started` investigation
 session before launching the worker.
+
+A reused `needs-evidence` result remains `blocked-awaiting-evidence`, with its
+issue, target, investigation identity, source fingerprint, and missing evidence.
+It blocks that item's actions without consuming another investigation request.
+This projection is independent of the current recommendation: changing
+`investigate` to `watch` cannot erase a fingerprint-matched blocker.
+Changed source evidence releases the old block for reassessment; unrelated safe
+actions remain eligible.
 
 ## Approved quarantine session
 
@@ -570,6 +598,16 @@ the pull request in draft when evidence or a human decision is missing.
 Exactly one validated `delegate-copilot` judgment is required for every
 `assign-copilot` proposal. Quarantine source reconciliation may enrich that
 proposal with pinned test identity, but it never creates delegation authority.
+A current fingerprint-matched `fixable` investigation must supply a complete
+`fixHandoff` (problem, repository-relative likely paths, and validation commands)
+for an issue-scoped blocking-build or product/tooling code change. Its diagnostic
+citations must cover the observed failures and be available and scoped to the
+issue. The observations must identify a deterministic non-test build or
+repository-configuration failure; a `fixable` result cannot override a possible
+flake, transient, or unknown failure identity. Missing evidence, ambiguous
+targets, unknown or conflicting workflow scope, and stale results prevent
+assignment. Compact defaults and proposal generation derive this gate from the
+frozen evidence; a model-provided actionability flag is never sufficient.
 An issue with an executable closure proposal is never also assigned to Copilot;
 the suppressed delegation remains visible under `blockedRecommendations` with
 reason `superseded-by-closure-review`.
@@ -604,6 +642,14 @@ cannot authorize a public effect. Every initial handoff or reminder comment
 still requires a validated `ping-human` recommendation and the normal exact
 proposal, policy, grant, preflight, execution, and reconciliation path.
 
+Due delegated issues carry `delegationContext` through preparation, compaction,
+and an expansion restart. It preserves the assignment/task/PR chain, the reason
+for a decision, pending reminder episode and ordinal, verified takeover, and
+activity metadata. Complete due handoffs produce delegation-specific human
+questions; incomplete lifecycle evidence cannot license escalation. Proposal
+generation rechecks this context against the frozen snapshot before rendering
+the handoff. Comment activity is context, not takeover authority.
+
 Review, denial, deferral, missing authorization, stale preflight, failed or
 indeterminate execution, and unchanged assessment do not consume the ordinal.
 Only a matching `executed` terminal action advances it and schedules exactly
@@ -636,23 +682,44 @@ the occurrence in `needs-positive-coverage`. A selected `no-action` case in
 that state records one typed `positive-coverage-review` wakeup so waiting work
 remains durable without treating silence as recovery.
 
+Preparation builds observations before any defaults are chosen. Issue recovery
+requires a nonempty complete relevant failure set, including every recorded job
+and any newer collected failure, with exact later coverage for every occurrence.
+Known exact-test facts with unresolved failure attribution remain explicit
+`testAttributionGaps`; they cannot become lane-only recovery proof.
+An available workflow log with collector `truncated: true` is not complete
+failure evidence. Required truncated diagnostics remain visible as
+`incompleteDiagnosticEvidenceIds` and block recovery and machine actionability.
+No unmodeled completeness fallback is inferred.
+An associated merged PR or a successful workflow alone cannot replace that
+proof, including for verified-main failures. Mandatory proof citations take
+priority in compact evidence selection; truncation or missing citations fails
+closed. Both recovery comments and closure revalidate the frozen proof.
+Duplicate closure remains separate and does not claim recovery.
+
 Repository policy explicitly opts issue producers and open pull requests into
 the managed-active-item invariant. `managed-item-coverage.json` projects every
 configured active target exactly once as terminal, pending action, tracked open
 PR, active delegation or investigation, typed wakeup, uncovered, or
 conflicting. The same projection is rendered in `report.md`. Unknown verified
-run scope, observation-generation failure, uncovered work, or conflicting
-terminal/active state clears every selected policy action and sets mutation
-exposure to zero; collection, assessment, and reporting still complete. The
+run scope, uncovered work, conflicting terminal/active state, and typed
+awaiting-evidence investigations block only their issue or target and dependent
+actions. Exclusions run before ranking, same-issue suppression, and budgets;
+exact approval cannot override them. Unscoped collection or observation failures
+still stop every action and set mutation exposure to zero. Collection,
+assessment, and reporting still complete. The
 Aspire policy initially enables this gate only for `ci-failure-cause` issues;
 open pull requests and other issue producers remain outside the managed set
 until they have an equally durable coverage path.
 
-The finalized proposal document carries the managed-coverage validity and
-blockers inside its production capability. Because the proposal bytes bind
-authorization, every later `coordinator.py select` iteration reapplies the same
-gate before minting a grant; rebuilding selection cannot bypass an invalid
-coverage projection.
+The finalized proposal document carries schema-v2 managed coverage inside its
+production capability: report validity, structured `globalBlockers`, and
+`blockedScopes` identifying an issue, target, or exact action. Malformed scope
+is rejected. Legacy invalid projections have no trustworthy local scope and
+therefore remain globally blocked. Because proposal bytes bind authorization,
+every later `coordinator.py select` iteration applies the same exclusions before
+budget allocation; rebuilding selection cannot bypass them. State integrity and
+authorization remain separate gates.
 
 ## Quarantine source reconciliation
 
@@ -1392,9 +1459,10 @@ defaults and avoid contradicting safe queues:
    or unrecognized producer ledgers need human review.
 5. Do not ping a human solely because an issue is old. For an old single
    occurrence, investigate positive execution coverage; silence is not
-   recovery. A complete one-off record with a citable later successful run on
-   `main` may be `review-close`. The successful run must match the failed
-   workflow and no contradictory blocker may remain. Without that recovery
+   recovery. A complete one-off record with citable later positive execution
+   coverage may be `review-close`. The proof must match the verified scope,
+   workflow, job, lane, OS, and exact test when applicable, and cover every
+   relevant failure. No contradictory blocker may remain. Without that recovery
    proof, investigate when machine-fetchable evidence remains or continue
    watching for a named future event. A future recurrence must create a new
    incident linked to the closed issue instead of reopening or reusing it.

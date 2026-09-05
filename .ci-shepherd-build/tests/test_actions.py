@@ -8,6 +8,9 @@ from ci_shepherd.actions import build_action_proposals, build_watch_proposals
 from ci_shepherd.actor import build_dry_run
 from ci_shepherd.models import stable_json
 from ci_shepherd.quarantine_reconciliation import reconcile_quarantine_source
+from ci_shepherd.lifecycle import prepare_assessment
+from ci_shepherd.poc import build_compact_poc_input
+from tests.recovery_fixtures import with_exact_coverage
 
 
 def _snapshot() -> dict[str, object]:
@@ -26,6 +29,7 @@ def _snapshot() -> dict[str, object]:
                 "payload": {
                     "number": 21,
                     "state": "open",
+                    "title": "One transient failure",
                     "updatedAt": "2026-08-21T15:59:00Z",
                     "labels": [{"name": "ci-failure-cause"}],
                     "occurrences": [
@@ -200,23 +204,20 @@ def _no_action_judgments() -> dict[str, object]:
 
 
 def _resolved_prepared() -> dict[str, object]:
-    prepared = _prepared()
-    issue = prepared["issues"][0]
-    assert isinstance(issue, dict)
-    issue.update(
-        {
-            "candidateState": "resolved",
-            "candidateAction": "recommend-close",
-            "resolutionEvidence": {
-                "runEvidenceId": "run:777",
-                "pullRequestEvidenceId": "pr:22",
-                "mergeCommitSha": "abc123",
-                "mergedAt": "2026-08-21T15:00:00Z",
-                "successfulRunStartedAt": "2026-08-21T15:00:05Z",
-            },
-        }
-    )
-    return prepared
+    return prepare_assessment(_recovery_snapshot())
+
+
+def _recovery_snapshot() -> dict[str, object]:
+    value = _snapshot()
+    issue = value["evidence"]["issue:21"]["payload"]
+    issue.update({
+        "title": "[Main CI Failure] Compilation failed",
+        "url": "https://github.com/owner/repo/issues/21",
+        "producer": "ci-failure-cause",
+        "ledger": {"complete": True, "schemaRecognized": True, "parsedRowCount": 1,
+                   "rows": [{"date": "2026-08-20", "sourceRun": 776, "job": "Build"}]},
+    })
+    return with_exact_coverage(value)
 
 
 def _close_judgments() -> dict[str, object]:
@@ -232,7 +233,7 @@ def _close_judgments() -> dict[str, object]:
             "disposition": "review-close",
             "target": {"kind": "issue", "value": 21},
             "summary": "Review this issue for closure.",
-            "evidenceIds": ["issue:21", "run:777", "pr:22"],
+            "evidenceIds": [*_resolved_prepared()["issues"][0]["recovery"]["evidenceIds"], "pr:22"],
             "missingEvidence": [],
             "reassessWhen": "After the next positive evidence or human review.",
         }
@@ -260,17 +261,7 @@ def _duplicate_agent_input() -> dict[str, object]:
 
 
 def _recovered_run_agent_input() -> dict[str, object]:
-    return {
-        "schemaVersion": 1,
-        "snapshotId": "snapshot:owner/repo:2026-08-21T16:00:00Z",
-        "repository": "owner/repo",
-        "issues": [
-            {
-                "issueNumber": 21,
-                "recoveredRunEvidenceId": "run:777",
-            }
-        ],
-    }
+    return build_compact_poc_input(_resolved_prepared())
 
 
 def _duplicate_judgments() -> dict[str, object]:
@@ -357,23 +348,59 @@ def _with_owned_comment(
     return result
 
 
+def _prepare_handoff(snapshot: dict) -> dict:
+    from datetime import timedelta
+    from ci_shepherd.handoff_reminders import derive_handoff_reminders
+    from ci_shepherd.repository_policy import HandoffReminderPolicy
+
+    for record in snapshot["delegationStatus"]["records"]:
+        record.update(issueOpen=True, copilotAssigned=True, humanAssigned=False)
+        record.setdefault("handoffStartedAt", record["startedAt"])
+        if "handoffReminder" not in record:
+            derive_handoff_reminders([record], [], HandoffReminderPolicy(
+                interval=timedelta(days=1), stale_progress_interval=timedelta(days=7), maximum=2,
+            ))
+    return prepare_assessment({
+        **snapshot, "openIssues": sorted(set(snapshot["openIssues"]) | set(snapshot.get("delegatedIssues", []))),
+    })
+
+
+def _current_code_handoff() -> tuple[dict, dict, dict]:
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from ci_shepherd.investigations import attach_latest_investigation_results
+    from tests.test_production_decisions import completed_investigation
+
+    snapshot = _recovery_snapshot()
+    snapshot["repositoryPolicy"] = {"quarantinePullRequest": {"baseRef": "main"}}
+    for record in snapshot["evidence"].values():
+        if record["kind"] == "workflow-job" and record["payload"]["conclusion"] == "success":
+            record["payload"]["conclusion"] = "skipped"
+    prepared = prepare_assessment(snapshot)
+    compact = build_compact_poc_input(prepared)
+    judgments = {"schemaVersion": 1, "snapshotId": prepared["snapshotId"],
+                 "issues": [compact["issues"][0]["defaultJudgment"]]}
+    with TemporaryDirectory() as directory:
+        result = completed_investigation(Path(directory), prepared, judgments, outcome="fixable")
+    prepared = attach_latest_investigation_results(prepared, [result])
+    judgments["issues"] = [build_compact_poc_input(prepared)["issues"][0]["defaultJudgment"]]
+    return snapshot, prepared, judgments
+
+
+def _handoff_judgments(snapshot: dict) -> dict:
+    compact = build_compact_poc_input(_prepare_handoff(snapshot))
+    return {"schemaVersion": 1, "snapshotId": compact["snapshotId"],
+            "issues": [issue["defaultJudgment"] for issue in compact["issues"]]}
+
+
 class WatchActionTests(unittest.TestCase):
     def test_delegate_copilot_recommendation_creates_assignment_proposal(self) -> None:
-        prepared = _prepared()
-        prepared["repositoryPolicy"] = {
-            "quarantinePullRequest": {"baseRef": "main"},
-        }
-        prepared["issues"][0]["machineActionability"] = {
-            "status": "verified",
-            "kind": "deterministic-failure",
-            "fingerprint": "test:Demo.Tests.Broken",
-            "evidenceIds": ["issue:21", "run:777"],
-        }
+        snapshot, prepared, judgments = _current_code_handoff()
 
         proposals = build_action_proposals(
-            _snapshot(),
+            snapshot,
             prepared,
-            _delegate_judgments(),
+            judgments,
             "ankj",
         )
 
@@ -393,23 +420,14 @@ class WatchActionTests(unittest.TestCase):
         build_dry_run(proposals, action_id=str(proposal["actionId"]))
 
     def test_materially_new_delegation_uses_new_episode_identity(self) -> None:
-        prepared = _prepared()
-        prepared["repositoryPolicy"] = {
-            "quarantinePullRequest": {"baseRef": "main"},
-        }
-        prepared["issues"][0]["machineActionability"] = {
-            "status": "verified",
-            "kind": "deterministic-failure",
-            "fingerprint": "test:Demo.Tests.Broken",
-            "evidenceIds": ["issue:21", "run:777"],
-        }
+        snapshot, prepared, judgments = _current_code_handoff()
         first = build_action_proposals(
-            _snapshot(),
+            snapshot,
             prepared,
-            _delegate_judgments(),
+            judgments,
             "ankj",
         )
-        successor_snapshot = _snapshot()
+        successor_snapshot = copy.deepcopy(snapshot)
         successor_snapshot["delegationStatus"] = {
             "status": "complete",
             "records": [],
@@ -419,13 +437,13 @@ class WatchActionTests(unittest.TestCase):
         successor = build_action_proposals(
             successor_snapshot,
             prepared,
-            _delegate_judgments(),
+            judgments,
             "ankj",
         )
         replay = build_action_proposals(
             successor_snapshot,
             prepared,
-            _delegate_judgments(),
+            judgments,
             "ankj",
         )
 
@@ -538,6 +556,7 @@ class WatchActionTests(unittest.TestCase):
                 "payload": {
                     "number": issue_number,
                     "state": "open",
+                    "title": "Frozen prior-live no-action issue",
                     "updatedAt": "2026-09-04T18:40:55Z",
                     "labels": [{"name": "test-failure"}],
                     "occurrences": [],
@@ -589,6 +608,20 @@ class WatchActionTests(unittest.TestCase):
             "ankj",
             quarantine_reconciliation=reconciliation,
         )
+        production_prepared = prepare_assessment(snapshot)
+        production_compact = build_compact_poc_input(production_prepared)
+        production_judgments = {
+            "schemaVersion": 1, "snapshotId": production_prepared["snapshotId"],
+            "issues": [issue["defaultJudgment"] for issue in production_compact["issues"]],
+        }
+        production_proposals = build_action_proposals(
+            snapshot, production_prepared, production_judgments, "ankj",
+            agent_input=production_compact, quarantine_reconciliation=reconciliation,
+        )
+        self.assertEqual([], [
+            proposal for proposal in production_proposals["proposals"]
+            if proposal["issueNumber"] in {6866, 8728} and proposal["operation"] == "assign-copilot"
+        ])
 
         self.assertEqual(
             stable_json(baseline["proposals"]),
@@ -636,7 +669,7 @@ class WatchActionTests(unittest.TestCase):
         )
 
     def test_unverified_bare_reference_blocks_the_complete_document(self) -> None:
-        snapshot = _snapshot()
+        snapshot = _recovery_snapshot()
         pull_request = snapshot["evidence"]["pr:22"]
         pull_request["payload"]["referencedBy"] = [
             {
@@ -888,7 +921,7 @@ class WatchActionTests(unittest.TestCase):
 
     def test_newest_legacy_status_comment_is_migrated_when_multiple_exist(self) -> None:
         snapshot = _with_owned_comment(
-            _snapshot(),
+            _recovery_snapshot(),
             "[automated] Old watch status",
             comment_id=900,
             idempotency_key="issue:21:watch",
@@ -922,7 +955,7 @@ class WatchActionTests(unittest.TestCase):
         recommendations.append(copy.deepcopy(_judgments()["issues"][0]["recommendations"][0]))
 
         result = build_action_proposals(
-            _snapshot(),
+            _recovery_snapshot(),
             _resolved_prepared(),
             judgments,
             "ankj",
@@ -1033,7 +1066,7 @@ class WatchActionTests(unittest.TestCase):
 
     def test_build_action_proposals_renders_resolved_review_close(self) -> None:
         result = build_action_proposals(
-            _snapshot(),
+            _recovery_snapshot(),
             _resolved_prepared(),
             _close_judgments(),
             "ankj",
@@ -1050,26 +1083,9 @@ class WatchActionTests(unittest.TestCase):
             "https://github.com/owner/repo/actions/runs/777",
             comment["body"],
         )
+        self.assertIn("`CI` / `Build (ubuntu-latest)`", comment["body"])
         self.assertIn(
-            "compiler error `CS0117`",
-            comment["body"],
-        )
-        self.assertIn(
-            "PR [#22](https://github.com/owner/repo/pull/22) merged commit "
-            "`abc123`",
-            comment["body"],
-        )
-        self.assertIn(
-            "CI run [777](https://github.com/owner/repo/actions/runs/777) "
-            "completed successfully on `main` for that exact merge commit",
-            comment["body"],
-        )
-        self.assertIn(
-            "That successful post-fix run satisfies the recovery gate",
-            comment["body"],
-        )
-        self.assertIn(
-            "**Resolution:** The recovery evidence supports closing this issue "
+            "**Resolution:** The matched execution evidence supports closing this issue "
             "as completed.",
             comment["body"],
         )
@@ -1084,8 +1100,8 @@ class WatchActionTests(unittest.TestCase):
 
     def test_build_action_proposals_renders_direct_run_recovery_close(self) -> None:
         result = build_action_proposals(
-            _snapshot(),
-            _prepared(),
+            _recovery_snapshot(),
+            _resolved_prepared(),
             _close_judgments(),
             "ankj",
             agent_input=_recovered_run_agent_input(),
@@ -1096,7 +1112,7 @@ class WatchActionTests(unittest.TestCase):
             [proposal["operation"] for proposal in result["proposals"]],
         )
         self.assertIn(
-            "completed successfully on `main` after the last recorded failure",
+            "in `main` completed successfully after the recorded failure",
             result["proposals"][0]["body"],
         )
 
@@ -1110,8 +1126,8 @@ class WatchActionTests(unittest.TestCase):
         ]
 
         result = build_action_proposals(
-            _snapshot(),
-            _prepared(),
+            _recovery_snapshot(),
+            _resolved_prepared(),
             judgments,
             "ankj",
             agent_input=_recovered_run_agent_input(),
@@ -1148,7 +1164,7 @@ class WatchActionTests(unittest.TestCase):
         closing_issue["issueNumber"] = 22
         closing_recommendation = closing_issue["recommendations"][0]
         closing_recommendation["target"]["value"] = 22
-        closing_recommendation["evidenceIds"][0] = "issue:22"
+        closing_recommendation["evidenceIds"] = ["issue:22", "run:777", "pr:22"]
         judgments["issues"].append(closing_issue)
 
         result = build_action_proposals(snapshot, prepared, judgments, "ankj")
@@ -1224,12 +1240,6 @@ class WatchActionTests(unittest.TestCase):
         prepared = _prepared()
         prepared["repositoryPolicy"] = {
             "quarantinePullRequest": {"baseRef": "main"},
-        }
-        prepared["issues"][0]["machineActionability"] = {
-            "status": "verified",
-            "kind": "deterministic-failure",
-            "fingerprint": "test:Demo.Tests.Broken",
-            "evidenceIds": ["issue:21", "run:777"],
         }
         judgments = _delegate_judgments()
         issue = judgments["issues"][0]
@@ -1560,8 +1570,8 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
         proposals = build_action_proposals(
             snapshot,
-            _prepared(),
-            _ping_human_judgments(),
+            _prepare_handoff(snapshot),
+            _handoff_judgments(snapshot),
             "ankj",
         )
 
@@ -1583,8 +1593,8 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
         replay = build_action_proposals(
             replay_snapshot,
-            _prepared(),
-            _ping_human_judgments(),
+            _prepare_handoff(replay_snapshot),
+            _handoff_judgments(replay_snapshot),
             "ankj",
         )
 
@@ -1701,8 +1711,8 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
         proposals = build_action_proposals(
             snapshot,
-            _prepared(),
-            _ping_human_judgments(),
+            _prepare_handoff(snapshot),
+            _handoff_judgments(snapshot),
             "ankj",
         )
 
@@ -1735,14 +1745,14 @@ class DelegationHandoffActionTests(unittest.TestCase):
 
         proposals = build_action_proposals(
             snapshot,
-            _prepared(),
-            _ping_human_judgments(),
+            _prepare_handoff(snapshot),
+            _handoff_judgments(snapshot),
             "ankj",
         )
 
         self.assertEqual(1, len(proposals["proposals"]))
         self.assertIn(
-            "delegation-handoff-comment",
+            "ping-human-comment:assignment:21:handoff:reminder-1",
             proposals["proposals"][0]["actionId"],
         )
         build_dry_run(

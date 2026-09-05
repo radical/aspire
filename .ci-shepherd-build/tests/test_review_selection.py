@@ -301,7 +301,7 @@ class ReviewSelectionTests(unittest.TestCase):
 
         self.assertNotIn("review-close", allowed)
         self.assertNotIn("ping-human", allowed)
-        self.assertIn("delegate-copilot", allowed)
+        self.assertNotIn("delegate-copilot", allowed)
         self.assertIn("investigate", allowed)
         self.assertIn("watch", allowed)
 
@@ -310,6 +310,7 @@ class ReviewSelectionTests(unittest.TestCase):
             [
                 _compact_issue(
                     101,
+                    tier2_test_name=None,
                     parsed_row_count=2,
                     ledger_rows=[
                         {"date": "2026-08-16", "sourceRun": 900, "job": "Tests"},

@@ -55,9 +55,89 @@ def _source_evidence_fingerprint(issue: Mapping[str, Any]) -> str:
         {
             key: value
             for key, value in issue.items()
-            if key not in {"investigationResult", "investigationResults"}
+            if key not in {"investigationResult", "investigationResults", "machineActionability"}
         }
     )
+
+
+def derive_machine_actionability(
+    issue: Mapping[str, Any], category: str, results: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """A current, fully cited code handoff is a candidate, never authorization."""
+    if category not in {"blocking-build", "product-or-tooling"}:
+        return None
+    recovery = issue.get("recovery", {})
+    if recovery.get("complete") is not True or not recovery.get("subjects"):
+        return None
+    # A model's category or handoff cannot turn a possible flake, transient,
+    # or unidentified failure into a deterministic code-change subject.
+    if any(
+        subject["occurrence"].get("scopeConflict")
+        or subject["occurrence"].get("verifiedScope", {}).get("kind") == "unknown"
+        or not {"toolchain-build-break", "repo-config-break"}.intersection(
+            subject["occurrence"].get("allowedCauses", [])
+        )
+        for subject in recovery["subjects"]
+    ):
+        return None
+    fingerprint = _source_evidence_fingerprint(issue)
+    candidates = [
+        result for result in (results if results is not None else issue.get("investigationResults", []))
+        if result.get("issueNumber") == issue["issueNumber"]
+        and result.get("sourceEvidenceFingerprint") == fingerprint
+    ]
+    # Multiple target conclusions are ambiguous: one positive handoff cannot
+    # silently override another target still awaiting evidence.
+    if len(candidates) != 1:
+        return None
+    result = candidates[0]
+    if (
+        result.get("outcome") != "fixable" or result.get("missingEvidence")
+        or result.get("target") != {"kind": "issue", "value": issue["issueNumber"]}
+        or not isinstance(result.get("investigationId"), str)
+        or any(
+            result.get("repository") != subject["occurrence"]["verifiedScope"]["repository"]
+            for subject in recovery["subjects"]
+        )
+    ):
+        return None
+    handoff = result.get("fixHandoff")
+    if (
+        not isinstance(handoff, Mapping)
+        or set(handoff) != {"problem", "likelyPaths", "validation"}
+        or not isinstance(handoff["problem"], str) or not handoff["problem"].strip()
+        or any(
+            not isinstance(handoff[field], list) or not handoff[field]
+            or any(not isinstance(text, str) or not text.strip() for text in handoff[field])
+            for field in ("likelyPaths", "validation")
+        )
+    ):
+        return None
+    if any(
+        path.startswith(("/", "\\")) or "\\" in path or ":" in path
+        or any(part in {"", ".", ".."} for part in path.split("/"))
+        for path in handoff["likelyPaths"]
+    ):
+        return None
+    bundle = {record["id"]: record for record in issue.get("evidenceBundle", [])}
+    ids = result.get("evidenceIds")
+    failure_ids = {
+        evidence_id for subject in recovery["subjects"]
+        for evidence_id in subject["occurrence"]["evidenceIds"]
+    }
+    if (
+        not isinstance(ids, list) or not ids
+        or any(not isinstance(eid, str) or bundle.get(eid, {}).get("availability") != "available" for eid in ids)
+        or not failure_ids.issubset(ids)
+        or not any(bundle[eid].get("kind") in {"workflow-job", "workflow-log", "source-path"} for eid in ids)
+    ):
+        return None
+    return {
+        "status": "verified", "kind": "code-change",
+        "fingerprint": fingerprint, "investigationId": result["investigationId"],
+        "evidenceIds": sorted(set([f"issue:{issue['issueNumber']}", *ids])),
+        "fixHandoff": copy.deepcopy(dict(handoff)),
+    }
 
 
 def _worker_prompt(request: Mapping[str, Any]) -> str:
@@ -77,6 +157,10 @@ def _worker_prompt(request: Mapping[str, Any]) -> str:
         "links, search GitHub, or query repository history. If those inputs are "
         "insufficient, return needs-evidence. Do not edit code, post comments, "
         "assign anyone, or open a pull request.\n\n"
+        "excerptTruncated, errorMessageTruncated, and factsTruncated identify "
+        "partial diagnostic previews; truncated identifies incomplete collection. "
+        "A fingerprint does not supply missing diagnostic contents. Use the same "
+        "exact-URL boundary for a partial preview, or return needs-evidence.\n\n"
         f"Target: {request['target']['kind']}:{request['target']['value']}\n"
         f"Question: {request['question']}\n"
         f"Evidence already checked: {', '.join(request['evidenceIds'])}\n"
@@ -172,6 +256,23 @@ def build_investigation_plan(
     active: list[str] = []
     active_investigations: list[dict[str, object]] = []
     exhausted: list[dict[str, object]] = []
+    # A judgment may change queues without changing evidence. Persisted,
+    # fingerprint-matched blockers therefore belong to the current issue facts,
+    # not to the loop that decides which new investigations to request.
+    current_results = attach_latest_investigation_results(prepared, prior_results)
+    blocked_awaiting_evidence = [
+        {
+            "issueNumber": current_issue["issueNumber"],
+            "target": copy.deepcopy(result["target"]),
+            "investigationId": result["investigationId"],
+            "sourceEvidenceFingerprint": result["sourceEvidenceFingerprint"],
+            "missingEvidence": list(result.get("missingEvidence", [])),
+            "status": "blocked-awaiting-evidence",
+        }
+        for current_issue in current_results["issues"]
+        for result in current_issue.get("investigationResults", [])
+        if result.get("outcome") == "needs-evidence"
+    ]
     for issue in judgments.get("issues", []):
         if not isinstance(issue, Mapping):
             continue
@@ -209,6 +310,27 @@ def build_investigation_plan(
                 raise ValueError(
                     f"Investigation for issue {issue_number} has invalid missingEvidence."
                 )
+            if (
+                issue.get("category") in {"blocking-build", "product-or-tooling"}
+                and target == {"kind": "issue", "value": issue_number}
+            ):
+                # Compact recommendations cite only a few summary records.
+                # Include the failed execution's proof before freezing the
+                # request: the worker cannot cite records outside that request.
+                # Never expand beyond the already-bounded prepared bundle.
+                failure_ids = {
+                    evidence_id
+                    for subject in prepared_issue.get("recovery", {}).get("subjects", [])
+                    for evidence_id in subject["occurrence"]["evidenceIds"]
+                }
+                bundled_ids = {
+                    record["id"] for record in prepared_issue.get("evidenceBundle", [])
+                }
+                evidence_ids = sorted(set(evidence_ids) | (failure_ids & bundled_ids))
+                if failure_ids - bundled_ids:
+                    missing_evidence = [
+                        *missing_evidence, "complete failed-execution diagnostic evidence",
+                    ]
             identity = {
                 "repository": repository.casefold(),
                 "issueNumber": issue_number,
@@ -319,6 +441,7 @@ def build_investigation_plan(
         "reusedInvestigationIds": reused,
         "activeInvestigationIds": active,
         "activeInvestigations": active_investigations,
+        "blockedAwaitingEvidence": blocked_awaiting_evidence,
     }
 
 
@@ -843,6 +966,16 @@ def render_investigation_section(plan: Mapping[str, Any]) -> str:
                 f"**Reused completed investigations:** {len(reused)}",
             ]
         )
+    blocked = plan.get("blockedAwaitingEvidence", [])
+    if blocked:
+        lines.extend(["", "**Blocked awaiting evidence:**"])
+        for item in blocked:
+            target = item["target"]
+            missing = ", ".join(item["missingEvidence"]) or "additional evidence"
+            lines.append(
+                f"- Issue #{item['issueNumber']}, `{target['kind']}:{target['value']}` "
+                f"(`{item['investigationId']}`, source `{item['sourceEvidenceFingerprint']}`): {missing}."
+            )
     if isinstance(active, list) and active:
         lines.extend(
             [

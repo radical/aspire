@@ -37,7 +37,6 @@ from ci_shepherd.managed_coverage import (
     render_managed_item_coverage_section,
 )
 from ci_shepherd.models import stable_json, validate_snapshot
-from ci_shepherd.observations import build_observations
 from ci_shepherd.operation_policy import load_operation_policy_document
 from ci_shepherd.policy import load_policy
 from ci_shepherd.poc import build_compact_poc_input
@@ -403,8 +402,17 @@ def _restart_after_evidence_expansion(
         )
     _write_private_json(input_path, expanded_snapshot)
 
+    # Delegated cases enter assessment only when due. Expansion must retain that
+    # frozen review set without enrolling every active delegation.
+    reviewed_delegations = set(expanded_snapshot.get("delegatedIssues", [])) & {
+        issue["issueNumber"] for issue in final_judgments["issues"]
+    }
+    assessment_snapshot = {
+        **expanded_snapshot,
+        "openIssues": sorted(set(expanded_snapshot["openIssues"]) | reviewed_delegations),
+    }
     prepared = attach_latest_investigation_results(
-        prepare_assessment(expanded_snapshot),
+        prepare_assessment(assessment_snapshot),
         read_investigation_results(Path(str(manifest["stateDirectory"]))),
     )
     compact = build_compact_poc_input(prepared)
@@ -813,18 +821,7 @@ def finish_cycle(
         sparse_pull_request_judgments,
     )
     _write_private_json(paths["pullRequestJudgments"], pull_request_judgments)
-    try:
-        quarantine_evidence = build_observations(
-            snapshot,
-            policy=load_policy(DEFAULT_POLICY_PATH),
-        )
-    except ValueError as error:
-        quarantine_evidence = {
-            "occurrences": [],
-            "coverage": [],
-            "fingerprints": [],
-            "error": str(error),
-        }
+    quarantine_evidence = prepared["observations"]
     _write_private_json(paths["quarantineEvidence"], quarantine_evidence)
     quarantine_request = build_quarantine_session_request(
         prepared,
@@ -977,9 +974,11 @@ def finish_cycle(
         "productionPilotCapability": {
             **capability,
             "managedItemCoverage": {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "valid": managed_coverage["valid"],
                 "blockers": managed_coverage["blockers"],
+                "globalBlockers": managed_coverage["globalBlockers"],
+                "blockedScopes": managed_coverage["blockedScopes"],
             },
         },
     }

@@ -28,6 +28,7 @@ from ci_shepherd.poc import (
     ASSESSMENT_SCHEMA_VERSION,
     DISPOSITIONS,
     close_is_projectable,
+    delegation_is_projectable,
     compact_issue_requires_human_decision,
     is_ambiguous_default,
     validate_poc_projectability,
@@ -38,10 +39,10 @@ from ci_shepherd.poc_history import compute_fingerprint
 SELECTION_SCHEMA_VERSION = 2
 
 # Dispositions an agent may always choose for a selected case. `review-close`
-# and `ping-human` are deliberately absent: both are added per case only when
+# `ping-human`, and `delegate-copilot` are absent: they are added only when
 # the deterministic evidence that lets them project into a real action is
 # already present.
-_BASE_ALLOWED_DISPOSITIONS = frozenset(DISPOSITIONS - {"review-close", "ping-human"})
+_BASE_ALLOWED_DISPOSITIONS = frozenset(DISPOSITIONS - {"review-close", "ping-human", "delegate-copilot"})
 
 _OMISSION_NOT_ELIGIBLE = "not-review-required"
 _OMISSION_UNCHANGED = "unchanged-stable"
@@ -612,6 +613,8 @@ def _review_reasons(
 
 def _allowed_dispositions(issue: Mapping[str, Any]) -> list[str]:
     allowed = set(_BASE_ALLOWED_DISPOSITIONS)
+    if delegation_is_projectable(issue):
+        allowed.add("delegate-copilot")
     if close_is_projectable(issue):
         allowed.add("review-close")
     if compact_issue_requires_human_decision(issue):

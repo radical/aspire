@@ -7,6 +7,7 @@ from typing import Callable, Protocol
 
 from .collector import COPILOT_ASSIGNEES
 from .eligibility import EXECUTABLE_CI_LABELS, label_names
+from .managed_coverage import validate_coverage_capability
 
 
 KNOWN_OPERATIONS = frozenset(
@@ -796,20 +797,8 @@ def validate_action_proposals(document: object) -> dict[str, object]:
                     "round-0 or round-1 proposal document."
                 )
             managed_coverage = capability.get("managedItemCoverage")
-            if managed_coverage is not None and (
-                not isinstance(managed_coverage, dict)
-                or set(managed_coverage) != {"schemaVersion", "valid", "blockers"}
-                or managed_coverage.get("schemaVersion") != 1
-                or not isinstance(managed_coverage.get("valid"), bool)
-                or not isinstance(managed_coverage.get("blockers"), list)
-                or any(
-                    not isinstance(blocker, str) or not blocker
-                    for blocker in managed_coverage.get("blockers", [])
-                )
-            ):
-                raise ValueError(
-                    "productionPilotCapability.managedItemCoverage is invalid."
-                )
+            if "managedItemCoverage" in capability:
+                validate_coverage_capability(managed_coverage)
         blocked_recommendations = document.get("blockedRecommendations", [])
         if not isinstance(blocked_recommendations, list):
             raise TypeError("blockedRecommendations must be a list.")

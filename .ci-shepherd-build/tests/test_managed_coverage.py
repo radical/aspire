@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import copy
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from ci_shepherd.managed_coverage import (
     block_policy_selection,
@@ -10,9 +12,77 @@ from ci_shepherd.managed_coverage import (
 )
 from ci_shepherd.repository_policy import load_repository_policy
 from tests.test_policy import ASPIRE_REPOSITORY_POLICY_PATH
+from tests.test_policy_selection import (
+    _close_proposal, _comment_proposal, _digest_of, _document,
+    _exact_decision, _policy_document, _projection,
+)
+from ci_shepherd.policy_selection import build_policy_selection
 
 
 class ManagedCoverageTests(unittest.TestCase):
+    def test_unresolved_issue_does_not_spend_safe_actions_single_budget_slot(self) -> None:
+        policy = replace(
+            load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
+            managed_issue_producers=frozenset({"ci-failure-cause"}),
+            managed_automation_explicit=True,
+        )
+        document = _document([
+            _comment_proposal(action_id="a:ping-human-comment", issue_number=1),
+            _close_proposal(action_id="a:close", issue_number=1, depends_on="a:ping-human-comment"),
+            _comment_proposal(action_id="b:watch-comment", issue_number=2),
+        ])
+        coverage = build_managed_item_coverage(
+            {"repository": document["repository"], "openIssues": [1, 2],
+             "evidence": {f"issue:{n}": {"payload": {"producer": "ci-failure-cause"}} for n in (1, 2)}},
+            policy=policy, proposals=document, investigation_plan={},
+            review_schedule={}, observations={"occurrences": [
+                {"issueNumber": 1, "verifiedScope": {"kind": "unknown"}},
+            ]},
+        )
+        document["productionPilotCapability"] = {
+            "schemaVersion": 1, "evidenceRound": 0,
+            "managedItemCoverage": {
+                k: v for k, v in coverage.items() if k not in {"repository", "counts", "items"}
+            },
+        }
+        now = datetime(2026, 9, 4, tzinfo=UTC)
+        policy_doc = _policy_document(enabled_classes=frozenset({"create-comment"}))
+        policy_doc["operationClasses"]["create-comment"]["maxPerRun"] = 1
+        selection = build_policy_selection(
+            document, run_id="test", policy_projection=_projection(policy_doc=policy_doc),
+            action_events=[], now=now,
+        )
+        self.assertFalse(coverage["valid"])
+        self.assertEqual(["b:watch-comment"], selection["selectedActionIds"])
+        projection = _projection(policy_doc=policy_doc, exact_decisions=[
+            _exact_decision(action_id="a:ping-human-comment", proposal_digest=_digest_of(document),
+                            decision="approve-once", now=now),
+        ])
+        for _ in range(2):
+            selected = build_policy_selection(document, run_id="test", policy_projection=projection, action_events=[], now=now)
+            self.assertEqual(["b:watch-comment"], selected["selectedActionIds"])
+            self.assertEqual(
+                {"a:ping-human-comment", "a:close"},
+                {item["actionId"] for item in selected["candidates"] if item["reason"] == "managed-item-coverage-invalid"},
+            )
+        for invalid in (None, [], {"kind": "issue", "issueNumber": True, "reason": "unknown"},
+                        {"kind": "target", "issueNumber": 1, "target": {"kind": "issue", "value": 2}, "reason": "unknown"},
+                        {"kind": "action", "actionId": "", "reason": "unknown"}):
+            changed = copy.deepcopy(document)
+            changed["productionPilotCapability"]["managedItemCoverage"]["blockedScopes"] = [invalid]
+            with self.subTest(scope=invalid), self.assertRaises(ValueError):
+                build_policy_selection(changed, run_id="test", policy_projection=projection, action_events=[], now=now)
+        for gate in (
+            {"schemaVersion": 1, "valid": False, "blockers": ["legacy untrusted scope"]},
+            {"schemaVersion": 2, "valid": False, "blockers": ["observation error"],
+             "globalBlockers": [{"reason": "observation error"}], "blockedScopes": []},
+        ):
+            changed = copy.deepcopy(document)
+            changed["productionPilotCapability"]["managedItemCoverage"] = gate
+            selected = build_policy_selection(changed, run_id="test", policy_projection=projection, action_events=[], now=now)
+            self.assertEqual([], selected["selectedActionIds"])
+            self.assertEqual({"thisRun": 0, "rolling24h": 0}, selected["maximumWriteExposure"])
+
     def test_observation_collection_failure_blocks_mutation(self) -> None:
         policy = replace(
             load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
@@ -125,7 +195,7 @@ class ManagedCoverageTests(unittest.TestCase):
             ],
         )
 
-    def test_uncovered_item_blocks_all_mutation_and_remains_visible(self) -> None:
+    def test_uncovered_item_is_reported_without_globally_revoking_selection(self) -> None:
         policy = replace(
             load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
             managed_issue_producers=frozenset({"ci-failure-cause"}),
@@ -169,12 +239,12 @@ class ManagedCoverageTests(unittest.TestCase):
         )
 
         self.assertFalse(coverage["valid"])
-        self.assertEqual([], selection["selectedActionIds"])
-        self.assertTrue(selection["mutationBlocked"])
+        self.assertEqual(["action-1"], selection["selectedActionIds"])
+        self.assertFalse(selection.get("mutationBlocked", False))
         self.assertEqual(
-            {"thisRun": 0, "rolling24h": 0},
+            {"thisRun": 1, "rolling24h": 1},
             selection["maximumWriteExposure"],
         )
         report = render_managed_item_coverage_section(coverage)
-        self.assertIn("Mutation gate: **blocked**", report)
+        self.assertIn("Mutation gate: **item-local**", report)
         self.assertIn("`issue:1` | `uncovered` | `uncovered`", report)

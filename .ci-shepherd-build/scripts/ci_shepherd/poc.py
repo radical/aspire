@@ -5,7 +5,8 @@ import re
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
-from ci_shepherd.models import ValidationError
+from ci_shepherd.investigations import derive_machine_actionability
+from ci_shepherd.models import ValidationError, validate_workflow_log_payload
 from ci_shepherd.poc_history import compute_fingerprint, merge_occurrence_dimensions
 from ci_shepherd.timeutils import parse_aware_iso8601
 
@@ -160,17 +161,56 @@ def validate_poc_projectability(compact_input: object, judgments: object) -> Non
         for raw_recommendation in _require_list(issue, "recommendations"):
             recommendation = _require_mapping(raw_recommendation, "recommendation")
             disposition = recommendation.get("disposition")
+            if disposition == "delegate-copilot":
+                actionability = compact_issue.get("machineActionability", {})
+                evidence_ids = actionability.get("evidenceIds", [])
+                if (
+                    not delegation_is_projectable(compact_issue)
+                    or not set(evidence_ids).issubset(recommendation.get("evidenceIds", []))
+                ):
+                    raise ValidationError(f"Issue {issue_number} requires a current cited code handoff.")
             if disposition == "review-close" and not close_is_projectable(compact_issue):
                 raise ValidationError(
                     f"Issue {issue_number} review-close requires deterministic "
                     "duplicate or resolution evidence."
                 )
+            if (
+                disposition == "review-close"
+                and compact_issue.get("actionCluster", {}).get("role") != "superseded"
+                and not set(compact_issue["recovery"]["evidenceIds"]).issubset(
+                    recommendation.get("evidenceIds", [])
+                )
+            ):
+                raise ValidationError(f"Issue {issue_number} requires every recovery proof citation.")
             if disposition == "ping-human":
                 if not compact_issue_requires_human_decision(compact_issue):
                     raise ValidationError(
                         f"Issue {issue_number} ping-human requires a reported human decision."
                     )
                 _validate_human_escalation(recommendation.get("humanEscalation"))
+
+
+def delegation_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
+    actionability = compact_issue.get("machineActionability", {})
+    handoff = actionability.get("fixHandoff")
+    return (
+        actionability.get("status") == "verified"
+        and actionability.get("kind") == "code-change"
+        and all(isinstance(actionability.get(key), str) and actionability[key] for key in ("fingerprint", "investigationId"))
+        and isinstance(handoff, Mapping)
+        and set(handoff) == {"problem", "likelyPaths", "validation"}
+        and isinstance(handoff["problem"], str) and bool(handoff["problem"].strip())
+        and all(
+            isinstance(handoff[key], list) and handoff[key]
+            and all(isinstance(value, str) and value.strip() for value in handoff[key])
+            for key in ("likelyPaths", "validation")
+        )
+        and bool(actionability.get("evidenceIds"))
+        and set(actionability["evidenceIds"]).issubset(
+            record["id"] for record in compact_issue.get("allowedEvidence", [])
+            if record.get("availability") == "available"
+        )
+    )
 
 
 def close_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
@@ -180,15 +220,16 @@ def close_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
         and action_cluster.get("role") == "superseded"
     ):
         return True
-    if (
-        compact_issue.get("candidateState") == "resolved"
-        and compact_issue.get("candidateAction") == "recommend-close"
-        and bool(compact_issue.get("resolutionEvidence"))
-    ):
-        return True
-    recovered_run_evidence_id = compact_issue.get("recoveredRunEvidenceId")
-    return isinstance(recovered_run_evidence_id, str) and bool(
-        recovered_run_evidence_id.strip()
+    recovery = compact_issue.get("recovery")
+    return (
+        isinstance(recovery, Mapping)
+        and recovery.get("status") == "verified"
+        and recovery.get("complete") is True
+        and bool(recovery.get("evidenceIds"))
+        and set(recovery["evidenceIds"]).issubset(
+            record["id"] for record in compact_issue.get("allowedEvidence", [])
+            if record.get("availability") == "available"
+        )
     )
 
 
@@ -429,6 +470,11 @@ def _prepared_issues(prepared: Mapping[str, Any]) -> dict[int, Mapping[str, Any]
         if issue_number in result:
             raise ValidationError(f"Prepared assessment contains duplicate issue {issue_number}.")
         evidence_bundle = _require_list(issue, "evidenceBundle")
+        for record in evidence_bundle:
+            if isinstance(record, Mapping) and record.get("kind") == "workflow-log" and "payload" in record:
+                validate_workflow_log_payload(
+                    _require_mapping(record["payload"], "workflow-log payload"), bounded=True,
+                )
         result[issue_number] = {"evidenceBundle": evidence_bundle}
     return result
 
@@ -675,9 +721,25 @@ def _build_compact_issue(
         "quarantined-test",
     )
     human_context = _build_human_context(evidence_bundle)
+    delegation = issue.get("delegationContext")
+    if isinstance(delegation, Mapping):
+        human_context = {
+            "kind": "delegation",
+            "decisionRequired": delegation.get("decisionRequired") is True,
+            "decisionReason": delegation.get("decisionReason"),
+        }
     automation_context = _build_automation_context(issue_number, evidence_bundle)
 
-    allowed_evidence, allowed_evidence_ids = _select_allowed_evidence(evidence_bundle)
+    recovery = copy.deepcopy(issue.get("recovery", {"status": "needs-positive-coverage", "evidenceIds": []}))
+    actionability = derive_machine_actionability(issue, _default_category(title, producer, identity))
+    proof_ids = recovery["evidenceIds"] if recovery.get("status") == "verified" else []
+    allowed_evidence, allowed_evidence_ids = _select_allowed_evidence(
+        evidence_bundle, [*proof_ids, *(actionability["evidenceIds"] if actionability else [])],
+    )
+    if actionability and not set(actionability["evidenceIds"]).issubset(allowed_evidence_ids):
+        actionability = None
+    if not proof_ids or not set(proof_ids).issubset(allowed_evidence_ids):
+        recovery["status"] = "needs-positive-coverage"
 
     if cluster_occurrence_summary is not None:
         if history_rows and cluster_dimensions is not None:
@@ -697,16 +759,14 @@ def _build_compact_issue(
             effective_occurrence_summary = cluster_occurrence_summary
     else:
         effective_occurrence_summary = history_occurrence_summary
-    verification_context = _build_verification_context(
-        evidence_bundle,
-        last_seen_date=effective_occurrence_summary.get("lastSeenDate"),
+    recovered_run_evidence_id = (
+        recovery["subjects"][0]["coverage"]["evidenceIds"][0]
+        if recovery.get("status") == "verified" else None
     )
-    recovered_run_evidence_id = _recovered_run_evidence_id(
-        verification_context,
-        require_matching_workflow=(
-            _default_category(title, producer, identity) == "unknown"
-        ),
-    )
+    verification_context = {
+        "laterSuccessfulRuns": [{"evidenceId": recovered_run_evidence_id}] if recovered_run_evidence_id else [],
+        "matchingLaterSuccessfulRuns": [{"evidenceId": recovered_run_evidence_id}] if recovered_run_evidence_id else [],
+    }
     if (
         recovered_run_evidence_id is not None
         and recovered_run_evidence_id not in allowed_evidence_ids
@@ -724,7 +784,7 @@ def _build_compact_issue(
         occurrence_summary=effective_occurrence_summary,
         blockers=blockers,
         missing_prerequisites=missing_prerequisites,
-        resolution_evidence=resolution_evidence,
+        resolution_evidence=resolution_evidence if recovery.get("status") == "verified" else {},
         allowed_evidence_ids=allowed_evidence_ids,
         human_context=human_context,
         verification_context=verification_context,
@@ -735,6 +795,21 @@ def _build_compact_issue(
         ),
     )
     _apply_superseded_default(default_judgment, issue_number, action_context)
+    if (
+        actionability is not None and delegation is None
+        and default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human"}
+    ):
+        default_judgment["recommendations"] = [{
+            "disposition": "delegate-copilot",
+            "target": {"kind": "issue", "value": issue_number},
+            "confidence": "medium", "summary": actionability["fixHandoff"]["problem"],
+            "evidenceIds": actionability["evidenceIds"], "missingEvidence": [],
+            "reassessWhen": "After the delegated task and linked pull request change state.",
+        }]
+    for recommendation in default_judgment["recommendations"]:
+        if recommendation["disposition"] == "review-close" and recovery.get("status") == "verified":
+            recommendation["evidenceIds"] = list(proof_ids)
+            recommendation["missingEvidence"] = []
     _apply_canonical_cluster_summary(default_judgment, action_context)
     watch_reason = _watch_reason(default_judgment, effective_occurrence_summary)
     _apply_watch_explanation(default_judgment, watch_reason)
@@ -773,6 +848,18 @@ def _build_compact_issue(
     }
     if action_context is not None:
         compact_issue["actionCluster"] = action_context
+    if isinstance(delegation, Mapping):
+        compact_issue["delegationContext"] = copy.deepcopy(delegation)
+    if actionability is not None:
+        compact_issue["machineActionability"] = actionability
+    if "recovery" in issue:
+        compact_issue["recovery"] = {
+            key: recovery[key] for key in ("status", "complete", "evidenceIds")
+        }
+        if recovery.get("testAttributionGaps"):
+            compact_issue["recovery"]["testAttributionGaps"] = recovery["testAttributionGaps"]
+        if recovery.get("incompleteDiagnosticEvidenceIds"):
+            compact_issue["recovery"]["incompleteDiagnosticEvidenceIds"] = recovery["incompleteDiagnosticEvidenceIds"]
     investigation_results = issue.get("investigationResults")
     if isinstance(investigation_results, list):
         compact_issue["investigationResults"] = copy.deepcopy(
@@ -2097,6 +2184,17 @@ def _build_human_escalation(
         raise AssertionError(
             "_build_human_escalation requires a human_context with decisionRequired=True"
         )
+    if human_context.get("kind") == "delegation":
+        return {
+            "context": f"{title}: delegated work requires a human handoff ({human_context['decisionReason']}).",
+            "whyHuman": "Automation cannot decide whether to provide missing information, take over the work, or authorize another delegation.",
+            "question": "Should this delegation receive more information, be taken over by a human, or be attempted again?",
+            "suggestedNextSteps": [
+                "Review the completed or paused task and its linked pull request.",
+                "Record the chosen next step and provide any missing evidence before another delegation.",
+            ],
+            "routingHint": "unassigned",
+        }
 
     assessment = human_context.get("reportedAssessment")
     suggestion = human_context.get("reportedSuggestion")
@@ -2256,6 +2354,14 @@ def _default_disposition(
     has_blockers: bool = False,
     has_exact_test_name: bool = False,
 ) -> str:
+    if (
+        human_context is not None
+        and human_context.get("kind") == "delegation"
+        and human_context.get("decisionRequired") is True
+        and not has_resolution_evidence
+        and recovered_run_evidence_id is None
+    ):
+        return "ping-human"
     if already_quarantined:
         return "no-action"
 
@@ -2406,6 +2512,7 @@ _ALLOWED_EVIDENCE_DEFAULT_PRIORITY = 3
 
 def _select_allowed_evidence(
     evidence_bundle: Sequence[Any],
+    priority_ids: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Deterministically cap the evidence bundle for the agent-visible allowedEvidence.
 
@@ -2415,7 +2522,13 @@ def _select_allowed_evidence(
     by kind first -- ties broken by the original bundle order -- keeps the
     cap small while making sure recovery-relevant evidence is prioritized.
     """
-    records = _ranked_allowed_evidence(evidence_bundle)
+    records = sorted(
+        _assessment_evidence_records(evidence_bundle),
+        key=lambda record: (
+            record.get("id") not in priority_ids,
+            _ALLOWED_EVIDENCE_PRIORITY_BY_KIND.get(record.get("kind"), _ALLOWED_EVIDENCE_DEFAULT_PRIORITY),
+        ),
+    )[:_MAX_ALLOWED_EVIDENCE]
     allowed_evidence: list[dict[str, Any]] = []
     allowed_evidence_ids: list[str] = []
     for record in records:

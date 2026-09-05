@@ -16,6 +16,7 @@ from typing import Any, Mapping, NamedTuple
 from urllib.parse import quote
 
 from ci_shepherd.naming import normalize_component
+from ci_shepherd.models import validate_workflow_log_payload
 from ci_shepherd.policy import ManualPolicy
 from ci_shepherd.run_scope import reported_issue_scope, scopes_conflict, verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
@@ -185,6 +186,13 @@ def build_observations(
         occurrence["reportedScope"] = reported_scope
         occurrence["verifiedScope"] = verified_scope
         occurrence["scopeConflict"] = scopes_conflict(reported_scope, verified_scope)
+        incomplete_diagnostics = [
+            evidence_id for evidence_id in occurrence["evidenceIds"]
+            if records[evidence_id].kind == "workflow-log"
+            and records[evidence_id].payload.get("truncated") is True
+        ]
+        if incomplete_diagnostics:
+            occurrence["incompleteDiagnosticEvidenceIds"] = incomplete_diagnostics
 
     occurrences = _assign_occurrence_ids(occurrences, _history_occurrence_ordinals(history))
     coverage = _build_coverage(
@@ -209,6 +217,98 @@ def build_observations(
 
 def _independent_recovery_eligible(attempt: object) -> bool:
     return isinstance(attempt, int) and not isinstance(attempt, bool) and attempt == 1
+
+
+def issue_recovery(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue_number: int,
+) -> dict[str, Any]:
+    """Project exact recovery for the entire recorded failure, never a green workflow."""
+    occurrences = [
+        occurrence for occurrence in observations.get("occurrences", [])
+        if occurrence.get("issueNumber") == issue_number
+    ]
+    evidence = snapshot["evidence"]
+    payload = evidence[f"issue:{issue_number}"].get("payload", {})
+    ledger = payload.get("ledger", {})
+    rows = ledger.get("rows", [])
+    known_tests = (
+        sorted(set(_fact_values(f"issue:{issue_number}", payload, "testName")))
+        if not observations.get("error") else []
+    )
+    relevant_runs = sorted({occurrence["runId"] for occurrence in occurrences})
+    # An unanchored issue fact must not disappear when jobs fall back to
+    # non-test occurrences. Keep the attribution gap rather than inventing a
+    # test/job association or accepting a lane-only pass for a known test.
+    test_attribution_gaps = [
+        {"testName": test_name, "runId": run_id, "evidenceIds": [evidence_id]}
+        for run_id in relevant_runs
+        for test_name, evidence_id in known_tests
+        if any(
+            occurrence["runId"] == run_id and occurrence.get("testName") is None
+            for occurrence in occurrences
+        ) or not any(
+            occurrence["runId"] == run_id
+            and occurrence.get("testName") == test_name
+            and occurrence.get("jobId") is not None
+            for occurrence in occurrences
+        )
+    ]
+    complete = (
+        not observations.get("error")
+        and not test_attribution_gaps
+        and not any(occurrence.get("incompleteDiagnosticEvidenceIds") for occurrence in occurrences)
+        and ledger.get("complete") is True
+        and bool(rows)
+        and all(
+            any(
+                occurrence["runId"] == row.get("sourceRun")
+                and (not row.get("job") or occurrence.get("jobName") == row["job"])
+                for occurrence in occurrences
+            )
+            for row in rows
+        )
+        and not any(
+            record.get("payload", {}).get("jobsTruncated") is True
+            or record.get("availability") != "available"
+            for evidence_id, record in evidence.items()
+            if record.get("kind", "").startswith("workflow-")
+            and is_scoped_to_issue(evidence_id, record, issue_number)
+        )
+        and not any(
+            not isinstance(error.get("scope"), Mapping)
+            or error["scope"].get("kind") != "issue"
+            or issue_number in error["scope"].get("issueNumbers", [])
+            for error in snapshot.get("collectionErrors", [])
+        )
+    )
+    coverage = {item["coverageId"]: item for item in observations.get("coverage", [])}
+    subjects = []
+    ids = {f"issue:{issue_number}"}
+    for occurrence in occurrences:
+        match = coverage.get(occurrence.get("positiveCoverageId"))
+        subjects.append({"occurrence": occurrence, "coverage": match})
+        ids.update(occurrence.get("evidenceIds", []))
+        if match is not None:
+            ids.update(match["evidenceIds"])
+    verified = bool(occurrences) and complete and all(
+        not subject["occurrence"].get("scopeConflict")
+        and all(subject["occurrence"].get(field) for field in ("workflow", "jobName", "lane", "os"))
+        and subject["occurrence"].get("verifiedScope", {}).get("repository") == snapshot["repository"]
+        and subject["coverage"] is not None
+        and _coverage_matches_occurrence(subject["occurrence"], subject["coverage"])
+        for subject in subjects
+    ) and all(evidence.get(evidence_id, {}).get("availability") == "available" for evidence_id in ids)
+    return {
+        "status": "verified" if verified else "needs-positive-coverage",
+        "complete": bool(complete),
+        "subjects": subjects,
+        "evidenceIds": sorted(ids),
+        "testAttributionGaps": test_attribution_gaps,
+        "incompleteDiagnosticEvidenceIds": sorted({
+            evidence_id for occurrence in occurrences
+            for evidence_id in occurrence.get("incompleteDiagnosticEvidenceIds", [])
+        }),
+    }
 
 
 def is_annotation_evidence_id(evidence_id: str) -> bool:
@@ -429,6 +529,8 @@ def _require_issue_record(issue_number: int, records: Mapping[str, _EvidenceReco
 
 
 def _validate_identity_payload(evidence_id: str, kind: str, payload: Mapping[str, Any]) -> None:
+    if kind == "workflow-log":
+        validate_workflow_log_payload(payload, bounded=False)
     if kind == "workflow-test-results":
         parsed_results = _parse_test_results_evidence_id(evidence_id)
         if parsed_results is None:
@@ -719,6 +821,7 @@ def _non_test_occurrence(
         "testName": None,
         "fingerprintId": fingerprint_id,
         "fingerprintComponents": fingerprint_components,
+        "jobName": fingerprint_components.get("job"),
         "allowedCauses": allowed_causes,
         "retrySafe": retry_safe,
         "evidenceIds": sorted(set(evidence_ids)),
@@ -960,6 +1063,10 @@ def _coverage_matches_occurrence(
     occurrence: Mapping[str, Any],
     coverage: Mapping[str, Any],
 ) -> bool:
+    # An available log can still be a truncated prefix. Its unseen failures
+    # cannot be declared covered by a later successful lane or known test.
+    if occurrence.get("incompleteDiagnosticEvidenceIds"):
+        return False
     if occurrence.get("verifiedScope", {}).get("kind") == "unknown":
         return False
     if _scope_subject(occurrence.get("verifiedScope")) != _scope_subject(

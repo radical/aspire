@@ -7,6 +7,8 @@ from typing import Any, Mapping
 from ci_shepherd.comment_body import comment_bodies_materially_equal
 from ci_shepherd.eligibility import executable_ci_labels
 from ci_shepherd.handoff_reminders import reminder_action_identity
+from ci_shepherd.investigations import derive_machine_actionability
+from ci_shepherd.lifecycle import delegation_context, prepare_assessment
 from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
 from ci_shepherd.timeutils import parse_aware_iso8601
@@ -401,6 +403,30 @@ def _render_recovered_run_close_body(
             _status_markers(issue_number),
         ]
     )
+
+
+def _render_exact_recovery_body(
+    issue_number: int, recommendation: Mapping[str, Any],
+    recovery: Mapping[str, Any], snapshot: dict[str, object],
+) -> str:
+    proof_lines = []
+    for subject in recovery["subjects"]:
+        covered = subject["coverage"]
+        scope = covered["verifiedScope"]
+        label = scope.get("pullRequest", scope.get("ref", scope["kind"]))
+        test = f"; exact test `{covered['testName']}` passed" if covered["testName"] else ""
+        proof_lines.append(
+            f"- `{covered['workflow']}` / `{covered['jobName']}` on `{covered['os']}` "
+            f"in `{label}` completed successfully after the recorded failure{test}."
+        )
+    return "\n".join([
+        "[automated] The CI shepherd found exact positive execution coverage for this failure.",
+        "", f"**Current assessment:** {recommendation['summary']}",
+        "", "**Recovery proof:**", *dict.fromkeys(proof_lines),
+        "", "**Evidence reviewed:**", *_evidence_lines(snapshot, recommendation["evidenceIds"]),
+        "", "**Resolution:** The matched execution evidence supports closing this issue as completed.",
+        "", _status_markers(issue_number),
+    ])
 
 
 def _render_duplicate_close_body(
@@ -1314,17 +1340,14 @@ def _verified_quarantine_issues(
 def _machine_actionability(
     prepared_issue: Mapping[str, Any],
     evidence_ids: list[object],
+    *,
+    frozen_issue: Mapping[str, Any],
+    category: str,
 ) -> Mapping[str, Any] | None:
-    actionability = prepared_issue.get("machineActionability")
-    if not isinstance(actionability, Mapping):
-        return None
-    if (
-        actionability.get("status") != "verified"
-        or actionability.get("kind")
-        not in {"deterministic-failure", "quarantined-test"}
-        or not isinstance(actionability.get("fingerprint"), str)
-        or not actionability["fingerprint"]
-    ):
+    actionability = derive_machine_actionability(
+        frozen_issue, category, prepared_issue.get("investigationResults", []),
+    )
+    if actionability is None:
         return None
     verified_evidence_ids = actionability.get("evidenceIds")
     if (
@@ -1541,6 +1564,7 @@ def _delegation_base_branch(prepared: Mapping[str, object]) -> str:
 
 def _delegation_instructions(
     issue_number: int,
+    handoff: Mapping[str, Any],
     verified_tests: object | None = None,
 ) -> str:
     verified_context = ""
@@ -1572,11 +1596,15 @@ def _delegation_instructions(
             + ". Do not modify or remove the `[QuarantinedTest]` attribute; "
             "unquarantine is a separately authorized change."
         )
+    validation = "\n".join(f"- {command}" for command in handoff["validation"])
     return (
         f"Investigate and fix issue #{issue_number}. Make the smallest complete "
         "change that addresses the reported failure, add focused regression "
         "coverage that would fail without the fix, and avoid unrelated changes."
         f"{verified_context} "
+        f"\n\nProblem: {handoff['problem']}\n"
+        f"Likely paths: {', '.join(handoff['likelyPaths'])}\n"
+        f"Validation:\n{validation}\n\n"
         f"Open a draft pull request whose body includes `Fixes #{issue_number}`. "
         "If the issue cannot be fixed from the available evidence, keep the pull "
         "request in draft and clearly record the missing evidence or human "
@@ -1636,6 +1664,14 @@ def build_action_proposals(
         agent_input,
         snapshot_id=prepared.get("snapshotId"),
     )
+    frozen_issues = {
+        item["issueNumber"]: item
+        for item in prepare_assessment(snapshot, max_bundle_records=prepared.get("maxBundleRecords", 25))["issues"]
+    } if any(
+        recommendation.get("disposition") in {"review-close", "delegate-copilot"}
+        for issue in judgments["issues"]
+        for recommendation in issue["recommendations"]
+    ) else {}
 
     prepared_issues = {
         issue["issueNumber"]: issue
@@ -1677,20 +1713,21 @@ def build_action_proposals(
             isinstance(action_cluster, dict)
             and action_cluster.get("role") == "superseded"
         )
+        recovery = frozen_issues.get(issue_number, {}).get("recovery", {})
         has_recovery = (
-            prepared_issue.get("candidateState") == "resolved"
-            and prepared_issue.get("candidateAction") == "recommend-close"
-            and bool(prepared_issue.get("resolutionEvidence"))
-        )
-        recovered_run_evidence_id = compact_issue.get("recoveredRunEvidenceId")
-        has_run_recovery = (
-            isinstance(recovered_run_evidence_id, str)
-            and bool(recovered_run_evidence_id)
+            recovery.get("status") == "verified"
+            and recovery == prepared_issue.get("recovery")
+            and all(
+                compact_issue.get("recovery", recovery).get(key) == recovery.get(key)
+                for key in ("status", "complete", "evidenceIds")
+            )
+            and status_recommendation is not None
+            and set(recovery["evidenceIds"]).issubset(status_recommendation["evidenceIds"])
         )
         closure_supersedes_delegation = (
             status_recommendation is not None
             and status_recommendation["disposition"] == "review-close"
-            and (is_duplicate or has_recovery or has_run_recovery)
+            and (is_duplicate or has_recovery)
         )
         if delegation_recommendation is not None and closure_supersedes_delegation:
             blocked_recommendations.append(
@@ -1702,10 +1739,14 @@ def build_action_proposals(
                 }
             )
             delegation_recommendation = None
-        if delegation_recommendation is not None and _machine_actionability(
-            prepared_issue,
-            list(delegation_recommendation["evidenceIds"]),
-        ) is None:
+        actionability = (
+            _machine_actionability(
+                prepared_issue, list(delegation_recommendation["evidenceIds"]),
+                frozen_issue=frozen_issues.get(issue_number, {}),
+                category=issue["category"],
+            ) if delegation_recommendation is not None else None
+        )
+        if delegation_recommendation is not None and actionability is None:
             blocked_recommendations.append(
                 {
                     "issueNumber": issue_number,
@@ -1759,6 +1800,7 @@ def build_action_proposals(
                 "baseBranch": _delegation_base_branch(prepared),
                 "customInstructions": _delegation_instructions(
                     issue_number,
+                    actionability["fixHandoff"],
                     (
                         verified_quarantine.get("tests")
                         if verified_quarantine is not None
@@ -1918,17 +1960,10 @@ def build_action_proposals(
                 snapshot,
             )
             if is_duplicate
-            else _render_recovered_run_close_body(
+            else _render_exact_recovery_body(
                 issue_number,
                 recommendation,
-                recovered_run_evidence_id,
-                snapshot,
-            )
-            if has_run_recovery and not has_recovery
-            else _render_close_body(
-                issue_number,
-                recommendation,
-                prepared_issue,
+                recovery,
                 snapshot,
             )
         )
@@ -2054,6 +2089,10 @@ def build_action_proposals(
     for issue_number, records in sorted(delegation_handoffs.items()):
         if issue_number in reconciliation_issue_numbers:
             continue
+        context = delegation_context(snapshot, issue_number)
+        prepared_context = prepared_issues.get(issue_number, {}).get("delegationContext")
+        if snapshot.get("delegationStatus", {}).get("status") != "complete":
+            continue
         latest_record = records[-1]
         if issue_number not in open_issue_numbers | delegated_issue_numbers:
             continue
@@ -2080,6 +2119,15 @@ def build_action_proposals(
                     "evidenceIds": [f"issue:{issue_number}"],
                 }
             )
+            continue
+        if (
+            context is None or context != prepared_context
+            or context.get("decisionRequired") is not True
+            or (
+                issue_number in compact_issues
+                and compact_issues[issue_number].get("delegationContext") != context
+            )
+        ):
             continue
         reminder = latest_record.get("handoffReminder")
         if isinstance(reminder, Mapping) and reminder.get("state") != "pending":

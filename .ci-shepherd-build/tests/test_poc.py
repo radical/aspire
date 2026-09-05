@@ -13,6 +13,7 @@ from ci_shepherd.poc import (
     validate_poc_projectability,
 )
 from ci_shepherd.poc_history import compute_fingerprint
+from tests.recovery_fixtures import with_exact_coverage, with_prepared_recovery
 
 
 COLLECTED_AT = "2026-08-17T21:24:23Z"
@@ -253,13 +254,17 @@ def _compact_issue(
 
 
 def _compact_prepared(issues: list[dict[str, object]]) -> dict[str, object]:
-    return {
+    prepared = {
         "schemaVersion": 1,
         "repository": REPOSITORY,
         "sourceCollectedAt": COLLECTED_AT,
         "snapshotId": f"snapshot:{REPOSITORY}:{COLLECTED_AT}",
         "issues": issues,
     }
+    for index, issue in enumerate(issues):
+        if issue.get("resolutionEvidence"):
+            prepared["issues"][index] = with_prepared_recovery({**prepared, "issues": [issue]})["issues"][0]
+    return prepared
 
 
 def _category_and_disposition(judgment: dict[str, object]) -> tuple[str, str]:
@@ -664,6 +669,7 @@ class PocValidationTests(unittest.TestCase):
                 "missingPrerequisites",
                 "resolutionEvidence",
                 "recoveredRunEvidenceId",
+                "recovery",
                 "allowedEvidence",
                 "defaultJudgment",
             },
@@ -687,7 +693,7 @@ class PocValidationTests(unittest.TestCase):
         self.assertEqual(8, len(issue_101["allowedEvidence"]))
         self.assertNotIn("payload", issue_101["allowedEvidence"][0])
         self.assertEqual(
-            ["issue:101", "pr:101", "run:101"],
+            ["issue:101", "run:1001", "run:1002"],
             issue_101["defaultJudgment"]["recommendations"][0]["evidenceIds"],
         )
         self.assertEqual(
@@ -696,13 +702,13 @@ class PocValidationTests(unittest.TestCase):
                 "category": "flaky-test",
                 "recommendations": [
                     {
-                        "disposition": "review-close",
+                        "disposition": "review-quarantine",
                         "target": {"kind": "test", "value": "Namespace.Type.Test"},
                         "confidence": "medium",
-                        "summary": "Review this issue for closure.",
-                        "evidenceIds": ["issue:101", "pr:101", "run:101"],
+                        "summary": "Review this recurrent test for quarantine.",
+                        "evidenceIds": ["issue:101", "run:1001", "run:1002"],
                         "missingEvidence": [],
-                        "reassessWhen": "After the next positive evidence or human review.",
+                        "reassessWhen": "After the quarantine review or new recurrence evidence.",
                     }
                 ],
             },
@@ -753,8 +759,7 @@ class PocValidationTests(unittest.TestCase):
         evidence_ids = issue["defaultJudgment"]["recommendations"][0]["evidenceIds"]
 
         self.assertLessEqual(len(issue["allowedEvidence"]), 8)
-        self.assertLessEqual(len(evidence_ids), 3)
-        self.assertEqual(["issue:201", "pr:201", "run:201"], evidence_ids)
+        self.assertEqual(issue["recovery"]["evidenceIds"], evidence_ids)
         self.assertTrue(set(evidence_ids).issubset(set(allowed_ids)))
         self.assertNotIn("payload", issue["resolutionEvidence"])
 
@@ -1385,7 +1390,7 @@ class PocValidationTests(unittest.TestCase):
             ]
         )
 
-        compact = build_compact_poc_input(prepared)
+        compact = build_compact_poc_input(with_prepared_recovery(prepared))
         default_judgment = compact["issues"][0]["defaultJudgment"]
 
         self.assertEqual(
@@ -1393,7 +1398,7 @@ class PocValidationTests(unittest.TestCase):
             _category_and_disposition(default_judgment),
         )
         recommendation = default_judgment["recommendations"][0]
-        self.assertIn("run:19149", recommendation["evidenceIds"])
+        self.assertIn("run:31211923676", recommendation["evidenceIds"])
 
     def test_old_unknown_one_off_with_later_success_supports_review_close(self) -> None:
         issue = _compact_issue(
@@ -1439,14 +1444,14 @@ class PocValidationTests(unittest.TestCase):
         )
         prepared = _compact_prepared([issue])
 
-        compact = build_compact_poc_input(prepared)
+        compact = build_compact_poc_input(with_prepared_recovery(prepared))
         compact_issue = compact["issues"][0]
 
         self.assertEqual(
             ("unknown", "review-close"),
             _category_and_disposition(compact_issue["defaultJudgment"]),
         )
-        self.assertEqual("run:19452", compact_issue["recoveredRunEvidenceId"])
+        self.assertEqual("run:32099999999", compact_issue["recoveredRunEvidenceId"])
         self.assertIsNone(compact_issue["watchReason"])
 
     def test_unknown_one_off_ignores_success_from_an_unrelated_workflow(self) -> None:
@@ -1728,7 +1733,7 @@ class PocValidationTests(unittest.TestCase):
             extra_evidence=(failed_run, recovery_run),
         )
 
-        prepared = prepare_assessment(raw_snapshot)
+        prepared = prepare_assessment(with_exact_coverage(raw_snapshot))
         compact = build_compact_poc_input(prepared)
         default_judgment = compact["issues"][0]["defaultJudgment"]
 
@@ -1737,7 +1742,7 @@ class PocValidationTests(unittest.TestCase):
             _category_and_disposition(default_judgment),
         )
         recommendation = default_judgment["recommendations"][0]
-        self.assertIn(f"run:{issue_number}:recovery", recommendation["evidenceIds"])
+        self.assertIn("run:31211923676", recommendation["evidenceIds"])
 
     def test_real_snapshot_unknown_recovery_matches_projected_workflow_name(self) -> None:
         issue_number = 19457
@@ -1783,7 +1788,7 @@ class PocValidationTests(unittest.TestCase):
             extra_evidence=(failed_run, recovery_run),
         )
 
-        prepared = prepare_assessment(raw_snapshot)
+        prepared = prepare_assessment(with_exact_coverage(raw_snapshot))
         compact_issue = build_compact_poc_input(prepared)["issues"][0]
 
         self.assertEqual(
@@ -1791,7 +1796,7 @@ class PocValidationTests(unittest.TestCase):
             _category_and_disposition(compact_issue["defaultJudgment"]),
         )
         self.assertEqual(
-            f"run:{issue_number}:recovery",
+            "run:32099999999",
             compact_issue["recoveredRunEvidenceId"],
         )
 
@@ -1961,7 +1966,7 @@ class PocValidationTests(unittest.TestCase):
                 "runId": 31211900003,
                 "conclusion": "failure",
                 "status": "completed",
-                "branch": "feature/unrelated",
+                "branch": "main",
                 "createdAt": "2026-08-07T09:00:00Z",
                 "referencedBy": referenced_by,
             },
@@ -1987,25 +1992,24 @@ class PocValidationTests(unittest.TestCase):
             extra_evidence=(*crowding_pull_requests, failed_run, recovery_run),
         )
 
-        prepared = prepare_assessment(raw_snapshot, max_bundle_records=25)
+        prepared = prepare_assessment(with_exact_coverage(raw_snapshot), max_bundle_records=25)
         compact_issue = prepared["issues"][0]
-        # Sanity-check the setup: the recovery run's evidenceBundle index is
-        # indeed past the old plain-prefix cap of 8.
+        # Exact coverage citations take priority over unrelated PR evidence.
         bundle_ids = [entry["id"] for entry in compact_issue["evidenceBundle"]]
-        self.assertGreaterEqual(bundle_ids.index(f"run:{issue_number}:recovery"), 8)
+        self.assertLess(bundle_ids.index("run:31211900004"), 8)
 
         compact = build_compact_poc_input(prepared)
         compact_issue_out = compact["issues"][0]
         default_judgment = compact_issue_out["defaultJudgment"]
 
         allowed_evidence_ids = [entry["id"] for entry in compact_issue_out["allowedEvidence"]]
-        self.assertIn(f"run:{issue_number}:recovery", allowed_evidence_ids)
+        self.assertIn("run:31211900004", allowed_evidence_ids)
         self.assertEqual(
             ("blocking-build", "review-close"),
             _category_and_disposition(default_judgment),
         )
         recommendation = default_judgment["recommendations"][0]
-        self.assertIn(f"run:{issue_number}:recovery", recommendation["evidenceIds"])
+        self.assertIn("run:31211900004", recommendation["evidenceIds"])
 
     def test_finalizer_rejects_agent_ping_human_without_decision_required(self) -> None:
         # Regression: an agent judgment must never be allowed to escalate to a
@@ -2755,9 +2759,9 @@ class PocValidationTests(unittest.TestCase):
         compact = build_compact_poc_input(prepared)
         serialized = json.dumps(compact, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-        # Cap raised from 120_000 to account for the historyOccurrenceSummary
-        # field added to every compact issue (same shape as occurrenceSummary).
-        self.assertLessEqual(len(serialized), 140_000)
+        # Recovery completeness and mandatory proof citations remain bounded;
+        # full occurrence/coverage records stay in prepared input.
+        self.assertLessEqual(len(serialized), 160_000)
         self.assertEqual(60, len(compact["issues"]))
 
 
@@ -2851,6 +2855,7 @@ class PocProjectabilityTests(unittest.TestCase):
             )
         )
         judgments = _override_judgments(compact, 101, _close_recommendation(101))
+        judgments["issues"][0]["recommendations"][0]["evidenceIds"] = compact["issues"][0]["recovery"]["evidenceIds"]
 
         validate_poc_projectability(compact, judgments)
 

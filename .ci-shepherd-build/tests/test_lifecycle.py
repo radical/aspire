@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Mapping
 
 from ci_shepherd.lifecycle import candidate_for, prepare_assessment
+from tests.recovery_fixtures import with_exact_coverage
 
 
 COLLECTED_AT = "2026-08-19T16:00:00Z"
@@ -368,7 +369,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
             },
         )
 
-        candidate = candidate_for(prepare_assessment(snapshot(payload, pr, run)), issue_number)
+        candidate = candidate_for(prepare_assessment(with_exact_coverage(snapshot(payload, pr, run))), issue_number)
 
         self.assertEqual("resolved", candidate["candidateState"])
         self.assertEqual("recommend-close", candidate["candidateAction"])
@@ -490,7 +491,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
         )
 
         candidate = candidate_for(
-            prepare_assessment(snapshot(payload, occurrence_run, pr, recovery_run)),
+            prepare_assessment(with_exact_coverage(snapshot(payload, occurrence_run, pr, recovery_run))),
             issue_number,
         )
 
@@ -544,7 +545,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
         )
 
         candidate = candidate_for(
-            prepare_assessment(snapshot(payload, occurrence_run, pr, recovery_run)),
+            prepare_assessment(with_exact_coverage(snapshot(payload, occurrence_run, pr, recovery_run))),
             issue_number,
         )
 
@@ -594,7 +595,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
         )
 
         candidate = candidate_for(
-            prepare_assessment(snapshot(payload, occurrence_run, pr, recovery_run)),
+            prepare_assessment(with_exact_coverage(snapshot(payload, occurrence_run, pr, recovery_run))),
             issue_number,
         )
 
@@ -644,7 +645,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
         )
 
         candidate = candidate_for(
-            prepare_assessment(snapshot(payload, occurrence_run, pr, recovery_run)),
+            prepare_assessment(with_exact_coverage(snapshot(payload, occurrence_run, pr, recovery_run))),
             issue_number,
         )
 
@@ -725,7 +726,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
             },
         )
 
-        candidate = candidate_for(prepare_assessment(snapshot(payload, pr, run)), issue_number)
+        candidate = candidate_for(prepare_assessment(with_exact_coverage(snapshot(payload, pr, run))), issue_number)
 
         self.assertEqual("needs-human", candidate["candidateState"])
         self.assertEqual("recommend-close", candidate["candidateAction"])

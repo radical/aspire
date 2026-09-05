@@ -18,6 +18,11 @@ class ValidationError(ValueError):
     pass
 
 
+WORKFLOW_LOG_TEXT_LIMIT = 4_000
+WORKFLOW_LOG_FACT_LIMIT = 20
+WORKFLOW_LOG_FACT_FIELDS = ("field", "raw", "normalized", "method", "sourceEvidenceId")
+
+
 ISSUE_KINDS = frozenset({"incident", "root-cause", "tracker", "transient"})
 STATES = frozenset(
     {
@@ -2864,6 +2869,39 @@ def _load_snapshot_evidence(snapshot: Mapping[str, Any]) -> dict[str, dict[str, 
     return loaded
 
 
+def validate_workflow_log_payload(payload: Mapping[str, Any], *, bounded: bool) -> None:
+    for field in ("truncated", "excerptTruncated", "errorMessageTruncated", "factsTruncated"):
+        if field in payload and type(payload[field]) is not bool:
+            raise ValidationError(f"workflow-log {field} must be a boolean.")
+    for field in ("excerpt", "errorMessage"):
+        if field in payload and (
+            not isinstance(payload[field], str)
+            or (bounded and len(payload[field]) > WORKFLOW_LOG_TEXT_LIMIT)
+        ):
+            raise ValidationError(f"workflow-log {field} must be a string within its display bound.")
+    if "diagnosticFingerprint" in payload and (
+        not isinstance(payload["diagnosticFingerprint"], str)
+        or re.fullmatch(r"fnv1a64:[0-9a-f]{16}", payload["diagnosticFingerprint"]) is None
+    ):
+        raise ValidationError("workflow-log diagnosticFingerprint is malformed.")
+    if "facts" not in payload:
+        return
+    facts = payload["facts"]
+    if not isinstance(facts, list) or (bounded and len(facts) > WORKFLOW_LOG_FACT_LIMIT):
+        raise ValidationError("workflow-log facts must be an array within its display bound.")
+    for fact in facts:
+        if (
+            not isinstance(fact, Mapping)
+            or set(fact) - set(WORKFLOW_LOG_FACT_FIELDS)
+            or not isinstance(fact.get("field"), str) or not fact["field"].strip()
+            or any(not isinstance(value, str) for value in fact.values())
+            or not (fact.get("raw") or fact.get("normalized"))
+        ):
+            raise ValidationError("workflow-log facts must contain only supported string fields and a value.")
+    if bounded and len(stable_json([dict(fact) for fact in facts])) > WORKFLOW_LOG_TEXT_LIMIT:
+        raise ValidationError("workflow-log facts exceed their display bound.")
+
+
 def _validate_evidence_record(evidence_id: object, record: object) -> dict[str, Any]:
     evidence_id_text = _require_nonempty_string(evidence_id, "evidence ID")
     if (
@@ -2896,6 +2934,8 @@ def _validate_evidence_record(evidence_id: object, record: object) -> dict[str, 
     if not isinstance(payload, Mapping):
         raise ValidationError(f"Evidence {evidence_id_text} must include a payload object.")
     payload_mapping = dict(payload)
+    if kind == "workflow-log":
+        validate_workflow_log_payload(payload_mapping, bounded=False)
     _optional_evidence_role(payload_mapping)
     _optional_normalized_cause(payload_mapping)
     _validate_supporting_candidate_dispositions(payload_mapping)

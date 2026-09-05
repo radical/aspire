@@ -46,6 +46,7 @@ import re
 from .actor import validate_action_proposals
 from .comment_selection import COMMENT_OPERATIONS, operation_priority, priority_for_action_id
 from .models import stable_json
+from .managed_coverage import coverage_exclusions
 from .operation_policy import (
     HARD_MAX_PER_RUN,
     HARD_MAX_ROLLING_24H,
@@ -170,6 +171,9 @@ def build_policy_selection(
     policy_revision_id = policy.revision_id if policy is not None else None
 
     base: list[dict[str, object]] = []
+    global_stop, blocked_ids = coverage_exclusions(
+        validated.get("productionPilotCapability", {}).get("managedItemCoverage"), proposals,
+    )
     for proposal in proposals:
         base.append(
             _classify_initial(
@@ -184,6 +188,8 @@ def build_policy_selection(
                 snapshot_id=snapshot_id,
             )
         )
+        if proposal["actionId"] in blocked_ids:
+            base[-1].update(status="ineligible", reason="managed-item-coverage-invalid")
 
     pending = [record for record in base if record["status"] is None]
     pending.sort(
@@ -297,6 +303,8 @@ def build_policy_selection(
             sum_remaining_rolling, max(0, HARD_MAX_ROLLING_24H - overall_rolling_used)
         ),
     }
+    if global_stop:
+        maximum_write_exposure = {"thisRun": 0, "rolling24h": 0}
 
     for record in base:
         if record["status"] is None:
@@ -323,6 +331,7 @@ def build_policy_selection(
         "candidates": base,
         "budgets": budgets,
         "maximumWriteExposure": maximum_write_exposure,
+        **({"mutationBlocked": True} if global_stop else {}),
     }
 
 

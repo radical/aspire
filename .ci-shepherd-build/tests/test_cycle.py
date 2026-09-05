@@ -389,7 +389,7 @@ class CycleTests(unittest.TestCase):
                 (work / "policy-selection.json").read_text(encoding="utf-8")
             )
             self.assertEqual([], policy_selection["selectedActionIds"])
-            self.assertTrue(policy_selection["mutationBlocked"])
+            self.assertFalse(policy_selection.get("mutationBlocked", False))
             report = (work / "report.md").read_text(encoding="utf-8")
             self.assertIn("## Managed active-item coverage", report)
             self.assertIn("verified workflow-run scope is unknown", report)
@@ -518,6 +518,15 @@ class CycleTests(unittest.TestCase):
             assert isinstance(source_evidence, dict)
             assert isinstance(pull_request_evidence, dict)
             source_evidence.update(pull_request_evidence)
+            from tests.test_production_decisions import handoff_snapshot
+            handoff = json.loads(json.dumps(handoff_snapshot()).replace("microsoft/aspire", "owner/repo"))
+            source_snapshot["delegatedIssues"] = [21]
+            source_snapshot["delegatedIssueDetails"] = handoff["issues"]
+            source_snapshot["delegationStatus"] = handoff["delegationStatus"]
+            source_evidence.update(handoff["evidence"])
+            state.mkdir(mode=0o700)
+            record_review_wakeup(state, "owner/repo", target_kind="issue", target_number=21,
+                                 evaluate_at=source_snapshot["collectedAt"], reason="escalation-reminder")
             input_path.write_text(json.dumps(source_snapshot), encoding="utf-8")
             work = root / "work"
             started = cycle_script.start_cycle(
@@ -620,6 +629,10 @@ class CycleTests(unittest.TestCase):
                     (work / "agent-judgments.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(restarted["snapshotId"], reset_judgments["snapshotId"])
+                restarted_prepared = json.loads((work / "assessment-input.json").read_text())
+                handoff_issue = next((issue for issue in restarted_prepared["issues"] if issue["issueNumber"] == 21), None)
+                self.assertIsNotNone(handoff_issue, "Expansion must retain the already-due delegated issue.")
+                self.assertTrue(handoff_issue["delegationContext"]["decisionRequired"])
 
                 completed = cycle_script.finish_cycle(
                     work_dir=work,
@@ -636,9 +649,11 @@ class CycleTests(unittest.TestCase):
                     "schemaVersion": 1,
                     "evidenceRound": 1,
                     "managedItemCoverage": {
-                        "schemaVersion": 1,
+                        "schemaVersion": 2,
                         "valid": True,
                         "blockers": [],
+                        "globalBlockers": [],
+                        "blockedScopes": [],
                     },
                 },
                 completed_proposals["productionPilotCapability"],
@@ -681,7 +696,7 @@ class CycleTests(unittest.TestCase):
                 ).read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(
-                [("issue", 1), ("pull-request", 23)],
+                [("issue", 1), ("issue", 21), ("pull-request", 23)],
                 [
                     (event["targetKind"], event["targetNumber"])
                     for event in review_events
@@ -706,8 +721,8 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=successor_input,
             )
-            self.assertEqual("completed", successor["stage"])
-            self.assertEqual(0, successor["issueReviewCount"])
+            self.assertEqual("awaiting-review", successor["stage"])
+            self.assertEqual(1, successor["issueReviewCount"])
             self.assertEqual(0, successor["pullRequestReviewCount"])
 
     def test_cycle_refuses_to_publish_when_history_advanced_after_start(self) -> None:
@@ -1100,6 +1115,8 @@ class CycleTests(unittest.TestCase):
             input_path = root / "input.json"
             input_snapshot = snapshot("2026-08-28T20:00:00Z")
             input_snapshot["evidence"]["issue:1"]["payload"]["labels"] = []
+            add_class_a_retry_evidence(input_snapshot, "Namespace.Type.FlakyTest")
+            del input_snapshot["evidence"]["run:200"]
             input_path.write_text(
                 json.dumps(input_snapshot),
                 encoding="utf-8",
@@ -1155,15 +1172,10 @@ class CycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(
-                cycle_script,
-                "build_observations",
-                side_effect=ValueError("invalid structured evidence"),
-            ):
-                cycle_script.finish_cycle(
-                    work_dir=work,
-                    agent_judgments_path=agent_path,
-                )
+            cycle_script.finish_cycle(
+                work_dir=work,
+                agent_judgments_path=agent_path,
+            )
 
             evidence = json.loads(
                 (work / "quarantine-evidence.json").read_text(
@@ -1171,7 +1183,7 @@ class CycleTests(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                "invalid structured evidence",
+                "run:200:attempt:1:job:901 requires workflow-run evidence run:200.",
                 evidence["error"],
             )
             plan = json.loads(
@@ -1522,9 +1534,11 @@ class CycleTests(unittest.TestCase):
                     "schemaVersion": 1,
                     "evidenceRound": 0,
                     "managedItemCoverage": {
-                        "schemaVersion": 1,
+                        "schemaVersion": 2,
                         "valid": True,
                         "blockers": [],
+                        "globalBlockers": [],
+                        "blockedScopes": [],
                     },
                 },
                 proposals["productionPilotCapability"],
