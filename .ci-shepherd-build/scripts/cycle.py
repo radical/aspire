@@ -36,7 +36,7 @@ from ci_shepherd.managed_coverage import (
     build_managed_item_coverage,
     render_managed_item_coverage_section,
 )
-from ci_shepherd.models import stable_json, validate_snapshot
+from ci_shepherd.models import ValidationError, stable_json, validate_snapshot
 from ci_shepherd.operation_policy import load_operation_policy_document
 from ci_shepherd.policy import load_policy
 from ci_shepherd.poc import build_compact_poc_input
@@ -299,6 +299,59 @@ def _empty_pull_request_judgments(snapshot_id: str) -> dict[str, object]:
     return {"schemaVersion": 1, "snapshotId": snapshot_id, "pullRequests": []}
 
 
+def _empty_agent_assessment(snapshot_id: str) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "snapshotId": snapshot_id,
+        "issues": [],
+        "pullRequests": [],
+    }
+
+
+def _split_agent_assessment(
+    document: object,
+    *,
+    snapshot_id: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    if not isinstance(document, Mapping):
+        raise ValidationError("Agent assessment must be a JSON object.")
+    expected_fields = {"schemaVersion", "snapshotId", "issues", "pullRequests"}
+    unsupported = set(document) - expected_fields
+    missing = expected_fields - set(document)
+    if unsupported:
+        raise ValidationError(
+            f"Agent assessment has unsupported fields: {sorted(unsupported)}."
+        )
+    if missing:
+        raise ValidationError(
+            f"Agent assessment is missing fields: {sorted(missing)}."
+        )
+    if document.get("schemaVersion") != 1:
+        raise ValidationError("Agent assessment schemaVersion must be 1.")
+    if document.get("snapshotId") != snapshot_id:
+        raise ValidationError(
+            "Agent assessment snapshotId must match the current cycle."
+        )
+    issues = document.get("issues")
+    if not isinstance(issues, list):
+        raise ValidationError("Agent assessment issues must be an array.")
+    pull_requests = document.get("pullRequests")
+    if not isinstance(pull_requests, list):
+        raise ValidationError("Agent assessment pullRequests must be an array.")
+    return (
+        {
+            "schemaVersion": 1,
+            "snapshotId": snapshot_id,
+            "issues": issues,
+        },
+        {
+            "schemaVersion": 1,
+            "snapshotId": snapshot_id,
+            "pullRequests": pull_requests,
+        },
+    )
+
+
 def _retain_pull_request_reviews(
     handoff: Mapping[str, Any],
     judgments: Mapping[str, Any],
@@ -475,6 +528,10 @@ def _restart_after_evidence_expansion(
     _write_private_json(
         work_dir / "agent-pull-request-judgments.json",
         _empty_pull_request_judgments(str(prepared["snapshotId"])),
+    )
+    _write_private_json(
+        work_dir / "agent-assessment.json",
+        _empty_agent_assessment(str(prepared["snapshotId"])),
     )
     restarted: dict[str, object] = {
         **manifest,
@@ -724,6 +781,10 @@ def start_cycle(
         work_dir / "agent-pull-request-judgments.json",
         _empty_pull_request_judgments(prepared["snapshotId"]),
     )
+    _write_private_json(
+        work_dir / "agent-assessment.json",
+        _empty_agent_assessment(prepared["snapshotId"]),
+    )
     manifest: dict[str, object] = {
         "schemaVersion": 1,
         "startedAt": started_at,
@@ -749,12 +810,9 @@ def start_cycle(
     _write_private_json(work_dir / "cycle.json", manifest)
 
     if issue_review_count == 0 and pull_request_review_count == 0:
-        agent_judgments = work_dir / "agent-judgments.json"
-        _write_private_json(agent_judgments, _empty_agent_judgments(prepared["snapshotId"]))
         return finish_cycle(
             work_dir=work_dir,
-            agent_judgments_path=agent_judgments,
-            pull_request_judgments_path=work_dir / "agent-pull-request-judgments.json",
+            agent_assessment_path=work_dir / "agent-assessment.json",
         )
     return manifest
 
@@ -762,7 +820,8 @@ def start_cycle(
 def finish_cycle(
     *,
     work_dir: Path,
-    agent_judgments_path: Path,
+    agent_assessment_path: Path | None = None,
+    agent_judgments_path: Path | None = None,
     pull_request_judgments_path: Path | None = None,
 ) -> dict[str, object]:
     work_dir = work_dir.expanduser().resolve(strict=True)
@@ -779,6 +838,31 @@ def finish_cycle(
         raise ValueError("Cycle manifest identity is incomplete.")
     state_dir = Path(state_directory)
     _ensure_separate_directories(state_dir, work_dir)
+    if agent_assessment_path is not None:
+        if agent_judgments_path is not None or pull_request_judgments_path is not None:
+            raise ValueError(
+                "Combined agent assessment cannot be used with legacy judgment paths."
+            )
+        combined = _load_json(agent_assessment_path, "agent assessment")
+        issue_judgments, pull_request_judgments = _split_agent_assessment(
+            combined,
+            snapshot_id=str(manifest.get("snapshotId")),
+        )
+        canonical_assessment_path = work_dir / "agent-assessment.json"
+        _write_private_json(canonical_assessment_path, combined)
+        agent_judgments_path = work_dir / "agent-judgments.json"
+        pull_request_judgments_path = (
+            work_dir / "agent-pull-request-judgments.json"
+        )
+        _write_private_json(agent_judgments_path, issue_judgments)
+        _write_private_json(
+            pull_request_judgments_path,
+            pull_request_judgments,
+        )
+    elif agent_judgments_path is None:
+        raise ValueError(
+            "Finish requires a combined agent assessment or legacy issue judgments."
+        )
 
     paths = {
         "input": work_dir / "input.json",
@@ -802,6 +886,7 @@ def finish_cycle(
         "reviewSchedule": work_dir / "review-schedule.json",
         "managedCoverage": work_dir / "managed-item-coverage.json",
     }
+    assert agent_judgments_path is not None
     finalize(
         agent_input_path=paths["defaults"],
         agent_judgments_path=agent_judgments_path,
@@ -1123,6 +1208,7 @@ def finish_cycle(
         report_path=paths["report"],
         artifact_paths=[
             audit_report_path,
+            work_dir / "agent-assessment.json",
             paths["compact"],
             paths["defaults"],
             paths["selection"],
@@ -1269,7 +1355,9 @@ def main() -> int:
     )
     finish = subparsers.add_parser("finish")
     finish.add_argument("--work-dir", type=Path, required=True)
-    finish.add_argument("--agent-judgments", type=Path, required=True)
+    response = finish.add_mutually_exclusive_group(required=True)
+    response.add_argument("--agent-assessment", type=Path)
+    response.add_argument("--agent-judgments", type=Path)
     finish.add_argument("--pull-request-judgments", type=Path)
     args = parser.parse_args()
 
@@ -1290,6 +1378,7 @@ def main() -> int:
         else:
             result = finish_cycle(
                 work_dir=args.work_dir,
+                agent_assessment_path=args.agent_assessment,
                 agent_judgments_path=args.agent_judgments,
                 pull_request_judgments_path=args.pull_request_judgments,
             )

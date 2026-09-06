@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from dataclasses import replace
 from pathlib import Path
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -17,6 +18,7 @@ from ci_shepherd.investigations import (
     record_investigation_result,
     record_investigation_session_event,
 )
+from ci_shepherd.models import ValidationError
 from ci_shepherd.poc_state import load_review_schedule, record_review_wakeup
 from ci_shepherd.repository_policy import load_repository_policy
 
@@ -537,6 +539,17 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=input_path,
             )
+            self.assertEqual(
+                {
+                    "schemaVersion": 1,
+                    "snapshotId": started["snapshotId"],
+                    "issues": [],
+                    "pullRequests": [],
+                },
+                json.loads(
+                    (work / "agent-assessment.json").read_text(encoding="utf-8")
+                ),
+            )
             request_document = {
                 "schemaVersion": 1,
                 "repository": "owner/repo",
@@ -593,7 +606,7 @@ class CycleTests(unittest.TestCase):
             ):
                 restarted = cycle_script.finish_cycle(
                     work_dir=work,
-                    agent_judgments_path=work / "agent-judgments.json",
+                    agent_assessment_path=work / "agent-assessment.json",
                 )
                 self.assertEqual("awaiting-review", restarted["stage"])
                 self.assertEqual(1, restarted["evidenceExpansionRound"])
@@ -629,18 +642,66 @@ class CycleTests(unittest.TestCase):
                     (work / "agent-judgments.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(restarted["snapshotId"], reset_judgments["snapshotId"])
+                reset_assessment = json.loads(
+                    (work / "agent-assessment.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": restarted["snapshotId"],
+                        "issues": [],
+                        "pullRequests": [],
+                    },
+                    reset_assessment,
+                )
                 restarted_prepared = json.loads((work / "assessment-input.json").read_text())
                 handoff_issue = next((issue for issue in restarted_prepared["issues"] if issue["issueNumber"] == 21), None)
                 self.assertIsNotNone(handoff_issue, "Expansion must retain the already-due delegated issue.")
                 self.assertTrue(handoff_issue["delegationContext"]["decisionRequired"])
 
+                # The domain-specific files are derived audit artifacts. Stale or
+                # cross-routed copies must not override the combined response.
+                (work / "agent-judgments.json").write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "snapshotId": restarted["snapshotId"],
+                            "pullRequests": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (work / "agent-pull-request-judgments.json").write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "snapshotId": restarted["snapshotId"],
+                            "issues": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
                 completed = cycle_script.finish_cycle(
                     work_dir=work,
-                    agent_judgments_path=work / "agent-judgments.json",
+                    agent_assessment_path=work / "agent-assessment.json",
                 )
 
             self.assertEqual("completed", completed["stage"])
             self.assertEqual(1, expansion_calls)
+            self.assertIn(
+                "issues",
+                json.loads(
+                    (work / "agent-judgments.json").read_text(encoding="utf-8")
+                ),
+            )
+            self.assertIn(
+                "pullRequests",
+                json.loads(
+                    (work / "agent-pull-request-judgments.json").read_text(
+                        encoding="utf-8"
+                    )
+                ),
+            )
             completed_proposals = json.loads(
                 (work / "action-proposals.json").read_text(encoding="utf-8")
             )
@@ -662,6 +723,9 @@ class CycleTests(unittest.TestCase):
                 (Path(completed["runDirectory"]) / "evidence-requests.json").is_file()
             )
             self.assertTrue(
+                (Path(completed["runDirectory"]) / "agent-assessment.json").is_file()
+            )
+            self.assertTrue(
                 (
                     Path(completed["runDirectory"])
                     / "action-proposals.pre-expansion.json"
@@ -673,6 +737,7 @@ class CycleTests(unittest.TestCase):
                     / "review-selection.pre-expansion.json"
                 ).is_file()
             )
+
             self.assertTrue(
                 (
                     Path(completed["runDirectory"])
@@ -724,6 +789,95 @@ class CycleTests(unittest.TestCase):
             self.assertEqual("awaiting-review", successor["stage"])
             self.assertEqual(1, successor["issueReviewCount"])
             self.assertEqual(0, successor["pullRequestReviewCount"])
+
+    def test_combined_agent_assessment_fails_before_splitting_invalid_output(
+        self,
+    ) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            input_path = root / "input.json"
+            input_path.write_text(
+                json.dumps(snapshot("2026-08-31T12:00:00Z")),
+                encoding="utf-8",
+            )
+            state = root / "state"
+            work = root / "work"
+            started = cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=state,
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            issue_artifact = work / "agent-judgments.json"
+            pull_request_artifact = work / "agent-pull-request-judgments.json"
+            issue_before = issue_artifact.read_bytes()
+            pull_request_before = pull_request_artifact.read_bytes()
+            (work / "agent-assessment.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshotId": started["snapshotId"],
+                        "issues": [],
+                        "pullRequests": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValidationError,
+                "Agent assessment pullRequests must be an array",
+            ):
+                cycle_script.finish_cycle(
+                    work_dir=work,
+                    agent_assessment_path=work / "agent-assessment.json",
+                )
+
+            self.assertEqual(issue_before, issue_artifact.read_bytes())
+            self.assertEqual(pull_request_before, pull_request_artifact.read_bytes())
+            self.assertFalse((state / "current.json").exists())
+
+    def test_finish_cli_accepts_combined_agent_assessment(self) -> None:
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            input_path = root / "input.json"
+            input_path.write_text(
+                json.dumps(snapshot("2026-08-31T12:00:00Z")),
+                encoding="utf-8",
+            )
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=root / "state",
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPOSITORY_ROOT / ".ci-shepherd-build" / "scripts" / "cycle.py"),
+                    "finish",
+                    "--work-dir",
+                    str(work),
+                    "--agent-assessment",
+                    str(work / "agent-assessment.json"),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("completed", json.loads(result.stdout)["stage"])
 
     def test_cycle_refuses_to_publish_when_history_advanced_after_start(self) -> None:
         with TemporaryDirectory() as scratch:

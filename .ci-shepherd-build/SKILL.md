@@ -48,19 +48,21 @@ $SCRATCH/review-selection.json
 $SCRATCH/pull-request-review.json
 ```
 
-The assessment agent writes sparse issue overrides to
-`$SCRATCH/agent-judgments.json` and sparse pull-request overrides to
-`$SCRATCH/agent-pull-request-judgments.json`. Silence for a selected case means
-"keep the deterministic default"; omitted cases must not be returned. The
-coordinator carries the last validated override for an unchanged omitted case
-until evidence changes or a typed wakeup selects it again. Finish the
-exact cycle with:
+The assessment agent writes one combined sparse response to
+`$SCRATCH/agent-assessment.json`, with separate `issues` and `pullRequests`
+arrays. Silence for a selected case means "keep the deterministic default";
+omitted cases must not be returned. The coordinator validates the combined
+document and deterministically splits it into `agent-judgments.json` and
+`agent-pull-request-judgments.json` audit artifacts. Agents must not write those
+derived files. This single-output boundary prevents issue and pull-request
+responses from being routed to the wrong filename. The coordinator carries the
+last validated override for an unchanged omitted case until evidence changes or
+a typed wakeup selects it again. Finish the exact cycle with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
   --work-dir "$SCRATCH" \
-  --agent-judgments "$SCRATCH/agent-judgments.json" \
-  --pull-request-judgments "$SCRATCH/agent-pull-request-judgments.json"
+  --agent-assessment "$SCRATCH/agent-assessment.json"
 ```
 
 ## Autonomous local operator cycle
@@ -324,12 +326,13 @@ additional pull requests remain visible with incomplete evidence and a warning.
 Primary-inventory pull requests do not fetch changed-file lists because that
 data is not used by the PR assessment.
 
-The pull-request agent output has this sparse shape:
+The `pullRequests` array inside `agent-assessment.json` has this sparse shape:
 
 ```json
 {
   "schemaVersion": 1,
   "snapshotId": "snapshot:microsoft/aspire:2026-08-28T12:00:00Z",
+  "issues": [],
   "pullRequests": [
     {
       "pullRequestNumber": 123,
@@ -1157,6 +1160,7 @@ assessment-defaults.json
 agent-input.json
 review-selection.json
 pull-request-review.json
+agent-assessment.json
 agent-judgments.json
 agent-pull-request-judgments.json
 judgments.json
@@ -1249,13 +1253,16 @@ issue, and every issue whose explicit typed wakeup is due to the model.
 `agent-input.json` is filtered to that same set. Stable reviewed cases are
 omitted from both until they change or a wakeup becomes due, while their last
 validated agent overrides remain effective.
-`agent-judgments.json` is the only issue assessment-agent output. `finalize.py`
-accepts sparse agent changes only for selected cases, carries forward validated
-overrides for unchanged omitted cases, and restores safe deterministic defaults
-for the remainder into `judgments.json`. Pull-request handoffs similarly retain
-only judgments that differed from the prior deterministic default. A legacy run
-that has a pull-request handoff but predates pull-request judgment persistence
-is re-reviewed once during rollout. `report.md` is rendered deterministically
+`agent-assessment.json` is the only assessment-agent output. `cycle.py finish`
+validates its exact top-level schema and snapshot, then derives
+`agent-judgments.json` and `agent-pull-request-judgments.json` before applying
+the existing domain validators. `finalize.py` accepts sparse issue changes only
+for selected cases, carries forward validated overrides for unchanged omitted
+cases, and restores safe deterministic defaults for the remainder into
+`judgments.json`. Pull-request handoffs similarly retain only judgments that
+differed from the prior deterministic default. A legacy run that has a
+pull-request handoff but predates pull-request judgment persistence is
+re-reviewed once during rollout. `report.md` is rendered deterministically
 after validation. The report includes collection completeness and warnings.
 `progress.json` records stage status, and
 `api-calls.jsonl` is the coordinator-owned GET audit for collection or
@@ -1388,7 +1395,9 @@ input.json
   -> expand.py writes input.expanded.json and evidence-expansion-errors.json
   -> input.json, assessment-input.json, agent-input.json,
      review-selection.json, and pull-request-review.json are regenerated in place
-  -> fresh assessment agent writes agent-judgments.json
+  -> fresh assessment agent writes agent-assessment.json
+  -> cycle.py validates and splits the combined response into the two
+     domain-specific audit artifacts
   -> cycle.py finish validates, renders, and records the round
 ```
 
@@ -1498,15 +1507,19 @@ judgment or action proposal.
 
 ## Fresh assessment-agent contract
 
-A fresh assessment agent reads `agent-input.json` and
-`review-selection.json`. It writes only evidence-supported overrides for
-entries in `review-selection.json.selected`. Deterministic defaults already
-apply the safe recurrence rubric; omitting a selected issue means "keep the
-default." Do not return omitted issues or copy all defaults. Process selected
-issues in batches of at most 10, but load each input file only once. Write only
-`agent-judgments.json`. Report the number of overrides, plus category and
-disposition counts, in the completion response. The coordinator owns finalized
-`judgments.json`.
+A fresh assessment agent reads `agent-input.json`, `review-selection.json`, and
+`pull-request-review.json`. It writes one `agent-assessment.json` document with
+exactly `schemaVersion`, `snapshotId`, `issues`, and `pullRequests`. Write only
+evidence-supported overrides for selected issue and pull-request entries.
+Deterministic defaults already apply the safe recurrence rubric; omitting a
+selected item means "keep the default." Do not return omitted items or copy all
+defaults. Process selected items in batches of at most 10, but load each input
+file only once. Do not write `agent-judgments.json` or
+`agent-pull-request-judgments.json`; `cycle.py` derives them after validating
+the combined response. Report the number of issue and pull-request overrides,
+plus category and disposition counts, in the completion response. The
+coordinator owns finalized `judgments.json` and
+`pull-request-judgments.json`.
 
 The deterministic selector includes every first-seen issue, every direct or
 derived material change, and every due typed wakeup. Selected
@@ -1533,7 +1546,8 @@ using the checkout that contains this skill. The workflow prompt must:
 2. create a new timestamped scratch directory for each run;
 3. run `cycle.py start`;
 4. if the manifest says `awaiting-review`, read only the three bounded handoff
-   files, write the typed sparse judgment files, and run `cycle.py finish`;
+   files, write the single typed sparse `agent-assessment.json`, and run
+   `cycle.py finish`;
 5. launch and record new read-only requests in `investigation-plan.json`;
 6. independently validate investigation results and regenerate frozen
    `action-proposals.json`;
