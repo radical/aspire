@@ -122,6 +122,56 @@ def judgment_document(
 
 
 class CurrentStateTests(unittest.TestCase):
+    def test_human_review_preserves_submitted_progress_event(self) -> None:
+        state = build_pull_request_current_state(
+            {"head": {"sha": "abc"}},
+            check_runs=[],
+            reviews=[{
+                "id": 51,
+                "user": {"login": "maintainer", "type": "User"},
+                "state": "APPROVED",
+                "body": "",
+                "submitted_at": "2026-08-25T10:00:00Z",
+            }],
+        )
+
+        self.assertEqual(
+            [{
+                "at": "2026-08-25T10:00:00Z",
+                "basis": "human-review",
+                "author": "maintainer",
+                "reviewId": 51,
+            }],
+            state["progressEvents"],
+        )
+
+    def test_review_progress_requires_verified_non_automated_submission(self) -> None:
+        for changes in (
+            {"user": {"login": "worker", "type": "Bot"}},
+            {"user": {"login": "worker[bot]", "type": "User"}},
+            {"user": {"login": "maintainer"}},
+            {"state": "PENDING"},
+            {"state": "DISMISSED"},
+            {"body": "[automated] Reviewing this pull request."},
+            {"submitted_at": None},
+            {"submitted_at": "2026-08-25T10:00:00"},
+            {"submitted_at": "not-a-time"},
+        ):
+            with self.subTest(changes=changes):
+                review = {
+                    "id": 51,
+                    "user": {"login": "maintainer", "type": "User"},
+                    "state": "APPROVED",
+                    "body": "",
+                    "submitted_at": "2026-08-25T10:00:00Z",
+                    **changes,
+                }
+                state = build_pull_request_current_state(
+                    {"head": {"sha": "abc"}}, reviews=[review],
+                )
+
+                self.assertEqual([], state["progressEvents"])
+
     def test_all_completed_successful_check_runs_are_green_and_complete(self) -> None:
         state = build_pull_request_current_state(
             {"head": {"sha": "abc"}, "mergeable": True, "mergeable_state": "clean"},
@@ -353,6 +403,22 @@ class CurrentStateTests(unittest.TestCase):
 
 
 class HandoffTests(unittest.TestCase):
+    def test_handoff_keeps_progress_separate_from_updated_at(self) -> None:
+        current = snapshot(current_state=green_state())
+        progress = {
+            "status": "observed",
+            "at": "2026-08-25T10:00:00Z",
+            "basis": "human-review",
+            "evidenceIds": ["pr:23"],
+            "precision": "source-event",
+        }
+        current["pullRequests"][0]["meaningfulProgress"] = progress
+
+        handoff = build_pull_request_handoff(current)
+
+        self.assertEqual(progress, handoff["tasks"][0]["meaningfulProgress"])
+        self.assertEqual("2026-08-27T10:00:00Z", current["pullRequests"][0]["updatedAt"])
+
     def test_selects_only_new_or_changed_pull_requests(self) -> None:
         previous = snapshot(current_state=green_state())
 

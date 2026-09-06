@@ -6,6 +6,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
+import collect as collect_script
+from ci_shepherd.collector import Collector, InventoryResult
+from tests.test_collector import ScriptedClient, make_issue
 
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import validate_action_proposals
@@ -26,8 +30,9 @@ from ci_shepherd.repository_policy import HandoffReminderPolicy
 from tests.test_policy import ASPIRE_REPOSITORY_POLICY_PATH
 from ci_shepherd.repository_policy import load_repository_policy
 import cycle
-from ci_shepherd.poc_state import record_review_wakeup
+from ci_shepherd.poc_state import load_review_schedule, record_review_wakeup
 from ci_shepherd.models import validate_snapshot
+from ci_shepherd.quarantine_reconciliation import freeze_quarantine_source
 from ci_shepherd.review_selection import build_review_selection, merge_selected_poc_judgments
 from ci_shepherd.managed_coverage import build_managed_item_coverage
 from ci_shepherd.policy_selection import build_policy_selection
@@ -86,6 +91,7 @@ def assess(value: dict, *, max_bundle_records: int = 25) -> tuple[dict, dict, di
 def completed_investigation(
     root: Path, prepared: dict, judgments: dict, *, outcome: str = "needs-evidence",
     evidence_ids: list[str] | None = None,
+    fix_handoff: dict | None = None,
 ) -> dict:
     validate_poc_judgments(prepared, judgments)
     request = build_investigation_plan(prepared, judgments, [])["requests"][0]
@@ -102,15 +108,306 @@ def completed_investigation(
             "evidenceIds": request["evidenceIds"] if evidence_ids is None else evidence_ids,
             "reassessWhen": "After diagnostic evidence changes.",
             "missingEvidence": ["compiler context"] if outcome == "needs-evidence" else [],
-            "fixHandoff": {"problem": "Missing statement terminator in the entry point.",
+            "fixHandoff": (fix_handoff or {"problem": "Missing statement terminator in the entry point.",
                            "likelyPaths": ["src/Program.cs"],
-                           "validation": ["dotnet build src/App.csproj"]} if outcome == "fixable" else None,
+                           "validation": ["dotnet build src/App.csproj"]}) if outcome == "fixable" else None,
         },
         recorded_at="2026-08-19T16:02:00Z", session_id="investigator", checkout=checkout,
     )
 
 
+def quarantined_snapshot() -> dict:
+    issue = issue_payload(21, facts=[fact("testName", "Demo.Tests.Flaky")])
+    issue.update(
+        title="Flaky test Demo.Tests.Flaky", labels=["quarantined-test"],
+        body="Demo.Tests.Flaky intermittently times out while waiting for readiness.",
+    )
+    value = snapshot(issue)
+    source_state = {
+        "schemaVersion": 1, "sourceRevision": "a" * 40,
+        "sourceTreeDigest": "sha256:" + "b" * 64,
+        "inspectorTreeDigest": "sha256:" + "c" * 64,
+        "tests": [],
+        "quarantines": [{
+            "testName": "Demo.Tests.Flaky", "issueUrl": issue["url"],
+            "file": "Demo.Tests/Tests.cs", "line": 12,
+        }],
+    }
+    return freeze_quarantine_source(value, prepare_assessment(value), source_state)
+
+
+class QuarantinedRemediationPipelineTests(unittest.TestCase):
+    def test_duplicate_group_preserves_the_source_linked_quarantine_tracker(self) -> None:
+        value = quarantined_snapshot()
+        original = value["evidence"]["issue:21"]["payload"]
+        original["facts"].append(fact("causeId", "test-timeout"))
+        other = copy.deepcopy(value["evidence"]["issue:21"])
+        other["url"] = other["payload"]["url"] = original["url"].replace("/21", "/20")
+        other["payload"].update(number=20, labels=["test-failure"])
+        value["evidence"]["issue:20"] = other
+        value["openIssues"].append(20)
+        value["issues"].append(other["payload"])
+        _, compact, judgments, proposals = assess(value)
+        tracked = next(issue for issue in compact["issues"] if issue["issueNumber"] == 21)
+        self.assertEqual("superseded", tracked["actionCluster"]["role"])
+        decision = next(issue for issue in judgments["issues"] if issue["issueNumber"] == 21)
+        self.assertEqual("investigate", decision["recommendations"][0]["disposition"])
+        self.assertEqual([], [action for action in proposals["proposals"] if action["operation"] == "close-issue"])
+
+    def test_existing_quarantine_delegation_is_tracked_without_new_investigation(self) -> None:
+        value = quarantined_snapshot()
+        value["delegationStatus"] = handoff_snapshot(changed_files=3)["delegationStatus"]
+        prepared, compact, judgments, proposals = assess(value)
+        context = compact["issues"][0]["delegationContext"]
+        self.assertEqual("task-21", context["records"][0]["taskId"])
+        self.assertEqual(22, context["records"][0]["pullRequests"][0]["number"])
+        self.assertEqual("no-action", judgments["issues"][0]["recommendations"][0]["disposition"])
+        self.assertEqual([], build_investigation_plan(prepared, judgments, [])["requests"])
+        self.assertEqual([], proposals["proposals"])
+
+    def test_collection_freezes_quarantine_before_canonical_assessment(self) -> None:
+        value = quarantined_snapshot()
+        source_state = value["quarantineSourceState"]
+        issue = value["evidence"]["issue:21"]["payload"]
+        inventory = InventoryResult(
+            [issue], [], {"issue:21": value["evidence"]["issue:21"]}, [], [], {},
+        )
+        artifacts = Path(__file__).parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as directory:
+            root = Path(directory)
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=object()),
+                patch.object(collect_script, "Collector") as collector,
+                patch.object(collect_script, "collect_quarantine_source_state", return_value=source_state) as inspect,
+            ):
+                collector.return_value.collect.return_value = inventory
+                collector.return_value.enrich_github_evidence.return_value = inventory
+                collector.return_value.enrich_ownership_evidence.return_value = inventory
+                collect_script.collect(
+                    value["repository"], root / "collected", None,
+                    repository_policy_path=ASPIRE_REPOSITORY_POLICY_PATH,
+                )
+            frozen_path = root / "collected" / "input.json"
+            frozen = json.loads(frozen_path.read_text())
+            validate_snapshot(frozen)
+            self.assertEqual(source_state, frozen["quarantineSourceState"])
+            inspect.assert_called_once_with(None, ["Demo.Tests.Flaky"])
+            work = root / "cycle"
+            with patch.object(cycle, "collect_quarantine_source_state", side_effect=AssertionError("Source must remain frozen.")):
+                started = cycle.start_cycle(
+                    repository=value["repository"], state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="ankj", input_path=frozen_path,
+                )
+                if started["stage"] == "awaiting-review":
+                    completed = cycle.finish_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+                else:
+                    completed = started
+            prepared = json.loads((work / "assessment-input.json").read_text())
+            self.assertEqual("quarantined", prepared["issues"][0]["testMaintenance"]["state"])
+            plan = json.loads((work / "investigation-plan.json").read_text())
+            self.assertEqual([21], [request["issueNumber"] for request in plan["requests"]])
+            report = (work / "report.md").read_text()
+            self.assertTrue(report.startswith("# CI Shepherd run report\n"))
+            self.assertIn("0 executed effects", report)
+            self.assertIn("[Audit details](report-details.md)", report)
+            run_directory = Path(completed["runDirectory"])
+            self.assertEqual(report, (run_directory / "report.md").read_text())
+            self.assertEqual(
+                (work / "report-details.md").read_text(),
+                (run_directory / "report-details.md").read_text(),
+            )
+
+    def test_label_or_incomplete_source_cannot_supply_fix_authority(self) -> None:
+        for missing in ("source-state", "attribute", "source-record", "source-revision", "source-availability"):
+            with self.subTest(missing=missing), TemporaryDirectory() as directory:
+                value = quarantined_snapshot()
+                if missing == "source-state":
+                    del value["quarantineSourceState"]
+                elif missing == "attribute":
+                    value["quarantineSourceState"]["quarantines"] = []
+                elif missing == "source-record":
+                    del value["evidence"]["source:tests/Demo.Tests/Tests.cs"]
+                elif missing == "source-revision":
+                    value["quarantineSourceState"]["sourceRevision"] = "d" * 40
+                else:
+                    value["evidence"]["source:tests/Demo.Tests/Tests.cs"]["availability"] = "partial"
+                prepared, _, judgments, _ = assess(value)
+                result = completed_investigation(
+                    Path(directory), prepared, judgments, outcome="fixable",
+                    fix_handoff={
+                        "problem": "Fix the readiness wait.",
+                        "likelyPaths": ["tests/Demo.Tests/Tests.cs"],
+                        "validation": ["Run the exact test repeatedly."],
+                    },
+                )
+                compact = build_compact_poc_input(attach_latest_investigation_results(prepared, [result]))
+                self.assertNotIn("machineActionability", compact["issues"][0])
+                self.assertEqual("investigate", compact["issues"][0]["defaultJudgment"]["recommendations"][0]["disposition"])
+
+    def test_quarantine_handoff_requires_report_and_target_source_citations(self) -> None:
+        for missing in ("diagnostic", "source-citation", "target-path"):
+            with self.subTest(missing=missing), TemporaryDirectory() as directory:
+                value = quarantined_snapshot()
+                if missing == "diagnostic":
+                    value["evidence"]["issue:21"]["payload"]["body"] = ""
+                prepared, _, judgments, _ = assess(value)
+                result = completed_investigation(
+                    Path(directory), prepared, judgments, outcome="fixable",
+                    evidence_ids=["issue:21"] if missing == "source-citation" else None,
+                    fix_handoff={
+                        "problem": "Fix the readiness wait.",
+                        "likelyPaths": ["src/Other.cs" if missing == "target-path" else "tests/Demo.Tests/Tests.cs"],
+                        "validation": ["Run the exact test repeatedly."],
+                    },
+                )
+                compact = build_compact_poc_input(attach_latest_investigation_results(prepared, [result]))
+                self.assertNotIn("machineActionability", compact["issues"][0])
+
+    def test_quarantine_preview_limit_does_not_veto_a_complete_fix_handoff(self) -> None:
+        value = quarantined_snapshot()
+        value["evidence"]["issue:21"]["payload"]["body"] += "\n" + "Repeated diagnostic output.\n" * 300
+        prepared, _, judgments, _ = assess(value)
+        with TemporaryDirectory() as directory:
+            result = completed_investigation(
+                Path(directory), prepared, judgments, outcome="fixable",
+                fix_handoff={
+                    "problem": "Wait for resource readiness before querying it.",
+                    "likelyPaths": ["tests/Demo.Tests/Tests.cs"],
+                    "validation": ["Run Demo.Tests.Flaky repeatedly across operating systems."],
+                },
+            )
+            attached = attach_latest_investigation_results(prepared, [result])
+            compact = build_compact_poc_input(attached)
+            self.assertEqual("delegate-copilot", compact["issues"][0]["defaultJudgment"]["recommendations"][0]["disposition"])
+            incomplete = copy.deepcopy(result)
+            incomplete["missingEvidence"] = ["remaining diagnostic output"]
+            compact = build_compact_poc_input(attach_latest_investigation_results(prepared, [incomplete]))
+            self.assertNotIn("machineActionability", compact["issues"][0])
+
+    def test_source_confirmed_quarantine_cannot_be_closed_by_a_fix_judgment(self) -> None:
+        prepared, compact, judgments, _ = assess(quarantined_snapshot())
+        judgments["issues"][0]["recommendations"][0].update(disposition="review-close", missingEvidence=[])
+        with self.assertRaisesRegex(ValueError, "review-close requires"):
+            validate_poc_projectability(compact, judgments)
+
+    def test_current_quarantine_fix_handoff_delegates_without_closing_tracker(self) -> None:
+        value = quarantined_snapshot()
+        policy = load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH)
+        value["repositoryPolicy"] = {**policy.as_public_dict(), "digest": policy.digest}
+        prepared, _, judgments, _ = assess(value)
+        with TemporaryDirectory() as directory:
+            result = completed_investigation(
+                Path(directory), prepared, judgments, outcome="fixable",
+                fix_handoff={
+                    "problem": "Wait for resource readiness before querying it.",
+                    "likelyPaths": ["tests/Demo.Tests/Tests.cs"],
+                    "validation": ["Run Demo.Tests.Flaky repeatedly across operating systems."],
+                },
+            )
+            attached = attach_latest_investigation_results(prepared, [result])
+            compact = build_compact_poc_input(attached)
+            final = {
+                "schemaVersion": 1, "snapshotId": prepared["snapshotId"],
+                "issues": [compact["issues"][0]["defaultJudgment"]],
+            }
+            self.assertEqual("delegate-copilot", final["issues"][0]["recommendations"][0]["disposition"])
+            validate_poc_judgments(attached, final)
+            validate_poc_projectability(compact, final)
+            proposals = build_action_proposals(value, attached, final, "ankj", agent_input=compact)
+            validate_action_proposals(proposals)
+            self.assertEqual(["assign-copilot"], [proposal["operation"] for proposal in proposals["proposals"]])
+            action = proposals["proposals"][0]
+            self.assertEqual("source-reconciliation", action["evidenceBasis"])
+            self.assertIn("Refs #21", action["customInstructions"])
+            self.assertIn("Keep the tracking issue open", action["customInstructions"])
+            self.assertIn("Do not modify or remove the `[QuarantinedTest]` attribute", action["customInstructions"])
+
+    def test_source_confirmed_quarantine_starts_fix_investigation_without_recurrence(self) -> None:
+        value = quarantined_snapshot()
+        prepared, compact, judgments, proposals = assess(value)
+        recommendation = judgments["issues"][0]["recommendations"][0]
+        self.assertEqual("investigate", recommendation["disposition"])
+        self.assertEqual({"kind": "issue", "value": 21}, recommendation["target"])
+        self.assertEqual("quarantined", compact["issues"][0]["testMaintenance"]["state"])
+        self.assertEqual([], proposals["proposals"])
+        plan = build_investigation_plan(prepared, judgments, [])
+        self.assertEqual(1, len(plan["requests"]))
+        self.assertIn("source:tests/Demo.Tests/Tests.cs", plan["requests"][0]["evidenceIds"])
+        self.assertIn("Demo.Tests.Flaky", plan["requests"][0]["workerPrompt"])
+        self.assertIn("source-path record contains metadata rather than the needed source text", plan["requests"][0]["workerPrompt"])
+
+
 class InvestigationCoveragePipelineTests(unittest.TestCase):
+    def test_closure_requires_its_own_explanation_not_an_unrelated_watch_comment(self) -> None:
+        from tests.test_actions import _with_owned_comment
+
+        value = recovery_snapshot()
+        _, _, _, proposals = assess(_with_owned_comment(value, "[automated] Waiting for another failure."))
+        self.assertEqual(["edit-comment", "close-issue"], [action["operation"] for action in proposals["proposals"]])
+        comment, close = proposals["proposals"]
+        self.assertEqual(comment["actionId"], close["dependsOn"])
+        _, _, _, explained = assess(_with_owned_comment(value, comment["body"]))
+        self.assertEqual(["close-issue"], [action["operation"] for action in explained["proposals"]])
+
+    def test_issue_tail_changes_invalidate_results_without_growing_worker_packet(self) -> None:
+        value = snapshot(issue_payload(21))
+        value["evidence"]["issue:21"]["payload"].update(
+            producer="unknown", body="x" * 4_000 + "old failure detail",
+        )
+        prepared, _, judgments, _ = assess(value)
+        with TemporaryDirectory() as directory:
+            result = completed_investigation(Path(directory), prepared, judgments)
+            unchanged = attach_latest_investigation_results(prepared, [result])
+            self.assertEqual([result], unchanged["issues"][0]["investigationResults"])
+            value["evidence"]["issue:21"]["payload"]["body"] = "x" * 4_000 + "new failure detail"
+            fresh, _, fresh_judgments, _ = assess(value)
+            attached = attach_latest_investigation_results(fresh, [result])
+            self.assertNotIn("investigationResults", attached["issues"][0])
+            request = build_investigation_plan(attached, fresh_judgments, [result])["requests"][0]
+            payload = next(record["payload"] for record in request["allowedEvidence"] if record["id"] == "issue:21")
+            self.assertEqual("x" * 4_000, payload["body"])
+            self.assertIs(True, payload["bodyTruncated"])
+            self.assertNotEqual(result["sourceEvidenceFingerprint"], request["sourceEvidenceFingerprint"])
+
+    def test_issue_diagnostic_preview_rejects_malformed_and_unbounded_payloads(self) -> None:
+        value = snapshot(issue_payload(21))
+        value["evidence"]["issue:21"]["payload"].update(producer="unknown", body="failure")
+        prepared, _, judgments, _ = assess(value)
+        for field, invalid in (
+            ("body", "x" * 4_001), ("body", []),
+            ("bodyTruncated", "true"), ("bodyFingerprint", "unchecked"),
+        ):
+            with self.subTest(field=field):
+                altered = copy.deepcopy(prepared)
+                altered["issues"][0]["evidenceBundle"][0]["payload"][field] = invalid
+                with self.assertRaisesRegex(ValueError, "issue body"):
+                    validate_poc_judgments(altered, judgments)
+
+    def test_unstructured_issue_diagnostics_reach_assessor_and_investigator(self) -> None:
+        value = snapshot(issue_payload(21))
+        payload = value["evidence"]["issue:21"]["payload"]
+        payload.update(
+            producer="unknown",
+            title="Emulator tests fail during startup",
+            body=(
+                "Failed Demo.EmulatorTests.ReadData\n"
+                "Failed Demo.EmulatorTests.UseBindMount\n"
+                "Stopped waiting for resource 'TestDb' because it failed to start."
+            ),
+            facts=[],
+        )
+        prepared, compact, judgments, _ = assess(value)
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        embedded = next(record["payload"] for record in request["allowedEvidence"] if record["id"] == "issue:21")
+        visible = next(record for record in compact["issues"][0]["allowedEvidence"] if record["id"] == "issue:21")
+        self.assertEqual(payload["body"], embedded.get("body"))
+        self.assertEqual(payload["body"], visible.get("body"))
+        self.assertIs(False, embedded["bodyTruncated"])
+        self.assertIn("Demo.EmulatorTests.ReadData", request["workerPrompt"])
+        self.assertIn("Demo.EmulatorTests.UseBindMount", request["workerPrompt"])
+        self.assertEqual("investigate", judgments["issues"][0]["recommendations"][0]["disposition"])
+
     def test_log_diagnostic_shapes_and_prepared_bounds_are_validated(self) -> None:
         log_id = "run:100:attempt:1:job:900:log"
         malformed = [
@@ -489,6 +786,75 @@ def handoff_snapshot(*, changed_files: int | None = 0, events: list | None = Non
 
 
 class HandoffPipelineTests(unittest.TestCase):
+    def test_snapshot_rejects_unverified_progress_shapes(self) -> None:
+        for progress in (
+            {"headSha": ""},
+            {"headSha": True},
+            {"headSha": "current-head", "updatedAt": "2026-08-20T12:00:00Z"},
+        ):
+            with self.subTest(progress=progress):
+                value = handoff_snapshot()
+                value["delegationStatus"]["records"][0]["pullRequests"][0]["progressSource"] = progress
+                with self.assertRaisesRegex(ValueError, "progressSource"):
+                    validate_snapshot(value)
+        value = handoff_snapshot()
+        value["delegationStatus"]["records"][0]["meaningfulProgress"] = {
+            "status": "observed", "at": "2026-08-20T12:00:00Z",
+            "basis": "updated-at", "evidenceIds": ["issue:21"], "precision": "source-event",
+        }
+        with self.assertRaisesRegex(ValueError, "basis"):
+            validate_snapshot(value)
+
+    def test_collection_persists_human_progress_before_scheduling_reminder(self) -> None:
+        policy_path = Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+        for body, expected_at in (
+            ("I am working on this.", "2026-08-27T12:00:00Z"),
+            ("[automated] Refreshed status.", "2026-08-26T15:55:00Z"),
+        ):
+            with self.subTest(body=body), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                state = root / "state"
+                state.mkdir(mode=0o700)
+                record = copy.deepcopy(handoff_snapshot(human=True)["delegationStatus"]["records"][0])
+                record["repository"] = "owner/repo"
+                client = ScriptedClient(pages={
+                    "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [
+                        make_issue(21, labels=["ci-failure-cause"]),
+                    ],
+                    "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                    "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                    "/repos/owner/repo/issues/21/comments": [{
+                        "id": 99,
+                        "html_url": "https://github.com/owner/repo/issues/21#issuecomment-99",
+                        "user": {"login": "reviewer", "type": "User"},
+                        "body": body,
+                        "created_at": "2026-08-20T12:00:00Z",
+                        "updated_at": "2026-08-22T12:00:00Z",
+                    }],
+                })
+                with (
+                    patch.object(collect_script, "GitHubClient", return_value=client),
+                    patch.object(collect_script, "observe_delegation_status", return_value=(
+                        {"status": "complete", "records": [record]}, (),
+                    )),
+                    patch.object(Collector, "enrich_github_evidence", side_effect=lambda inventory, **kwargs: inventory),
+                    patch.object(Collector, "enrich_ownership_evidence", side_effect=lambda inventory, **kwargs: inventory),
+                ):
+                    collect_script.collect(
+                        "owner/repo", root / "output", None, state_dir=state,
+                        shepherd_author="operator", repository_policy_path=policy_path,
+                    )
+                collected = json.loads((root / "output" / "input.json").read_text())
+                actual = collected["delegationStatus"]["records"][0]
+                self.assertEqual(expected_at, actual["nextWakeup"]["evaluateAt"])
+                self.assertEqual(1, actual["handoffReminder"]["ordinal"])
+                schedule = load_review_schedule(
+                    state, "owner/repo", collected["collectedAt"],
+                    issue_numbers=[21], pull_request_numbers=[],
+                )
+                self.assertEqual(expected_at, schedule["issues"]["21"]["reassessAt"])
+                self.assertEqual("human-stale-progress", schedule["issues"]["21"]["wakeReason"])
+
     def test_unassessed_delegated_handoff_remains_valid_blocked_work(self) -> None:
         value = handoff_snapshot()
         value["delegatedIssues"] = [21]

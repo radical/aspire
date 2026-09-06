@@ -143,6 +143,7 @@ class DelegationObserverTests(unittest.TestCase):
                     "merged_at": "2026-09-01T14:00:00Z",
                     "draft": False,
                     "changed_files": 4,
+                    "head": {"sha": "current-head"},
                 },
                 issue_endpoint: {
                     "number": 42,
@@ -164,6 +165,10 @@ class DelegationObserverTests(unittest.TestCase):
         self.assertEqual(TaskState.COMPLETED, observation.tasks[0].state)
         self.assertTrue(observation.issues[0].is_open)
         self.assertTrue(observation.issues[0].copilot_assigned)
+        self.assertEqual(
+            {101: {"headSha": "current-head"}},
+            observation.pull_request_sources,
+        )
         self.assertEqual(
             [
                 (101, "PR_open", PullRequestState.MERGED, False, 4),

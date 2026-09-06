@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Read-only observation of shepherd-owned GitHub Copilot task lifecycles."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping, Protocol
 from urllib.parse import urlencode
@@ -29,6 +29,7 @@ class DelegationObservation:
     pull_requests: tuple[DelegatedPullRequest, ...]
     issues: tuple[DelegatedIssue, ...]
     evidence: CapacityEvidence
+    pull_request_sources: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
 
 
 def observe_delegations(
@@ -51,6 +52,7 @@ def observe_delegations(
         for index, record in enumerate(task_records)
     )
     pull_requests: dict[int, DelegatedPullRequest] = {}
+    pull_request_sources: dict[int, Mapping[str, object]] = {}
     observed_owned_ids = (
         {task.task_id for task in tasks}
         if owned_task_ids is None
@@ -75,12 +77,11 @@ def observe_delegations(
             for index, record in enumerate(client.get_pages(endpoint)):
                 summary = _normalize_pull_request(record, index=index)
                 assert summary.number is not None
-                pull_request = _normalize_pull_request(
-                    client.get(
-                        f"/repos/{repository}/pulls/{summary.number}"
-                    ),
-                    index=index,
+                detail = _mapping(
+                    client.get(f"/repos/{repository}/pulls/{summary.number}"),
+                    f"pull_requests[{index}]",
                 )
+                pull_request = _normalize_pull_request(detail, index=index)
                 if (
                     pull_request.database_id != summary.database_id
                     or pull_request.global_id != summary.global_id
@@ -97,6 +98,20 @@ def observe_delegations(
                         "across branch observations."
                     )
                 pull_requests[pull_request.database_id] = pull_request
+                head = detail.get("head")
+                head_sha = head.get("sha") if isinstance(head, Mapping) else None
+                source = {
+                    "headSha": head_sha
+                    if isinstance(head_sha, str) and head_sha.strip()
+                    else None,
+                }
+                previous_source = pull_request_sources.get(pull_request.database_id)
+                if previous_source is not None and previous_source != source:
+                    raise ValueError(
+                        f"Pull request {pull_request.database_id} head changed "
+                        "across branch observations."
+                    )
+                pull_request_sources[pull_request.database_id] = source
         for artifact in task.pull_artifacts:
             assert artifact.database_id is not None
             key = artifact.database_id
@@ -123,6 +138,7 @@ def observe_delegations(
             for issue_number in sorted(owned_issue_numbers or set())
         ),
         evidence=CapacityEvidence(),
+        pull_request_sources=pull_request_sources,
     )
 
 

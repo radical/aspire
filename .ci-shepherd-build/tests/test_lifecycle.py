@@ -796,7 +796,8 @@ class LifecycleAssessmentTests(unittest.TestCase):
         issue_bundle_payload = candidate["evidenceBundle"][0]["payload"]
         comment_bundle_payload = candidate["evidenceBundle"][1]["payload"]
 
-        self.assertNotIn("body", issue_bundle_payload)
+        self.assertEqual(payload["body"][:4_000], issue_bundle_payload["body"])
+        self.assertIs(True, issue_bundle_payload["bodyTruncated"])
         self.assertNotIn("comments", issue_bundle_payload)
         self.assertEqual("timeout", issue_bundle_payload["facts"][0]["normalized"])
         self.assertLessEqual(len(comment_bundle_payload["body"]), 2_000)

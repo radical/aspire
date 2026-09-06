@@ -6,9 +6,11 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 from ci_shepherd.models import validate_report, validate_snapshot
 from ci_shepherd.poc import validate_poc_judgments
+from ci_shepherd.run_report import render_run_markdown
 
 
 _OPERATIONAL_QUEUES = (
@@ -505,17 +507,72 @@ def main() -> int:
     parser.add_argument("--judgments", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--run-report", action="store_true",
+        help="Render grouped work performed, using companion cycle artifacts when present.",
+    )
+    parser.add_argument("--action-events", type=Path)
+    parser.add_argument("--investigation-results", type=Path)
+    parser.add_argument("--investigation-sessions", type=Path)
+    parser.add_argument("--usage", type=Path)
+    parser.add_argument("--as-of")
+    parser.add_argument("--run-id")
+    parser.add_argument(
+        "--invocation", type=Path,
+        help="Existing invocation manifest with runId, boundary scope, startedAt/completedAt, and optional recordingWindows.",
+    )
     args = parser.parse_args()
 
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
     judgments = json.loads(args.judgments.read_text(encoding="utf-8"))
     snapshot = json.loads(args.snapshot.read_text(encoding="utf-8"))
-    markdown = render_poc_markdown(
-        prepared,
-        judgments,
-        prepared_path=args.prepared.resolve(),
-        snapshot=snapshot,
-    )
+    if args.run_report:
+        validate_poc_judgments(prepared, judgments)
+        invocation = json.loads(args.invocation.read_text(encoding="utf-8")) if args.invocation else {}
+
+        def companion(name: str) -> object:
+            path = args.prepared.parent / name
+            return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+        def events(path: Path | None) -> list[object]:
+            if path is None:
+                return []
+            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        audit_path = args.prepared.parent / "report-details.md"
+        if not audit_path.is_file():
+            # Older cycles stored the detailed audit directly in report.md.
+            audit_path = args.prepared.parent / "report.md"
+        audit_details_url = (
+            quote(Path(os.path.relpath(audit_path, args.output.parent)).as_posix(), safe="/")
+            if audit_path.is_file() and audit_path.resolve() != args.output.resolve()
+            else None
+        )
+        markdown = render_run_markdown(
+            snapshot, prepared, judgments,
+            review_selection=companion("review-selection.json"),
+            pull_request_review=companion("pull-request-review.json"),
+            pull_request_judgments=companion("pull-request-judgments.json"),
+            investigation_plan=companion("investigation-plan.json"),
+            action_events=events(args.action_events),
+            investigation_results=events(args.investigation_results),
+            investigation_sessions=events(args.investigation_sessions),
+            usage=json.loads(args.usage.read_text(encoding="utf-8")) if args.usage else None,
+            as_of=args.as_of,
+            run_id=args.run_id or invocation.get("runId"),
+            invocation_window=invocation,
+            recording_windows=invocation.get("recordingWindows", []),
+            audit_details_url=audit_details_url,
+            pre_expansion_review_selection=companion("review-selection.pre-expansion.json"),
+            pre_expansion_pull_request_review=companion("pull-request-review.pre-expansion.json"),
+        )
+    else:
+        markdown = render_poc_markdown(
+            prepared,
+            judgments,
+            prepared_path=args.prepared.resolve(),
+            snapshot=snapshot,
+        )
 
     print(_write_markdown(args.output, markdown))
     return 0

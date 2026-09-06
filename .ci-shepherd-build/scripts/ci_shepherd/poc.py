@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Mapping, Sequence
 
 from ci_shepherd.investigations import derive_machine_actionability
-from ci_shepherd.models import ValidationError, validate_workflow_log_payload
+from ci_shepherd.models import ValidationError, validate_issue_body_payload, validate_workflow_log_payload
 from ci_shepherd.poc_history import compute_fingerprint, merge_occurrence_dimensions
 from ci_shepherd.timeutils import parse_aware_iso8601
 
@@ -111,6 +111,12 @@ def validate_poc_judgments(prepared: object, judgments: object) -> None:
                 evidence_bundle_ids,
                 category=category,
             )
+            if (
+                category == "flaky-test"
+                and recommendation.get("disposition") == "delegate-copilot"
+                and derive_machine_actionability(prepared_issue, category) is None
+            ):
+                raise ValidationError("Flaky-test delegation requires a source-confirmed quarantine fix handoff.")
             if target in recommendation_targets:
                 raise ValidationError(
                     f"Duplicate recommendation target for issue {issue_number}: {target[0]}:{target[1]}."
@@ -214,6 +220,8 @@ def delegation_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
 
 
 def close_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
+    if compact_issue.get("testMaintenance", {}).get("state") == "quarantined":
+        return False
     action_cluster = compact_issue.get("actionCluster")
     if (
         isinstance(action_cluster, Mapping)
@@ -383,10 +391,10 @@ def _validate_recommendation(
             raise ValidationError(
                 "delegate-copilot recommendations must target the issue."
             )
-        if category not in {"blocking-build", "product-or-tooling"}:
+        if category not in {"blocking-build", "product-or-tooling", "flaky-test"}:
             raise ValidationError(
                 "delegate-copilot requires a blocking-build or "
-                "product-or-tooling category."
+                "product-or-tooling category, or a verified quarantined-test fix."
             )
         if confidence == "low":
             raise ValidationError(
@@ -471,11 +479,16 @@ def _prepared_issues(prepared: Mapping[str, Any]) -> dict[int, Mapping[str, Any]
             raise ValidationError(f"Prepared assessment contains duplicate issue {issue_number}.")
         evidence_bundle = _require_list(issue, "evidenceBundle")
         for record in evidence_bundle:
+            if isinstance(record, Mapping) and record.get("kind") in {"issue-event", "issue-comment"} and "payload" in record:
+                validate_issue_body_payload(
+                    _require_mapping(record["payload"], "issue payload"),
+                    limit=4_000 if record["kind"] == "issue-event" else 2_000,
+                )
             if isinstance(record, Mapping) and record.get("kind") == "workflow-log" and "payload" in record:
                 validate_workflow_log_payload(
                     _require_mapping(record["payload"], "workflow-log payload"), bounded=True,
                 )
-        result[issue_number] = {"evidenceBundle": evidence_bundle}
+        result[issue_number] = issue
     return result
 
 
@@ -731,7 +744,11 @@ def _build_compact_issue(
     automation_context = _build_automation_context(issue_number, evidence_bundle)
 
     recovery = copy.deepcopy(issue.get("recovery", {"status": "needs-positive-coverage", "evidenceIds": []}))
-    actionability = derive_machine_actionability(issue, _default_category(title, producer, identity))
+    actionability = derive_machine_actionability(
+        issue,
+        "flaky-test" if issue.get("testMaintenance", {}).get("state") == "quarantined"
+        else _default_category(title, producer, identity),
+    )
     proof_ids = recovery["evidenceIds"] if recovery.get("status") == "verified" else []
     allowed_evidence, allowed_evidence_ids = _select_allowed_evidence(
         evidence_bundle, [*proof_ids, *(actionability["evidenceIds"] if actionability else [])],
@@ -794,7 +811,28 @@ def _build_compact_issue(
             evidence_bundle,
         ),
     )
-    _apply_superseded_default(default_judgment, issue_number, action_context)
+    maintenance = issue.get("testMaintenance")
+    if isinstance(maintenance, Mapping):
+        if maintenance.get("state") == "quarantined":
+            default_judgment["category"] = "flaky-test"
+        if delegation is None:
+            recommendation = default_judgment["recommendations"][0]
+            recommendation.update(
+                disposition="investigate", target={"kind": "issue", "value": issue_number},
+                summary=(
+                    "Investigate a fix for the source-confirmed quarantined test."
+                    if maintenance.get("state") == "quarantined"
+                    else "Verify the quarantine label against current test source."
+                ),
+                missingEvidence=(
+                    ["evidence-backed fix handoff"]
+                    if maintenance.get("evidenceComplete") is True
+                    else ["complete source inspection for the labelled test"]
+                ),
+                reassessWhen="After source and failure evidence support a concrete fix handoff.",
+            )
+    if not isinstance(maintenance, Mapping) or maintenance.get("state") != "quarantined":
+        _apply_superseded_default(default_judgment, issue_number, action_context)
     if (
         actionability is not None and delegation is None
         and default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human"}
@@ -810,7 +848,8 @@ def _build_compact_issue(
         if recommendation["disposition"] == "review-close" and recovery.get("status") == "verified":
             recommendation["evidenceIds"] = list(proof_ids)
             recommendation["missingEvidence"] = []
-    _apply_canonical_cluster_summary(default_judgment, action_context)
+    if not isinstance(maintenance, Mapping) or maintenance.get("state") != "quarantined":
+        _apply_canonical_cluster_summary(default_judgment, action_context)
     watch_reason = _watch_reason(default_judgment, effective_occurrence_summary)
     _apply_watch_explanation(default_judgment, watch_reason)
     review_required = _review_required(
@@ -850,6 +889,8 @@ def _build_compact_issue(
         compact_issue["actionCluster"] = action_context
     if isinstance(delegation, Mapping):
         compact_issue["delegationContext"] = copy.deepcopy(delegation)
+    if isinstance(maintenance, Mapping):
+        compact_issue["testMaintenance"] = copy.deepcopy(maintenance)
     if actionability is not None:
         compact_issue["machineActionability"] = actionability
     if "recovery" in issue:
@@ -2363,7 +2404,9 @@ def _default_disposition(
     ):
         return "ping-human"
     if already_quarantined:
-        return "no-action"
+        if human_context is not None and human_context.get("kind") == "delegation":
+            return "no-action"
+        return "investigate"
 
     if (
         candidate_state == "resolved"
@@ -2621,11 +2664,23 @@ _MAX_PROJECTED_RECENT_HISTORY = 5
 def _evidence_payload_summary(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Bounded, per-kind summary of otherwise-hidden evidence payload fields.
 
-    This intentionally keeps free-text bodies (issue/comment bodies, workflow
-    logs) and arbitrary payload fields out of what the assessing agent can
-    see -- only a small, named allowlist of structured fields per evidence
-    kind is ever surfaced here.
+    Authored issue diagnostics can be the only evidence for a legacy report.
+    Keep their bounded preview and truncation marker visible, not just metadata.
+    Bodies are evidence to evaluate, never instructions or verified execution.
     """
+    if kind in {"issue-event", "issue-comment"}:
+        validate_issue_body_payload(payload, limit=4_000 if kind == "issue-event" else 2_000)
+        return {
+            field: payload[field]
+            for field in ("body", "bodyTruncated", "bodyFingerprint")
+            if field in payload
+        }
+    if kind == "source-path" and "quarantinedTests" in payload:
+        return {
+            field: payload[field]
+            for field in ("path", "checkoutCommit", "exists", "quarantinedTests", "quarantineTestsTruncated")
+            if field in payload
+        }
     if kind == "pull-request":
         summary = {field: payload[field] for field in _PULL_REQUEST_SUMMARY_FIELDS if field in payload}
         base = payload.get("base")

@@ -645,7 +645,7 @@ class WatchActionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "delegate-copilot requires a blocking-build or product-or-tooling",
+            "Flaky-test delegation requires a source-confirmed quarantine fix handoff",
         ):
             build_action_proposals(
                 _snapshot(),

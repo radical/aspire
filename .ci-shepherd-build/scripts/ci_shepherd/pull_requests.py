@@ -32,7 +32,9 @@ from datetime import datetime
 from typing import Any
 
 from .comment_body import comment_bodies_materially_equal
+from .meaningful_progress import unknown_meaningful_progress
 from .models import ValidationError, validate_snapshot
+from .timeutils import format_utc_z, parse_aware_iso8601
 
 
 PULL_REQUEST_SCHEMA_VERSION = 1
@@ -128,6 +130,7 @@ def unknown_pull_request_current_state(reason: str) -> dict[str, Any]:
         "mergeable": None,
         "mergeableState": None,
         "draft": False,
+        "progressEvents": [],
         "complete": False,
         "incompleteReasons": [reason],
     }
@@ -191,9 +194,53 @@ def build_pull_request_current_state(
         "mergeable": mergeable,
         "mergeableState": mergeable_state,
         "draft": pull_request.get("draft") is True,
+        "progressEvents": _review_progress_events(reviews, limit=limit),
         "complete": head_sha is not None and checks["complete"] and review["complete"],
         "incompleteReasons": incomplete,
     }
+
+
+def _review_progress_events(
+    reviews: Sequence[Any] | None, *, limit: int,
+) -> list[dict[str, Any]]:
+    # Submitted reviews have an event timestamp; updated_at and PENDING reviews
+    # cannot establish human progress. Preserve only verified human submissions.
+    # https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request
+    events = []
+    for review in reviews or []:
+        if not isinstance(review, Mapping):
+            continue
+        user = review.get("user")
+        if not isinstance(user, Mapping):
+            continue
+        author = user.get("login")
+        body = review.get("body", "")
+        if (
+            user.get("type") != "User"
+            or not isinstance(author, str)
+            or not author
+            or author.casefold().endswith("[bot]")
+            or author.casefold() in COPILOT_ASSIGNEE_LOGINS
+            or review.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
+            or type(review.get("id")) is not int
+            or review["id"] <= 0
+            or not isinstance(body, str)
+            or body.lstrip().casefold().startswith("[automated]")
+        ):
+            continue
+        try:
+            at = parse_aware_iso8601(review.get("submitted_at"), "review submitted_at")
+        except ValueError:
+            continue
+        events.append({
+            "at": format_utc_z(at),
+            "basis": "human-review",
+            "author": author,
+            "reviewId": review["id"],
+        })
+    return sorted(events, key=lambda item: (
+        parse_aware_iso8601(item["at"], "review progress at"), item["reviewId"],
+    ))[-limit:]
 
 
 def _normalize_checks(
@@ -621,6 +668,9 @@ def build_pull_request_handoff(
             "evidenceIds": [evidence_id],
             "evidenceStatus": evidence_status,
             "currentState": current_state,
+            "meaningfulProgress": copy.deepcopy(
+                pull_request.get("meaningfulProgress", unknown_meaningful_progress())
+            ),
             "questions": [
                 (
                     "Does this pull request still address an active CI "
@@ -742,6 +792,7 @@ def _pull_request_change_reasons(
         ("headSha", "head-changed"),
         ("checks", "checks-changed"),
         ("review", "review-changed"),
+        ("progressEvents", "human-progress-changed"),
         ("mergeable", "mergeability-changed"),
         ("mergeableState", "mergeability-changed"),
         ("complete", "evidence-completeness-changed"),

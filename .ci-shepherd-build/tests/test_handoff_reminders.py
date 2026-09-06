@@ -143,6 +143,109 @@ class HandoffReminderTests(unittest.TestCase):
                     reminder["nextWakeup"]["reason"],
                 )
 
+    def test_real_progress_delays_human_stale_wakeup(self) -> None:
+        record = _handoff_record()
+        record["humanAssigned"] = True
+        record["meaningfulProgress"] = {
+            "status": "observed",
+            "at": "2026-08-25T10:00:00Z",
+            "basis": "human-comment",
+            "evidenceIds": ["issue:21:comment:101"],
+            "precision": "source-event",
+        }
+
+        derive_handoff_reminders([record], [], self.policy)
+
+        self.assertEqual(
+            {
+                "reason": "human-stale-progress",
+                "evaluateAt": "2026-09-01T10:00:00Z",
+            },
+            record["nextWakeup"],
+        )
+        self.assertEqual(1, record["handoffReminder"]["ordinal"])
+        self.assertEqual("human-owned", record["handoffReminder"]["state"])
+
+    def test_real_progress_defers_unowned_reminder_without_consuming_ordinal(self) -> None:
+        record = _handoff_record()
+        record["humanAssigned"] = False
+        record["meaningfulProgress"] = {
+            "status": "observed",
+            "at": "2026-08-25T10:00:00Z",
+            "basis": "human-comment",
+            "evidenceIds": ["issue:21:comment:101"],
+            "precision": "source-event",
+        }
+        events = [_terminal("executed", ordinal=1)]
+
+        derive_handoff_reminders([record], events, self.policy)
+
+        self.assertEqual(
+            {
+                "reason": "escalation-reminder",
+                "evaluateAt": "2026-08-26T10:00:00Z",
+            },
+            record["nextWakeup"],
+        )
+        self.assertEqual(2, record["handoffReminder"]["ordinal"])
+        self.assertEqual("pending", record["handoffReminder"]["state"])
+        self.assertFalse(record["humanAssigned"])
+
+    def test_updated_at_is_not_an_accepted_progress_basis(self) -> None:
+        record = _handoff_record()
+        record["meaningfulProgress"] = {
+            "status": "observed",
+            "at": "2026-08-25T10:00:00Z",
+            "basis": "issue-updated-at",
+            "evidenceIds": ["issue:21"],
+            "precision": "source-event",
+        }
+
+        with self.assertRaisesRegex(ValueError, "progress basis"):
+            derive_handoff_reminders([record], [], self.policy)
+
+    def test_progress_wakeup_is_stable_on_replay_and_becomes_due(self) -> None:
+        record = _handoff_record()
+        record["meaningfulProgress"] = {
+            "status": "observed",
+            "at": "2026-08-25T10:00:00Z",
+            "basis": "human-comment",
+            "evidenceIds": ["issue:21:comment:101"],
+            "precision": "source-event",
+        }
+        events = [_terminal("executed", ordinal=1)]
+        with TemporaryDirectory() as directory:
+            state_directory = Path(directory)
+            for _ in range(2):
+                derive_handoff_reminders([record], events, self.policy)
+                wakeup = record["nextWakeup"]
+                record_review_wakeup(
+                    state_directory,
+                    "owner/repo",
+                    target_kind="issue",
+                    target_number=21,
+                    evaluate_at=wakeup["evaluateAt"],
+                    reason=wakeup["reason"],
+                )
+            for instant, expected in (
+                ("2026-08-26T09:59:59Z", []),
+                ("2026-08-26T10:00:00Z", [21]),
+            ):
+                with self.subTest(instant=instant):
+                    schedule = load_review_schedule(
+                        state_directory,
+                        "owner/repo",
+                        instant,
+                        issue_numbers=[21],
+                        pull_request_numbers=[],
+                    )
+                    self.assertEqual(expected, schedule["dueIssueNumbers"])
+            rows = read_ledger_rows(state_directory / "ledgers" / "review-wakeups.jsonl")
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual(2, record["handoffReminder"]["ordinal"])
+        self.assertEqual("pending", record["handoffReminder"]["state"])
+
     def test_review_event_does_not_consume_transactional_wakeup(self) -> None:
         with TemporaryDirectory() as directory:
             state_directory = Path(directory)

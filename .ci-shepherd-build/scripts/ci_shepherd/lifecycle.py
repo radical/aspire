@@ -10,10 +10,11 @@ from typing import Any, Mapping
 from ci_shepherd.investigations import _fingerprint
 from ci_shepherd.models import (
     WORKFLOW_LOG_FACT_FIELDS, WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT,
-    stable_json, validate_workflow_log_payload,
+    stable_json, validate_issue_body_payload, validate_workflow_log_payload,
 )
 from ci_shepherd.observations import build_observations, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue
 from ci_shepherd.policy import load_policy
+from ci_shepherd.quarantine_reconciliation import add_test_maintenance_context
 from ci_shepherd.run_scope import verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 
@@ -67,6 +68,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "createdAt",
         "updatedAt",
         "author",
+        "authorType",
         "markers",
         "facts",
         "references",
@@ -285,6 +287,7 @@ def prepare_assessment(
     if isinstance(repository_policy, Mapping):
         prepared["repositoryPolicy"] = dict(repository_policy)
         prepared["repositoryPolicyDigest"] = repository_policy.get("digest")
+    add_test_maintenance_context(prepared, snapshot)
     return prepared
 
 
@@ -542,8 +545,15 @@ def _compact_payload(evidence_id: str, record: Mapping[str, Any]) -> dict[str, A
         for field in fields
         if field in payload
     }
-    if kind == "issue-comment" and isinstance(payload.get("body"), str):
-        compact["body"] = payload["body"][:2_000]
+    if kind in {"issue-event", "issue-comment"}:
+        validate_issue_body_payload(payload, limit=None)
+        if isinstance(payload.get("body"), str):
+            body = payload["body"]
+            limit = 4_000 if kind == "issue-event" else 2_000
+            compact["body"] = body[:limit]
+            compact["bodyTruncated"] = len(body) > limit
+            # Changes beyond the preview must wake a needs-evidence investigation.
+            compact["bodyFingerprint"] = _fingerprint(body)
     if kind == "issue-event" and isinstance(payload.get("body"), str):
         body = payload["body"]
         dashboard_context: dict[str, Any] = {}
@@ -621,6 +631,9 @@ def _compact_payload(evidence_id: str, record: Mapping[str, Any]) -> dict[str, A
         ]
     if kind == "source-path" and isinstance(payload.get("recentCommits"), list):
         compact["recentCommits"] = payload["recentCommits"][:3]
+    if kind == "source-path" and isinstance(payload.get("quarantinedTests"), list):
+        compact["quarantinedTests"] = copy.deepcopy(payload["quarantinedTests"][:20])
+        compact["quarantineTestsTruncated"] = len(payload["quarantinedTests"]) > 20
     if kind == "issue-event" and isinstance(payload.get("supportingSearch"), dict):
         search = payload["supportingSearch"]
         compact["supportingSearch"] = {

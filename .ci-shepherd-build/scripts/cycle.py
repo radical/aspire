@@ -69,6 +69,7 @@ from ci_shepherd.quarantine_reconciliation import (
 )
 from ci_shepherd.repository_policy import load_embedded_repository_policy
 from ci_shepherd.review_selection import build_review_selection
+from ci_shepherd.run_report import render_run_markdown
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 from collect import collect
 from expand import expand_files
@@ -526,6 +527,7 @@ def start_cycle(
     repository_policy_path: Path = DEFAULT_REPOSITORY_POLICY_PATH,
     max_comments: int = 5,
 ) -> dict[str, object]:
+    started_at = format_utc_z(datetime.now(UTC))
     _ensure_separate_directories(state_dir, work_dir)
     if work_dir.exists() and any(work_dir.iterdir()):
         raise ValueError(f"Cycle work directory is not empty: {work_dir}")
@@ -724,6 +726,7 @@ def start_cycle(
     )
     manifest: dict[str, object] = {
         "schemaVersion": 1,
+        "startedAt": started_at,
         "repository": repository,
         "snapshotId": prepared["snapshotId"],
         "stateDirectory": str(state_dir.expanduser().resolve(strict=False)),
@@ -844,7 +847,9 @@ def finish_cycle(
     quarantine_reconciliation = reconcile_quarantine_source(
         prepared,
         (
-            collect_quarantine_source_state(
+            snapshot["quarantineSourceState"]
+            if "quarantineSourceState" in snapshot
+            else collect_quarantine_source_state(
                 Path(checkout_value) if isinstance(checkout_value, str) else None,
                 labeled_test_names,
             )
@@ -1076,7 +1081,37 @@ def finish_cycle(
         + "\n"
         + render_managed_item_coverage_section(managed_coverage)
     )
-    _write_private_text(paths["report"], report_markdown)
+    audit_report_path = work_dir / "report-details.md"
+    _write_private_text(audit_report_path, report_markdown)
+    report_as_of = format_utc_z(datetime.now(UTC))
+    recording_windows = []
+    if manifest.get("startedAt") is not None:
+        recording_windows.append({
+            "label": "Cycle start to decision projection",
+            "startedAt": manifest["startedAt"], "completedAt": report_as_of,
+        })
+    report_markdown = render_run_markdown(
+        snapshot, prepared, final_judgments,
+        review_selection=review_selection,
+        pull_request_review=pull_request_handoff,
+        pull_request_judgments=pull_request_judgments,
+        investigation_plan=investigation_plan,
+        investigation_results=read_investigation_results(state_dir),
+        investigation_sessions=read_investigation_session_events(state_dir),
+        action_events=ActionEventStore(state_dir).events(repository=repository),
+        prior_snapshot=_previous_context(state_dir, repository)[1],
+        as_of=report_as_of,
+        recording_windows=recording_windows,
+        pre_expansion_review_selection=(
+            _load_json(work_dir / "review-selection.pre-expansion.json", "pre-expansion review selection")
+            if (work_dir / "review-selection.pre-expansion.json").is_file() else None
+        ),
+        pre_expansion_pull_request_review=(
+            _load_json(work_dir / "pull-request-review.pre-expansion.json", "pre-expansion pull request handoff")
+            if (work_dir / "pull-request-review.pre-expansion.json").is_file() else None
+        ),
+    )
+    _write_private_text(paths["report"], report_markdown.rstrip() + "\n\n[Audit details](report-details.md)\n")
     dry_run = build_dry_run(proposals, action_id=None)
     _write_private_json(paths["dryRun"], dry_run)
 
@@ -1087,6 +1122,7 @@ def finish_cycle(
         judgments_path=paths["judgments"],
         report_path=paths["report"],
         artifact_paths=[
+            audit_report_path,
             paths["compact"],
             paths["defaults"],
             paths["selection"],
@@ -1174,6 +1210,7 @@ def finish_cycle(
     )
     completed = {
         **manifest,
+        "decisionProjectedAt": report_as_of,
         "stage": "completed",
         "coordinatorStage": _coordinator_stage(
             coordinator_projection,

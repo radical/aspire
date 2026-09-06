@@ -803,6 +803,7 @@ class PrototypeScriptTests(unittest.TestCase):
                     changed_files=4,
                 ),
             ),
+            pull_request_sources={101: {"headSha": "current-head"}},
             issues=(
                 DelegatedIssue(
                     number=42,
@@ -843,6 +844,10 @@ class PrototypeScriptTests(unittest.TestCase):
             )
 
         self.assertEqual("completed", status["records"][0]["lifecycle"])
+        self.assertEqual(
+            {"headSha": "current-head"},
+            status["records"][0]["pullRequests"][0]["progressSource"],
+        )
         self.assertEqual((), retired_task_ids)
 
     def test_terminal_handoff_retires_after_issue_closure_or_unassignment(
@@ -963,6 +968,7 @@ class PrototypeScriptTests(unittest.TestCase):
                 observation = SimpleNamespace(
                     tasks=(task,),
                     pull_requests=(pull_request,),
+                    pull_request_sources={},
                     issues=(
                         DelegatedIssue(
                             number=42,
@@ -1002,6 +1008,7 @@ class PrototypeScriptTests(unittest.TestCase):
             inventory,
             [
                 {
+                    "actionId": "action:75",
                     "issueNumber": 75,
                     "pullRequests": [{"number": 80}],
                 }
@@ -1133,6 +1140,7 @@ class PrototypeScriptTests(unittest.TestCase):
                     "derive_delegation_tracking",
                     return_value=(
                         {
+                            "actionId": "action:75",
                             "issueNumber": 75,
                             "requiresHuman": True,
                             "pullRequests": [],
@@ -4409,6 +4417,48 @@ class PrototypeScriptTests(unittest.TestCase):
             )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_render_run_cli_joins_companions_without_treating_decisions_as_effects(self) -> None:
+        render_script = load_script("render")
+        scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
+        scratch.mkdir(parents=True, exist_ok=True)
+        prepared = poc_prepared([(1, "Failure")])
+        judgments = poc_judgments(
+            prepared, [(1, "flaky-test", "no-action", "issue", 1, "high", [], "New evidence.")],
+        )
+        artifacts = {
+            "assessment-input.json": prepared,
+            "judgments.json": judgments,
+            "input.json": {"repository": "owner/repo", "issues": [{"number": 1, "title": "Failure"}]},
+            "review-selection.json": {"selected": [{"issueNumber": 1, "changeClass": "new"}]},
+            "invocation.json": {
+                "scope": "whole-invocation",
+                "runId": "invocation:one", "startedAt": "2026-09-05T12:00:00Z",
+                "completedAt": "2026-09-05T12:02:00Z",
+            },
+        }
+        try:
+            for name, value in artifacts.items():
+                (scratch / name).write_text(json.dumps(value), encoding="utf-8")
+            (scratch / "report-details.md").write_text("Audit detail.", encoding="utf-8")
+            with patch.object(sys, "argv", [
+                "render.py", "--run-report",
+                "--prepared", str(scratch / "assessment-input.json"),
+                "--judgments", str(scratch / "judgments.json"),
+                "--snapshot", str(scratch / "input.json"),
+                "--invocation", str(scratch / "invocation.json"),
+                "--output", str(scratch / "operator" / "report.md"),
+            ]), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, render_script.main())
+            markdown = (scratch / "operator" / "report.md").read_text(encoding="utf-8")
+            self.assertIn("[Full collection audit](../report-details.md)", markdown)
+            self.assertIn("## Flaky / failing test issues", markdown)
+            self.assertIn("🆕 New; reviewed this run", markdown)
+            self.assertIn("0 executed effects", markdown)
+            self.assertIn("No executed action recorded", markdown)
+            self.assertIn("**Whole invocation duration:** 2m", markdown)
+        finally:
+            shutil.rmtree(scratch)
 
     def test_render_script_produces_deterministic_markdown_for_every_decision(self) -> None:
         render_script = load_script("render")

@@ -849,10 +849,10 @@ class PocValidationTests(unittest.TestCase):
         issue = build_compact_poc_input(prepared)["issues"][0]
 
         self.assertEqual(
-            ("flaky-test", "no-action"),
+            ("flaky-test", "investigate"),
             _category_and_disposition(issue["defaultJudgment"]),
         )
-        self.assertFalse(issue["reviewRequired"])
+        self.assertTrue(issue["reviewRequired"])
 
     def test_quarantined_test_label_is_read_from_the_primary_issue(self) -> None:
         prepared = _compact_prepared(
@@ -888,7 +888,7 @@ class PocValidationTests(unittest.TestCase):
         issue = build_compact_poc_input(prepared)["issues"][0]
 
         self.assertTrue(issue["alreadyQuarantined"])
-        self.assertFalse(issue["reviewRequired"])
+        self.assertTrue(issue["reviewRequired"])
 
     def test_related_quarantined_issue_does_not_suppress_the_primary_issue(self) -> None:
         prepared = _compact_prepared(

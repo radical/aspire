@@ -11,6 +11,7 @@ from ci_shepherd.investigations import derive_machine_actionability
 from ci_shepherd.lifecycle import delegation_context, prepare_assessment
 from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
+from ci_shepherd.quarantine_reconciliation import reconcile_quarantine_source
 from ci_shepherd.timeutils import parse_aware_iso8601
 
 
@@ -1597,6 +1598,12 @@ def _delegation_instructions(
             "unquarantine is a separately authorized change."
         )
     validation = "\n".join(f"- {command}" for command in handoff["validation"])
+    issue_reference = "Refs" if verified_context else "Fixes"
+    tracking_instructions = (
+        "Keep the tracking issue open for the separate unquarantine reliability window. "
+        "Use the fix-flaky-test skill to reproduce and validate the fix. "
+        if verified_context else ""
+    )
     return (
         f"Investigate and fix issue #{issue_number}. Make the smallest complete "
         "change that addresses the reported failure, add focused regression "
@@ -1605,7 +1612,8 @@ def _delegation_instructions(
         f"\n\nProblem: {handoff['problem']}\n"
         f"Likely paths: {', '.join(handoff['likelyPaths'])}\n"
         f"Validation:\n{validation}\n\n"
-        f"Open a draft pull request whose body includes `Fixes #{issue_number}`. "
+        f"Open a draft pull request whose body includes `{issue_reference} #{issue_number}`. "
+        f"{tracking_instructions}"
         "If the issue cannot be fixed from the available evidence, keep the pull "
         "request in draft and clearly record the missing evidence or human "
         "decision needed."
@@ -1623,6 +1631,8 @@ def build_action_proposals(
 ) -> dict[str, object]:
     if not isinstance(snapshot, dict):
         raise TypeError("Snapshot must be an object.")
+    if quarantine_reconciliation is None and "quarantineSourceState" in snapshot:
+        quarantine_reconciliation = reconcile_quarantine_source(prepared, snapshot["quarantineSourceState"])
     open_issue_numbers = frozenset(
         int(issue_number)
         for issue_number in snapshot.get("openIssues", [])
@@ -1716,6 +1726,7 @@ def build_action_proposals(
         recovery = frozen_issues.get(issue_number, {}).get("recovery", {})
         has_recovery = (
             recovery.get("status") == "verified"
+            and frozen_issues.get(issue_number, {}).get("testMaintenance", {}).get("state") != "quarantined"
             and recovery == prepared_issue.get("recovery")
             and all(
                 compact_issue.get("recovery", recovery).get(key) == recovery.get(key)
@@ -1728,6 +1739,7 @@ def build_action_proposals(
             status_recommendation is not None
             and status_recommendation["disposition"] == "review-close"
             and (is_duplicate or has_recovery)
+            and frozen_issues.get(issue_number, {}).get("testMaintenance", {}).get("state") != "quarantined"
         )
         if delegation_recommendation is not None and closure_supersedes_delegation:
             blocked_recommendations.append(

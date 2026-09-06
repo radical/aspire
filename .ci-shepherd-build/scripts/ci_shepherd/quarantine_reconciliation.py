@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
 import re
 from pathlib import Path
 import json
@@ -48,6 +49,95 @@ _LABEL_HUMAN_ACTION = (
     "Confirm whether this test should be quarantined. Either quarantine it "
     f"against this issue or remove the `{QUARANTINE_LABEL}` label."
 )
+
+
+def freeze_quarantine_source(
+    snapshot: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+    source_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Freeze inspected quarantine targets as citable, issue-scoped source evidence."""
+    frozen = copy.deepcopy(dict(snapshot))
+    frozen["quarantineSourceState"] = copy.deepcopy(source_state)
+    reconciliation = reconcile_quarantine_source(prepared, source_state)
+    by_path: dict[str, list[dict[str, Any]]] = {}
+    for issue in reconciliation["verifiedIssues"]:
+        for test in issue["tests"]:
+            path = _quarantine_source_path(test["file"])
+            by_path.setdefault(path, []).append({
+                "issueNumber": issue["issueNumber"],
+                "testName": test["testName"], "line": test["line"],
+            })
+    for path, tests in sorted(by_path.items()):
+        evidence_id = f"source:{path}"
+        previous = frozen["evidence"].get(evidence_id, {})
+        payload = previous.get("payload", {})
+        references = [
+            *payload.get("referencedBy", []),
+            *({"sourceIssueNumber": number, "sourceEvidenceId": f"issue:{number}"}
+              for number in sorted({test["issueNumber"] for test in tests})),
+        ]
+        url = f"https://github.com/{snapshot['repository']}/blob/{reconciliation['sourceRevision']}/{path}"
+        frozen["evidence"][evidence_id] = {
+            "kind": "source-path", "url": url,
+            "collectedAt": snapshot["collectedAt"], "availability": "available",
+            "payload": {
+                **payload, "path": path, "exists": True,
+                "checkoutCommit": reconciliation["sourceRevision"],
+                "sourceUrl": url, "referencedBy": references,
+                "quarantinedTests": sorted(tests, key=lambda test: (test["issueNumber"], test["testName"])),
+            },
+        }
+    return frozen
+
+
+def add_test_maintenance_context(prepared: dict[str, Any], snapshot: Mapping[str, Any]) -> None:
+    """Classify source-confirmed quarantine independently of recurrence evidence."""
+    reconciliation = reconcile_quarantine_source(prepared, snapshot.get("quarantineSourceState"))
+    verified = {issue["issueNumber"]: issue for issue in reconciliation["verifiedIssues"]}
+    findings = {issue["issueNumber"]: issue for issue in reconciliation["findings"]}
+    labeled = {issue["issueNumber"] for issue in _labeled_issues(prepared)}
+    for issue in prepared["issues"]:
+        number = issue["issueNumber"]
+        if number not in labeled:
+            continue
+        source = verified.get(number)
+        if source is None:
+            issue["testMaintenance"] = {
+                "state": "quarantine-mismatch" if number in findings else "unverified-quarantine",
+                "reason": findings[number]["kind"] if number in findings else "source-inspection-unavailable",
+                "tests": [], "evidenceIds": [], "evidenceComplete": False,
+            }
+            continue
+        tests = [
+            {**test, "path": _quarantine_source_path(test["file"])}
+            for test in source["tests"]
+        ]
+        evidence_ids = sorted({f"issue:{number}", *(f"source:{test['path']}" for test in tests)})
+        bundle = {record["id"]: record for record in issue["evidenceBundle"]}
+        complete = all(bundle.get(eid, {}).get("availability") == "available" for eid in evidence_ids)
+        for test in tests:
+            payload = bundle.get(f"source:{test['path']}", {}).get("payload", {})
+            complete = complete and (
+                payload.get("checkoutCommit") == reconciliation["sourceRevision"]
+                and payload.get("quarantineTestsTruncated") is not True
+                and payload.get("exists") is True
+                and {"issueNumber": number, "testName": test["testName"], "line": test["line"]}
+                in payload.get("quarantinedTests", [])
+            )
+        issue["testMaintenance"] = {
+            "state": "quarantined", "tests": tests, "evidenceIds": evidence_ids,
+            "evidenceComplete": complete,
+            "sourceRevision": reconciliation["sourceRevision"],
+            "sourceTreeDigest": reconciliation["sourceTreeDigest"],
+            "inspectorTreeDigest": reconciliation["inspectorTreeDigest"],
+        }
+
+
+def _quarantine_source_path(file: str) -> str:
+    if "\\" in file or ":" in file or any(part in {"", ".", ".."} for part in file.split("/")):
+        raise ValueError("Quarantine inspection must contain repository-relative source paths.")
+    return file if file.startswith("tests/") else f"tests/{file}"
 
 
 def reconcile_quarantine_source(

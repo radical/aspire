@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
 from ci_shepherd.repository_policy import HandoffReminderPolicy
+from ci_shepherd.meaningful_progress import validate_meaningful_progress
 
 
 def derive_handoff_reminders(
@@ -41,6 +42,14 @@ def derive_handoff_reminders(
         delivered = _delivered_ordinals(terminals, episode_id, issue_number)
         ordinal = max(delivered, default=0) + 1
         last_delivery = _latest_delivery(terminals, episode_id, issue_number)
+        progress = record.get("meaningfulProgress")
+        if progress is not None:
+            validate_meaningful_progress(progress)
+        progress_at = (
+            _parse_timestamp(progress["at"])
+            if isinstance(progress, Mapping) and progress.get("status") == "observed"
+            else None
+        )
         human_takeover = (
             record.get("humanAssigned") is True
             or any(
@@ -54,6 +63,8 @@ def derive_handoff_reminders(
 
         if human_takeover:
             base = last_delivery or _parse_timestamp(handoff_started_at)
+            if progress_at is not None:
+                base = max(base, progress_at)
             wakeup = _wakeup(
                 base + policy.stale_progress_interval,
                 "human-stale-progress",
@@ -65,8 +76,13 @@ def derive_handoff_reminders(
             state = "operator-escalation"
         else:
             base = last_delivery or _parse_timestamp(handoff_started_at)
+            due = base + policy.interval if last_delivery is not None else base
+            if progress_at is not None:
+                # A human response delays the same reminder; it does not prove
+                # takeover or consume an ordinal without an executed effect.
+                due = max(due, progress_at + policy.interval)
             wakeup = _wakeup(
-                base + policy.interval if last_delivery is not None else base,
+                due,
                 "escalation-reminder",
             )
             state = "pending"

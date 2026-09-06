@@ -11,6 +11,7 @@ from .repository_policy import (
     load_embedded_repository_policy,
 )
 from .poc_state import REVIEW_WAKEUP_REASONS
+from .meaningful_progress import validate_meaningful_progress
 from .timeutils import parse_aware_iso8601
 
 
@@ -353,6 +354,9 @@ def validate_snapshot(snapshot: object) -> None:
     _validate_repository_policy_identity(mapping)
     _validate_expansion_manifests(mapping)
     _validate_delegation_status(mapping.get("delegationStatus"))
+    for pull in mapping.get("pullRequests", []):
+        if isinstance(pull, Mapping) and "meaningfulProgress" in pull:
+            _validate_progress(pull["meaningfulProgress"])
 
 
 def _validate_delegated_inventory(
@@ -435,6 +439,13 @@ def _validate_inventory_details(
         )
 
 
+def _validate_progress(value: object) -> None:
+    try:
+        validate_meaningful_progress(value)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+
+
 def _validate_delegation_status(value: object) -> None:
     if value is None:
         return
@@ -471,11 +482,14 @@ def _validate_delegation_status(value: object) -> None:
                 "handoffReminder",
                 "nextWakeup",
                 "pullRequests",
+                "meaningfulProgress",
             },
             field,
         )
         _require_nonempty_string(record, "actionId")
         _require_nonempty_string(record, "repository")
+        if "meaningfulProgress" in record:
+            _validate_progress(record["meaningfulProgress"])
         issue_number = record.get("issueNumber")
         if (
             not isinstance(issue_number, int)
@@ -608,6 +622,7 @@ def _validate_delegation_status(value: object) -> None:
                     "isDraft",
                     "changedFiles",
                     "humanAuthored",
+                    "progressSource",
                 },
                 pull_field,
             )
@@ -654,6 +669,13 @@ def _validate_delegation_status(value: object) -> None:
                 raise ValidationError(
                     f"{pull_field}.humanAuthored must be a boolean when supplied."
                 )
+            if "progressSource" in pull:
+                source = _require_mapping(pull["progressSource"], f"{pull_field}.progressSource")
+                if set(source) != {"headSha"} or (
+                    source["headSha"] is not None
+                    and (not isinstance(source["headSha"], str) or not source["headSha"].strip())
+                ):
+                    raise ValidationError(f"{pull_field}.progressSource requires a nonempty headSha or null.")
     episode_ordinals_value = status.get("episodeOrdinals")
     if episode_ordinals_value is not None:
         episode_ordinals = _require_mapping(
@@ -2869,6 +2891,21 @@ def _load_snapshot_evidence(snapshot: Mapping[str, Any]) -> dict[str, dict[str, 
     return loaded
 
 
+def validate_issue_body_payload(payload: Mapping[str, Any], *, limit: int | None) -> None:
+    if payload.get("body") is not None and (
+        not isinstance(payload["body"], str)
+        or (limit is not None and len(payload["body"]) > limit)
+    ):
+        raise ValidationError("issue body must be a string within its display bound.")
+    if "bodyTruncated" in payload and type(payload["bodyTruncated"]) is not bool:
+        raise ValidationError("issue bodyTruncated must be a boolean.")
+    if "bodyFingerprint" in payload and (
+        not isinstance(payload["bodyFingerprint"], str)
+        or re.fullmatch(r"fnv1a64:[0-9a-f]{16}", payload["bodyFingerprint"]) is None
+    ):
+        raise ValidationError("issue bodyFingerprint is malformed.")
+
+
 def validate_workflow_log_payload(payload: Mapping[str, Any], *, bounded: bool) -> None:
     for field in ("truncated", "excerptTruncated", "errorMessageTruncated", "factsTruncated"):
         if field in payload and type(payload[field]) is not bool:
@@ -2934,6 +2971,8 @@ def _validate_evidence_record(evidence_id: object, record: object) -> dict[str, 
     if not isinstance(payload, Mapping):
         raise ValidationError(f"Evidence {evidence_id_text} must include a payload object.")
     payload_mapping = dict(payload)
+    if kind in {"issue-event", "issue-comment"}:
+        validate_issue_body_payload(payload_mapping, limit=None)
     if kind == "workflow-log":
         validate_workflow_log_payload(payload_mapping, bounded=False)
     _optional_evidence_role(payload_mapping)

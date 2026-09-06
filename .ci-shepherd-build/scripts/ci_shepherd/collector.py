@@ -4895,6 +4895,7 @@ def _normalize_comments(raw_comments: object) -> list[dict[str, Any]]:
             comment_id = raw_comment.get("id")
             if not isinstance(comment_id, int) or isinstance(comment_id, bool):
                 continue
+            author_type = _nested_text(raw_comment, ("user", "type"))
             comments.append(
                 {
                     "id": comment_id,
@@ -4902,6 +4903,7 @@ def _normalize_comments(raw_comments: object) -> list[dict[str, Any]]:
                     "createdAt": _text(raw_comment, "created_at"),
                     "updatedAt": _text(raw_comment, "updated_at"),
                     "author": _nested_text(raw_comment, ("user", "login")),
+                    **({"authorType": author_type} if author_type else {}),
                     "body": _text(raw_comment, "body"),
                 }
             )

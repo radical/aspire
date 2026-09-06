@@ -390,7 +390,7 @@ class CycleTests(unittest.TestCase):
             )
             self.assertEqual([], policy_selection["selectedActionIds"])
             self.assertFalse(policy_selection.get("mutationBlocked", False))
-            report = (work / "report.md").read_text(encoding="utf-8")
+            report = (work / "report-details.md").read_text(encoding="utf-8")
             self.assertIn("## Managed active-item coverage", report)
             self.assertIn("verified workflow-run scope is unknown", report)
             first_coverage = (work / "managed-item-coverage.json").read_bytes()
@@ -1022,11 +1022,11 @@ class CycleTests(unittest.TestCase):
             self.assertEqual([], proposals["proposals"])
             self.assertIn(
                 "## Quarantine source reconciliation",
-                (work / "report.md").read_text(encoding="utf-8"),
+                (work / "report-details.md").read_text(encoding="utf-8"),
             )
             self.assertIn(
                 "could not be verified against source: #1",
-                (work / "report.md").read_text(encoding="utf-8"),
+                (work / "report-details.md").read_text(encoding="utf-8"),
             )
 
     def test_fails_closed_when_quarantine_source_inspection_is_unavailable(self) -> None:
@@ -1103,7 +1103,7 @@ class CycleTests(unittest.TestCase):
             )
             self.assertIn(
                 "source-inspection-unavailable",
-                (work / "report.md").read_text(encoding="utf-8"),
+                (work / "report-details.md").read_text(encoding="utf-8"),
             )
 
     def test_fails_closed_when_observation_generation_is_invalid(self) -> None:
@@ -1645,7 +1645,7 @@ class CycleTests(unittest.TestCase):
                 },
                 proposals["productionPilotCapability"],
             )
-            report = (first_work / "report.md").read_text(encoding="utf-8")
+            report = (first_work / "report-details.md").read_text(encoding="utf-8")
             self.assertIn("## Legacy production comment pilot selection", report)
             self.assertIn(
                 "## Autonomous policy selection at cycle finalization",
@@ -1690,7 +1690,7 @@ class CycleTests(unittest.TestCase):
             self.assertEqual("completed", unchanged["stage"])
             self.assertEqual(0, unchanged["issueReviewCount"])
             self.assertEqual(2, len(list((state / "runs").iterdir())))
-            unchanged_report = (second_work / "report.md").read_text(encoding="utf-8")
+            unchanged_report = (second_work / "report-details.md").read_text(encoding="utf-8")
             self.assertNotIn("Unclassified CI failure", unchanged_report)
             self.assertIn(
                 "**Carried forward unchanged cases:** 1",
@@ -1963,7 +1963,7 @@ class CycleTests(unittest.TestCase):
                 ],
             )
             self.assertIn(
-                "### Needs human",
+                "Human input:",
                 (second_work / "report.md").read_text(encoding="utf-8"),
             )
 
@@ -2112,9 +2112,10 @@ class CycleTests(unittest.TestCase):
             self.assertEqual([], judgments["pullRequests"])
             report = (second_work / "report.md").read_text(encoding="utf-8")
             self.assertIn(
-                "0 selected; 1 excluded (`unchanged-stable`: 1)",
+                "0 PRs assessed",
                 report,
             )
+            self.assertIn("unchanged-stable", report)
 
     def test_interrupted_started_cycle_does_not_advance_current_state(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
@@ -2278,7 +2279,7 @@ class CycleTests(unittest.TestCase):
                 agent_judgments_path=agent_judgments,
             )
 
-            report = (work / "report.md").read_text(encoding="utf-8")
+            report = (work / "report-details.md").read_text(encoding="utf-8")
             self.assertIn("## Collection completeness", report)
             self.assertIn("**Open bot scan:** `failed`", report)
             self.assertIn("**Collection errors:** 1", report)
@@ -2336,7 +2337,7 @@ class CycleTests(unittest.TestCase):
                 agent_judgments_path=agent_judgments,
             )
 
-            report = (work / "report.md").read_text(encoding="utf-8")
+            report = (work / "report-details.md").read_text(encoding="utf-8")
             self.assertIn("**Open bot scan:** `truncated`", report)
             self.assertIn("page budget was exhausted", report)
 

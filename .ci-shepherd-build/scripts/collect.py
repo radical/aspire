@@ -23,6 +23,10 @@ from ci_shepherd.github import GitHubClient
 from ci_shepherd.history import load_current
 from ci_shepherd.handoff_reminders import derive_handoff_reminders
 from ci_shepherd.models import stable_json, validate_snapshot
+from ci_shepherd.meaningful_progress import attach_meaningful_progress
+from ci_shepherd.lifecycle import prepare_assessment
+from ci_shepherd.quarantine import collect_quarantine_source_state
+from ci_shepherd.quarantine_reconciliation import freeze_quarantine_source, quarantine_labeled_test_names
 from ci_shepherd.progress import ProgressTracker
 from ci_shepherd.poc_state import record_review_wakeup
 from ci_shepherd.refresh import COLLECTION_VERSION, RefreshPlan, complete_refresh_plan
@@ -176,6 +180,11 @@ def observe_delegation_status(
         if record.get("taskId") in active_task_ids
         or record.get("taskId") is None
     ]
+    for record in tracking_records:
+        for pull in record.get("pullRequests", []):
+            source = observation.pull_request_sources.get(pull["databaseId"])
+            if source is not None:
+                pull["progressSource"] = dict(source)
     episode_ordinals: dict[str, int] = {}
     for start in starts:
         if start.issue_number is None:
@@ -385,6 +394,7 @@ def collect(
             "status": "complete",
             "records": [],
         }
+        events = []
         if state_dir is not None and state_dir.exists():
             event_store = ActionEventStore(state_dir)
             events = event_store.events(repository=repository)
@@ -396,17 +406,6 @@ def collect(
                         events=events,
                         now=now,
                     )
-                )
-                if repository_policy is not None:
-                    derive_handoff_reminders(
-                        list(delegation_status["records"]),
-                        events,
-                        repository_policy.handoff_reminders,
-                    )
-                record_delegation_wakeups(
-                    state_dir,
-                    repository,
-                    list(delegation_status["records"]),
                 )
                 if retired_task_ids:
                     event_store.append_delegation_retirements(
@@ -501,7 +500,31 @@ def collect(
             repository_policy=repository_policy,
             delegation_status=delegation_status,
         )
+        attach_meaningful_progress(snapshot, previous_snapshot, shepherd_author=shepherd_author)
+        if snapshot["delegationStatus"]["status"] == "complete" and repository_policy is not None:
+            derive_handoff_reminders(
+                snapshot["delegationStatus"]["records"], events, repository_policy.handoff_reminders,
+            )
+        prepared = prepare_assessment(snapshot)
+        labeled_test_names = quarantine_labeled_test_names(prepared)
+        if labeled_test_names is not None:
+            current_stage = "quarantine-source"
+            progress.update(current_stage, "started", message="Inspecting existing quarantine targets.")
+            snapshot = freeze_quarantine_source(
+                snapshot, prepared, collect_quarantine_source_state(checkout, labeled_test_names),
+            )
+            progress.update(
+                current_stage, "completed",
+                message=(
+                    "Quarantine source evidence captured."
+                    if snapshot["quarantineSourceState"] is not None
+                    else "Source inspection unavailable; quarantine targets remain unverified."
+                ),
+            )
+            current_stage = "write-artifacts"
         validate_snapshot(snapshot)
+        if state_dir is not None and snapshot["delegationStatus"]["status"] == "complete":
+            record_delegation_wakeups(state_dir, repository, snapshot["delegationStatus"]["records"])
         write_private(output_dir / "input.json", stable_json(snapshot))
         write_private(
             output_dir / "collection-errors.json",
