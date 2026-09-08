@@ -291,6 +291,16 @@ def prepare_assessment(
         prepared["repositoryPolicy"] = dict(repository_policy)
         prepared["repositoryPolicyDigest"] = repository_policy.get("digest")
     add_test_maintenance_context(prepared, snapshot)
+    source_state = snapshot.get("quarantineSourceState") or {}
+    source_revision = snapshot.get("sourceRevision")
+    if source_revision is not None:
+        if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+            raise ValueError("sourceRevision must be a full commit SHA.")
+        if source_state.get("sourceRevision", source_revision) != source_revision:
+            raise ValueError("Collected source revision changed during quarantine inspection.")
+        prepared["sourceRevision"] = source_revision
+        for candidate in candidates:
+            candidate["sourceRevision"] = source_revision
     return prepared
 
 

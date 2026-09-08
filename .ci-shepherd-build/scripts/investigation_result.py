@@ -41,6 +41,7 @@ def main() -> int:
                 _load_object(args.plan, "Investigation plan"),
                 args.investigation_id,
                 state_directory=args.state_dir,
+                prefer_recorded=True,
             ),
             _load_object(args.result, "Investigation result"),
             recorded_at=args.recorded_at,

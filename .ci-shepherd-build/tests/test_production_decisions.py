@@ -30,6 +30,7 @@ from ci_shepherd.repository_policy import HandoffReminderPolicy
 from tests.test_policy import ASPIRE_REPOSITORY_POLICY_PATH
 from ci_shepherd.repository_policy import load_repository_policy
 import cycle
+from tests.assessment_helpers import finish_reviewed_cycle
 from ci_shepherd.poc_state import load_review_schedule, record_review_wakeup
 from ci_shepherd.models import validate_snapshot
 from ci_shepherd.quarantine_reconciliation import freeze_quarantine_source
@@ -200,7 +201,7 @@ class QuarantinedRemediationPipelineTests(unittest.TestCase):
                     checkout=None, shepherd_author="ankj", input_path=frozen_path,
                 )
                 if started["stage"] == "awaiting-review":
-                    completed = cycle.finish_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+                    completed = finish_reviewed_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
                 else:
                     completed = started
             prepared = json.loads((work / "assessment-input.json").read_text())
@@ -916,7 +917,7 @@ class HandoffPipelineTests(unittest.TestCase):
                               work_dir=root / "work", checkout=None, shepherd_author="ankj", input_path=source)
             compact = json.loads((root / "work" / "assessment-defaults.json").read_text())
             self.assertTrue(compact["issues"][0]["delegationContext"]["decisionRequired"])
-            cycle.finish_cycle(work_dir=root / "work", agent_judgments_path=root / "work" / "agent-judgments.json")
+            finish_reviewed_cycle(work_dir=root / "work", agent_judgments_path=root / "work" / "agent-judgments.json")
             proposals = json.loads((root / "work" / "action-proposals.json").read_text())
             self.assertEqual(["create-comment"], [p["operation"] for p in proposals["proposals"]])
 
@@ -1156,7 +1157,7 @@ class NetworkFreeConvergenceTests(unittest.TestCase):
                 manifest = cycle.start_cycle(repository=value["repository"], state_dir=state, work_dir=work,
                                              checkout=None, shepherd_author="ankj", input_path=source)
                 if manifest["stage"] == "awaiting-review":
-                    cycle.finish_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+                    finish_reviewed_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
                 plan = json.loads((work / "investigation-plan.json").read_text())
                 proposals = json.loads((work / "action-proposals.json").read_text())
                 self.assertEqual([], plan["requests"])

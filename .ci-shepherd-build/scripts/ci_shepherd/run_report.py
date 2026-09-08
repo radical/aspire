@@ -190,6 +190,7 @@ def _investigation(
     results: list[Mapping[str, Any]],
     sessions: list[Mapping[str, Any]],
     repository: str,
+    launch_blockers: object = None,
 ) -> tuple[str, list[object], object, object]:
     requests = [
         row for key in ("requests", "deferredRequests", "activeInvestigations", "blockedAwaitingEvidence")
@@ -219,6 +220,20 @@ def _investigation(
         text = f"{prefix}; duration: {elapsed}; conclusion: {_text(result.get('outcome'))} — {_text(result.get('summary'))}"
         if result.get("validation"):
             text += "; validation: " + _text(result["validation"])
+        work = []
+        for entry in _rows(result.get("workLog")):
+            if entry.get("kind") == "source":
+                target = f"{_text(entry.get('path'))}:{entry.get('startLine')}-{entry.get('endLine')}"
+            elif entry.get("kind") == "github-get":
+                target = "GET " + _text(entry.get("url"))
+            elif entry.get("kind") == "command":
+                target = f"argv: {_text(str(entry.get('argv')))}; exit {_text(entry.get('exitCode'))}; output: {_text(entry.get('output'))}"
+            else:
+                target = _text(entry.get("evidenceId"))
+            work.append(f"{target} — {_text(entry.get('finding'))}")
+        if work:
+            text += "<br>**Worker-reported work** (advisory; not independently verified tool history):<br>"
+            text += "<br>".join(work)
         return text, list(result.get("missingEvidence", [])), result.get("reassessWhen"), result.get("sessionId")
     matching_sessions = [
         row for row in sessions if row.get("investigationId") in ids
@@ -232,6 +247,12 @@ def _investigation(
             return "⛔ Investigation ended without a recorded conclusion; duration: unknown", ["investigation-result-missing"], None, latest.get("sessionId")
     if any(row.get("issueNumber") == number for row in _rows(plan.get("activeInvestigations"))):
         return "🔄 Investigation running; duration: unknown; conclusion: pending", [], None, None
+    blockers = [
+        row.get("reason", row.get("detail", "Launch blocked without a recorded reason."))
+        for row in _rows(launch_blockers) if row.get("investigationId") in ids
+    ]
+    if blockers:
+        return "⛔ Investigation blocked before start; " + _text(blockers), blockers, None, None
     deferred = [row for row in _rows(plan.get("deferredRequests")) if row.get("issueNumber") == number]
     if deferred:
         return "⏸ Investigation deferred; not performed", [row.get("reason") for row in deferred], None, None
@@ -269,6 +290,7 @@ def _investigation_summary(description: str) -> tuple[str, str, str]:
     # "✅ Investigation completed; duration: 120s; conclusion: needs-evidence — ..."
     # The conclusion is opaque and may contain further semicolons.
     states = (
+        ("⛔ Investigation blocked before start", "launch-blocked"),
         ("✅ Investigation completed", "completed"),
         ("🔄 Investigation running", "running"),
         ("♻ Reused result", "reused"),
@@ -331,6 +353,8 @@ def _operational_state(
         if record.get("requiresHuman") is True or record.get("lifecycle") == "handoff_required":
             return "Waiting for human decision", record.get("nextWakeup")
     history_state, _, conclusion = _investigation_summary(history)
+    if history_state == "launch-blocked":
+        return "Investigation blocked before start", "Resolve the recorded launch blocker before starting the worker."
     outcome = conclusion.partition(" — ")[0]
     for lifecycle, label in (
         ("running", "Copilot fix in progress" if outcome == "fixable" else "Copilot task in progress"),
@@ -369,6 +393,7 @@ def _append_investigation_overview(
         "completed": "Evidence review finished", "running": "Evidence review in progress",
         "blocked": "Ended without a result", "reused": "Prior evidence review reused",
         "deferred": "Not started", "requested": "Not started",
+        "launch-blocked": "Launch blocked; not started",
     }
     active, deferred = [], []
     for row in rows:
@@ -390,7 +415,7 @@ def _append_investigation_overview(
             f"[Issue #{identity.removeprefix('issue-')}: {_short(title, 48)}](#{identity})",
             current_state, f"{states[state]}; duration: {duration}", summary,
         ]
-        (deferred if state in ("deferred", "requested") else active).append((state, output))
+        (deferred if state in ("deferred", "requested", "launch-blocked") else active).append((state, output))
     lines.extend(["## Investigations this run", ""])
     header = [
         "| Item | Current state | Investigation | Conclusion / next event |",
@@ -432,6 +457,7 @@ def _append_group(
             "completed": "✅ Investigated", "running": "🔄 Investigating",
             "blocked": "⛔ Investigation blocked", "reused": "♻ Reused investigation",
             "deferred": "⏸ Deferred", "requested": "🔎 Not started", "none": "⚪ No investigation",
+            "launch-blocked": "⛔ Investigation blocked before start",
         }[state]
         if conclusion:
             work += ": " + _short(conclusion.partition(" — ")[0], 50)
@@ -486,6 +512,8 @@ def render_run_markdown(
     audit_details_url: str | None = "report-details.md",
     pre_expansion_review_selection: Mapping[str, Any] | None = None,
     pre_expansion_pull_request_review: Mapping[str, Any] | None = None,
+    assessment_coverage: Mapping[str, Any] | None = None,
+    pre_expansion_assessment_coverage: Mapping[str, Any] | None = None,
 ) -> str:
     """Render projections only; callers supply canonical records and refresh time.
 
@@ -504,6 +532,34 @@ def render_run_markdown(
         for selection in (pre_expansion_review_selection, review_selection)
         for row in _rows((selection or {}).get("selected"))
     }
+    acknowledged_issues: set[int] = set()
+    acknowledged_prs: set[int] = set()
+    for coverage, selection, pr_review in (
+        (pre_expansion_assessment_coverage, pre_expansion_review_selection, pre_expansion_pull_request_review),
+        (assessment_coverage, review_selection, pull_request_review),
+    ):
+        selected_issues = {_number(row) for row in _rows((selection or {}).get("selected"))}
+        selected_prs = {_number(row) for row in _rows((pr_review or {}).get("tasks"))}
+        # Re-selected cases need the newer packet acknowledged; an old receipt
+        # cannot stand in for examining newly expanded evidence.
+        acknowledged_issues -= selected_issues
+        acknowledged_prs -= selected_prs
+        if coverage is None:
+            continue
+        expected_snapshot = (selection or {}).get("snapshotId", snapshot_id)
+        if coverage.get("snapshotId") != expected_snapshot or coverage.get("status") != "complete":
+            raise ValueError("Assessment coverage must match its completed handoff snapshot.")
+        for field, allowed, completed in (
+            ("completedIssueNumbers", selected_issues, acknowledged_issues),
+            ("completedPullRequestNumbers", selected_prs, acknowledged_prs),
+        ):
+            numbers = coverage.get(field)
+            if (
+                not isinstance(numbers, list) or any(type(number) is not int or number < 1 for number in numbers)
+                or len(set(numbers)) != len(numbers) or not set(numbers) <= allowed
+            ):
+                raise ValueError("Assessment coverage contains invalid or unselected cases.")
+            completed.update(numbers)
     metadata = {
         _number(row): row for field in ("delegatedIssueDetails", "issues")
         for row in _rows(snapshot.get(field))
@@ -570,7 +626,10 @@ def render_run_markdown(
         recommendations = _rows(judgment.get("recommendations"))
         selection = selected.get(number, {})
         tracking = tracking_by_issue.get(number) or _rows((assessment.get("delegationContext") or {}).get("records"))
-        investigation, missing, wake, investigator = _investigation(number, plan, results, sessions, repository)
+        investigation, missing, wake, investigator = _investigation(
+            number, plan, results, sessions, repository,
+            (invocation_window or {}).get("investigationBlockers"),
+        )
         if (review_selection is not None and number not in selected
                 and investigation == "⚪ No investigation recorded"
                 and ("issue", number) not in attempts and not tracking):
@@ -591,7 +650,11 @@ def render_run_markdown(
         url = item.get("html_url") or item.get("url") or assessment.get("issueUrl") or f"https://github.com/{repository}/issues/{number}"
         prior = selection.get("previousDisposition", previous.get(number, {}).get("state"))
         change = "🆕 New" if selection.get("changeClass") == "new" else "Existing"
-        review = "reviewed this run" if number in selected else "carried assessment" if judgment else "tracked; not reviewed this run"
+        review = (
+            "assessment acknowledged" if number in acknowledged_issues
+            else "selected; completion unverified" if number in selected
+            else "carried assessment" if judgment else "tracked; not reviewed this run"
+        )
         blockers = [*missing, *assessment.get("blockers", []), *assessment.get("missingPrerequisites", [])]
         blockers.extend(value for row in recommendations for value in row.get("missingEvidence", []))
         blockers.extend(row.get("outcome") for row in attempts.get(("issue", number), []) if row.get("outcome") != "executed")
@@ -674,7 +737,11 @@ def render_run_markdown(
         if source_state is not None:
             task["currentState"] = source_state
         judgment = pr_judgments.get(number, task.get("defaultJudgment") or {})
-        review = "reviewed this run" if number in tasks else "carried assessment" if judgment else "tracked; not reviewed this run"
+        review = (
+            "assessment acknowledged" if number in acknowledged_prs
+            else "selected; completion unverified" if number in tasks
+            else "carried assessment" if judgment else "tracked; not reviewed this run"
+        )
         progress = task.get("meaningfulProgress", inventory_prs.get(number, {}).get("meaningfulProgress")) or {}
         url = task.get("html_url") or task.get("url") or f"https://github.com/{repository}/pull/{number}"
         groups["Pull requests"].append([
@@ -699,7 +766,9 @@ def render_run_markdown(
     lines = [
         "# CI Shepherd run report", "",
         f"**{_text(repository)}** · report as of {_text(as_of)} · snapshot collected {_text(snapshot.get('collectedAt'))}",
-        f"**{len(effects)} executed effects** · {len(selected)} issues selected for review · {len(tasks)} PRs assessed", "",
+        f"**{len(effects)} executed effects recorded** · {len(selected)} issues selected for review · {len(tasks)} PRs selected for review",
+        f"{len(acknowledged_issues)} issues / {len(acknowledged_prs)} PRs with assessment acknowledgements.",
+        "Acknowledgements establish packet coverage, not independent proof of reasoning quality.", "",
         "Decisions are not actions. Investigated is not fixed. Green checks are not merge readiness.",
         "⚪ No action · 🆕 New · 🔄 Running · ✅ Evidence review finished · ⛔ Blocked · ⏸ Deferred · 👤 Human input", "",
         _collection_summary(snapshot, audit_details_url), "",
@@ -711,18 +780,17 @@ def render_run_markdown(
         f"{sum(cell.startswith('♻ Reused result') for cell in investigation_cells)} reused results.", "",
     ])
     window = invocation_window or {}
-    whole_invocation = window.get("scope") == "whole-invocation"
     window_duration = _duration(window.get("startedAt"), window.get("completedAt"))
     lines.extend([
-        f"**Whole invocation duration:** {window_duration if whole_invocation else 'unknown'}.",
+        "**Whole invocation duration:** unknown.",
+        "Recorded windows do not independently establish runtime session boundaries, even when declared whole-invocation.",
     ])
     if window:
         lines.append(
             f"Recorded {_text(window.get('scope') or 'invocation')} window: {window_duration} "
             f"(recorded start: {_text(window.get('startedAt'))}; recorded completion: {_text(window.get('completedAt'))})."
         )
-    if not whole_invocation:
-        lines.append("Setup/tail outside the recorded window: unknown, not zero.")
+    lines.append("Setup/tail outside the recorded window: unknown, not zero.")
     for window in recording_windows:
         duration = _duration(window.get("startedAt"), window.get("completedAt"))
         seconds = window.get("durationSeconds")

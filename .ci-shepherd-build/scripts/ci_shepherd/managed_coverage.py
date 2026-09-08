@@ -68,7 +68,17 @@ def build_managed_item_coverage(
         proposal["issueNumber"] for proposal in proposals.get("proposals", [])
         if proposal.get("actionId") in investigation_assignments
     }
-    investigations = _investigation_issue_numbers(investigation_plan)
+    investigations = {
+        reason: _investigation_issue_numbers(
+            investigation_plan, field, repository=repository,
+            snapshot_id=proposals.get("snapshotId"),
+        )
+        for reason, field in (
+            ("active-investigation", "activeInvestigations"),
+            ("queued-investigation", "requests"),
+            ("deferred-investigation", "deferredRequests"),
+        )
+    }
     awaiting_evidence = _issue_numbers(investigation_plan.get("blockedAwaitingEvidence"))
     scheduled_issues = _scheduled_numbers(review_schedule.get("issues"))
     scheduled_pull_requests = _scheduled_numbers(review_schedule.get("pullRequests"))
@@ -107,8 +117,9 @@ def build_managed_item_coverage(
             and delegation.get("lifecycle") not in {"completed", "closed_unmerged", "retired"}
         ):
             reasons.append("active-delegation")
-        if issue_number in investigations:
-            reasons.append("active-investigation")
+        for reason, numbers in investigations.items():
+            if issue_number in numbers:
+                reasons.append(reason)
         if issue_number in awaiting_evidence:
             reasons.append("blocked-awaiting-evidence")
         if issue_number in scheduled_issues or _has_typed_wakeup(delegation):
@@ -376,6 +387,8 @@ def _project_item(
         "active-delegation",
         "active-investigation",
         "blocked-awaiting-evidence",
+        "queued-investigation",
+        "deferred-investigation",
         "scheduled-wakeup",
     )
     selected = next(reason for reason in precedence if reason in unique)
@@ -458,26 +471,46 @@ def _has_typed_wakeup(delegation: Mapping[str, Any] | None) -> bool:
     )
 
 
-def _investigation_issue_numbers(plan: Mapping[str, Any]) -> set[int]:
-    return _issue_numbers(
-        [
-            *(
-                plan.get("requests")
-                if isinstance(plan.get("requests"), list)
-                else []
-            ),
-            *(
-                plan.get("deferredRequests")
-                if isinstance(plan.get("deferredRequests"), list)
-                else []
-            ),
-            *(
-                plan.get("activeInvestigations")
-                if isinstance(plan.get("activeInvestigations"), list)
-                else []
-            ),
-        ]
-    )
+def _investigation_issue_numbers(
+    plan: Mapping[str, Any], field: str, *, repository: str, snapshot_id: object,
+) -> set[int]:
+    # Only the current frozen plan establishes queued work. A bare issue number
+    # or an old plan is not an investigation and must not fill a coverage gap.
+    if (
+        not isinstance(snapshot_id, str) or not snapshot_id
+        or plan.get("snapshotId") != snapshot_id
+        or plan.get("repository") != repository
+    ):
+        return set()
+    rows = plan.get(field)
+    if not isinstance(rows, list):
+        return set()
+    result: set[int] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        number, identity, target = row.get("issueNumber"), row.get("investigationId"), row.get("target")
+        if (
+            type(number) is not int or number <= 0
+            or not isinstance(identity, str) or not identity
+            or not isinstance(target, Mapping)
+            or target.get("kind") not in {"issue", "test", "workflow-run", "failure-fingerprint"}
+            or (target.get("kind") == "issue" and (
+                type(target.get("value")) is not int or target.get("value") != number
+            ))
+            or (target.get("kind") != "issue" and not _nonempty(target.get("value")))
+        ):
+            continue
+        if field == "activeInvestigations":
+            # The plan producer derives this index only from the latest
+            # registered session events whose status is started.
+            active_ids = plan.get("activeInvestigationIds")
+            if not isinstance(active_ids, list) or identity not in active_ids:
+                continue
+        if field == "deferredRequests" and not _nonempty(row.get("reason")):
+            continue
+        result.add(number)
+    return result
 
 
 def _scheduled_numbers(value: object) -> set[int]:

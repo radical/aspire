@@ -7,6 +7,82 @@ from ci_shepherd.run_report import render_run_markdown
 
 
 class RunReportTests(unittest.TestCase):
+    def test_investigation_report_shows_work_and_observed_command_output(self) -> None:
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            investigation_plan={"requests": [{"issueNumber": 1, "investigationId": "inv:one"}]},
+            investigation_results=[{
+                "issueNumber": 1, "investigationId": "inv:one", "outcome": "inconclusive",
+                "summary": "The source needs a targeted reproduction.",
+                "recordedAt": "2026-09-05T12:01:00Z", "sourceRevision": "a" * 40,
+                "workLog": [
+                    {"kind": "source", "path": "example.py", "startLine": 1, "endLine": 2,
+                     "finding": "The function returns a constant."},
+                    {"kind": "command", "argv": ["python3", "example.py"], "exitCode": 0,
+                     "output": "Observed output: 1", "finding": "The approved reproduction completed."},
+                ],
+            }],
+        )
+        for text in ("example.py:1-2", "The function returns a constant.", "exit 0", "Observed output: 1"):
+            self.assertIn(text, report)
+        self.assertIn("Worker-reported work", report)
+
+    def test_frozen_launch_blocker_is_not_reported_as_running_or_only_planned(self) -> None:
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            investigation_plan={"requests": [{"issueNumber": 1, "investigationId": "inv:one"}]},
+            invocation_window={"investigationBlockers": [{
+                "investigationId": "inv:one", "reason": "Worker checkout could not be provisioned.",
+            }]},
+        )
+        self.assertIn("Investigation blocked before start", report)
+        self.assertIn("Worker checkout could not be provisioned.", report)
+
+    def test_completed_receipts_distinguish_acknowledgement_from_selection(self) -> None:
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            review_selection={"snapshotId": "snapshot:current", "selected": [{"issueNumber": 1}]},
+            assessment_coverage={
+                "snapshotId": "snapshot:current", "status": "complete",
+                "completedIssueNumbers": [1], "completedPullRequestNumbers": [],
+            },
+        )
+        self.assertIn("1 issues / 0 PRs with assessment acknowledgements", report)
+        self.assertIn("Existing; assessment acknowledged", report)
+
+    def test_stale_or_unselected_completion_receipts_cannot_claim_coverage(self) -> None:
+        for snapshot_id, completed in (("snapshot:other", [1]), ("snapshot:current", [2])):
+            with self.subTest(snapshot_id=snapshot_id, completed=completed), self.assertRaises(ValueError):
+                render_run_markdown(
+                    self.snapshot, self.prepared, self.judgments,
+                    review_selection={"snapshotId": "snapshot:current", "selected": [{"issueNumber": 1}]},
+                    assessment_coverage={
+                        "snapshotId": snapshot_id, "status": "complete",
+                        "completedIssueNumbers": completed, "completedPullRequestNumbers": [],
+                    },
+                )
+
+    def test_reselected_case_cannot_reuse_pre_expansion_completion(self) -> None:
+        selection = {"snapshotId": "snapshot:current", "selected": [{"issueNumber": 1}]}
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            review_selection=selection, pre_expansion_review_selection=selection,
+            pre_expansion_assessment_coverage={
+                "snapshotId": "snapshot:current", "status": "complete",
+                "completedIssueNumbers": [1], "completedPullRequestNumbers": [],
+            },
+        )
+        self.assertIn("0 issues / 0 PRs with assessment acknowledgements", report)
+        self.assertIn("selected; completion unverified", report)
+
+    def test_selection_without_receipts_is_not_claimed_as_completed_review(self) -> None:
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            review_selection={"selected": [{"issueNumber": 1}]},
+        )
+        self.assertIn("selected; completion unverified", report)
+        self.assertIn("0 issues / 0 PRs with assessment acknowledgements", report)
+
     def test_retired_quarantine_fix_reports_merge_separately_from_failed_task_and_open_issue(self) -> None:
         self.snapshot["issues"][0]["labels"] = ["quarantined-test"]
         self.snapshot["delegationStatus"] = {"records": [{
@@ -34,7 +110,7 @@ class RunReportTests(unittest.TestCase):
             }]},
         )
         self.assertIn("3 issues selected for review", report)
-        self.assertIn("1 PRs assessed", report)
+        self.assertIn("1 PRs selected for review", report)
         self.assertIn("Checks green.", report)
         self.assertEqual(1, report.count("[#4]"))
 
@@ -60,7 +136,7 @@ class RunReportTests(unittest.TestCase):
         visible = re.sub(r"<details\b[^>]*>.*?</details>", "", report, flags=re.DOTALL)
         for expected in ("task-1", "handoff_required", "2026-09-11T12:00:00Z",
                          "Owner: maintainer", "Investigate the test", "draft: yes",
-                         "0 issues selected for review", "0 PRs assessed"):
+                         "0 issues selected for review", "0 PRs selected for review"):
             self.assertIn(expected, visible)
         self.assertEqual(1, report.count("[#1]"))
         self.assertEqual(1, report.count("[#2]"))
@@ -82,7 +158,7 @@ class RunReportTests(unittest.TestCase):
         visible = re.sub(r"<details\b[^>]*>.*?</details>", "", report, flags=re.DOTALL)
         for expected in ("Fix the failure", "checks: pending", "draft: yes", "NO-MERGE", "Owner: maintainer"):
             self.assertIn(expected, visible)
-        self.assertIn("0 PRs assessed", report)
+        self.assertIn("0 PRs selected for review", report)
 
     def setUp(self) -> None:
         self.snapshot = {
@@ -343,7 +419,8 @@ class RunReportTests(unittest.TestCase):
             ],
         )
         for expected in (
-            "**Whole invocation duration:** 10m",
+            "**Whole invocation duration:** unknown",
+            "Recorded whole-invocation window: 10m",
             "Primary cycle: 4m30s", "Collection: 1m", "Immediate follow-up: 3m",
             "Recording windows may overlap",
         ):
@@ -539,7 +616,7 @@ class RunReportTests(unittest.TestCase):
                 "humanEscalation": {"routingHint": "maintainer"},
             }]},
         )
-        self.assertIn("0 PRs assessed", report)
+        self.assertIn("0 PRs selected for review", report)
         row = next(line for line in report.splitlines() if line.startswith("| [#23]"))
         self.assertEqual(row.split(" | ")[1], "Existing; carried assessment; prior: unknown")
         self.assertIn("👤 Human input", row)

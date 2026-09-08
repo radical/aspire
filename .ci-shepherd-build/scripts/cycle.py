@@ -8,10 +8,15 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 from typing import Any, Mapping
 
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import build_dry_run
+from ci_shepherd.assessment_batches import (
+    assessment_artifacts, load_assessment_packets, materialize_assessment,
+    merge_worker_responses, verify_assessment_completion,
+)
 from ci_shepherd.collector import MAX_DELEGATION_REQUESTS, validate_delegation_requests
 from ci_shepherd.comment_selection import (
     build_comment_selection,
@@ -406,6 +411,11 @@ def _restart_after_evidence_expansion(
     if not requests:
         return None
 
+    for path in assessment_artifacts(work_dir):
+        preserved = path.with_name(path.stem + ".pre-expansion.json")
+        shutil.copyfile(path, preserved)
+        preserved.chmod(0o600)
+    _write_private_json(work_dir / "judgments.pre-expansion.json", final_judgments)
     input_path = work_dir / "input.json"
     requests_path = work_dir / "evidence-requests.json"
     expanded_path = work_dir / "input.expanded.json"
@@ -537,6 +547,8 @@ def _restart_after_evidence_expansion(
     )
     restarted: dict[str, object] = {
         **manifest,
+        "previousAssessment": manifest["assessment"],
+        "assessment": materialize_assessment(work_dir),
         "snapshotId": prepared["snapshotId"],
         "stage": "awaiting-review",
         "issueReviewCount": len(selection["selected"]),
@@ -586,10 +598,13 @@ def start_cycle(
     repository_policy_path: Path = DEFAULT_REPOSITORY_POLICY_PATH,
     max_comments: int = 5,
     delegation_requests: Iterable[int] = (),
+    state_origin: str = "explicit",
 ) -> dict[str, object]:
     delegation_requests = validate_delegation_requests(delegation_requests)
     if delegation_requests and input_path is not None:
         raise ValueError("--delegate-issue requires live collection and cannot be combined with --input.")
+    if state_origin not in {"explicit", "canonical"}:
+        raise ValueError("State origin must be explicit or canonical.")
     started_at = format_utc_z(datetime.now(UTC))
     _ensure_separate_directories(state_dir, work_dir)
     if work_dir.exists() and any(work_dir.iterdir()):
@@ -817,6 +832,8 @@ def start_cycle(
         work_dir / "agent-assessment.json",
         _empty_agent_assessment(prepared["snapshotId"]),
     )
+    coordinator_revision, coordinator_error = _checkout_revision(Path(__file__).resolve().parents[2])
+    checkout_revision, checkout_error = _checkout_revision(checkout) if checkout is not None else (None, None)
     manifest: dict[str, object] = {
         "schemaVersion": 1,
         "startedAt": started_at,
@@ -839,6 +856,34 @@ def start_cycle(
         "stage": "awaiting-review",
         "issueReviewCount": issue_review_count,
         "pullRequestReviewCount": pull_request_review_count,
+        "assessment": materialize_assessment(work_dir),
+        "invocation": {
+            "collectionMode": "live" if input_path is None else "replay",
+            "stateOrigin": state_origin,
+            "stateMode": "resume" if current_history is not None else "bootstrap",
+            "coordinatorRevision": coordinator_revision,
+            "checkoutRevision": checkout_revision,
+            "provenanceDiagnostics": [
+                {"source": source, "message": error}
+                for source, error in (("coordinator", coordinator_error), ("checkout", checkout_error))
+                if error is not None
+            ],
+            "frozenSourceRevisions": sorted({
+                record["payload"]["checkoutCommit"]
+                for record in snapshot.get("evidence", {}).values()
+                if isinstance(record, Mapping)
+                and isinstance(record.get("payload"), Mapping)
+                and isinstance(record["payload"].get("checkoutCommit"), str)
+            } | (
+                {snapshot["sourceRevision"]}
+                if isinstance(snapshot.get("sourceRevision"), str) else set()
+            ) | (
+                {snapshot["quarantineSourceState"]["sourceRevision"]}
+                if isinstance(snapshot.get("quarantineSourceState"), Mapping)
+                and isinstance(snapshot["quarantineSourceState"].get("sourceRevision"), str)
+                else set()
+            )),
+        },
     }
     _write_private_json(work_dir / "cycle.json", manifest)
 
@@ -850,12 +895,39 @@ def start_cycle(
     return manifest
 
 
+def merge_assessments(
+    *,
+    work_dir: Path,
+    response_paths: Iterable[Path] = (),
+) -> dict[str, object]:
+    work_dir = work_dir.expanduser().resolve(strict=True)
+    cycle_manifest = _load_json(work_dir / "cycle.json", "cycle manifest")
+    if cycle_manifest.get("stage") != "awaiting-review":
+        raise ValueError("Cycle is not awaiting assessment responses.")
+    manifest, packets = load_assessment_packets(work_dir, cycle_manifest.get("assessment"))
+    paths = list(response_paths)
+    if not paths:
+        paths = [work_dir / group["responseFile"] for group in manifest["workerGroups"]]
+    responses = [_load_json(path, "assessment worker response") for path in paths]
+    combined, receipts, summary = merge_worker_responses(manifest, packets, responses)
+    # Publish receipts last, so an interrupted merge cannot leave old complete
+    # coverage paired with a partially replaced aggregate response.
+    _write_private_json(work_dir / "assessment-receipts.json", {
+        "schemaVersion": 1, "assessmentId": manifest["assessmentId"], "batches": [],
+    })
+    (work_dir / "assessment-completion.json").unlink(missing_ok=True)
+    _write_private_json(work_dir / "agent-assessment.json", combined)
+    _write_private_json(work_dir / "assessment-receipts.json", receipts)
+    return summary
+
+
 def finish_cycle(
     *,
     work_dir: Path,
     agent_assessment_path: Path | None = None,
     agent_judgments_path: Path | None = None,
     pull_request_judgments_path: Path | None = None,
+    assessment_receipts_path: Path | None = None,
 ) -> dict[str, object]:
     work_dir = work_dir.expanduser().resolve(strict=True)
     manifest_path = work_dir / "cycle.json"
@@ -871,6 +943,15 @@ def finish_cycle(
         raise ValueError("Cycle manifest identity is incomplete.")
     state_dir = Path(state_directory)
     _ensure_separate_directories(state_dir, work_dir)
+    assessment_completion = verify_assessment_completion(
+        work_dir, manifest.get("assessment"), receipts_path=assessment_receipts_path,
+    )
+    prior_assessment_completion = (
+        verify_assessment_completion(
+            work_dir, manifest.get("previousAssessment"), pre_expansion=True,
+        )
+        if manifest.get("evidenceExpansionRound") is not None else None
+    )
     if agent_assessment_path is not None:
         if agent_judgments_path is not None or pull_request_judgments_path is not None:
             raise ValueError(
@@ -920,6 +1001,7 @@ def finish_cycle(
         "managedCoverage": work_dir / "managed-item-coverage.json",
     }
     assert agent_judgments_path is not None
+    _write_private_json(work_dir / "assessment-completion.json", assessment_completion)
     finalize(
         agent_input_path=paths["defaults"],
         agent_judgments_path=agent_judgments_path,
@@ -1234,11 +1316,16 @@ def finish_cycle(
             _load_json(work_dir / "pull-request-review.pre-expansion.json", "pre-expansion pull request handoff")
             if (work_dir / "pull-request-review.pre-expansion.json").is_file() else None
         ),
+        assessment_coverage=assessment_completion,
+        pre_expansion_assessment_coverage=prior_assessment_completion,
     )
     _write_private_text(paths["report"], report_markdown.rstrip() + "\n\n[Audit details](report-details.md)\n")
     dry_run = build_dry_run(proposals, action_id=None)
     _write_private_json(paths["dryRun"], dry_run)
 
+    verify_assessment_completion(work_dir, manifest["assessment"])
+    if prior_assessment_completion is not None:
+        verify_assessment_completion(work_dir, manifest["previousAssessment"], pre_expansion=True)
     run_directory = record_poc_cycle(
         state_dir=state_dir,
         input_path=paths["input"],
@@ -1246,6 +1333,8 @@ def finish_cycle(
         judgments_path=paths["judgments"],
         report_path=paths["report"],
         artifact_paths=[
+            *assessment_artifacts(work_dir),
+            *sorted(work_dir.glob("assessment-*.pre-expansion.json")),
             audit_report_path,
             work_dir / "agent-assessment.json",
             paths["compact"],
@@ -1272,6 +1361,7 @@ def finish_cycle(
                     work_dir / "action-proposals.pre-expansion.json",
                     work_dir / "review-selection.pre-expansion.json",
                     work_dir / "pull-request-review.pre-expansion.json",
+                    work_dir / "judgments.pre-expansion.json",
                     work_dir / "evidence-requests.json",
                     work_dir / "evidence-expansion-plan.json",
                     work_dir / "evidence-expansion-errors.json",
@@ -1335,6 +1425,7 @@ def finish_cycle(
     )
     completed = {
         **manifest,
+        "assessment": {**manifest["assessment"], **assessment_completion},
         "decisionProjectedAt": report_as_of,
         "stage": "completed",
         "coordinatorStage": _coordinator_stage(
@@ -1368,6 +1459,30 @@ def finish_cycle(
     return completed
 
 
+def _checkout_revision(checkout: Path) -> tuple[str | None, str | None]:
+    # Inherited Git routing/config variables must not redirect this identity
+    # probe into another worktree or invoke caller-configured helpers.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    try:
+        result = subprocess.run(
+            [
+                "git", "--no-pager", "-C", str(checkout),
+                "-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false",
+                "rev-parse", "HEAD",
+            ],
+            capture_output=True, text=True, check=False, timeout=10, env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"Revision probe unavailable: {error}"
+    revision = result.stdout.strip()
+    if result.returncode != 0:
+        return None, f"Revision probe failed (exit {result.returncode}): {result.stderr.strip()}"
+    if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
+        return None, "Revision probe returned an invalid commit identity."
+    return revision, None
+
+
 def _default_work_dir() -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return DEFAULT_RUNS_DIR / f"manual-{timestamp}"
@@ -1380,7 +1495,10 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     start = subparsers.add_parser("start")
     start.add_argument("--repository", required=True)
-    start.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
+    start.add_argument(
+        "--state-dir", type=Path,
+        help=f"Durable state directory (default: {DEFAULT_STATE_DIR}). Use an explicit path for isolated trials.",
+    )
     start.add_argument("--work-dir", type=Path)
     start.add_argument("--checkout", type=Path)
     start.add_argument("--shepherd-author", required=True)
@@ -1402,6 +1520,19 @@ def main() -> int:
     response.add_argument("--agent-assessment", type=Path)
     response.add_argument("--agent-judgments", type=Path)
     finish.add_argument("--pull-request-judgments", type=Path)
+    finish.add_argument(
+        "--assessment-receipts", type=Path,
+        help="Explicit batch/case/evidence coverage receipts (default: work-dir/assessment-receipts.json).",
+    )
+    merge = subparsers.add_parser(
+        "merge-assessments",
+        help="Merge whole-group worker responses; missing groups remain incomplete.",
+    )
+    merge.add_argument("--work-dir", type=Path, required=True)
+    merge.add_argument(
+        "--response", type=Path, action="append", default=[],
+        help="Worker response file (repeatable). Defaults to all materialized group response files.",
+    )
     args = parser.parse_args()
     if args.command == "start":
         try:
@@ -1414,7 +1545,7 @@ def main() -> int:
         if args.command == "start":
             result = start_cycle(
                 repository=args.repository,
-                state_dir=args.state_dir,
+                state_dir=args.state_dir or DEFAULT_STATE_DIR,
                 work_dir=args.work_dir or _default_work_dir(),
                 checkout=args.checkout,
                 shepherd_author=args.shepherd_author,
@@ -1423,13 +1554,17 @@ def main() -> int:
                 repository_policy_path=args.repository_policy,
                 max_comments=args.max_comments,
                 delegation_requests=args.delegate_issue,
+                state_origin="explicit" if args.state_dir is not None else "canonical",
             )
+        elif args.command == "merge-assessments":
+            result = merge_assessments(work_dir=args.work_dir, response_paths=args.response)
         else:
             result = finish_cycle(
                 work_dir=args.work_dir,
                 agent_assessment_path=args.agent_assessment,
                 agent_judgments_path=args.agent_judgments,
                 pull_request_judgments_path=args.pull_request_judgments,
+                assessment_receipts_path=args.assessment_receipts,
             )
     finally:
         os.umask(old_umask)

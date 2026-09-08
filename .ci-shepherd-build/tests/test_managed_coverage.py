@@ -20,6 +20,75 @@ from ci_shepherd.policy_selection import build_policy_selection
 
 
 class ManagedCoverageTests(unittest.TestCase):
+    def test_planned_and_budget_deferred_work_are_not_active_sessions(self) -> None:
+        policy = replace(
+            load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
+            managed_issue_producers=frozenset({"ci-failure-cause"}),
+            managed_automation_explicit=True,
+        )
+        snapshot = {
+            "repository": "owner/repo", "openIssues": [1, 2, 3, 4],
+            "evidence": {
+                f"issue:{number}": {"payload": {"producer": "ci-failure-cause"}}
+                for number in range(1, 5)
+            },
+        }
+        def request(number):
+            return {"issueNumber": number, "investigationId": f"investigation:{number}",
+                    "target": {"kind": "issue", "value": number}}
+
+        coverage = build_managed_item_coverage(
+            snapshot, policy=policy,
+            proposals={"snapshotId": "snapshot:current", "proposals": []},
+            investigation_plan={
+                "repository": "owner/repo", "snapshotId": "snapshot:current",
+                "requests": [request(1)],
+                "deferredRequests": [{**request(2), "reason": "per-cycle-investigation-budget"}],
+                "activeInvestigations": [request(3)],
+                "activeInvestigationIds": ["investigation:3"],
+            },
+            review_schedule={}, observations={},
+        )
+        self.assertEqual(
+            ["queued-investigation", "deferred-investigation", "active-investigation", "uncovered"],
+            [item["coverageReason"] for item in coverage["items"]],
+        )
+        self.assertEqual(
+            [{"kind": "issue", "issueNumber": 4, "reason": "uncovered"}],
+            coverage["blockedScopes"],
+        )
+        self.assertEqual(1, coverage["counts"]["active-investigation"])
+        self.assertEqual(0, coverage["counts"].get("scheduled-wakeup", 0))
+
+    def test_unbound_or_unregistered_plans_do_not_manufacture_coverage(self) -> None:
+        policy = replace(
+            load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
+            managed_issue_producers=frozenset({"ci-failure-cause"}),
+            managed_automation_explicit=True,
+        )
+        plan = {
+            "repository": "owner/repo", "snapshotId": "snapshot:current",
+            "activeInvestigations": [{"issueNumber": 1, "investigationId": "investigation:1",
+                                      "target": {"kind": "issue", "value": 1}}],
+            "activeInvestigationIds": ["investigation:1"],
+        }
+        for changes in (
+            {"activeInvestigationIds": "investigation:1"},
+            {"activeInvestigationIds": []},
+            {"snapshotId": "snapshot:old"},
+            {"repository": "another/repo"},
+            {"activeInvestigations": [], "deferredRequests": [{"issueNumber": 1}]},
+        ):
+            with self.subTest(changes=changes):
+                coverage = build_managed_item_coverage(
+                    {"repository": "owner/repo", "openIssues": [1],
+                     "evidence": {"issue:1": {"payload": {"producer": "ci-failure-cause"}}}},
+                    policy=policy, proposals={"snapshotId": "snapshot:current", "proposals": []},
+                    investigation_plan={**plan, **changes}, review_schedule={}, observations={},
+                )
+                self.assertFalse(coverage["valid"])
+                self.assertEqual("uncovered", coverage["items"][0]["coverageReason"])
+
     def test_unresolved_issue_does_not_spend_safe_actions_single_budget_slot(self) -> None:
         policy = replace(
             load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
@@ -159,10 +228,16 @@ class ManagedCoverageTests(unittest.TestCase):
         coverage = build_managed_item_coverage(
             snapshot,
             policy=policy,
-            proposals={"proposals": [{"issueNumber": 1}]},
+            proposals={"snapshotId": "snapshot:current", "proposals": [{"issueNumber": 1}]},
             investigation_plan={
+                "repository": "owner/repo",
+                "snapshotId": "snapshot:current",
                 "requests": [],
-                "deferredRequests": [{"issueNumber": 3}],
+                "deferredRequests": [{
+                    "issueNumber": 3, "investigationId": "investigation:3",
+                    "target": {"kind": "issue", "value": 3},
+                    "reason": "per-cycle-investigation-budget",
+                }],
             },
             review_schedule={
                 "issues": {
@@ -181,7 +256,7 @@ class ManagedCoverageTests(unittest.TestCase):
             [
                 ("issue", 1, "pending-action"),
                 ("issue", 2, "active-delegation"),
-                ("issue", 3, "active-investigation"),
+                ("issue", 3, "deferred-investigation"),
                 ("issue", 4, "scheduled-wakeup"),
                 ("pull-request", 10, "tracked-open-pr"),
             ],

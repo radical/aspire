@@ -11,6 +11,8 @@ from urllib.parse import quote
 from ci_shepherd.models import validate_report, validate_snapshot
 from ci_shepherd.poc import validate_poc_judgments
 from ci_shepherd.run_report import render_run_markdown
+from ci_shepherd.jsonl import read_jsonl_rows
+from ci_shepherd.assessment_batches import verify_assessment_completion
 
 
 _OPERATIONAL_QUEUES = (
@@ -537,7 +539,24 @@ def main() -> int:
         def events(path: Path | None) -> list[object]:
             if path is None:
                 return []
-            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            return read_jsonl_rows(path)
+
+        def completed_assessment(*, pre_expansion: bool = False) -> object:
+            suffix = ".pre-expansion" if pre_expansion else ""
+            recorded = companion(f"assessment-completion{suffix}.json")
+            if recorded is None:
+                return None
+            cycle = companion("cycle.json")
+            if not isinstance(cycle, dict):
+                raise ValueError("Assessment completion requires its bound cycle manifest.")
+            verified = verify_assessment_completion(
+                args.prepared.parent,
+                cycle.get("previousAssessment" if pre_expansion else "assessment"),
+                pre_expansion=pre_expansion,
+            )
+            if recorded != verified:
+                raise ValueError("Recorded assessment completion does not match its verified receipts.")
+            return verified
 
         audit_path = args.prepared.parent / "report-details.md"
         if not audit_path.is_file():
@@ -565,6 +584,8 @@ def main() -> int:
             audit_details_url=audit_details_url,
             pre_expansion_review_selection=companion("review-selection.pre-expansion.json"),
             pre_expansion_pull_request_review=companion("pull-request-review.pre-expansion.json"),
+            assessment_coverage=completed_assessment(),
+            pre_expansion_assessment_coverage=completed_assessment(pre_expansion=True),
         )
     else:
         markdown = render_poc_markdown(

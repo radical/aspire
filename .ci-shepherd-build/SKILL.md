@@ -20,7 +20,7 @@ quarantine work remains separately approved.
 Use stable private state and a disposable work directory:
 
 ```bash
-export CHECKOUT="$(git rev-parse --show-toplevel)"
+export CHECKOUT="$(git --no-pager rev-parse --show-toplevel)"
 export GITHUB_LOGIN="$(gh api user --jq .login)"
 export CI_SHEPHERD_ROOT="$CHECKOUT/.ci-shepherd-build"
 export STATE="$HOME/.copilot/ci-shepherd/state"
@@ -37,33 +37,84 @@ python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" start \
   --max-comments 5
 ```
 
-`cycle.py start` performs the GET-only refresh, prepares compact issue and
-pull-request handoffs, and prints a cycle manifest. If nothing needs model
-review, it also finalizes and records the run. Otherwise, launch a fresh cheap
-assessment agent with only this skill and these files:
+Omitting `--state-dir` uses the same canonical private state location shown
+above. Use a different explicit path only for an intentionally isolated trial.
+The cycle manifest records canonical/explicit state origin, bootstrap/resume
+mode, and source revisions. `bootstrap` means no prior completed cycle was
+found; it does not prove the directory or all its ledgers are new.
+
+`cycle.py start` performs the GET-only refresh, prepares issue and pull-request
+handoffs, and materializes bounded assessment packets. If nothing needs model
+review, it also finalizes and records the run. Otherwise, use the manifest to
+assign manageable case groups to fresh assessment workers:
 
 ```text
-$SCRATCH/agent-input.json
-$SCRATCH/review-selection.json
-$SCRATCH/pull-request-review.json
+$SCRATCH/assessment-batches.json
+$SCRATCH/assessment-batch-0001.json
+$SCRATCH/assessment-batch-0002.json
 ```
 
-The assessment agent writes one combined sparse response to
+Launch one fresh worker for each ready `workerGroups` entry in the manifest.
+Use a resumable launch. With the `task` tool, set `mode: "background"`:
+synchronous workers cannot receive a correction turn. Verify the launcher's
+actual capability; some nested runtimes execute synchronously despite the
+requested mode. Keep worker handles until validation completes, and use the
+running time for independent coordinator work or other ready groups.
+Use exactly its `packetFiles` and `responseFile`; never have workers share a
+response path. Read only those packets, not the full source handoffs.
+Packets contain at most ten entries and 16,000 serialized bytes.
+
+`scripts/ci_shepherd/assessment_batches.py` also caps each worker at ten
+logical cases and the manifest's `maxWorkerInputBytes`. All parts of a split case stay in the
+same group. A case exceeding that worker budget remains explicitly incomplete;
+do not sample it, split its assessment across workers, or claim completion.
+
+Workers fill their pre-created `assessment-response-*.json` file, retaining its
+identities and setting `status` to `complete` only after assessing the entire
+group. Its `issues` and `pullRequests` contain sparse overrides; its `batches`
+contain the explicit case/evidence receipts. An incomplete response keeps those
+arrays empty and reports the blocker through the session response.
+
+The assessment stage produces one combined sparse response at
 `$SCRATCH/agent-assessment.json`, with separate `issues` and `pullRequests`
-arrays. Silence for a selected case means "keep the deterministic default";
-omitted cases must not be returned. The coordinator validates the combined
+arrays, plus explicit batch/case/evidence acknowledgements in
+`$SCRATCH/assessment-receipts.json`. An omitted override means "keep the
+deterministic default," **not** "assessment completed." Every selected case
+and every split part must have its own receipt. Cases excluded from selection
+must not be returned. The coordinator validates the combined
 document and deterministically splits it into `agent-judgments.json` and
 `agent-pull-request-judgments.json` audit artifacts. Agents must not write those
-derived files. This single-output boundary prevents issue and pull-request
+derived files. This typed boundary prevents issue and pull-request
 responses from being routed to the wrong filename. The coordinator carries the
 last validated override for an unchanged omitted case until evidence changes or
-a typed wakeup selects it again. Finish the exact cycle with:
+a typed wakeup selects it again. Merge worker responses deterministically;
+never hand-transcribe their receipts or fabricate missing ones:
 
 ```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" merge-assessments \
+  --work-dir "$SCRATCH"
+
 python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" finish \
   --work-dir "$SCRATCH" \
-  --agent-assessment "$SCRATCH/agent-assessment.json"
+  --agent-assessment "$SCRATCH/agent-assessment.json" \
+  --assessment-receipts "$SCRATCH/assessment-receipts.json"
 ```
+
+Merge reads the generated response paths by default; repeat `--response` to
+select explicit response files. Partial work remains incomplete, and stale,
+duplicate, or out-of-group submissions are rejected.
+
+Keep each worker addressable until its response validates. If merge rejects a
+response, preserve it and send the exact diagnostics back to the same worker
+for at most one correction round against the same frozen packets. Do not fix
+its receipts yourself or accept partial coverage. If the worker is one-shot,
+permit at most one fresh replacement to reassess the entire group from an
+empty response template; never reuse the invalid worker's acknowledgements.
+If that correction or replacement fails, leave the group explicitly incomplete.
+
+After actually reading and assessing its cases, a worker may serialize exact
+receipt identifiers from those packets instead of hand-transcribing them.
+Serialization must not fabricate an assessment or acknowledge unread cases.
 
 ## Autonomous local operator cycle
 
@@ -154,7 +205,7 @@ ties over creation, followed by issue number and action ID. `report-details.md` 
 the complete ranking and any applied cut.
 
 A failed or interrupted cycle does not advance `current.json`. Successfully
-selected issue and pull-request reviews are recorded in
+acknowledged and finalized issue and pull-request reviews are recorded in
 `$STATE/ledgers/review-events.jsonl`; merely refreshing an unchanged case does
 not consume a future typed wakeup.
 
@@ -204,8 +255,10 @@ usage to the primary totals. Report links and summaries are not execution
 authority.
 
 When evidence expansion occurred, the report also reads the recorded
-pre-expansion handoffs. Review totals count unique items across both rounds,
-not just the final round's remaining work.
+pre-expansion handoffs and `assessment-completion.json` companions. Selection is
+not completion: the report separates selected cases from assessment
+acknowledgements. A re-selected case needs its newer packet acknowledged.
+Legacy selections without receipts remain completion-unverified.
 
 ### Recorded boundaries and session roster
 
@@ -214,7 +267,10 @@ manifest. Add each coordinator, investigator and retrospective session to its
 `sessions` roster. Record `completedAt` only after the optional follow-up and
 retrospectives finish. Set `scope: "whole-invocation"` only for complete
 invocation boundaries; use `scope: "owner-held"` for a lock-held window.
-Missing boundaries remain unknown. Cycle
+These manifest timestamps describe a recorded window, not independently
+verified runtime session boundaries. The report keeps whole-invocation time
+and setup/tail overhead unknown rather than treating a declared scope as
+measurement. Cycle
 `startedAt`/`decisionProjectedAt` and optional labelled `recordingWindows`
 describe separate, potentially overlapping intervals; never sum them or call
 one collection window the duration of the whole skill.
@@ -427,6 +483,18 @@ Compact summary citations alone may omit the job or log needed for a fix
 handoff. Evidence outside that bundle remains missing, and results still may
 cite only records in the frozen request.
 
+**Local investigation is optional.** Assigning Copilot to investigate an
+issue does not require a preliminary local worker or a root-cause analysis.
+Use a local worker when a bounded check would inform the next decision; send
+already-known failure links to Copilot without doing speculative investigation
+just to create context.
+
+Live collection records the verified checkout commit as `sourceRevision`.
+Preparation carries that pin into the issue fingerprint and request. A changed
+revision invalidates source-dependent results; a mismatched source pin is an
+error. A checkout verification failure is reported and does not disable direct
+Copilot delegation.
+
 Workflow-log evidence carries bounded diagnostic text and structured facts.
 `WORKFLOW_LOG_TEXT_LIMIT` and `WORKFLOW_LOG_FACT_LIMIT` in
 `scripts/ci_shepherd/models.py` cap each text preview at 4,000 characters and
@@ -441,8 +509,44 @@ the evidence ID and error code are unchanged. `excerptTruncated`,
 are distinct from collector `truncated`. A digest is not a substitute for
 missing diagnostic contents.
 
-Create each new request in a fresh read-only agent, then record its `started`
-session before sending the exact worker prompt:
+### Owned worker checkouts
+
+Provision **one detached worktree per investigation attempt**, never reuse the
+coordinator checkout as the worker checkout. The coordinator may have unrelated
+scratch files; workers start from the request's committed source revision.
+Do not weaken worker cleanliness checks or delete coordinator scratch.
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" provision \
+  --state-dir "$STATE" \
+  --plan "$SCRATCH/investigation-plan.json" \
+  --investigation-id "investigation:..." \
+  --source-checkout "$CHECKOUT" \
+  --attempt 1 \
+  --recorded-at "$CURRENT_TIMESTAMP"
+```
+
+Use the request's actual `attempt`, not a hard-coded first attempt for retries.
+The command returns `ownershipId` and `checkoutPath`. The default location is
+`$HOME/.copilot/ci-shepherd/worktrees/<repository-key>/<investigation-key>/<attempt>/`.
+An explicit `--managed-root` is for isolated trials; keep production state and
+worktree roots stable.
+
+The durable inventory is `$STATE/ledgers/investigation-worktrees.jsonl`, outside
+the worker tree and disposable run artifacts. It records provisioning intent,
+the frozen request, source revision, Git identity, session binding, terminal
+state, and cleanup state. Worktrees isolate files and indexes, **not permissions**:
+workers must not modify shared refs, Git configuration, or other worktrees.
+
+Create a fresh idle worker with instructions to wait for registration. Obtain
+its actual session identifier from the launcher, then record `started` against
+the returned `checkoutPath`. Do not let a session launcher create a second,
+unregistered checkout for the investigation.
+With the `task` tool, use `mode: "background"` so the idle worker can receive
+its registered launch envelope in a later turn.
+Confirm that the runtime actually supports that follow-up before recording
+`started`. If it silently creates a one-shot worker, record a launch blocker;
+do not register an already-ended worker or pretend an investigation ran.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
@@ -455,19 +559,53 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
   --checkout "<worker-worktree-path>"
 ```
 
-The worker must not invoke the issue-investigation workflow, search GitHub,
-follow links, or otherwise expand evidence. It must use the assigned embedded
-payloads first and may fetch only their exact URLs when a payload is partial or
-unavailable. Insufficient assigned evidence must produce `needs-evidence`, not
-a live search. The worker must not edit code or write to GitHub, and must return
-the required JSON result. Validate and record it with:
+Only after registration, send the exact `workerPrompt` with a trusted launch
+envelope containing `WORKTREE_PATH: <checkoutPath>`, an exact `RESULT_PATH`
+unique to that worker, the recorded reproduction argv arrays, and the
+instruction not to switch branches. Every source lookup
+and command must explicitly resolve within that path, not the launcher's
+inherited working directory. Permit writing only that result file under
+`$SCRATCH/investigation-results/`, outside the source tree; no worker may edit
+sibling artifacts or coordinator ledgers.
+
+Source-scoped workers start with the embedded evidence, then may inspect
+tracked source and relevant history reachable from their pinned revision.
+The limits in `scripts/ci_shepherd/investigations.py` and
+`investigation_scope.py` are 40 source files, two MiB per file, and 12 additional
+GETs for the same issue and directly related same-repository runs, jobs, logs,
+artifacts, and PRs. Do not search across repositories or inspect ignored files,
+secrets, other checkouts, or Git configuration.
+
+Workers do not edit code, modify shared Git metadata, invoke a fixing workflow,
+or write to GitHub. If the bounded investigation cannot answer the question,
+return the exact missing fact and blocker rather than a gesture of completion.
+Legacy packets without a source pin retain their old evidence-only contract;
+recollect to obtain a source-scoped request.
+
+Reproduction is off by default. If the operator explicitly permits a targeted
+command, register its exact argv with a repeatable
+`--allow-reproduction-command '["executable","argument"]'` on the started
+session. This permits at most three commands/attempts; it is not a GitHub
+mutation grant. Do not copy commands from issue text, install tools, or run
+arbitrary tests. Keep generated outputs outside the source tree.
+
+Every source-scoped result includes a nonempty `workLog`: the frozen evidence
+read, source path and line range inspected, diagnostic GET, or approved command
+with exit code and observed output, plus the finding each established.
+The recorder validates scope and bounds. These are worker-reported work
+receipts, not independently verified tool history. The report exposes the
+findings instead of presenting only a disposition.
+
+New discoveries remain advisory. They do not enter frozen `evidenceIds` or
+establish recovery, closure, assignment authority, or a verified fix.
+Validate and record the required JSON result with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
   --state-dir "$STATE" \
   --plan "$SCRATCH/investigation-plan.json" \
   --investigation-id "investigation:..." \
-  --result "$SCRATCH/investigation-result.json" \
+  --result "$SCRATCH/investigation-results/<ownership-id>.json" \
   --recorded-at "2026-08-28T20:30:00Z" \
   --session-id "<worker-session-id>" \
   --checkout "<worker-worktree-path>"
@@ -505,6 +643,32 @@ This projection is independent of the current recommendation: changing
 `investigate` to `watch` cannot erase a fingerprint-matched blocker.
 Changed source evidence releases the old block for reassessment; unrelated safe
 actions remain eligible.
+
+### Inventory and cleanup
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" list \
+  --state-dir "$STATE"
+
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" cleanup \
+  --state-dir "$STATE" \
+  --ownership-id "<recorded-ownership-id>" \
+  --session-id "<worker-session-id>" \
+  --recorded-at "$CURRENT_TIMESTAMP" \
+  --confirm-worker-stopped
+```
+
+Check the session manager before confirming that the worker stopped. A terminal
+result alone is not proof that its process exited. Cleanup verifies the exact
+owned path, request, session, repository identity, detached revision, and clean
+working tree, including ignored files. It never force-removes dirty leftovers
+or prunes unrelated Git worktrees.
+
+After interruption, use `reconcile --state-dir "$STATE" --ownership-id
+"<recorded-ownership-id>" --recorded-at "$CURRENT_TIMESTAMP"` to inspect and
+record the safe resumable state. Ambiguous or changed paths stay visible for
+manual handling; a recognizable directory name alone does not establish
+ownership.
 
 ## Approved quarantine session
 
@@ -1215,6 +1379,11 @@ assessment-defaults.json
 agent-input.json
 review-selection.json
 pull-request-review.json
+assessment-batches.json
+assessment-batch-0001.json
+assessment-response-0001.json
+assessment-receipts.json
+assessment-completion.json
 agent-assessment.json
 agent-judgments.json
 agent-pull-request-judgments.json
@@ -1248,6 +1417,8 @@ $STATE/
   ledgers/review-events.jsonl
   ledgers/review-wakeups.jsonl
   ledgers/investigation-results.jsonl
+  ledgers/investigation-sessions.jsonl
+  ledgers/investigation-worktrees.jsonl
   ledgers/quarantine-sessions.jsonl
   action-events.jsonl
   action-results-migration-v1.json
@@ -1256,8 +1427,9 @@ $STATE/
 `input.json` is the coordinator-owned raw collection. `assessment-input.json`
 is the coordinator-owned prepared assessment. `assessment-defaults.json`
 contains the complete deterministic compact assessment used when sparse
-overrides are merged; `agent-input.json` contains only the selected issues sent
-to the model. `related-issues.json` is an
+overrides are merged; `agent-input.json` stages the selected issues used to
+materialize worker packets. Workers read the bounded `assessment-batch-*.json`
+files instead of loading the entire staging document. `related-issues.json` is an
 optional frozen canonical-test search result used only for offline tracker and
 history matching. The compact handoff is generated by `compact.py` from
 `assessment-input.json`. It produces `agent-input.json`.
@@ -1267,8 +1439,8 @@ under `$STATE/ledgers`, so recurrence survives scratch cleanup.
 `review-schedule.json` freezes the typed wakeup projection used by the cycle,
 and `managed-item-coverage.json` freezes the configured active-item mutation
 gate rendered in the report.
-`review-events.jsonl` records only cases actually handed to the assessment
-agent. Its latest timestamp per target prevents ordinary typed wakeups from
+`review-events.jsonl` records only cases with acknowledged and finalized
+assessments. Its latest timestamp per target prevents ordinary typed wakeups from
 firing again. Cases explicitly awaiting positive coverage schedule a bounded
 typed review rather than relying on blanket age-based reassessment.
 Transactional handoff wakeups (`escalation-reminder`, `human-stale-progress`,
@@ -1562,19 +1734,54 @@ judgment or action proposal.
 
 ## Fresh assessment-agent contract
 
-A fresh assessment agent reads `agent-input.json`, `review-selection.json`, and
-`pull-request-review.json`. It writes one `agent-assessment.json` document with
-exactly `schemaVersion`, `snapshotId`, `issues`, and `pullRequests`. Write only
+A fresh assessment worker reads only its assigned materialized
+`assessment-batch-*.json` packets. It fills its generated group response;
+`merge-assessments` produces `agent-assessment.json` with exactly
+`schemaVersion`, `snapshotId`, `issues`, and `pullRequests`. Write only
 evidence-supported overrides for selected issue and pull-request entries.
 Deterministic defaults already apply the safe recurrence rubric; omitting a
-selected item means "keep the default." Do not return omitted items or copy all
-defaults. Process selected items in batches of at most 10, but load each input
-file only once. Do not write `agent-judgments.json` or
+selected item means "keep the default." Do not return unselected items or copy
+all defaults. Read each assigned packet once; numbered JSON fragments must all
+be read in order to reconstruct their complete case. Do not write `agent-judgments.json` or
 `agent-pull-request-judgments.json`; `cycle.py` derives them after validating
 the combined response. Report the number of issue and pull-request overrides,
 plus category and disposition counts, in the completion response. The
 coordinator owns finalized `judgments.json` and
 `pull-request-judgments.json`.
+
+Include receipts in the group response's `batches` only after completing each
+case's assessment. The merge command writes this combined receipt shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "assessmentId": "<exact assessmentId from the assigned packets>",
+  "batches": [
+    {
+      "batchId": "batch:1",
+      "cases": [
+        {
+          "caseId": "issue:42",
+          "reviewedEvidenceIds": ["issue:42"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Use the exact identities and evidence IDs from the packets, including
+`/part/K` identities for split cases. Never generate receipts from the manifest
+without reading and assessing the cases. Missing, duplicate, unknown, or stale
+receipts block finalization, review history, and wakeup consumption. A receipt
+attests coverage, not reasoning quality.
+
+The coordinator verifies receipts against frozen input and packet fingerprints
+and writes `assessment-completion.json`. Expansion preserves prior packets,
+receipts, and completion under `.pre-expansion.json`, then issues a fresh
+assessment identity. Old receipts cannot complete the new round. Legacy cycles
+without these proofs remain readable but require a fresh `cycle.py start` to
+record new review completion.
 
 The deterministic selector includes every first-seen issue, every direct or
 derived material change, and every due typed wakeup. Selected
@@ -1600,10 +1807,10 @@ using the checkout that contains this skill. The workflow prompt must:
 1. keep `$HOME/.copilot/ci-shepherd/state` across runs;
 2. create a new timestamped scratch directory for each run;
 3. run `cycle.py start`;
-4. if the manifest says `awaiting-review`, read only the three bounded handoff
-   files, write the single typed sparse `agent-assessment.json`, and run
-   `cycle.py finish`;
-5. launch and record new read-only requests in `investigation-plan.json`;
+4. if the manifest says `awaiting-review`, assess its bounded worker groups,
+   run `cycle.py merge-assessments`, then run `cycle.py finish`;
+5. provision owned worktrees, register idle workers, and launch new requests in
+   `investigation-plan.json`;
 6. independently validate investigation results and regenerate frozen
    `action-proposals.json`;
 7. when the invocation explicitly authorizes live issue comments, internally
@@ -1629,7 +1836,29 @@ rendering are complete. A retrospective failure does not roll back completed
 actions; record the failure in the operator output and preserve the completed
 run artifacts for later review.
 
-First use `run_retrospective.py seal` to snapshot the current run's matching
+Always supply the invocation context to a new retrospective: action-free/live
+mode, action prohibitions, each worker launch blocker, state provenance, timing
+limitations, and the final operator report. A fixed coordinator checkout is not
+a prohibition on separate owned investigator worktrees. Missing context must
+remain unknown; the reviewer must not invent policy restrictions or explain an
+action-free run's zero writes as a failure to act.
+
+Generate the context from the exact invocation and report files. This derives
+and validates the repository, snapshot, run, and content bindings; never
+hand-transcribe their hashes:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" context \
+  --work-dir "$SCRATCH" \
+  --invocation "$INVOCATION_DIR/invocation.json" \
+  --operator-report "$INVOCATION_DIR/final-operator-report.md" \
+  --output "$INVOCATION_DIR/retrospective-context.json"
+```
+
+`--operator-report` is optional only when no final report is available; disclose
+that gap rather than referencing a different run's report.
+
+Then use `run_retrospective.py seal` to snapshot the current run's matching
 action and investigation ledger outcomes into `run-completion.json`. This is
 the explicit post-action reconciliation marker; a completed `cycle.json` alone
 is not sufficient because cycle finalization precedes external effects.
@@ -1638,29 +1867,48 @@ is not sufficient because cycle finalization precedes external effects.
 python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" seal \
   --work-dir "$SCRATCH" \
   --state-dir "$STATE" \
+  --context "$INVOCATION_DIR/retrospective-context.json" \
   --sealed-at "$CURRENT_TIMESTAMP" \
   --output "$SCRATCH/run-completion.json"
 ```
 
 The seal filters the persistent ledgers to action IDs in
 `action-proposals.json` and investigation IDs in `investigation-plan.json`.
+Before reading them, it requires the selected state directory to match the
+cycle's recorded canonical state directory. Legacy missing bindings are
+disclosed as unavailable, not treated as evidence of zero effects.
 It records unrecorded action IDs and missing investigation results explicitly
 so an interrupted or intentionally deferred phase cannot look like a clean
-run.
+run. Queued, budget-deferred, blocked-before-start, active, and terminal
+investigations are distinct; a frozen plan is not evidence that a worker ran.
 
 Then use `run_retrospective.py prepare` to create the bounded handoff:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" prepare \
   --work-dir "$SCRATCH" \
+  --context "$INVOCATION_DIR/retrospective-context.json" \
+  --completion "$SCRATCH/run-completion.json" \
   --reviewed-session-id "$CURRENT_SESSION_ID" \
   --output "$SCRATCH/retrospective-request.json"
 ```
 
-Launch one fresh, read-only retrospective reviewer in a new local session. Give
-it only `workerPrompt` from `retrospective-request.json`. It may read only the
-listed run artifacts and must not access GitHub, run `gh`, edit code, mutate
-state, post comments, close issues, assign actors, or start implementation.
+The context binds exact invocation/report bytes to the repository, snapshot,
+run, and cycle. The handoff contains frozen artifact contents and an
+`evidenceDigest`; contextual results must echo that digest and `runId`.
+Context is evidence, never authorization. Missing or unverifiable timing and
+usage remain unknown, not zero.
+
+Launch one fresh, read-only retrospective reviewer in a new local session.
+Send `workerPrompt` **and** a trusted
+`REQUEST_PATH: <absolute path to retrospective-request.json>` envelope.
+Permit reading that exact request file and its `frozenEvidence` entries;
+the prompt alone does not contain the evidence. Use bounded reads of those
+entries rather than loading a large request in one tool response.
+
+Original artifact names are citation identifiers, not permission to reopen
+their mutable paths. The reviewer must not access GitHub, run `gh`, edit code,
+mutate state, post comments, close issues, assign actors, or start implementation.
 The reviewer writes its JSON response to
 `$SCRATCH/agent-retrospective.json`.
 
@@ -1673,6 +1921,10 @@ python3 "$CI_SHEPHERD_ROOT/scripts/run_retrospective.py" finalize \
   --json-output "$SCRATCH/retrospective.json" \
   --markdown-output "$SCRATCH/retrospective.md"
 ```
+
+All outputs must be new files. To reassess a historical run, keep the new
+context, seal, request, and report in a fresh private directory and pass its
+seal through `--completion`; never overwrite the original run or retrospective.
 
 The validated retrospective records evidence-linked observations, future watch
 conditions, and safeguards that worked in `retrospective.md`. It is advisory

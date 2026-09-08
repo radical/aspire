@@ -564,6 +564,15 @@ def collect(
             delegation_status=delegation_status,
             delegation_requests=delegation_requests,
         )
+        if checkout is not None:
+            from ci_shepherd.ownership import OwnershipError, validate_checkout
+
+            try:
+                snapshot["sourceRevision"] = validate_checkout(checkout, repository).commit
+            except OwnershipError as error:
+                # Source availability affects local investigation, not permission
+                # to ask cloud Copilot to investigate without a local diagnosis.
+                snapshot["warnings"].append(f"Local investigation source unavailable: {error}")
         attach_meaningful_progress(snapshot, previous_snapshot, shepherd_author=shepherd_author)
         if snapshot["delegationStatus"]["status"] == "complete" and repository_policy is not None:
             derive_handoff_reminders(

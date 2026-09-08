@@ -343,6 +343,10 @@ def validate_snapshot(snapshot: object) -> None:
     _require_exact_int(mapping, "schemaVersion", 1)
     _require_repository(mapping)
     _require_nonempty_string(mapping, "collectedAt")
+    if "sourceRevision" in mapping:
+        revision = mapping["sourceRevision"]
+        if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise ValidationError("snapshot.sourceRevision must be a full commit SHA.")
     open_issues = set(_require_unique_int_list(mapping, "openIssues"))
     if "delegationRequests" in mapping:
         requests = _require_unique_int_list(mapping, "delegationRequests")

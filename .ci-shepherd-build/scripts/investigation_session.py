@@ -17,6 +17,8 @@ def _select_request(
     path: Path,
     investigation_id: str,
     state_directory: Path,
+    *,
+    prefer_recorded: bool,
 ) -> dict[str, object]:
     document = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
@@ -25,6 +27,7 @@ def _select_request(
         document,
         investigation_id,
         state_directory=state_directory,
+        prefer_recorded=prefer_recorded,
     )
 
 
@@ -54,13 +57,28 @@ def main() -> int:
         ),
     )
     parser.add_argument("--confirm-worker-stopped", action="store_true")
+    parser.add_argument(
+        "--allow-reproduction-command", action="append", type=json.loads,
+        help="Explicitly authorize one exact JSON argv array for this local session; repeat up to three times. Never shell text.",
+    )
     args = parser.parse_args()
 
+    request = _select_request(
+        args.plan, args.investigation_id, args.state_dir,
+        prefer_recorded=args.status != "started",
+    )
+    if args.status == "started" and (
+        request.get("investigationScope") is None or request.get("sourceRevision") is None
+    ):
+        parser.error(
+            "Fresh investigation sessions require a frozen source revision and an owned worktree; "
+            "recollect the legacy request before starting a worker."
+        )
     old_umask = os.umask(0o077)
     try:
         event = record_investigation_session_event(
             args.state_dir,
-            _select_request(args.plan, args.investigation_id, args.state_dir),
+            request,
             status=args.status,
             recorded_at=args.recorded_at,
             session_id=args.session_id,
@@ -68,6 +86,7 @@ def main() -> int:
             failure_reason=args.failure_reason,
             failure_category=args.failure_category,
             confirm_worker_stopped=args.confirm_worker_stopped,
+            reproduction_commands=args.allow_reproduction_command,
         )
     finally:
         os.umask(old_umask)

@@ -24,6 +24,7 @@ from ci_shepherd.models import ValidationError
 from ci_shepherd.poc_state import load_review_schedule, record_review_wakeup
 from ci_shepherd.repository_policy import load_repository_policy
 from tests.test_collector import ScriptedClient, make_issue
+from tests.assessment_helpers import finish_reviewed_cycle, write_assessment_receipts
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_POLICY = load_repository_policy(
@@ -329,7 +330,7 @@ class CycleTests(unittest.TestCase):
                         Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
                     ),
                 )
-                cycle_script.finish_cycle(
+                finish_reviewed_cycle(
                     work_dir=work, agent_judgments_path=work / "agent-judgments.json",
                 )
                 collect_source.assert_not_called()
@@ -362,7 +363,7 @@ class CycleTests(unittest.TestCase):
             cycle_script.start_cycle(
                 **arguments, work_dir=first, delegation_requests=[42],
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first, agent_judgments_path=first / "agent-judgments.json",
             )
             proposals = json.loads((first / "action-proposals.json").read_text(encoding="utf-8"))
@@ -381,7 +382,7 @@ class CycleTests(unittest.TestCase):
             self.assertEqual("changed", selected["changeClass"])
             self.assertIn("operator-delegation-request-withdrawn", selected["changeReasons"])
             self.assertEqual([], selection["omitted"])
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=second, agent_judgments_path=second / "agent-judgments.json",
             )
             proposals = json.loads((second / "action-proposals.json").read_text(encoding="utf-8"))
@@ -437,7 +438,7 @@ class CycleTests(unittest.TestCase):
                 patch.object(cycle_script, "build_proposal_evidence_requests", return_value=(requests, [])),
                 patch("expand.GitHubClient", return_value=client),
             ):
-                result = cycle_script.finish_cycle(
+                result = finish_reviewed_cycle(
                     work_dir=work, agent_judgments_path=work / "agent-judgments.json",
                 )
 
@@ -485,7 +486,7 @@ class CycleTests(unittest.TestCase):
                         "operator-delegation-request", selection["selected"][0]["changeReasons"],
                     )
                     self.assertEqual("awaiting-review", result["stage"])
-                    cycle_script.finish_cycle(
+                    finish_reviewed_cycle(
                         work_dir=work, agent_judgments_path=work / "agent-judgments.json",
                     )
         self.assertEqual(2, client.calls.count(("get", "/repos/owner/repo/issues/42")))
@@ -636,7 +637,7 @@ class CycleTests(unittest.TestCase):
                 input_path=input_path,
             )
 
-            completed = cycle_script.finish_cycle(
+            completed = finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=work / "agent-judgments.json",
             )
@@ -859,12 +860,32 @@ class CycleTests(unittest.TestCase):
                 ),
                 patch.object(cycle_script, "expand_files", side_effect=fake_expand),
             ):
-                restarted = cycle_script.finish_cycle(
+                restarted = finish_reviewed_cycle(
                     work_dir=work,
                     agent_assessment_path=work / "agent-assessment.json",
                 )
                 self.assertEqual("awaiting-review", restarted["stage"])
                 self.assertEqual(1, restarted["evidenceExpansionRound"])
+                old_receipts = work / "assessment-receipts.pre-expansion.json"
+                self.assertTrue(old_receipts.is_file())
+                self.assertTrue((work / "assessment-completion.pre-expansion.json").is_file())
+                self.assertFalse((work / "assessment-completion.json").exists())
+                self.assertNotEqual(started["assessment"]["assessmentId"], restarted["assessment"]["assessmentId"])
+                with self.assertRaisesRegex(ValueError, "stale"):
+                    cycle_script.finish_cycle(
+                        work_dir=work,
+                        agent_assessment_path=work / "agent-assessment.json",
+                        assessment_receipts_path=old_receipts,
+                    )
+                preserved_receipts = old_receipts.read_bytes()
+                old_receipts.unlink()
+                write_assessment_receipts(work)
+                with self.assertRaisesRegex(ValueError, "assessment-receipts.pre-expansion"):
+                    cycle_script.finish_cycle(
+                        work_dir=work, agent_assessment_path=work / "agent-assessment.json",
+                    )
+                old_receipts.write_bytes(preserved_receipts)
+                old_receipts.chmod(0o600)
                 self.assertEqual(
                     "snapshot:owner/repo:2026-08-31T12:00:00Z:r1",
                     restarted["snapshotId"],
@@ -936,7 +957,7 @@ class CycleTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                completed = cycle_script.finish_cycle(
+                completed = finish_reviewed_cycle(
                     work_dir=work,
                     agent_assessment_path=work / "agent-assessment.json",
                 )
@@ -1087,7 +1108,7 @@ class CycleTests(unittest.TestCase):
                 ValidationError,
                 "Agent assessment pullRequests must be an array",
             ):
-                cycle_script.finish_cycle(
+                finish_reviewed_cycle(
                     work_dir=work,
                     agent_assessment_path=work / "agent-assessment.json",
                 )
@@ -1116,6 +1137,9 @@ class CycleTests(unittest.TestCase):
                 input_path=input_path,
             )
 
+            write_assessment_receipts(work)
+            supplied_receipts = work / "submitted-receipts.json"
+            (work / "assessment-receipts.json").rename(supplied_receipts)
             result = subprocess.run(
                 [
                     sys.executable,
@@ -1125,6 +1149,8 @@ class CycleTests(unittest.TestCase):
                     str(work),
                     "--agent-assessment",
                     str(work / "agent-assessment.json"),
+                    "--assessment-receipts",
+                    str(supplied_receipts),
                 ],
                 capture_output=True,
                 check=False,
@@ -1170,7 +1196,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=second_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -1179,7 +1205,7 @@ class CycleTests(unittest.TestCase):
                 HistoryError,
                 "History advanced after this cycle started",
             ):
-                cycle_script.finish_cycle(
+                finish_reviewed_cycle(
                     work_dir=second_work,
                     agent_judgments_path=second_work / "agent-judgments.json",
                 )
@@ -1204,7 +1230,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=first_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -1295,7 +1321,7 @@ class CycleTests(unittest.TestCase):
                 "fixable",
                 compact["issues"][0]["investigationResults"][0]["outcome"],
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=second_work,
                 agent_judgments_path=second_work / "agent-judgments.json",
             )
@@ -1341,7 +1367,7 @@ class CycleTests(unittest.TestCase):
                 "investigationResults",
                 changed_compact["issues"][0],
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=third_work,
                 agent_judgments_path=third_work / "agent-judgments.json",
             )
@@ -1491,7 +1517,7 @@ class CycleTests(unittest.TestCase):
             agent_path = work / "agent-judgments.json"
             agent_path.write_text(json.dumps(agent_judgments), encoding="utf-8")
 
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=agent_path,
             )
@@ -1581,7 +1607,7 @@ class CycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=agent_path,
             )
@@ -1670,7 +1696,7 @@ class CycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=agent_path,
             )
@@ -1757,7 +1783,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=first_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -1818,7 +1844,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=first_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -1915,7 +1941,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=first_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -1961,7 +1987,7 @@ class CycleTests(unittest.TestCase):
                 "2026-08-27T12:00:00Z",
                 selection["selected"][0]["reassessAt"],
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=due_work,
                 agent_judgments_path=due_work / "agent-judgments.json",
             )
@@ -2022,7 +2048,7 @@ class CycleTests(unittest.TestCase):
             agent_judgments = first_work / "agent-judgments.json"
             self.assertTrue(agent_judgments.is_file())
 
-            completed = cycle_script.finish_cycle(
+            completed = finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=agent_judgments,
             )
@@ -2159,7 +2185,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=first_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -2241,7 +2267,7 @@ class CycleTests(unittest.TestCase):
             }
             agent_path = first_work / "agent-judgments.json"
             agent_path.write_text(json.dumps(agent_judgments), encoding="utf-8")
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=agent_path,
             )
@@ -2331,7 +2357,7 @@ class CycleTests(unittest.TestCase):
                 json.dumps(pull_request_judgments),
                 encoding="utf-8",
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
                 pull_request_judgments_path=pull_request_judgments_path,
@@ -2399,7 +2425,7 @@ class CycleTests(unittest.TestCase):
                 shepherd_author="ankj",
                 input_path=first_input,
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
                 pull_request_judgments_path=(
@@ -2487,7 +2513,7 @@ class CycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
                 pull_request_judgments_path=pull_request_judgments_path,
@@ -2521,7 +2547,7 @@ class CycleTests(unittest.TestCase):
             self.assertEqual([], judgments["pullRequests"])
             report = (second_work / "report.md").read_text(encoding="utf-8")
             self.assertIn(
-                "0 PRs assessed",
+                "0 PRs selected for review",
                 report,
             )
             self.assertIn("unchanged-stable", report)
@@ -2556,7 +2582,7 @@ class CycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=first_work,
                 agent_judgments_path=first_work / "agent-judgments.json",
             )
@@ -2621,7 +2647,7 @@ class CycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            completed = cycle_script.finish_cycle(
+            completed = finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=work / "agent-judgments.json",
                 pull_request_judgments_path=pull_request_judgments,
@@ -2683,7 +2709,7 @@ class CycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=agent_judgments,
             )
@@ -2741,7 +2767,7 @@ class CycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            cycle_script.finish_cycle(
+            finish_reviewed_cycle(
                 work_dir=work,
                 agent_judgments_path=agent_judgments,
             )
