@@ -58,6 +58,52 @@ class AgentTaskNormalizationTests(unittest.TestCase):
 
 
 class TaskLifecycleTests(unittest.TestCase):
+    def test_multiple_pulls_cannot_complete_while_any_are_open_or_unknown(self) -> None:
+        task = normalize_agent_task({
+            "id": "task-1", "state": "completed", "created_at": "2026-09-01T12:00:00Z",
+        })
+        merged = DelegatedPullRequest(
+            database_id=101, global_id="PR_101", state=PullRequestState.MERGED,
+            is_draft=False, changed_files=4,
+        )
+        for state, expected in (
+            (PullRequestState.OPEN, TaskLifecycle.AWAITING_PULL_REQUEST),
+            (PullRequestState.UNKNOWN, TaskLifecycle.ASSOCIATION_PENDING),
+            (PullRequestState.CLOSED, TaskLifecycle.COMPLETED),
+        ):
+            with self.subTest(state=state):
+                result = derive_task_lifecycle(
+                    task, association=PullRequestAssociation.ASSOCIATED,
+                    pull_requests=[merged, replace(merged, database_id=102, global_id="PR_102", state=state)],
+                )
+                self.assertEqual(expected, result.lifecycle)
+
+    def test_pull_request_disposition_is_independent_of_task_execution(self) -> None:
+        task = normalize_agent_task({
+            "id": "task-1", "state": "failed",
+            "created_at": "2026-09-01T12:00:00Z", "artifacts": [],
+        })
+        pull = DelegatedPullRequest(
+            database_id=101, global_id="PR_101", number=201,
+            state=PullRequestState.MERGED, is_draft=False, changed_files=4,
+        )
+        for state in TaskState:
+            for pr_state, expected in (
+                (PullRequestState.MERGED, "completed"),
+                (PullRequestState.CLOSED, "closed_unmerged"),
+                (PullRequestState.OPEN, "awaiting_pull_request"),
+                (PullRequestState.UNKNOWN, "association_pending"),
+            ):
+                with self.subTest(task=state, pull=pr_state):
+                    result = derive_task_lifecycle(
+                        replace(task, state=state),
+                        association=PullRequestAssociation.ASSOCIATED,
+                        pull_requests=[replace(pull, state=pr_state)],
+                    )
+                    self.assertEqual(expected, result.lifecycle)
+                    self.assertEqual(state, result.state)
+                    self.assertEqual(pr_state is PullRequestState.CLOSED, result.requires_handoff)
+
     def test_derives_lifecycle_from_task_state_and_pull_request_association(
         self,
     ) -> None:
@@ -371,7 +417,11 @@ class DelegationEventTests(unittest.TestCase):
                 "startedAt": "2026-09-01T14:00:00Z",
                 "taskId": "task-1",
                 "taskState": "completed",
+                "taskObservation": "available",
                 "lifecycle": "awaiting_pull_request",
+                "attemptOutcome": "pending",
+                "requiresNewDecision": False,
+                "retired": False,
                 "requiresHuman": False,
                 "pullRequests": [
                     {
@@ -495,7 +545,7 @@ class DelegationEventTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual("handoff_required", tracking[0]["lifecycle"])
+        self.assertEqual("closed_unmerged", tracking[0]["lifecycle"])
         self.assertTrue(tracking[0]["requiresHuman"])
 
     def test_missing_assigned_task_requires_handoff(self) -> None:
@@ -587,6 +637,21 @@ class DelegationEventTests(unittest.TestCase):
             "| none | required |",
             report,
         )
+
+    def test_report_separates_attempt_outcome_from_open_issue(self) -> None:
+        report = render_delegation_status_section({
+            "status": "complete",
+            "records": [{
+                "issueNumber": 42, "taskId": "task-1", "taskState": "failed",
+                "taskObservation": "not-requested", "lifecycle": "completed",
+                "attemptOutcome": "merged", "issueOpen": True,
+                "requiresHuman": False, "requiresNewDecision": True,
+                "pullRequests": [{"number": 201, "state": "unknown", "lastKnownState": "merged"}],
+            }],
+        })
+        self.assertIn("| open | merged | required |", report)
+        self.assertIn("last verified: merged", report)
+        self.assertIn("not-requested", report)
 
     def test_report_surfaces_pending_lifecycle_before_raw_task_state(self) -> None:
         for lifecycle in ("association_pending", "awaiting_pull_request"):
@@ -689,6 +754,32 @@ class DelegationEventTests(unittest.TestCase):
 
 
 class CapacityAccountingTests(unittest.TestCase):
+    def test_unknown_pull_state_blocks_start_and_retirement_keeps_running_ownership(self) -> None:
+        now = datetime(2026, 9, 1, 16, tzinfo=UTC)
+        task = normalize_agent_task({
+            "id": "task-1", "state": "in_progress",
+            "created_at": "2026-09-01T12:00:00Z",
+            "artifacts": [{"type": "pull", "provider": "github",
+                           "data": {"id": 101, "global_id": "PR_101"}}],
+        })
+        start = DelegationStart(
+            started_at=now - timedelta(hours=1), outcome=StartOutcome.STARTED,
+            task_id=task.task_id, issue_number=42,
+        )
+        for retired in (frozenset(), frozenset({task.task_id})):
+            with self.subTest(retired=retired):
+                usage = derive_capacity_usage(
+                    tasks=[task], starts=[start], evidence=CapacityEvidence(), now=now,
+                    pull_requests=[DelegatedPullRequest(
+                        database_id=101, global_id="PR_101",
+                        state=PullRequestState.UNKNOWN, is_draft=False,
+                    )],
+                    retired_task_ids=retired,
+                )
+                self.assertEqual(1, usage.running_tasks)
+                self.assertEqual(1, usage.starts_in_rolling_24h)
+                self.assertFalse(decide_new_start(usage, CapacityLimits(5, 5, 1)).permitted)
+
     def test_only_recent_missing_owned_tasks_block_new_starts(self) -> None:
         now = datetime(2026, 9, 1, 16, tzinfo=UTC)
         old = derive_capacity_usage(
@@ -1085,7 +1176,7 @@ class CapacityAccountingTests(unittest.TestCase):
 
         self.assertEqual(1, usage.running_tasks)
         self.assertEqual(1, usage.open_delegated_prs)
-        self.assertEqual(TaskLifecycle.RUNNING, usage.task_lifecycles[0].lifecycle)
+        self.assertEqual(TaskLifecycle.ASSOCIATION_PENDING, usage.task_lifecycles[0].lifecycle)
 
     def test_unassigned_issue_does_not_hide_failed_task_handoff(self) -> None:
         now = datetime(2026, 9, 1, 16, tzinfo=UTC)

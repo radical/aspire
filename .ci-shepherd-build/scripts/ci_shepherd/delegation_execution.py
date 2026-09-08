@@ -16,6 +16,7 @@ from .delegations import (
     CapacityLimits,
     decide_new_start,
     delegation_starts_from_events,
+    delegation_records_from_events,
     normalize_agent_task,
     reconcile_started_task,
     derive_capacity_usage,
@@ -75,6 +76,7 @@ def reserve_delegation_start(
             repository,
             owned_task_ids=owned_task_ids,
             owned_issue_numbers=owned_issue_numbers,
+            known_records=delegation_records_from_events(events),
         )
         usage = derive_capacity_usage(
             tasks=observation.tasks,
@@ -84,6 +86,7 @@ def reserve_delegation_start(
             now=now,
             issues=observation.issues,
             retired_task_ids=retired_task_ids,
+            task_pull_request_ids=getattr(observation, "task_pull_request_ids", {}),
         )
         decision = decide_new_start(usage, limits)
     except Exception as exc:

@@ -2589,6 +2589,46 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
     # -- delegate-copilot: class caps supplement, never replace, live -----
     # -- capacity controls -------------------------------------------------
 
+    def test_operator_assignment_requires_exact_license_and_binds_instructions(self) -> None:
+        from tests.test_actor import _assignment_proposals
+
+        proposal = _assignment_proposals()["proposals"][0]
+        action_id = f"{self.proposals['snapshotId']}:issue:21:assign-copilot"
+        proposal.update(
+            actionId=action_id,
+            issueUrl="https://github.com/microsoft/aspire/issues/21",
+            targetRepository=self.repository,
+            evidenceBasis="operator-request",
+        )
+        proposal["executionEligibility"].update(
+            evidenceBasis="operator-request", ciLabels=[], occurrenceCount=0,
+        )
+        self.proposals["proposals"] = [proposal]
+        self._write_proposals()
+        self._append_policy(revision=1, enabled_classes=frozenset({"delegate-copilot"}))
+        self._build_and_write_selection()
+        with self.assertRaisesRegex(AuthorizationError, "does not select"):
+            self._mint(action_id)
+
+        self._append_decision(action_id=action_id, decision="approve-once")
+        selection = self._build_and_write_selection()
+        grant = self._mint(action_id)
+        self.assertTrue(grant["autonomousPolicyLicense"]["licenseSource"].startswith("decision:"))
+        self.assertEqual(proposal["customInstructions"], self._load(action_id).proposal["customInstructions"])
+
+        candidate, = selection["candidates"]
+        candidate.update(status="automatic", licenseSource="policy:1")
+        self.policy_selection_path.write_text(json.dumps(selection), encoding="utf-8")
+        with self.assertRaisesRegex(AuthorizationError, "requires an exact approval"):
+            self._mint(action_id)
+
+        proposal["customInstructions"] += "\nAdditional instruction."
+        self._write_proposals()
+        selection = self._build_and_write_selection()
+        self.assertEqual([], selection["selectedActionIds"])
+        with self.assertRaisesRegex(AuthorizationError, "does not select"):
+            self._mint(action_id)
+
     def test_delegate_copilot_binds_capacity_policy_digest(self) -> None:
         delegate_action_id = (
             "snapshot:microsoft/aspire:2026-08-29T20:00:00Z:issue:2:delegate"

@@ -13,7 +13,8 @@ from urllib.parse import quote
 from pathlib import Path
 
 from . import ownership
-from .eligibility import executable_ci_labels
+from .eligibility import MAX_DELEGATION_REQUESTS, executable_ci_labels
+from .github import GitHubApiError
 from .pull_requests import build_pull_request_current_state
 from .signals import Occurrence, extract_issue_signals, select_references
 from .trx import parse_test_results_archive
@@ -74,6 +75,22 @@ _ISSUE_COMMENT_EVIDENCE_ID_RE = re.compile(
 
 class InventoryError(RuntimeError):
     pass
+
+
+def validate_delegation_requests(issue_numbers: Iterable[int]) -> tuple[int, ...]:
+    numbers = tuple(issue_numbers)
+    if any(
+        not isinstance(number, int) or isinstance(number, bool) or number <= 0
+        for number in numbers
+    ):
+        raise ValueError("Explicit delegation requests must be positive issue numbers.")
+    if len(set(numbers)) != len(numbers):
+        raise ValueError("Explicit delegation requests must not contain duplicate issue numbers.")
+    if len(numbers) > MAX_DELEGATION_REQUESTS:
+        raise ValueError(
+            f"Explicit delegation requests are limited to {MAX_DELEGATION_REQUESTS} issues per cycle."
+        )
+    return numbers
 
 
 def _requires_full_issue_recollection(
@@ -201,6 +218,8 @@ class Collector:
         shepherd_author: str | None = None,
         repository_policy: RepositoryPolicy | None = None,
         released_delegation_issue_numbers: Iterable[int] = (),
+        delegation_requests: Iterable[int] = (),
+        monitored_issue_numbers: Iterable[int] = (),
     ) -> None:
         self._client = client
         self._repository = repository
@@ -218,6 +237,13 @@ class Collector:
         self._released_delegation_issue_numbers = frozenset(
             released_delegation_issue_numbers
         )
+        self._delegation_requests = validate_delegation_requests(delegation_requests)
+        self._monitored_issue_numbers = frozenset(monitored_issue_numbers)
+        if any(
+            not isinstance(number, int) or isinstance(number, bool) or number <= 0
+            for number in self._monitored_issue_numbers
+        ):
+            raise ValueError("Monitored issues must be positive issue numbers.")
         self._shepherd_author = (
             shepherd_author.casefold()
             if isinstance(shepherd_author, str) and shepherd_author.strip()
@@ -427,7 +453,12 @@ class Collector:
         include_closed_discovery: bool = False,
         full_refresh: bool = False,
     ) -> InventoryResult:
-        from .refresh import COLLECTION_VERSION, plan_refresh, reconstruct_inventory
+        from .refresh import (
+            COLLECTION_VERSION,
+            _associated_issue_numbers,
+            plan_refresh,
+            reconstruct_inventory,
+        )
 
         open_seed = self._fetch_open_inventory()
         open_inventory = [
@@ -444,6 +475,37 @@ class Collector:
             current_history,
             full_refresh=full_refresh,
         )
+        # A direct read may expose changes within GitHub's timestamp granularity,
+        # or fields absent from older snapshots. Never overwrite those facts with
+        # cached assignment/context data just because updated_at still matches.
+        directly_observed_numbers = (
+            set(self._delegation_requests) | self._monitored_issue_numbers
+        ) & open_seed.keys()
+        directly_changed_numbers = {
+            number
+            for number in directly_observed_numbers
+            if f"issue:{number}" in plan.reuse
+            and any(
+                previous_snapshot["evidence"][f"issue:{number}"]["payload"].get(key) != value
+                for key, value in self._normalize_issue(
+                    open_seed[number]["issue"], sorted(open_seed[number]["labels"]),
+                ).items()
+            )
+        }
+        if directly_changed_numbers:
+            invalidated = {
+                evidence_id
+                for evidence_id in plan.reuse
+                if directly_changed_numbers & _associated_issue_numbers(
+                    evidence_id, previous_snapshot["evidence"][evidence_id],
+                )
+            }
+            plan = replace(
+                plan,
+                reuse=tuple(set(plan.reuse) - invalidated),
+                refresh=(*plan.refresh, *invalidated),
+                changed_issues=(*plan.changed_issues, *directly_changed_numbers),
+            )
         if (
             not full_refresh
             and not _requires_full_issue_recollection(
@@ -458,6 +520,8 @@ class Collector:
                     previous_snapshot,
                     plan,
                 ),
+                collection_errors=list(self._collection_errors),
+                warnings=sorted(set(self._warnings)),
                 open_pull_requests=[
                     copy.deepcopy(pull)
                     for _, pull in sorted(self._open_pull_requests.items())
@@ -1148,6 +1212,7 @@ class Collector:
         evidence = copy.deepcopy(inventory.evidence)
         collection_errors = list(inventory.collection_errors)
         affected_paths = ownership.collect_affected_paths(evidence, target_repository=self._repository)
+        issue_scope = _issue_error_scope(issue["number"] for issue in inventory.open_issues)
         path_referenced_by = ownership.collect_path_referenced_by(
             evidence,
             target_repository=self._repository,
@@ -1194,7 +1259,12 @@ class Collector:
                     timeout_seconds=git_timeout_seconds,
                 )
             except ownership.OwnershipError as exc:
-                collection_errors.append(CollectionError(exc.stage, exc.endpoint, str(exc)))
+                collection_errors.append(
+                    CollectionError(
+                        exc.stage, exc.endpoint, str(exc),
+                        "diagnostic-evidence-unavailable", scope=issue_scope,
+                    )
+                )
                 return InventoryResult(
                     open_issues=copy.deepcopy(inventory.open_issues),
                     supporting_issues=copy.deepcopy(inventory.supporting_issues),
@@ -1219,7 +1289,12 @@ class Collector:
             try:
                 codeowners_document = ownership.load_codeowners_from_checkout(Path(checkout_path), checkout_info)
             except ownership.OwnershipError as exc:
-                collection_errors.append(CollectionError(exc.stage, exc.endpoint, str(exc)))
+                collection_errors.append(
+                    CollectionError(
+                        exc.stage, exc.endpoint, str(exc),
+                        "diagnostic-evidence-unavailable", scope=issue_scope,
+                    )
+                )
 
             for affected_path in affected_paths:
                 evidence_id = f"source:{quote(affected_path, safe='')}"
@@ -1240,7 +1315,14 @@ class Collector:
                         timeout_seconds=git_timeout_seconds,
                     )
                 except ownership.OwnershipError as exc:
-                    collection_errors.append(CollectionError(exc.stage, exc.endpoint, str(exc)))
+                    collection_errors.append(
+                        CollectionError(
+                            exc.stage, exc.endpoint, str(exc), "diagnostic-evidence-unavailable",
+                            scope=_referenced_error_scope(
+                                path_referenced_by.get(affected_path, [])
+                            ) or issue_scope,
+                        )
+                    )
                     evidence[evidence_id] = self._make_partial_record(
                         "source-path",
                         fallback_payload["sourceUrl"],
@@ -1254,7 +1336,12 @@ class Collector:
             try:
                 codeowners_document = ownership.load_codeowners_from_api(self._client, self._repository)
             except ownership.OwnershipError as exc:
-                collection_errors.append(CollectionError(exc.stage, exc.endpoint, str(exc)))
+                collection_errors.append(
+                    CollectionError(
+                        exc.stage, exc.endpoint, str(exc),
+                        "diagnostic-evidence-unavailable", scope=issue_scope,
+                    )
+                )
 
         if codeowners_document is not None:
             for affected_path in affected_paths:
@@ -1327,7 +1414,59 @@ class Collector:
                 None,
             )
         self._merge_bot_authored_open_inventory(open_seed)
+        # Observe explicit targets last so a long inventory scan cannot make an
+        # earlier direct response overwrite a newer assignee or state observation.
+        requested_issues = [
+            self._fetch_inventory_issue(number, require_open=True)
+            for number in self._delegation_requests
+        ]
+        for number in sorted(self._monitored_issue_numbers - set(self._delegation_requests)):
+            try:
+                requested_issues.append(self._fetch_inventory_issue(number, require_open=False))
+            except InventoryError as exc:
+                self._collection_errors.append(
+                    CollectionError(
+                        "monitored-issue", f"/repos/{self._repository}/issues/{number}",
+                        str(exc), scope=_issue_error_scope([number]),
+                    )
+                )
+        for raw_issue in requested_issues:
+            # The direct response is authoritative, not a stale label-query row.
+            open_seed.pop(raw_issue["number"], None)
+            self._delegated_issues.pop(raw_issue["number"], None)
+            if raw_issue["state"] == "open":
+                self._merge_issue_inventory(open_seed, [raw_issue], None)
         return open_seed
+
+    def _fetch_inventory_issue(self, number: int, *, require_open: bool) -> dict[str, Any]:
+        endpoint = f"/repos/{self._repository}/issues/{number}"
+        purpose = "delegation request" if require_open else "monitored issue"
+        try:
+            raw_issue = self._client.get(endpoint)
+            if not isinstance(raw_issue, dict):
+                raise ValueError("Expected an issue object.")
+            if "pull_request" in raw_issue:
+                raise ValueError("The returned item is a pull request, not an issue.")
+            if type(raw_issue.get("number")) is not int or raw_issue["number"] != number:
+                raise ValueError("The returned issue number does not match the requested issue.")
+            expected_urls = {
+                "html_url": f"https://github.com/{self._repository}/issues/{number}",
+                "url": f"https://api.github.com{endpoint}",
+                "repository_url": f"https://api.github.com/repos/{self._repository}",
+            }
+            for key, expected in expected_urls.items():
+                if key != "html_url" and key not in raw_issue:
+                    continue
+                value = raw_issue.get(key)
+                if not isinstance(value, str) or value.casefold() != expected.casefold():
+                    raise ValueError(f"The returned issue {key} does not match the repository and number.")
+            if raw_issue.get("state") not in (("open",) if require_open else ("open", "closed")):
+                raise ValueError("The returned issue state is not open." if require_open else "Invalid issue state.")
+            return raw_issue
+        except (GitHubApiError, ValueError) as exc:
+            raise InventoryError(
+                f"Failed {purpose} for {self._repository}#{number}: {endpoint}: {exc}"
+            ) from exc
 
     def _merge_bot_authored_open_inventory(
         self, open_seed: dict[int, dict[str, Any]]
@@ -2649,6 +2788,14 @@ class Collector:
             "closedAt": raw_issue.get("closed_at"),
             "labels": labels,
             "author": _nested_text(raw_issue, ("user", "login")),
+            "assignees": sorted(
+                {
+                    assignee["login"]
+                    for assignee in raw_issue.get("assignees", [])
+                    if isinstance(assignee, dict)
+                    and isinstance(assignee.get("login"), str)
+                }
+            ),
         }
 
     def _finalize_evidence(

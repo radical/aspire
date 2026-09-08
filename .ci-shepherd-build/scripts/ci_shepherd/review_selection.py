@@ -117,6 +117,8 @@ def build_review_selection(
             known=known,
             known_supplied=known_issue_numbers is not None,
         )
+        if issue.get("delegationRequest") == {"origin": "operator"}:
+            change_class = "changed"
         omission_reason = _omission_reason(issue, change_class)
         if omission_reason is not None:
             omitted_case: dict[str, Any] = {
@@ -550,6 +552,8 @@ def _previous_judgment_summary(
 
 
 def _omission_reason(issue: Mapping[str, Any], change_class: str) -> str | None:
+    if issue.get("delegationRequest") == {"origin": "operator"} and delegation_is_projectable(issue):
+        return None
     action_cluster = issue.get("actionCluster")
     if (
         isinstance(action_cluster, Mapping)
@@ -585,6 +589,8 @@ def _review_reasons(
 ) -> tuple[str, ...]:
     default_judgment = _require_mapping(issue.get("defaultJudgment"), "default judgment")
     reasons: list[str] = []
+    if issue.get("delegationRequest") == {"origin": "operator"}:
+        reasons.append("operator-delegation-request")
     if change_class in {"first-seen", "new"}:
         reasons.append("initial-assessment")
     if change_class == "changed":
@@ -661,6 +667,25 @@ def _build_question(issue: Mapping[str, Any], issue_number: int) -> dict[str, An
     default_judgment = _require_mapping(issue.get("defaultJudgment"), "default judgment")
     recommendations = _require_list(default_judgment, "recommendations")
     recommendation = _require_mapping(recommendations[0], "default recommendation")
+    if issue.get("delegationRequest") == {"origin": "operator"} and delegation_is_projectable(issue):
+        return {
+            "observedIdentity": fingerprint,
+            "evidenceChecked": list(issue["delegationReadiness"]["evidenceIds"]),
+            "missingFacts": [],
+            "decisionGates": [],
+            "defaultDisposition": "delegate-copilot",
+            "ask": (
+                f"The operator nominated issue #{issue_number} for Copilot to investigate and fix. "
+                "Use the frozen issue and existing context to identify any ownership, "
+                "duplicate-work, or current-target blocker. No local diagnosis is required."
+            ),
+            "stopCondition": (
+                "Do not fetch evidence or investigate just to enrich the task. Keep the "
+                "delegation proposal unless existing evidence shows a blocker. "
+                "Assignment still requires exact operator approval."
+            ),
+            "costClass": "no-fetch",
+        }
     evidence_checked = [
         value
         for value in recommendation.get("evidenceIds", [])

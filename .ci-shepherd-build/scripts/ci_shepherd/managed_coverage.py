@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .repository_policy import RepositoryPolicy
+from .eligibility import diagnostic_collection_error
 
 
 def build_managed_item_coverage(
@@ -40,11 +41,14 @@ def build_managed_item_coverage(
             "globalBlockers": global_blockers,
             "blockedScopes": [],
         }
-    delegated_numbers = _positive_ints(snapshot.get("delegatedIssues"))
+    delegation_by_issue = _delegations(snapshot)
+    delegated_numbers = _positive_ints(snapshot.get("delegatedIssues")) | set(delegation_by_issue)
+    requested_numbers = _positive_ints(snapshot.get("delegationRequests"))
     issue_numbers = {
         number
-        for number in _positive_ints(snapshot.get("openIssues")) | delegated_numbers
+        for number in _positive_ints(snapshot.get("openIssues")) | delegated_numbers | requested_numbers
         if number in delegated_numbers
+        or number in requested_numbers
         or _issue_producer(snapshot, number).casefold() in policy.managed_issue_producers
     }
     pull_request_numbers = (
@@ -53,9 +57,19 @@ def build_managed_item_coverage(
         else set()
     )
     proposals_by_issue = _issue_numbers(proposals.get("proposals"))
+    investigation_assignments = {
+        proposal["actionId"]
+        for proposal in proposals.get("proposals", [])
+        if proposal.get("operation") == "assign-copilot"
+        and proposal.get("evidenceBasis") in {"operator-request", "investigation-request", "source-reconciliation"}
+        and proposal.get("executionEligibility", {}).get("eligible") is True
+    }
+    assignment_issues = {
+        proposal["issueNumber"] for proposal in proposals.get("proposals", [])
+        if proposal.get("actionId") in investigation_assignments
+    }
     investigations = _investigation_issue_numbers(investigation_plan)
     awaiting_evidence = _issue_numbers(investigation_plan.get("blockedAwaitingEvidence"))
-    delegation_by_issue = _delegations(snapshot)
     scheduled_issues = _scheduled_numbers(review_schedule.get("issues"))
     scheduled_pull_requests = _scheduled_numbers(review_schedule.get("pullRequests"))
     unknown_scope_issues = {
@@ -71,15 +85,26 @@ def build_managed_item_coverage(
     for issue_number in sorted(issue_numbers):
         delegation = delegation_by_issue.get(issue_number)
         reasons: list[str] = []
-        if delegation is not None and delegation.get("lifecycle") == "completed":
+        issue_record = snapshot.get("evidence", {}).get(f"issue:{issue_number}", {})
+        tracking_active = delegation is not None and (
+            _has_open_pull_request(delegation)
+            or delegation.get("lifecycle") not in {"completed", "closed_unmerged", "retired"}
+        )
+        if (
+            issue_record.get("availability") == "available"
+            and issue_record.get("payload", {}).get("state") == "closed"
+            and not tracking_active
+        ):
             reasons.append("terminal-disposition")
-        if issue_number in proposals_by_issue:
+        elif issue_number in proposals_by_issue or issue_number in requested_numbers:
             reasons.append("pending-action")
+        elif delegation is not None and delegation.get("requiresNewDecision") is True:
+            reasons.append("awaiting-new-decision")
         if delegation is not None and _has_open_pull_request(delegation):
             reasons.append("tracked-open-pr")
         if (
             delegation is not None
-            and delegation.get("lifecycle") not in {"completed", "retired"}
+            and delegation.get("lifecycle") not in {"completed", "closed_unmerged", "retired"}
         ):
             reasons.append("active-delegation")
         if issue_number in investigations:
@@ -95,7 +120,7 @@ def build_managed_item_coverage(
                 reasons,
                 forced_uncovered=(
                     "verified workflow-run scope is unknown"
-                    if issue_number in unknown_scope_issues
+                    if issue_number in unknown_scope_issues and issue_number not in assignment_issues
                     else None
                 ),
             )
@@ -120,18 +145,39 @@ def build_managed_item_coverage(
          "reason": item["status"]}
         for item in invalid
     ]
-    blocked_scopes.extend(
-        {"kind": "target", "issueNumber": item["issueNumber"],
-         "target": item["target"], "reason": "blocked-awaiting-evidence"}
-        for item in investigation_plan.get("blockedAwaitingEvidence", [])
-    )
+    # Diagnostic gaps can prohibit a recovery claim without prohibiting a task
+    # whose purpose is to investigate those gaps. Scope that exemption to the
+    # exact eligible assignment; it must never license a comment or closure.
+    def diagnostic_blockers(number: int, reason: str) -> list[dict[str, object]]:
+        if number not in assignment_issues:
+            return [{"kind": "issue", "issueNumber": number, "reason": reason}]
+        return [
+            {"kind": "action", "actionId": proposal["actionId"], "reason": reason}
+            for proposal in proposals.get("proposals", [])
+            if proposal.get("issueNumber") == number
+            and proposal["actionId"] not in investigation_assignments
+        ]
+
+    for item in investigation_plan.get("blockedAwaitingEvidence", []):
+        if item["issueNumber"] in assignment_issues and item["target"].get("kind") == "issue":
+            blocked_scopes.extend(diagnostic_blockers(item["issueNumber"], "blocked-awaiting-evidence"))
+        else:
+            blocked_scopes.append({
+                "kind": "target", "issueNumber": item["issueNumber"],
+                "target": item["target"], "reason": "blocked-awaiting-evidence",
+            })
+    for number in sorted(unknown_scope_issues & assignment_issues):
+        blocked_scopes.extend(diagnostic_blockers(number, "unknown-workflow-scope"))
     for error in snapshot.get("collectionErrors", []):
         scope = error.get("scope", {})
         if isinstance(scope, Mapping) and scope.get("kind") == "issue":
-            blocked_scopes.extend(
-                {"kind": "issue", "issueNumber": number, "reason": "collection-incomplete"}
-                for number in sorted(_positive_ints(scope.get("issueNumbers")))
-            )
+            for number in sorted(_positive_ints(scope.get("issueNumbers"))):
+                if diagnostic_collection_error(error):
+                    blocked_scopes.extend(diagnostic_blockers(number, "collection-incomplete"))
+                else:
+                    blocked_scopes.append({
+                        "kind": "issue", "issueNumber": number, "reason": "collection-incomplete",
+                    })
     return {
         "schemaVersion": 2,
         "repository": repository,
@@ -326,6 +372,7 @@ def _project_item(
         "terminal-disposition",
         "pending-action",
         "tracked-open-pr",
+        "awaiting-new-decision",
         "active-delegation",
         "active-investigation",
         "blocked-awaiting-evidence",

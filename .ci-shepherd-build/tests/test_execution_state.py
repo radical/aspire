@@ -436,6 +436,49 @@ class ActionEventStoreTests(unittest.TestCase):
         self.assertEqual("delegation-retired", events[0]["eventType"])
         self.assertEqual("task-1", events[0]["taskId"])
 
+    def test_delegation_observation_survives_retirement_without_duplicate_history(self) -> None:
+        at = datetime(2026, 8, 29, 20, 5, tzinfo=UTC)
+        with self.store.transaction(
+            self.grant, action_id="action:1", chain_root="action:1",
+            operation="assign-copilot", target_kind="issue", target_number=1,
+            idempotency_key="issue:1:copilot-assignment", body_digest=None,
+            expected_actor_login="radical", at=at,
+        ) as execution:
+            execution.append_delegation_baseline(task_ids=(), at=at)
+            execution.append_terminal(
+                result={"actionId": "action:1", "outcome": "executed",
+                        "result": {"taskId": "task-1"}},
+                at=at,
+            )
+        record = {
+            "actionId": "action:1", "repository": "radical/aspire", "issueNumber": 1,
+            "startedAt": "2026-08-29T20:05:00Z", "taskId": "task-1",
+            "taskState": "failed", "lifecycle": "completed", "requiresHuman": False,
+            "attemptOutcome": "merged", "requiresNewDecision": True,
+            "pullRequests": [{"databaseId": 101, "globalId": "PR_101", "number": 201,
+                              "state": "merged", "isDraft": False, "changedFiles": 4}],
+        }
+        self.store.append_delegation_observations(
+            repository="radical/aspire", records=[record], at=at,
+        )
+        self.store.append_delegation_retirements(
+            repository="radical/aspire", task_ids=("task-1",), at=at,
+        )
+        reloaded = ActionEventStore(self.state_dir)
+        reloaded.append_delegation_observations(
+            repository="radical/aspire", records=[record], at=at + timedelta(minutes=1),
+        )
+        observations = [
+            event for event in reloaded.events(repository="radical/aspire")
+            if event["eventType"] == "delegation-observed"
+        ]
+        self.assertEqual([record], [event["record"] for event in observations])
+        with self.assertRaisesRegex(ExecutionStateError, "task identity"):
+            reloaded.append_delegation_observations(
+                repository="radical/aspire",
+                records=[{**record, "taskId": "unrelated-task"}], at=at,
+            )
+
     def test_assignment_intent_without_baseline_retries_capacity_reservation(
         self,
     ) -> None:

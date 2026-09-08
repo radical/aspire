@@ -80,7 +80,7 @@ __all__ = [
 # do not understand could otherwise be undercounted, which would silently
 # widen the effective budget available to an attacker or a bug.
 _KNOWN_ACTION_EVENT_TYPES = frozenset(
-    {"intent", "terminal", "delegation-baseline", "delegation-retired"}
+    {"intent", "terminal", "delegation-baseline", "delegation-observed", "delegation-retired"}
 )
 
 # Mirrors execution_state.py's private _TERMINAL_OUTCOMES. Duplicated (not
@@ -106,6 +106,7 @@ _EXACT_OVERRIDABLE_REASONS = frozenset(
         "operation-disabled",
         "per-run-cap-exhausted",
         "rolling-24h-cap-exhausted",
+        "operator-request-requires-exact-approval",
     }
 )
 
@@ -225,6 +226,10 @@ def build_policy_selection(
     for record in pending_after_suppression:
         op_class = record["operationClass"]
         assert isinstance(op_class, str)  # guaranteed by _classify_initial
+        if proposal_by_action_id[str(record["actionId"])].get("evidenceBasis") == "operator-request":
+            record["status"] = "denied"
+            record["reason"] = "operator-request-requires-exact-approval"
+            continue
         if policy is None or not policy_active:
             record["status"] = "denied"
             record["reason"] = "no-active-policy"

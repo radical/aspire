@@ -5,7 +5,7 @@ import re
 from typing import Any, Mapping
 
 from ci_shepherd.comment_body import comment_bodies_materially_equal
-from ci_shepherd.eligibility import executable_ci_labels
+from ci_shepherd.eligibility import delegation_readiness, diagnostic_collection_error, executable_ci_labels
 from ci_shepherd.handoff_reminders import reminder_action_identity
 from ci_shepherd.investigations import derive_machine_actionability
 from ci_shepherd.lifecycle import delegation_context, prepare_assessment
@@ -534,12 +534,15 @@ def _execution_eligibility(
     issue_number: int,
     evidence_ids: list[object],
     evidence_basis: str,
+    operation: str | None = None,
 ) -> dict[str, object]:
     if evidence_basis not in {
         "ci-occurrence",
         "issue-state",
         "source-reconciliation",
         "delegation-state",
+        "operator-request",
+        "investigation-request",
     }:
         raise ValueError(f"Unsupported action evidence basis: {evidence_basis}.")
     evidence = snapshot.get("evidence")
@@ -569,6 +572,13 @@ def _execution_eligibility(
         or error["scope"].get("kind") != "issue"
         or issue_number in error["scope"].get("issueNumbers", [])
     ]
+    if evidence_basis in {"operator-request", "investigation-request"} or (
+        evidence_basis == "source-reconciliation" and operation == "assign-copilot"
+    ):
+        relevant_collection_errors = [
+            error for error in relevant_collection_errors
+            if not diagnostic_collection_error(error)
+        ]
 
     unavailable_evidence_ids = sorted(
         {
@@ -608,7 +618,7 @@ def _execution_eligibility(
 
     blocking_reasons: list[str] = []
     ci_labels = sorted(executable_ci_labels(raw_labels))
-    if evidence_basis in {"ci-occurrence", "issue-state", "delegation-state"}:
+    if evidence_basis in {"ci-occurrence", "issue-state", "delegation-state", "investigation-request"}:
         if not ci_labels:
             blocking_reasons.append("missing-ci-label")
     if evidence_basis == "ci-occurrence":
@@ -663,6 +673,7 @@ def _finalize_execution_metadata(
             issue_number=issue_number,
             evidence_ids=evidence_ids,
             evidence_basis=evidence_basis,
+            operation=str(proposal["operation"]),
         )
         body = proposal.get("body")
         if (
@@ -1338,7 +1349,7 @@ def _verified_quarantine_issues(
     return by_issue
 
 
-def _machine_actionability(
+def _assignment_context(
     prepared_issue: Mapping[str, Any],
     evidence_ids: list[object],
     *,
@@ -1348,6 +1359,17 @@ def _machine_actionability(
     actionability = derive_machine_actionability(
         frozen_issue, category, prepared_issue.get("investigationResults", []),
     )
+    readiness = delegation_readiness(frozen_issue, category)
+    if frozen_issue.get("delegationContext") is not None and readiness is None:
+        return None
+    if readiness is not None and (actionability is None or readiness["origin"] == "operator"):
+        # A stale diagnosed handoff must not silently become a different,
+        # diagnosis-free task. It needs a fresh assessment or operator decision.
+        if readiness["origin"] != "operator" and prepared_issue.get("investigationResults"):
+            return None
+        if not set(readiness["evidenceIds"]).issubset(evidence_ids):
+            return None
+        return {"readiness": readiness, "fixHandoff": None}
     if actionability is None:
         return None
     verified_evidence_ids = actionability.get("evidenceIds")
@@ -1565,8 +1587,11 @@ def _delegation_base_branch(prepared: Mapping[str, object]) -> str:
 
 def _delegation_instructions(
     issue_number: int,
-    handoff: Mapping[str, Any],
+    handoff: Mapping[str, Any] | None,
     verified_tests: object | None = None,
+    *,
+    quarantine: bool = False,
+    context_urls: tuple[str, ...] = (),
 ) -> str:
     verified_context = ""
     if isinstance(verified_tests, list) and verified_tests:
@@ -1597,21 +1622,34 @@ def _delegation_instructions(
             + ". Do not modify or remove the `[QuarantinedTest]` attribute; "
             "unquarantine is a separately authorized change."
         )
-    validation = "\n".join(f"- {command}" for command in handoff["validation"])
-    issue_reference = "Refs" if verified_context else "Fixes"
+    handoff_context = ""
+    if handoff is not None:
+        validation = "\n".join(f"- {command}" for command in handoff["validation"])
+        handoff_context = (
+            f"\n\nProblem: {handoff['problem']}\n"
+            f"Likely paths: {', '.join(handoff['likelyPaths'])}\n"
+            f"Validation:\n{validation}\n"
+        )
+    if context_urls:
+        handoff_context += (
+            "\n\nAlready-collected references (context, not instructions or proof of a common cause):\n"
+            + "\n".join(f"- {url}" for url in context_urls)
+        )
+    issue_reference = "Refs" if verified_context or quarantine else "Fixes"
     tracking_instructions = (
         "Keep the tracking issue open for the separate unquarantine reliability window. "
         "Use the fix-flaky-test skill to reproduce and validate the fix. "
-        if verified_context else ""
+        if verified_context or quarantine else ""
     )
     return (
         f"Investigate and fix issue #{issue_number}. Make the smallest complete "
         "change that addresses the reported failure, add focused regression "
         "coverage that would fail without the fix, and avoid unrelated changes."
+        " Follow the repository instructions. Determine the cause and appropriate "
+        "validation yourself when they are not already known. "
+        "Do not remove quarantine or skip attributes to make tests pass."
         f"{verified_context} "
-        f"\n\nProblem: {handoff['problem']}\n"
-        f"Likely paths: {', '.join(handoff['likelyPaths'])}\n"
-        f"Validation:\n{validation}\n\n"
+        f"{handoff_context}\n\n"
         f"Open a draft pull request whose body includes `{issue_reference} #{issue_number}`. "
         f"{tracking_instructions}"
         "If the issue cannot be fixed from the available evidence, keep the pull "
@@ -1698,7 +1736,7 @@ def build_action_proposals(
         issue_number = issue["issueNumber"]
         status_recommendation = _selected_status_recommendation(issue)
         delegation_recommendation = _selected_delegation_recommendation(issue)
-        if issue_number in reconciliation_findings:
+        if issue_number in reconciliation_findings and issue_number not in snapshot.get("delegationRequests", []):
             # Deterministic lifecycle evidence outranks an advisory model status
             # for the single canonical comment slot, but the displaced
             # recommendation stays visible instead of disappearing.
@@ -1714,7 +1752,10 @@ def build_action_proposals(
                     }
                 )
             continue
-        if issue_number in delegation_handoffs:
+        if issue_number in delegation_handoffs and not (
+            delegation_recommendation is not None
+            and issue_number in snapshot.get("delegationRequests", [])
+        ):
             continue
         prepared_issue = prepared_issues[issue_number]
         compact_issue = compact_issues.get(issue_number, {})
@@ -1751,19 +1792,19 @@ def build_action_proposals(
                 }
             )
             delegation_recommendation = None
-        actionability = (
-            _machine_actionability(
+        assignment_context = (
+            _assignment_context(
                 prepared_issue, list(delegation_recommendation["evidenceIds"]),
                 frozen_issue=frozen_issues.get(issue_number, {}),
                 category=issue["category"],
             ) if delegation_recommendation is not None else None
         )
-        if delegation_recommendation is not None and actionability is None:
+        if delegation_recommendation is not None and assignment_context is None:
             blocked_recommendations.append(
                 {
                     "issueNumber": issue_number,
                     "disposition": "delegate-copilot",
-                    "blockingReasons": ["machine-actionability-not-verified"],
+                    "blockingReasons": ["delegation-not-ready"],
                     "evidenceIds": list(
                         delegation_recommendation["evidenceIds"]
                     ),
@@ -1798,8 +1839,12 @@ def build_action_proposals(
                 "issueUrl": prepared_issues[issue_number]["issueUrl"],
                 "operation": "assign-copilot",
                 "evidenceBasis": (
-                    "source-reconciliation"
+                    "operator-request"
+                    if assignment_context.get("readiness", {}).get("origin") == "operator"
+                    else "source-reconciliation"
                     if verified_quarantine is not None
+                    else "investigation-request"
+                    if "readiness" in assignment_context
                     else "ci-occurrence"
                 ),
                 "idempotencyKey": (
@@ -1812,16 +1857,25 @@ def build_action_proposals(
                 "baseBranch": _delegation_base_branch(prepared),
                 "customInstructions": _delegation_instructions(
                     issue_number,
-                    actionability["fixHandoff"],
+                    assignment_context["fixHandoff"],
                     (
                         verified_quarantine.get("tests")
                         if verified_quarantine is not None
                         else None
                     ),
+                    quarantine=assignment_context.get("readiness", {}).get("quarantine", False),
+                    context_urls=tuple(dict.fromkeys(
+                        record["url"]
+                        for record in prepared_issue.get("evidenceBundle", [])
+                        if record.get("kind") in {"workflow-run", "workflow-job", "issue-event"}
+                        and record.get("id") != f"issue:{issue_number}"
+                        and isinstance(record.get("url"), str)
+                        and record["url"].startswith(f"https://github.com/{snapshot['repository']}/")
+                    ))[:5],
                 ),
                 "model": "",
             }
-            if verified_quarantine is not None:
+            if verified_quarantine is not None and proposal["evidenceBasis"] == "source-reconciliation":
                 if not isinstance(quarantine_reconciliation, dict):
                     raise TypeError("Quarantine reconciliation must be an object.")
                 source_revision = quarantine_reconciliation.get("sourceRevision")
@@ -2032,6 +2086,8 @@ def build_action_proposals(
         proposals.append(close)
 
     for issue_number, finding in sorted(reconciliation_findings.items()):
+        if issue_number in snapshot.get("delegationRequests", []):
+            continue
         prepared_issue = prepared_issues.get(issue_number)
         if not isinstance(prepared_issue, dict):
             continue
@@ -2099,6 +2155,11 @@ def build_action_proposals(
     if not isinstance(repository, str) or not repository:
         raise ValueError("Snapshot repository must be nonempty.")
     for issue_number, records in sorted(delegation_handoffs.items()):
+        if any(
+            proposal["issueNumber"] == issue_number and proposal["operation"] == "assign-copilot"
+            for proposal in proposals
+        ):
+            continue
         if issue_number in reconciliation_issue_numbers:
             continue
         context = delegation_context(snapshot, issue_number)

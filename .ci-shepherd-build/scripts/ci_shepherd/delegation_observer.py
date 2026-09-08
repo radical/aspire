@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, Sequence
 from urllib.parse import urlencode
 
 from .delegations import (
@@ -15,6 +15,8 @@ from .delegations import (
     PullRequestState,
     normalize_agent_task,
 )
+from .github import GitHubApiError
+from .timeutils import parse_aware_iso8601
 
 
 class DelegationReadClient(Protocol):
@@ -30,6 +32,9 @@ class DelegationObservation:
     issues: tuple[DelegatedIssue, ...]
     evidence: CapacityEvidence
     pull_request_sources: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
+    task_pull_request_ids: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
+    unavailable_task_ids: frozenset[str] = frozenset()
+    unavailable_issue_numbers: frozenset[int] = frozenset()
 
 
 def observe_delegations(
@@ -38,7 +43,9 @@ def observe_delegations(
     *,
     owned_task_ids: set[str] | None = None,
     owned_issue_numbers: set[int] | None = None,
+    known_records: Sequence[Mapping[str, object]] = (),
 ) -> DelegationObservation:
+    unavailable_tasks: set[str] = set()
     if owned_task_ids is None:
         task_records = observe_agent_task_records(client, repository)
     else:
@@ -46,6 +53,7 @@ def observe_delegations(
             client,
             repository,
             owned_task_ids=owned_task_ids,
+            unavailable_tasks=unavailable_tasks,
         )
     tasks = tuple(
         normalize_agent_task(_mapping(record, f"tasks[{index}]"))
@@ -53,6 +61,46 @@ def observe_delegations(
     )
     pull_requests: dict[int, DelegatedPullRequest] = {}
     pull_request_sources: dict[int, Mapping[str, object]] = {}
+    task_pull_request_ids: dict[str, set[int]] = {}
+    for record in known_records:
+        task_id = record.get("taskId")
+        if not isinstance(task_id, str):
+            continue
+        for known in record.get("pullRequests", []):
+            key = known["databaseId"]
+            task_pull_request_ids.setdefault(task_id, set()).add(key)
+            expected = DelegatedPullRequest(
+                database_id=key, global_id=known.get("globalId"),
+                number=known.get("number"), state=PullRequestState.UNKNOWN,
+                is_draft=False,
+            )
+            if key in pull_requests:
+                if (
+                    pull_requests[key].number != expected.number
+                    or expected.global_id is not None
+                    and pull_requests[key].global_id != expected.global_id
+                ):
+                    raise ValueError("Conflicting persisted pull request identities.")
+                continue
+            pull_requests[key] = expected
+            if expected.number is None:
+                continue
+            try:
+                detail = client.get(f"/repos/{repository}/pulls/{expected.number}")
+            except GitHubApiError:
+                # Preserve the binding, not a stale open/closed claim, when
+                # GitHub cannot currently return the exact pull request.
+                continue
+            pull = _normalize_pull_request(detail, index=expected.number)
+            if (
+                pull.database_id != key or pull.number != expected.number
+                or expected.global_id is not None and pull.global_id != expected.global_id
+            ):
+                raise ValueError("Pull request detail identity does not match its persisted binding.")
+            pull_requests[key] = pull
+            head = detail.get("head")
+            sha = head.get("sha") if isinstance(head, Mapping) else None
+            pull_request_sources[key] = {"headSha": sha if isinstance(sha, str) and sha.strip() else None}
     observed_owned_ids = (
         {task.task_id for task in tasks}
         if owned_task_ids is None
@@ -77,6 +125,18 @@ def observe_delegations(
             for index, record in enumerate(client.get_pages(endpoint)):
                 summary = _normalize_pull_request(record, index=index)
                 assert summary.number is not None
+                previous = pull_requests.get(summary.database_id)
+                if previous is not None:
+                    if (
+                        previous.number is not None and previous.number != summary.number
+                        or previous.global_id is not None and previous.global_id != summary.global_id
+                    ):
+                        raise ValueError("Branch observation contradicts its persisted pull identity.")
+                    if previous.state is not PullRequestState.UNKNOWN:
+                        # Reuse one exact detail response so task progress between
+                        # discovery reads cannot mix head/file counts in this cycle.
+                        task_pull_request_ids.setdefault(task.task_id, set()).add(previous.database_id)
+                        continue
                 detail = _mapping(
                     client.get(f"/repos/{repository}/pulls/{summary.number}"),
                     f"pull_requests[{index}]",
@@ -92,12 +152,13 @@ def observe_delegations(
                         "match its branch observation."
                     )
                 previous = pull_requests.get(pull_request.database_id)
-                if previous is not None and previous != pull_request:
+                if previous is not None and previous.state is not PullRequestState.UNKNOWN and previous != pull_request:
                     raise ValueError(
                         f"Pull request {pull_request.database_id} changed "
                         "across branch observations."
                     )
                 pull_requests[pull_request.database_id] = pull_request
+                task_pull_request_ids.setdefault(task.task_id, set()).add(pull_request.database_id)
                 head = detail.get("head")
                 head_sha = head.get("sha") if isinstance(head, Mapping) else None
                 source = {
@@ -115,6 +176,7 @@ def observe_delegations(
         for artifact in task.pull_artifacts:
             assert artifact.database_id is not None
             key = artifact.database_id
+            task_pull_request_ids.setdefault(task.task_id, set()).add(key)
             pull_requests.setdefault(
                 key,
                 DelegatedPullRequest(
@@ -125,20 +187,32 @@ def observe_delegations(
                 ),
             )
 
+    issues: list[DelegatedIssue] = []
+    unavailable_issues: set[int] = set()
+    for issue_number in sorted(owned_issue_numbers or set()):
+        try:
+            record = client.get(f"/repos/{repository}/issues/{issue_number}")
+        except GitHubApiError:
+            unavailable_issues.add(issue_number)
+            continue
+        issues.append(_normalize_issue(record, expected_number=issue_number))
+
     return DelegationObservation(
         tasks=tasks,
         pull_requests=tuple(
             pull_requests[key] for key in sorted(pull_requests)
         ),
-        issues=tuple(
-            _normalize_issue(
-                client.get(f"/repos/{repository}/issues/{issue_number}"),
-                expected_number=issue_number,
-            )
-            for issue_number in sorted(owned_issue_numbers or set())
+        issues=tuple(issues),
+        evidence=CapacityEvidence(
+            owned_task_inventory_complete=all(task_pull_request_ids.get(task_id) for task_id in unavailable_tasks),
+            pull_request_inventory_complete=all(
+                pull.state is not PullRequestState.UNKNOWN for pull in pull_requests.values()
+            ),
         ),
-        evidence=CapacityEvidence(),
         pull_request_sources=pull_request_sources,
+        task_pull_request_ids={key: tuple(sorted(value)) for key, value in task_pull_request_ids.items()},
+        unavailable_task_ids=frozenset(unavailable_tasks),
+        unavailable_issue_numbers=frozenset(unavailable_issues),
     )
 
 
@@ -178,6 +252,7 @@ def observe_capacity_task_records(
     repository: str,
     *,
     owned_task_ids: set[str],
+    unavailable_tasks: set[str] | None = None,
 ) -> list[object]:
     """Read shepherd-owned tasks exactly plus repository-wide running tasks."""
     records_by_id: dict[str, object] = {}
@@ -185,7 +260,10 @@ def observe_capacity_task_records(
         endpoint = f"/agents/repos/{repository}/tasks/{task_id}"
         try:
             record = client.get(endpoint)
-        except Exception as exc:
+        except GitHubApiError as exc:
+            if unavailable_tasks is not None:
+                unavailable_tasks.add(task_id)
+                continue
             raise RuntimeError(
                 f"owned_task_inventory_incomplete:{task_id}"
             ) from exc
@@ -245,11 +323,25 @@ def _normalize_pull_request(
     if raw_state == "open":
         state = PullRequestState.OPEN
     elif raw_state == "closed":
-        state = (
-            PullRequestState.MERGED
-            if pull_request.get("merged_at") is not None
-            else PullRequestState.CLOSED
-        )
+        # A closed detail response supplies merged_at:null for an unmerged PR.
+        # An omitted field or contradictory merged flag is incomplete evidence,
+        # not permission to retire a potentially merged or still-open attempt.
+        merged_at = pull_request.get("merged_at")
+        if (
+            "merged_at" not in pull_request
+            or "merged" in pull_request
+            and pull_request["merged"] is not (merged_at is not None)
+        ):
+            state = PullRequestState.UNKNOWN
+        elif merged_at is None:
+            state = PullRequestState.CLOSED
+        else:
+            try:
+                parse_aware_iso8601(merged_at, "merged_at")
+            except ValueError:
+                state = PullRequestState.UNKNOWN
+            else:
+                state = PullRequestState.MERGED
     else:
         raise ValueError(
             f"pull_requests[{index}].state must be 'open' or 'closed'."

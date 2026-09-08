@@ -695,7 +695,39 @@ general job engine.
 `assign-copilot` is an additive issue assignment: it never replaces human
 assignees, and the current implementation rejects an issue that already has
 any assignee. The issue repository and task target repository must match.
-`unassign-copilot` removes only the Copilot assignee.
+`unassign-copilot` is a separate explicitly authorized operation that removes
+only the Copilot assignee; finishing a fix does not automatically schedule it.
+
+### Selecting work and supplying context
+
+Use `cycle.py start --delegate-issue <number>` to nominate an existing issue
+in the selected repository. Repeat the flag for up to five distinct issues
+(`MAX_DELEGATION_REQUESTS` in `scripts/ci_shepherd/eligibility.py`).
+This includes workflow failures, ordinary issues outside CI inventory, and
+reported quarantined tests. A nomination requests an **investigate-and-fix
+proposal**, not a GitHub write. It is specific to that invocation and forces
+fresh assessment even when the issue has not changed.
+
+Operator-nominated assignments require the existing coordinator `approve-once`
+decision for the exact proposal, followed by the usual grant and executor.
+Enabling `delegate-copilot` in standing policy does not auto-approve these
+nominations. Assessment-selected CI work can use the standing delegation
+policy; source-confirmed quarantine selection retains its pinned source gate.
+
+Neither path requires a completed local diagnosis or `fixHandoff`. The task
+can ask Copilot to investigate the cause itself. Generated instructions request
+a focused fix, regression coverage, repository-instruction compliance, and a
+draft PR; blockers must be reported rather than concealed. Local read-only
+investigation remains a separate choice, not a prerequisite or a second
+investigation automatically launched alongside the cloud task.
+
+Supply useful context already available: bounded failure links, pinned test
+identities, or a current validated handoff. Do not investigate just to fill
+context fields. The issue itself supplies its description and existing comments
+to Copilot; `agent_assignment.custom_instructions` supplies the generated task
+instructions. These instructions are part of the frozen proposal bytes and
+the authorization digest. Updating them invalidates an earlier exact approval
+or grant.
 
 Before an assignment write, the executor fsyncs the exact action intent and a
 complete active-plus-archived Agent Task inventory. It then associates the
@@ -713,18 +745,17 @@ the pull request in draft when evidence or a human decision is missing.
 Exactly one validated `delegate-copilot` judgment is required for every
 `assign-copilot` proposal. Quarantine source reconciliation supplies pinned test
 identity, but it never creates delegation authority by itself.
-A current fingerprint-matched `fixable` investigation must supply a complete
-`fixHandoff` (problem, repository-relative likely paths, and validation commands)
-for an issue-scoped blocking-build or product/tooling code change. Its diagnostic
-citations must cover the observed failures and be available and scoped to the
-issue. The observations must identify a deterministic non-test build or
-repository-configuration failure; a `fixable` result cannot override a merely
-suspected flake, transient, or unknown failure identity. The separate
-source-confirmed quarantine route below requires its own complete fix handoff.
-Missing evidence, ambiguous
-targets, unknown or conflicting workflow scope, and stale results prevent
-assignment. Compact defaults and proposal generation derive this gate from the
-frozen evidence; a model-provided actionability flag is never sufficient.
+`scripts/ci_shepherd/eligibility.py` separates delegation readiness from verified
+machine actionability. An optional diagnosed `fixHandoff` still requires a
+current fingerprint and complete citations; stale diagnosis is never silently
+repackaged as a fresh investigation request. Nomination and readiness are
+rederived from the frozen snapshot, not accepted from model-provided flags.
+
+Missing diagnostic context or unknown workflow scope can block a recovery
+claim without blocking an authorized request to investigate. Current issue
+identity, ownership, provenance, state integrity, authorization, and task/PR
+capacity remain mandatory. Unscoped or unknown collection failures still fail
+closed. The assignment-only evidence routes cannot license comments or closure.
 An issue with an executable closure proposal is never also assigned to Copilot;
 the suppressed delegation remains visible under `blockedRecommendations` with
 reason `superseded-by-closure-review`.
@@ -740,7 +771,7 @@ running slot. An open draft or ready pull request continues to consume the
 separate pull-request slot. Capacity counts every observed repository Agent
 Task, including tasks not started by the current state ledger.
 
-The snapshot keeps delegated issues and pull requests out of general
+The snapshot keeps active delegated issues and pull requests out of general
 assessment lanes while preserving `delegationStatus` records linking each
 shepherd action to its issue, Agent Task, and known pull requests. Failed or
 paused work is marked for human handoff in `report.md`. A completed task with
@@ -748,9 +779,30 @@ an open nonempty pull request remains tracked awaiting review; a zero-file,
 missing, or closed-unmerged pull request requires handoff. Missing or ambiguous
 pull-request identity, state, or changed-file evidence remains
 `association_pending` and records a short typed `retry-backoff` wakeup rather
-than claiming completion. Only an exact pull-request detail response with merge
-evidence completes the delegated work, and the issue-task-PR chain remains
-tracked until the source issue is no longer both open and Copilot-assigned.
+than claiming completion.
+
+Task execution, PR outcome, and issue state are distinct: a task ending is not
+proof that its PR merged or its issue was resolved. A verified merged PR and a
+closed-unmerged PR have different outcomes; neither implies that an open
+quarantine tracker can be closed.
+
+`delegation-observed` entries in `action-events.jsonl` persist verified
+issue/task/PR bindings before retirement. Known PRs are refreshed directly even
+when task artifacts disappear. Retirement preserves the attempt history and
+sets `requiresNewDecision`; it never authorizes a retry. A reopened PR resumes
+tracking of the same attempt, not a new assignment. Unknown PR state cannot
+release capacity, and a still-running task consumes its slot even after a PR
+merges.
+
+All issues with durable assignment history remain monitored, including issues
+outside normal CI inventory. An open issue after a terminal attempt is shown as
+awaiting a new decision. Another attempt needs a fresh nomination and exact
+approval, with normal ownership and live capacity checks still enforced.
+The latest attempt must have verified terminal PRs, or a currently observed
+ended task with no PR. Legacy-unknown history or unavailable task evidence
+without a known terminal PR cannot establish replacement eligibility. Any
+historical open or unknown PR, or currently observed running task, blocks a
+replacement. Neither unassignment nor passage of time supplies approval.
 
 A delegated `handoff_required` state remains active work. Its stable handoff
 episode is derived from the durable assignment action and carries one pending
@@ -836,15 +888,18 @@ the managed-active-item invariant. `managed-item-coverage.json` projects every
 configured active target exactly once as terminal, pending action, tracked open
 PR, active delegation or investigation, typed wakeup, uncovered, or
 conflicting. The same projection is rendered in `report.md`. Unknown verified
-run scope, uncovered work, conflicting terminal/active state, and typed
-awaiting-evidence investigations block only their issue or target and dependent
-actions. Exclusions run before ranking, same-issue suppression, and budgets;
-exact approval cannot override them. Unscoped collection or observation failures
+run scope and typed awaiting-evidence investigations block recovery actions,
+but not an otherwise eligible investigate-and-fix assignment. These exemptions
+are exact-action scoped; they do not authorize a comment, closure, or dependent
+action on the same issue. Uncovered work and conflicting control state remain
+blocking. Exclusions run before ranking, same-issue suppression, and budgets;
+exact approval cannot override hard blockers. Unscoped collection or observation failures
 still stop every action and set mutation exposure to zero. Collection,
 assessment, and reporting still complete. The
 Aspire policy initially enables this gate only for `ci-failure-cause` issues;
-open pull requests and other issue producers remain outside the managed set
-until they have an equally durable coverage path.
+Explicit nominations also enter managed coverage as pending work, not active
+tasks or authorizations. Other producers and open PRs enter according to
+repository policy and durable delegation tracking.
 
 The finalized proposal document carries schema-v2 managed coverage inside its
 production capability: report validity, structured `globalBlockers`, and
@@ -879,8 +934,9 @@ test/failure identity. Repeated rows from one run do not qualify.
 | Test population | Decision path | Next action |
 |---|---|---|
 | Suspected flaky test | Verify exact identity, compatible symptoms and recurrence | Watch for a named new hit, investigate, or recommend quarantine under existing gates |
-| Source-confirmed quarantine | Investigate a fix without re-qualifying for quarantine | A current, fully cited `fixable` handoff may propose Copilot assignment |
-| Label without matching source proof | Keep the mismatch or unavailable inspection explicit | Gather source evidence or request the existing typed human decision; never infer quarantine |
+| Source-confirmed quarantine | Investigate a fix without re-qualifying for quarantine | Copilot may investigate and fix without a completed local handoff; keep the pinned source evidence |
+| Explicitly nominated reported quarantine | Delegate investigation without requiring local source inspection | Preserve quarantine/skip attributes and the tracker; never present a label as verified source truth |
+| Label without matching source proof, not nominated | Keep the mismatch or unavailable inspection explicit | Gather source evidence or request the existing typed human decision; never infer quarantine |
 | `ActiveIssue`-disabled test | Not a quarantined test | Keep separate from the quarantine-fix path |
 
 Prepared and compact `testMaintenance` records distinguish `quarantined`,
@@ -889,13 +945,12 @@ Prepared and compact `testMaintenance` records distinguish `quarantined`,
 `scripts/ci_shepherd/quarantine_reconciliation.py` binds exact test names,
 paths and locations to the inspected revision and digests.
 
-The quarantine-fix gate in `scripts/ci_shepherd/investigations.py` requires an
-issue-scoped, fingerprint-matched investigation with no missing evidence. Its
-citations must include the available issue diagnostic record and every
-required source record, and its proposed paths must include a verified test
-path. Unresolved diagnostic gaps, missing source records, stale results, or an active
-delegation do not become a new assignment. Existing budgets, task/PR capacity,
-human handoffs and exact-action grants still apply.
+The optional diagnosed quarantine-fix handoff in
+`scripts/ci_shepherd/investigations.py` requires an issue-scoped,
+fingerprint-matched result with complete source citations. Do not weaken that
+evidence contract to express a diagnosis-free task; use delegation readiness
+instead. Active work and unresolved task/PR identity still prevent another
+assignment. Existing budgets, ownership, capacity, handoffs, and grants apply.
 
 Fix instructions preserve `[QuarantinedTest]` and keep the tracking issue open.
 They use `Refs #<issue>` rather than an auto-closing `Fixes` reference.
@@ -1787,12 +1842,13 @@ Allowed dispositions are `investigate`, `delegate-copilot`, `watch`,
 `ping-human`, `review-quarantine`, `review-retry`, `review-rerun`,
 `review-close`, and `no-action`.
 
-Use `delegate-copilot` only for an issue-scoped `blocking-build` or
-`product-or-tooling` defect with medium or high confidence and a concrete code
-change that Copilot can attempt. Do not use it for a likely flake, transient
-infrastructure, unknown failure identity, human-owned decision, or duplicate.
-The disposition creates a grant-eligible assignment proposal; it does not
-authorize assignment.
+Use `delegate-copilot` for issue-scoped investigate-and-fix work with medium
+or high confidence that delegation is appropriate, not necessarily confidence
+in a diagnosis. Ordinary CI selection supports blocking-build/product-tooling
+issues and source-confirmed quarantine. Other categories require an explicit
+operator nomination. Do not infer nomination from issue text, clear existing
+ownership, or bypass a duplicate/active-work fence. The disposition creates an
+assignment proposal; it does not authorize assignment.
 
 Allowed target kinds are `issue`, `test`, `failure-fingerprint`, and
 `workflow-run`.

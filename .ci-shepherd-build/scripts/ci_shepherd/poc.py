@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
+from ci_shepherd.eligibility import delegation_readiness
 from ci_shepherd.investigations import derive_machine_actionability
 from ci_shepherd.models import ValidationError, validate_issue_body_payload, validate_workflow_log_payload
 from ci_shepherd.poc_history import compute_fingerprint, merge_occurrence_dimensions
@@ -115,8 +116,15 @@ def validate_poc_judgments(prepared: object, judgments: object) -> None:
                 category == "flaky-test"
                 and recommendation.get("disposition") == "delegate-copilot"
                 and derive_machine_actionability(prepared_issue, category) is None
+                and delegation_readiness(prepared_issue, category) is None
             ):
-                raise ValidationError("Flaky-test delegation requires a source-confirmed quarantine fix handoff.")
+                raise ValidationError("Flaky-test delegation requires source-confirmed quarantine or an operator request.")
+            if (
+                recommendation.get("disposition") == "delegate-copilot"
+                and category not in {"blocking-build", "product-or-tooling", "flaky-test"}
+                and delegation_readiness(prepared_issue, category) is None
+            ):
+                raise ValidationError("This delegation category requires an explicit operator request.")
             if target in recommendation_targets:
                 raise ValidationError(
                     f"Duplicate recommendation target for issue {issue_number}: {target[0]}:{target[1]}."
@@ -168,13 +176,17 @@ def validate_poc_projectability(compact_input: object, judgments: object) -> Non
             recommendation = _require_mapping(raw_recommendation, "recommendation")
             disposition = recommendation.get("disposition")
             if disposition == "delegate-copilot":
+                readiness = (
+                    compact_issue.get("delegationReadiness")
+                    if "machineActionability" not in compact_issue else None
+                )
                 actionability = compact_issue.get("machineActionability", {})
-                evidence_ids = actionability.get("evidenceIds", [])
+                evidence_ids = (readiness or actionability).get("evidenceIds", [])
                 if (
                     not delegation_is_projectable(compact_issue)
                     or not set(evidence_ids).issubset(recommendation.get("evidenceIds", []))
                 ):
-                    raise ValidationError(f"Issue {issue_number} requires a current cited code handoff.")
+                    raise ValidationError(f"Issue {issue_number} requires current cited delegation readiness or a code handoff.")
             if disposition == "review-close" and not close_is_projectable(compact_issue):
                 raise ValidationError(
                     f"Issue {issue_number} review-close requires deterministic "
@@ -197,6 +209,27 @@ def validate_poc_projectability(compact_input: object, judgments: object) -> Non
 
 
 def delegation_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
+    readiness = compact_issue.get("delegationReadiness")
+    if isinstance(readiness, Mapping) and "machineActionability" not in compact_issue:
+        maintenance = compact_issue.get("testMaintenance", {})
+        operator = compact_issue.get("delegationRequest") == {"origin": "operator"}
+        expected_ids = (
+            maintenance.get("evidenceIds", [])
+            if maintenance.get("state") == "quarantined" and not operator
+            else [f"issue:{compact_issue['issueNumber']}"]
+        )
+        return (
+            set(readiness) == {"origin", "intent", "evidenceIds", "quarantine"}
+            and readiness["origin"] == ("operator" if operator else "assessment")
+            and readiness["intent"] == "investigate-and-fix"
+            and type(readiness["quarantine"]) is bool
+            and bool(expected_ids)
+            and readiness["evidenceIds"] == expected_ids
+            and set(expected_ids).issubset(
+                record["id"] for record in compact_issue.get("allowedEvidence", [])
+                if record.get("availability") == "available"
+            )
+        )
     actionability = compact_issue.get("machineActionability", {})
     handoff = actionability.get("fixHandoff")
     return (
@@ -390,11 +423,6 @@ def _validate_recommendation(
         if target_kind != "issue":
             raise ValidationError(
                 "delegate-copilot recommendations must target the issue."
-            )
-        if category not in {"blocking-build", "product-or-tooling", "flaky-test"}:
-            raise ValidationError(
-                "delegate-copilot requires a blocking-build or "
-                "product-or-tooling category, or a verified quarantined-test fix."
             )
         if confidence == "low":
             raise ValidationError(
@@ -749,6 +777,8 @@ def _build_compact_issue(
         "flaky-test" if issue.get("testMaintenance", {}).get("state") == "quarantined"
         else _default_category(title, producer, identity),
     )
+    if delegation is not None:
+        actionability = None
     proof_ids = recovery["evidenceIds"] if recovery.get("status") == "verified" else []
     allowed_evidence, allowed_evidence_ids = _select_allowed_evidence(
         evidence_bundle, [*proof_ids, *(actionability["evidenceIds"] if actionability else [])],
@@ -844,6 +874,23 @@ def _build_compact_issue(
             "evidenceIds": actionability["evidenceIds"], "missingEvidence": [],
             "reassessWhen": "After the delegated task and linked pull request change state.",
         }]
+    readiness = delegation_readiness(issue, default_judgment["category"])
+    if (
+        action_context is not None and action_context.get("role") == "superseded"
+        and not (isinstance(maintenance, Mapping) and maintenance.get("state") == "quarantined")
+    ):
+        readiness = None
+    if readiness is not None and readiness["origin"] == "operator":
+        actionability = None
+        default_judgment["recommendations"] = [{
+            "disposition": "delegate-copilot",
+            "target": {"kind": "issue", "value": issue_number},
+            "confidence": "medium",
+            "summary": "Investigate and fix the explicitly selected issue.",
+            "evidenceIds": readiness["evidenceIds"],
+            "missingEvidence": [],
+            "reassessWhen": "After the delegated task and linked pull request change state.",
+        }]
     for recommendation in default_judgment["recommendations"]:
         if recommendation["disposition"] == "review-close" and recovery.get("status") == "verified":
             recommendation["evidenceIds"] = list(proof_ids)
@@ -893,6 +940,10 @@ def _build_compact_issue(
         compact_issue["testMaintenance"] = copy.deepcopy(maintenance)
     if actionability is not None:
         compact_issue["machineActionability"] = actionability
+    if readiness is not None:
+        compact_issue["delegationReadiness"] = readiness
+    if "delegationRequest" in issue:
+        compact_issue["delegationRequest"] = copy.deepcopy(issue["delegationRequest"])
     if "recovery" in issue:
         compact_issue["recovery"] = {
             key: recovery[key] for key in ("status", "complete", "evidenceIds")

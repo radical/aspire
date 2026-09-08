@@ -3,6 +3,7 @@ from __future__ import annotations
 """Deterministic lifecycle and global capacity accounting for delegated tasks."""
 
 from dataclasses import dataclass
+import copy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Mapping, Sequence
@@ -29,6 +30,7 @@ __all__ = [
     "TaskState",
     "decide_new_start",
     "delegation_starts_from_events",
+    "delegation_records_from_events",
     "active_owned_task_ids_from_events",
     "derive_capacity_usage",
     "derive_delegation_tracking",
@@ -54,6 +56,7 @@ class TaskLifecycle(StrEnum):
     RUNNING = "running"
     AWAITING_PULL_REQUEST = "awaiting_pull_request"
     COMPLETED = "completed"
+    CLOSED_UNMERGED = "closed_unmerged"
     HANDOFF_REQUIRED = "handoff_required"
     ASSOCIATION_PENDING = "association_pending"
 
@@ -247,7 +250,7 @@ class CapacityLimits:
 @dataclass(frozen=True, slots=True)
 class TaskLifecycleResult:
     task_id: str
-    state: TaskState
+    state: TaskState | None
     association: PullRequestAssociation
     lifecycle: TaskLifecycle
     requires_handoff: bool
@@ -506,11 +509,51 @@ def active_owned_task_ids_from_events(
         and isinstance(task_id, str)
         and task_id
     }
+    for record in delegation_records_from_events(events):
+        if record.get("retired") is False or (
+            record.get("taskObservation", "available") == "available"
+            and record.get("taskState") in {"queued", "in_progress"}
+        ):
+            retired_task_ids.discard(record.get("taskId"))
     return frozenset(
         start.task_id
         for start in delegation_starts_from_events(events)
         if start.task_id is not None and start.task_id not in retired_task_ids
     )
+
+
+def delegation_records_from_events(
+    events: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, object], ...]:
+    from .models import _validate_delegation_status
+
+    records: dict[str, dict[str, object]] = {}
+    baselines: dict[str, Mapping[str, object]] = {}
+    terminals: dict[str, Mapping[str, object]] = {}
+    for event in events:
+        action_id = event.get("actionId")
+        if event.get("eventType") == "delegation-baseline":
+            baselines[action_id] = event
+        elif event.get("eventType") == "terminal":
+            terminals[action_id] = event
+        if event.get("eventType") != "delegation-observed":
+            continue
+        record = event.get("record")
+        _validate_delegation_status({"status": "complete", "records": [record]})
+        baseline = baselines.get(action_id, {})
+        result = terminals.get(action_id, {}).get("result")
+        expected_task = result.get("taskId") if isinstance(result, Mapping) else None
+        if (
+            record["actionId"] != action_id
+            or baseline.get("operation") != "assign-copilot"
+            or baseline.get("repository") != record["repository"]
+            or baseline.get("target") != {"kind": "issue", "number": record["issueNumber"]}
+            or record.get("taskId") != expected_task
+            or event.get("repository", record["repository"]) != record["repository"]
+        ):
+            raise ValueError("Delegation observation contradicts its assignment.")
+        records[record["actionId"]] = copy.deepcopy(record)
+    return tuple(records.values())
 
 
 def derive_delegation_tracking(
@@ -519,6 +562,9 @@ def derive_delegation_tracking(
     tasks: Sequence[AgentTask],
     pull_requests: Sequence[DelegatedPullRequest],
     issues: Sequence[DelegatedIssue] = (),
+    task_pull_request_ids: Mapping[str, Sequence[int]] | None = None,
+    unavailable_task_ids: frozenset[str] = frozenset(),
+    unavailable_issue_numbers: frozenset[int] = frozenset(),
 ) -> tuple[dict[str, object], ...]:
     """Preserve the durable issue -> task -> pull-request lifecycle chain."""
     latest_terminals: dict[str, Mapping[str, object]] = {}
@@ -528,6 +574,13 @@ def derive_delegation_tracking(
             latest_terminals[action_id] = event
     tasks_by_id = {task.task_id: task for task in tasks}
     issues_by_number = {issue.number: issue for issue in issues}
+    previous_by_action = {
+        record["actionId"]: record for record in delegation_records_from_events(events)
+    }
+    retired_task_ids = {
+        event.get("taskId") for event in events
+        if event.get("eventType") == "delegation-retired"
+    }
 
     tracking: list[dict[str, object]] = []
     for baseline in events:
@@ -576,7 +629,15 @@ def derive_delegation_tracking(
             "startedAt": started_at.isoformat().replace("+00:00", "Z"),
             "taskId": task_id,
         }
+        previous = previous_by_action.get(action_id, {})
+        if previous and (
+            any(previous.get(key) != common[key] for key in ("repository", "issueNumber"))
+            or previous.get("taskId") is not None and previous["taskId"] != task_id
+        ):
+            raise ValueError("Persisted delegation does not match its assignment.")
         live_issue = issues_by_number.get(issue_number)
+        if issue_number in unavailable_issue_numbers:
+            common["issueObservation"] = "unavailable"
         if live_issue is not None:
             common.update(
                 {
@@ -590,12 +651,25 @@ def derive_delegation_tracking(
                 }
             )
         task = tasks_by_id.get(task_id) if task_id is not None else None
-        if task is None:
+        known_pulls = previous.get("pullRequests", [])
+        known_states = {
+            pull["databaseId"]: pull.get("lastKnownState") if pull["state"] == "unknown" else pull["state"]
+            for pull in known_pulls
+        }
+        if task_id is None or (
+            task is None and not known_pulls
+            and not (task_pull_request_ids or {}).get(task_id)
+        ):
+            legacy_retired = task_id is not None and task_id in retired_task_ids
             tracking.append(
                 {
                     **common,
-                    "taskState": None,
-                    "lifecycle": TaskLifecycle.HANDOFF_REQUIRED.value,
+                    "taskState": previous.get("taskState"),
+                    "taskObservation": "unavailable" if task_id in unavailable_task_ids else "not-requested",
+                    "lifecycle": "retired" if legacy_retired else TaskLifecycle.HANDOFF_REQUIRED.value,
+                    "attemptOutcome": "legacy-unknown" if legacy_retired else "unresolved",
+                    "requiresNewDecision": True,
+                    "retired": legacy_retired,
                     "requiresHuman": True,
                     "handoffStartedAt": common["startedAt"],
                     "pullRequests": [],
@@ -605,21 +679,36 @@ def derive_delegation_tracking(
 
         associated_pulls: list[DelegatedPullRequest] = []
         association = PullRequestAssociation.NONE
-        if task.pull_artifacts:
+        identities = {
+            pull["databaseId"]: pull.get("globalId") for pull in known_pulls
+        }
+        for identity in (task_pull_request_ids or {}).get(task_id, ()):
+            identities.setdefault(identity, None)
+        for artifact in task.pull_artifacts if task is not None else ():
+            previous_global = identities.get(artifact.database_id)
+            if previous_global is not None and artifact.global_id is not None and previous_global != artifact.global_id:
+                raise ValueError("Task pull artifact contradicts its persisted identity.")
+            identities[artifact.database_id] = artifact.global_id or previous_global
+        if identities:
             association = PullRequestAssociation.ASSOCIATED
-            for artifact in task.pull_artifacts:
-                assert artifact.database_id is not None
+            for database_id, global_id in sorted(identities.items()):
                 matches = [
                     pull_request
                     for pull_request in pull_requests
-                    if pull_request.database_id == artifact.database_id
+                    if pull_request.database_id == database_id
                     and (
-                        artifact.global_id is None
-                        or pull_request.global_id == artifact.global_id
+                        global_id is None
+                        or pull_request.global_id == global_id
                     )
                 ]
                 if len(matches) != 1:
                     association = PullRequestAssociation.PENDING
+                    known = next((pull for pull in known_pulls if pull["databaseId"] == database_id), {})
+                    associated_pulls.append(DelegatedPullRequest(
+                        database_id=database_id, global_id=global_id,
+                        number=known.get("number"), state=PullRequestState.UNKNOWN,
+                        is_draft=False,
+                    ))
                     continue
                 pull_request = matches[0]
                 associated_pulls.append(pull_request)
@@ -631,18 +720,40 @@ def derive_delegation_tracking(
             task,
             association=association,
             pull_requests=associated_pulls,
+            task_id=task_id,
+        )
+        outcome = {
+            TaskLifecycle.COMPLETED: "merged",
+            TaskLifecycle.CLOSED_UNMERGED: "closed-unmerged",
+            TaskLifecycle.HANDOFF_REQUIRED: "unresolved",
+        }.get(lifecycle.lifecycle, "pending")
+        if (
+            lifecycle.lifecycle is TaskLifecycle.ASSOCIATION_PENDING
+            and previous.get("attemptOutcome") in {"merged", "closed-unmerged"}
+            and all(pull.state is not PullRequestState.OPEN for pull in associated_pulls)
+            and set(identities).issubset(known_states)
+        ):
+            # Losing a current API response does not undo a verified historical
+            # disposition. Current PR state remains unknown and blocks capacity.
+            outcome = previous["attemptOutcome"]
+        retired = outcome in {"merged", "closed-unmerged"}
+        handoff_at = (
+            task.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            if task is not None else previous.get("handoffStartedAt", common["startedAt"])
         )
         tracking.append(
             {
                 **common,
-                "taskState": task.state.value,
+                "taskState": task.state.value if task is not None else previous.get("taskState"),
+                "taskObservation": "available" if task is not None else "unavailable" if task_id in unavailable_task_ids else "not-requested",
                 "lifecycle": lifecycle.lifecycle.value,
+                "attemptOutcome": outcome,
+                "requiresNewDecision": outcome != "pending" or previous.get("requiresNewDecision") is True,
+                "retired": retired,
                 "requiresHuman": lifecycle.requires_handoff,
                 **(
                     {
-                        "handoffStartedAt": task.updated_at.astimezone(UTC)
-                        .isoformat()
-                        .replace("+00:00", "Z")
+                        "handoffStartedAt": handoff_at,
                     }
                     if lifecycle.requires_handoff
                     else {}
@@ -652,7 +763,7 @@ def derive_delegation_tracking(
                         "nextWakeup": {
                             "reason": "retry-backoff",
                             "evaluateAt": (
-                                task.updated_at.astimezone(UTC)
+                                parse_aware_iso8601(handoff_at, "handoffStartedAt")
                                 + timedelta(minutes=15)
                             )
                             .isoformat()
@@ -666,6 +777,12 @@ def derive_delegation_tracking(
                     {
                         "databaseId": pull_request.database_id,
                         "state": pull_request.state.value,
+                        **(
+                            {"lastKnownState": known_states[pull_request.database_id]}
+                            if pull_request.state is PullRequestState.UNKNOWN
+                            and known_states.get(pull_request.database_id) in {"open", "closed", "merged"}
+                            else {}
+                        ),
                         "isDraft": pull_request.is_draft,
                         **(
                             {"globalId": pull_request.global_id}
@@ -697,50 +814,55 @@ def derive_delegation_tracking(
 
 
 def derive_task_lifecycle(
-    task: AgentTask,
+    task: AgentTask | None,
     *,
     association: PullRequestAssociation,
     pull_requests: Sequence[DelegatedPullRequest] = (),
+    task_id: str | None = None,
 ) -> TaskLifecycleResult:
     """Derive task lifecycle after accounting for PR association evidence."""
-    if task.state in {TaskState.QUEUED, TaskState.IN_PROGRESS}:
-        lifecycle = TaskLifecycle.RUNNING
-        requires_handoff = False
-    elif task.state is TaskState.COMPLETED:
-        if association is PullRequestAssociation.NONE:
-            lifecycle = TaskLifecycle.HANDOFF_REQUIRED
-            requires_handoff = True
-        elif (
+    state = task.state if task is not None else None
+    if pull_requests:
+        open_pulls = [
+            pull for pull in pull_requests if pull.state is PullRequestState.OPEN
+        ]
+        if (
             association is PullRequestAssociation.PENDING
-            or not pull_requests
-            or len(pull_requests) != 1
-            or pull_requests[0].state is PullRequestState.UNKNOWN
-            or (
-                pull_requests[0].state is PullRequestState.OPEN
-                and pull_requests[0].changed_files is None
-            )
+            or any(pull.state is PullRequestState.UNKNOWN for pull in pull_requests)
+            or any(pull.changed_files is None for pull in open_pulls)
         ):
             lifecycle = TaskLifecycle.ASSOCIATION_PENDING
             requires_handoff = False
-        elif pull_requests[0].state is PullRequestState.MERGED:
+        elif open_pulls:
+            if any(pull.changed_files > 0 for pull in open_pulls):
+                lifecycle = TaskLifecycle.AWAITING_PULL_REQUEST
+                requires_handoff = False
+            else:
+                lifecycle = TaskLifecycle.HANDOFF_REQUIRED
+                requires_handoff = True
+        elif any(pull.state is PullRequestState.MERGED for pull in pull_requests):
             lifecycle = TaskLifecycle.COMPLETED
             requires_handoff = False
-        elif (
-            pull_requests[0].state is PullRequestState.OPEN
-            and pull_requests[0].changed_files > 0
-        ):
-            lifecycle = TaskLifecycle.AWAITING_PULL_REQUEST
-            requires_handoff = False
         else:
+            lifecycle = TaskLifecycle.CLOSED_UNMERGED
+            requires_handoff = True
+    elif state in {TaskState.QUEUED, TaskState.IN_PROGRESS}:
+        lifecycle = TaskLifecycle.RUNNING
+        requires_handoff = False
+    elif state is TaskState.COMPLETED:
+        if association is PullRequestAssociation.NONE:
             lifecycle = TaskLifecycle.HANDOFF_REQUIRED
             requires_handoff = True
+        else:
+            lifecycle = TaskLifecycle.ASSOCIATION_PENDING
+            requires_handoff = False
     else:
         lifecycle = TaskLifecycle.HANDOFF_REQUIRED
         requires_handoff = True
 
     return TaskLifecycleResult(
-        task_id=task.task_id,
-        state=task.state,
+        task_id=task.task_id if task is not None else _nonempty_string(task_id, "task_id"),
+        state=state,
         association=association,
         lifecycle=lifecycle,
         requires_handoff=requires_handoff,
@@ -756,6 +878,7 @@ def derive_capacity_usage(
     now: datetime,
     issues: Sequence[DelegatedIssue] = (),
     retired_task_ids: frozenset[str] = frozenset(),
+    task_pull_request_ids: Mapping[str, Sequence[int]] | None = None,
 ) -> CapacityUsage:
     """Derive shepherd usage and repository-wide runaway protection."""
     now = _require_aware(now, "now")
@@ -769,6 +892,8 @@ def derive_capacity_usage(
     starts_in_window = 0
     owned_task_ids: set[str] = set()
     recent_owned_task_ids: set[str] = set()
+    observed_task_ids = {task.task_id for task in tasks}
+    bound_pulls = task_pull_request_ids or {}
     for start in starts:
         started_at = start.started_at.astimezone(UTC)
         if started_at > now:
@@ -777,7 +902,11 @@ def derive_capacity_usage(
             starts_in_window += 1
         if (
             start.task_id is not None
-            and start.task_id not in retired_task_ids
+            and (
+                start.task_id not in retired_task_ids
+                or start.task_id in observed_task_ids
+                or start.task_id in bound_pulls
+            )
         ):
             owned_task_ids.add(start.task_id)
             if started_at > cutoff:
@@ -810,13 +939,13 @@ def derive_capacity_usage(
     lifecycles: list[TaskLifecycleResult] = []
     for task_id in sorted(recent_owned_task_ids):
         task = tasks_by_id.get(task_id)
-        if task is None:
+        if task is None and not bound_pulls.get(task_id):
             problems.append(f"owned_task_missing:{task_id}")
 
     open_pull_requests: set[tuple[int, str]] = set()
     for task_id in sorted(owned_task_ids):
         task = tasks_by_id.get(task_id)
-        if task is None:
+        if task is None and not bound_pulls.get(task_id):
             continue
         association = PullRequestAssociation.NONE
         associated_pulls: list[DelegatedPullRequest] = []
@@ -825,22 +954,25 @@ def derive_capacity_usage(
             or not evidence.pull_request_inventory_complete
         ):
             association = PullRequestAssociation.PENDING
-        for artifact in task.pull_artifacts:
+        identities = {database_id: None for database_id in bound_pulls.get(task_id, ())}
+        for artifact in task.pull_artifacts if task is not None else ():
+            identities[artifact.database_id] = artifact.global_id
+        for database_id, global_id in identities.items():
             matches = [
                 pull_request
                 for pull_request in pull_requests
-                if pull_request.database_id == artifact.database_id
+                if pull_request.database_id == database_id
                 and (
-                    artifact.global_id is None
-                    or pull_request.global_id == artifact.global_id
+                    global_id is None
+                    or pull_request.global_id == global_id
                 )
             ]
             if not matches:
                 has_conflicting_identity = any(
-                    pull_request.database_id == artifact.database_id
+                    pull_request.database_id == database_id
                     or (
-                        artifact.global_id is not None
-                        and pull_request.global_id == artifact.global_id
+                        global_id is not None
+                        and pull_request.global_id == global_id
                     )
                     for pull_request in pull_requests
                 )
@@ -849,16 +981,17 @@ def derive_capacity_usage(
                     if has_conflicting_identity
                     else "task_pull_request_association_incomplete"
                 )
-                problems.append(f"{problem}:{task.task_id}")
+                problems.append(f"{problem}:{task_id}")
                 association = PullRequestAssociation.PENDING
                 continue
             if len(matches) > 1:
-                problems.append(f"task_pull_request_association_ambiguous:{task.task_id}")
+                problems.append(f"task_pull_request_association_ambiguous:{task_id}")
                 association = PullRequestAssociation.PENDING
                 continue
             pull_request = matches[0]
             associated_pulls.append(pull_request)
             if pull_request.state is PullRequestState.UNKNOWN:
+                problems.append(f"task_pull_request_state_unknown:{task_id}")
                 association = PullRequestAssociation.PENDING
                 continue
             if association is not PullRequestAssociation.PENDING:
@@ -872,6 +1005,7 @@ def derive_capacity_usage(
                 task,
                 association=association,
                 pull_requests=associated_pulls,
+                task_id=task_id,
             )
         )
 
@@ -962,8 +1096,8 @@ def render_delegation_status_section(
         return "\n".join(lines) + "\n"
     lines.extend(
         [
-            "| Issue | Task | State | Pull requests | Human handoff |",
-            "|---|---|---|---|---|",
+            "| Issue | Task | State | Pull requests | Human handoff | Issue state | Attempt outcome | New decision |",
+            "|---|---|---|---|---|---|---|---|",
         ]
     )
     for record in records:
@@ -983,12 +1117,18 @@ def render_delegation_status_section(
                 )
                 rendered_pulls.append(
                     f"{identity} ({pull_request.get('state')})"
+                    + (
+                        f" [last verified: {pull_request['lastKnownState']}]"
+                        if pull_request.get("lastKnownState") else ""
+                    )
                 )
         lifecycle = record.get("lifecycle")
         task_state = record.get("taskState")
         rendered_state = lifecycle or task_state
         if lifecycle and task_state and lifecycle != task_state:
             rendered_state = f"{lifecycle} (task: {task_state})"
+        if record.get("taskObservation") in {"unavailable", "not-requested"}:
+            rendered_state += f" [{record['taskObservation']}]"
         reminder = record.get("handoffReminder")
         handoff = "required" if record.get("requiresHuman") else "no"
         if isinstance(reminder, Mapping):
@@ -1001,7 +1141,10 @@ def render_delegation_status_section(
             f"| `{record.get('taskId') or 'pending'}` "
             f"| {rendered_state} "
             f"| {', '.join(rendered_pulls) or 'none'} "
-            f"| {handoff} |"
+            f"| {handoff} "
+            f"| {'open' if record.get('issueOpen') is True else 'closed' if record.get('issueOpen') is False else 'unknown'} "
+            f"| {record.get('attemptOutcome', 'unknown')} "
+            f"| {'required' if record.get('requiresNewDecision') else 'no'} |"
         )
     lines.append("")
     _append_delegation_proposals(lines, proposals_document)

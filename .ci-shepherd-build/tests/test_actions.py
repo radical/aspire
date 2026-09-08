@@ -456,7 +456,7 @@ class WatchActionTests(unittest.TestCase):
             replay["proposals"][0]["idempotencyKey"],
         )
 
-    def test_model_only_delegation_recommendation_is_blocked(self) -> None:
+    def test_ci_delegation_can_request_investigation_without_a_local_handoff(self) -> None:
         prepared = _prepared()
         prepared["repositoryPolicy"] = {
             "quarantinePullRequest": {"baseRef": "main"},
@@ -469,11 +469,9 @@ class WatchActionTests(unittest.TestCase):
             "ankj",
         )
 
-        self.assertEqual([], proposals["proposals"])
-        self.assertEqual(
-            ["machine-actionability-not-verified"],
-            proposals["blockedRecommendations"][0]["blockingReasons"],
-        )
+        proposal, = proposals["proposals"]
+        self.assertEqual("investigation-request", proposal["evidenceBasis"])
+        self.assertIn("Determine the cause", proposal["customInstructions"])
 
     def test_no_action_with_verified_quarantine_does_not_propose_assignment(
         self,
@@ -645,7 +643,7 @@ class WatchActionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "Flaky-test delegation requires a source-confirmed quarantine fix handoff",
+            "Flaky-test delegation requires source-confirmed quarantine or an operator request",
         ):
             build_action_proposals(
                 _snapshot(),

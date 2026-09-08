@@ -110,7 +110,7 @@ _POLICY_LOCK_FILENAME = "policy-events.lock"
 # clear rather than silently answering as though the action it was asked
 # about has (or lacks) a durable intent.
 _KNOWN_ACTION_EVENT_TYPES = frozenset(
-    {"intent", "terminal", "delegation-baseline", "delegation-retired"}
+    {"intent", "terminal", "delegation-baseline", "delegation-retired", "delegation-observed"}
 )
 
 

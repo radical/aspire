@@ -681,6 +681,8 @@ def _validate_policy_selection(
             "proposal operation."
         )
     license_source = _require_license_source(candidate)
+    if proposal.get("evidenceBasis") == "operator-request" and not license_source.startswith("decision:"):
+        raise AuthorizationError("Operator-request assignment requires an exact approval.")
     depends_on = proposal.get("dependsOn")
     satisfied_raw = candidate.get("satisfiedPrerequisites")
     satisfied: tuple[tuple[str, str], ...]

@@ -268,6 +268,8 @@ def _validate_proposal(
             evidence_basis=evidence_basis,
             body=proposal.get("body"),
         )
+        if evidence_basis in {"operator-request", "investigation-request"} and operation != "assign-copilot":
+            raise ValueError(f"{action_id}: investigation request only licenses assignment.")
         if (
             "source-comment-unavailable" in eligibility["blockingReasons"]
             and operation != "edit-comment"
@@ -549,6 +551,8 @@ def _validate_execution_eligibility(
             "issue-state",
             "source-reconciliation",
             "delegation-state",
+            "operator-request",
+            "investigation-request",
         }
         or recorded_evidence_basis != evidence_basis
     ):
@@ -613,7 +617,7 @@ def _validate_execution_eligibility(
         )
 
     derived_reasons: list[str] = []
-    if evidence_basis in {"ci-occurrence", "issue-state", "delegation-state"}:
+    if evidence_basis in {"ci-occurrence", "issue-state", "delegation-state", "investigation-request"}:
         if not ci_labels:
             derived_reasons.append("missing-ci-label")
     if evidence_basis == "ci-occurrence":
@@ -1249,7 +1253,7 @@ def execute_action(
         if (
             validated["schemaVersion"] == 2
             and proposal.get("evidenceBasis")
-            in {"ci-occurrence", "issue-state", "delegation-state"}
+            in {"ci-occurrence", "issue-state", "delegation-state", "investigation-request"}
             and not live_labels & EXECUTABLE_CI_LABELS
         ):
             return _terminal_result(

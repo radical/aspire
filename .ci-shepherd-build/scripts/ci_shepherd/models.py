@@ -13,6 +13,7 @@ from .repository_policy import (
 from .poc_state import REVIEW_WAKEUP_REASONS
 from .meaningful_progress import validate_meaningful_progress
 from .timeutils import parse_aware_iso8601
+from .eligibility import MAX_DELEGATION_REQUESTS
 
 
 class ValidationError(ValueError):
@@ -343,6 +344,10 @@ def validate_snapshot(snapshot: object) -> None:
     _require_repository(mapping)
     _require_nonempty_string(mapping, "collectedAt")
     open_issues = set(_require_unique_int_list(mapping, "openIssues"))
+    if "delegationRequests" in mapping:
+        requests = _require_unique_int_list(mapping, "delegationRequests")
+        if len(requests) > MAX_DELEGATION_REQUESTS:
+            raise ValidationError(f"delegationRequests may contain at most {MAX_DELEGATION_REQUESTS} issues.")
     _validate_delegated_inventory(mapping, open_issues=open_issues)
     collection_errors = _require_list(mapping, "collectionErrors")
     for index, collection_error in enumerate(collection_errors):
@@ -473,9 +478,14 @@ def _validate_delegation_status(value: object) -> None:
                 "startedAt",
                 "taskId",
                 "taskState",
+                "taskObservation",
                 "lifecycle",
+                "attemptOutcome",
+                "requiresNewDecision",
+                "retired",
                 "requiresHuman",
                 "issueOpen",
+                "issueObservation",
                 "copilotAssigned",
                 "humanAssigned",
                 "handoffStartedAt",
@@ -507,9 +517,22 @@ def _validate_delegation_status(value: object) -> None:
         ):
             raise ValidationError(f"{field}.taskState must be null or nonempty.")
         _require_nonempty_string(record, "lifecycle")
+        if "attemptOutcome" in record and record["attemptOutcome"] not in {
+            "pending", "merged", "closed-unmerged", "unresolved", "legacy-unknown",
+        }:
+            raise ValidationError(f"{field}.attemptOutcome is invalid.")
+        for flag in ("requiresNewDecision", "retired"):
+            if flag in record and type(record[flag]) is not bool:
+                raise ValidationError(f"{field}.{flag} must be a boolean.")
+        if "taskObservation" in record and record["taskObservation"] not in {
+            "available", "unavailable", "not-requested",
+        }:
+            raise ValidationError(f"{field}.taskObservation is invalid.")
         if not isinstance(record.get("requiresHuman"), bool):
             raise ValidationError(f"{field}.requiresHuman must be a boolean.")
         issue_open = record.get("issueOpen")
+        if "issueObservation" in record and record["issueObservation"] != "unavailable":
+            raise ValidationError(f"{field}.issueObservation is invalid.")
         copilot_assigned = record.get("copilotAssigned")
         if (issue_open is None) != (copilot_assigned is None):
             raise ValidationError(
@@ -541,6 +564,7 @@ def _validate_delegation_status(value: object) -> None:
             if record.get("lifecycle") not in {
                 "association_pending",
                 "handoff_required",
+                "closed_unmerged",
             }:
                 raise ValidationError(
                     f"{field}.nextWakeup is not valid for this lifecycle."
@@ -619,6 +643,7 @@ def _validate_delegation_status(value: object) -> None:
                     "globalId",
                     "number",
                     "state",
+                    "lastKnownState",
                     "isDraft",
                     "changedFiles",
                     "humanAuthored",
@@ -650,6 +675,8 @@ def _validate_delegation_status(value: object) -> None:
                     f"{pull_field}.number must be null or positive."
                 )
             _require_nonempty_string(pull, "state")
+            if "lastKnownState" in pull and pull["lastKnownState"] not in {"open", "closed", "merged"}:
+                raise ValidationError(f"{pull_field}.lastKnownState is invalid.")
             if not isinstance(pull.get("isDraft"), bool):
                 raise ValidationError(f"{pull_field}.isDraft must be a boolean.")
             changed_files = pull.get("changedFiles")

@@ -7,6 +7,7 @@ import unittest
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from ci_shepherd.collector import (
     Collector,
@@ -19,9 +20,11 @@ from ci_shepherd.collector import (
     _repository_scoped_evidence_id,
 )
 from ci_shepherd.models import ValidationError, validate_report, validate_snapshot
+from ci_shepherd.github import GitHubApiError
 from ci_shepherd.history import record_history
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.refresh import COLLECTION_VERSION, RefreshPlan, complete_refresh_plan
+from tests.test_ownership import FakeCompletedProcess, FakeGitRunner
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
@@ -203,6 +206,354 @@ def mixed_root_report(high_risk_issue_number: int) -> dict[str, object]:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_direct_issue_reads_propagate_unexpected_client_errors(self) -> None:
+        for options in (
+            {"delegation_requests": [42]},
+            {"monitored_issue_numbers": [42]},
+        ):
+            for error in (RuntimeError("unexpected client failure"), TypeError("client bug")):
+                with self.subTest(options=options, error=error):
+                    client = ScriptedClient(
+                        pages={
+                            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                        },
+                        singles={f"/repos/{REPOSITORY}/issues/42": error},
+                    )
+                    with self.assertRaises(type(error)) as caught:
+                        Collector(client, REPOSITORY, NOW, **options).collect(
+                            include_supporting=False, include_timeline=False,
+                        )
+                    self.assertIs(error, caught.exception)
+
+    def test_direct_nomination_is_observed_after_ordinary_inventory(self) -> None:
+        initial = make_issue(42, labels=["ci-failure-cause"])
+        current = {
+            **initial, "updated_at": "2026-08-02T00:00:01Z",
+            "assignees": [{"login": "copilot-swe-agent[bot]"}],
+        }
+        endpoint = f"/repos/{REPOSITORY}/issues/42"
+        client = ScriptedClient(
+            pages={
+                f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [current],
+                f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                f"/repos/{REPOSITORY}/issues/42/comments": [],
+            },
+            singles={endpoint: current},
+        )
+        get = client.get
+
+        def observe(endpoint: str) -> object:
+            response = get(endpoint)
+            if endpoint.endswith("/issues/42") and not any(
+                method == "get_pages" and "labels=" in path for method, path in client.calls
+            ):
+                return initial
+            return response
+
+        with patch.object(client, "get", side_effect=observe):
+            result = Collector(
+                client, REPOSITORY, NOW, delegation_requests=[42],
+            ).collect(include_supporting=False, include_timeline=False)
+
+        self.assertEqual([], result.open_issues)
+        self.assertEqual([current], result.delegated_issues)
+
+    def test_incremental_nomination_keeps_fresh_payload_when_timestamp_is_unchanged(self) -> None:
+        issue = make_issue(42)
+        issue["assignees"] = []
+        pages = {
+            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+            f"/repos/{REPOSITORY}/issues/42/comments": [],
+        }
+        first = Collector(
+            ScriptedClient(pages=pages, singles={f"/repos/{REPOSITORY}/issues/42": issue}),
+            REPOSITORY, NOW, delegation_requests=[42],
+        ).collect(include_supporting=False, include_timeline=False)
+        previous = {
+            **snapshot_from_result(first), "collectionVersion": COLLECTION_VERSION,
+            "issues": first.open_issues,
+        }
+        history = {
+            "schemaVersion": 1, "repository": REPOSITORY,
+            "sourceSchemaVersions": {"snapshot": 1, "collection": COLLECTION_VERSION},
+            "evidence": {
+                evidence_id: {**record, "sourceUpdatedAt": issue["updated_at"]}
+                for evidence_id, record in first.evidence.items()
+            },
+        }
+        fresh = {
+            **issue, "body": "Current investigation context",
+            "assignees": [{"login": "another-developer"}],
+        }
+        for options in (
+            {"delegation_requests": [42]},
+            {"monitored_issue_numbers": [42]},
+        ):
+            with self.subTest(options=options):
+                result = Collector(
+                    ScriptedClient(pages=pages, singles={f"/repos/{REPOSITORY}/issues/42": fresh}),
+                    REPOSITORY, NOW, **options,
+                ).collect_incremental(
+                    previous, history, include_supporting=False, include_timeline=False,
+                )
+                payload = result.evidence["issue:42"]["payload"]
+                self.assertEqual(["another-developer"], payload["assignees"])
+                self.assertEqual("Current investigation context", payload["body"])
+                self.assertEqual(["another-developer"], result.open_issues[0]["assignees"])
+                self.assertEqual((42,), result.refresh_plan.changed_issues)
+                self.assertIn("issue:42", result.refresh_plan.refresh)
+
+    def test_local_history_failure_is_diagnostic_for_only_referencing_issue(self) -> None:
+        inventory = InventoryResult(
+            open_issues=[{"number": 42}, {"number": 43}], supporting_issues=[],
+            evidence={
+                "commit:abc": {
+                    "kind": "commit", "payload": {
+                        "changedPaths": ["src/app.py"],
+                        "referencedBy": [{
+                            "sourceIssueNumber": 42, "sourceEvidenceId": "issue:42",
+                            "sourceUrl": f"https://github.com/{REPOSITORY}/issues/42",
+                            "extractionMethod": "issue-body",
+                        }],
+                    },
+                },
+            },
+            collection_errors=[], warnings=[], references={},
+        )
+        git = FakeGitRunner([
+            FakeCompletedProcess([], 0, "true\n"),
+            FakeCompletedProcess([], 0, f"https://github.com/{REPOSITORY}.git\n"),
+            FakeCompletedProcess([], 0, "abc\n"),
+            FakeCompletedProcess([], 1, stderr="history unavailable"),
+        ])
+        with tempfile.TemporaryDirectory() as checkout:
+            result = Collector(ScriptedClient(), REPOSITORY, NOW).enrich_ownership_evidence(
+                inventory, checkout_path=checkout, git_runner=git,
+            )
+
+        self.assertEqual(1, len(result.collection_errors))
+        error = result.collection_errors[0]
+        self.assertEqual("ownership-history", error.stage)
+        self.assertEqual("diagnostic-evidence-unavailable", error.effect)
+        self.assertEqual({"kind": "issue", "issueNumbers": [42]}, error.scope)
+        self.assertEqual("partial", result.evidence["source:src%2Fapp.py"]["availability"])
+
+    def test_codeowners_lookup_failure_is_scoped_diagnostic_evidence(self) -> None:
+        inventory = InventoryResult(
+            open_issues=[{"number": 42}], supporting_issues=[],
+            evidence={}, collection_errors=[], warnings=[], references={},
+        )
+        endpoint = f"/repos/{REPOSITORY}/contents/.github/CODEOWNERS"
+        client = ScriptedClient(singles={endpoint: RuntimeError("permission denied")})
+        result = Collector(client, REPOSITORY, NOW).enrich_ownership_evidence(inventory)
+
+        self.assertEqual(1, len(result.collection_errors))
+        error = result.collection_errors[0]
+        self.assertEqual("ownership-codeowners", error.stage)
+        self.assertEqual("diagnostic-evidence-unavailable", error.effect)
+        self.assertEqual({"kind": "issue", "issueNumbers": [42]}, error.scope)
+        self.assertEqual(endpoint, error.endpoint)
+
+    def test_local_checkout_failure_is_scoped_diagnostic_evidence(self) -> None:
+        inventory = InventoryResult(
+            open_issues=[{"number": 42}], supporting_issues=[],
+            evidence={}, collection_errors=[], warnings=[], references={},
+        )
+        git = FakeGitRunner([
+            FakeCompletedProcess([], 1, stderr="git unavailable"),
+        ])
+        result = Collector(ScriptedClient(), REPOSITORY, NOW).enrich_ownership_evidence(
+            inventory, checkout_path=str(Path.cwd()), git_runner=git,
+        )
+
+        self.assertEqual(1, len(result.collection_errors))
+        error = result.collection_errors[0]
+        self.assertEqual("ownership-checkout", error.stage)
+        self.assertEqual("diagnostic-evidence-unavailable", error.effect)
+        self.assertEqual({"kind": "issue", "issueNumbers": [42]}, error.scope)
+        self.assertEqual("git unavailable", error.message)
+
+    def test_incremental_monitoring_keeps_scoped_read_failure(self) -> None:
+        endpoint = f"/repos/{REPOSITORY}/issues/42"
+        client = ScriptedClient(
+            pages={
+                f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+            },
+            singles={endpoint: GitHubApiError(
+                category="not-found", endpoint=endpoint, status=404, headers={},
+                retryable=False, attempts=1, sanitized_stderr="HTTP 404 Not Found",
+            )},
+        )
+        previous = {
+            "schemaVersion": 1, "repository": REPOSITORY,
+            "openIssues": [], "issues": [], "evidence": {},
+        }
+        history = {
+            "schemaVersion": 1, "repository": REPOSITORY,
+            "sourceSchemaVersions": {"snapshot": 1}, "evidence": {},
+        }
+        result = Collector(
+            client, REPOSITORY, NOW, monitored_issue_numbers=[42],
+        ).collect_incremental(
+            previous, history, include_supporting=False, include_timeline=False,
+        )
+        self.assertEqual(1, len(result.collection_errors))
+        self.assertEqual("monitored-issue", result.collection_errors[0].stage)
+        self.assertEqual({"kind": "issue", "issueNumbers": [42]}, result.collection_errors[0].scope)
+
+    def test_explicit_nomination_preserves_existing_assignees(self) -> None:
+        for login in ("another-developer", "copilot-swe-agent[bot]"):
+            with self.subTest(assignee=login):
+                issue = make_issue(42)
+                issue["assignees"] = [{"login": login}]
+                client = ScriptedClient(
+                    pages={
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                        f"/repos/{REPOSITORY}/issues/42/comments": [],
+                    },
+                    singles={f"/repos/{REPOSITORY}/issues/42": issue},
+                )
+                result = Collector(
+                    client, REPOSITORY, NOW, delegation_requests=[42],
+                ).collect(include_supporting=False, include_timeline=False)
+                if login == "another-developer":
+                    self.assertEqual([login], result.open_issues[0]["assignees"])
+                    self.assertEqual([login], result.evidence["issue:42"]["payload"]["assignees"])
+                else:
+                    self.assertEqual([], result.open_issues)
+                    self.assertEqual([issue], result.delegated_issues)
+
+    def test_monitoring_closed_or_unavailable_issue_is_not_a_new_request(self) -> None:
+        endpoint = f"/repos/{REPOSITORY}/issues/42"
+        for response in (
+            make_issue(42, state="closed"),
+            GitHubApiError(
+                category="not-found", endpoint=endpoint, status=404, headers={},
+                retryable=False, attempts=1, sanitized_stderr="HTTP 404 Not Found",
+            ),
+        ):
+            with self.subTest(response=response):
+                client = ScriptedClient(
+                    pages={
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                    },
+                    singles={endpoint: response},
+                )
+                result = Collector(
+                    client, REPOSITORY, NOW, monitored_issue_numbers=[42],
+                ).collect(include_supporting=False, include_timeline=False)
+                self.assertEqual([], result.open_issues)
+                self.assertEqual([], result.delegated_issues)
+                if isinstance(response, Exception):
+                    self.assertEqual(1, len(result.collection_errors))
+                    self.assertEqual("monitored-issue", result.collection_errors[0].stage)
+                    self.assertEqual(endpoint, result.collection_errors[0].endpoint)
+                    self.assertEqual(
+                        {"kind": "issue", "issueNumbers": [42]}, result.collection_errors[0].scope,
+                    )
+                else:
+                    self.assertEqual([], result.collection_errors)
+
+    def test_monitored_arbitrary_issue_remains_visible_after_terminal_release(self) -> None:
+        issue = make_issue(42)
+        issue["assignees"] = [{"login": "copilot-swe-agent[bot]"}]
+        for released in ((), (42,)):
+            with self.subTest(released=released):
+                client = ScriptedClient(
+                    pages={
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                        f"/repos/{REPOSITORY}/issues/42/comments": [],
+                    },
+                    singles={f"/repos/{REPOSITORY}/issues/42": issue},
+                )
+                result = Collector(
+                    client, REPOSITORY, NOW, monitored_issue_numbers=[42],
+                    released_delegation_issue_numbers=released,
+                ).collect(include_supporting=False, include_timeline=False)
+                self.assertEqual(
+                    [42] if released else [],
+                    [item["number"] for item in result.open_issues],
+                )
+                self.assertEqual(
+                    [] if released else [42],
+                    [item["number"] for item in result.delegated_issues],
+                )
+                self.assertIn(("get", f"/repos/{REPOSITORY}/issues/42"), client.calls)
+
+    def test_explicit_nomination_fails_visibly_for_missing_or_invalid_issue(self) -> None:
+        endpoint = f"/repos/{REPOSITORY}/issues/42"
+        for response in (
+            GitHubApiError(
+                category="not-found", endpoint=endpoint, status=404, headers={},
+                retryable=False, attempts=1, sanitized_stderr="HTTP 404 Not Found",
+            ),
+            None,
+            make_issue(42, is_pull_request=True),
+            {**make_issue(42), "pull_request": {}},
+            make_issue(42, state="closed"),
+            {**make_issue(42), "state": ["open"]},
+            make_issue(43),
+            {**make_issue(42), "html_url": "https://github.com/other/repo/issues/42"},
+            {**make_issue(42), "repository_url": "https://api.github.com/repos/other/repo"},
+            {**make_issue(42), "url": "https://api.github.com/repos/owner/repo/issues/43"},
+        ):
+            with self.subTest(response=response):
+                client = ScriptedClient(
+                    pages={
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                        f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                    },
+                    singles={endpoint: response},
+                )
+                with self.assertRaisesRegex(InventoryError, "delegation request.*owner/repo#42"):
+                    Collector(
+                        client, REPOSITORY, NOW, delegation_requests=[42],
+                    ).collect(include_supporting=False, include_timeline=False)
+                self.assertEqual(("get", endpoint), client.calls[-1])
+                self.assertEqual(1, client.calls.count(("get", endpoint)))
+
+    def test_explicit_nomination_rejects_invalid_ids_before_github_reads(self) -> None:
+        for requests in ([0], [-1], [True], ["42"], [1, 1], list(range(1, 7))):
+            with self.subTest(requests=requests):
+                client = ScriptedClient()
+                with self.assertRaisesRegex(ValueError, "delegation requests"):
+                    Collector(
+                        client, REPOSITORY, NOW, delegation_requests=requests,
+                    ).collect(include_supporting=False, include_timeline=False)
+                self.assertEqual([], client.calls)
+
+    def test_explicit_nomination_collects_unlabeled_human_issue(self) -> None:
+        issue = make_issue(42, body="The dashboard hangs on startup.")
+        client = ScriptedClient(
+            pages={
+                f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [],
+                f"/repos/{REPOSITORY}/issues/42/comments": [],
+            },
+            singles={f"/repos/{REPOSITORY}/issues/42": issue},
+        )
+
+        result = Collector(
+            client, REPOSITORY, NOW, delegation_requests=[42],
+        ).collect(include_supporting=False, include_timeline=False)
+
+        self.assertEqual([42], [item["number"] for item in result.open_issues])
+        payload = result.evidence["issue:42"]["payload"]
+        self.assertEqual([], payload["labels"])
+        self.assertEqual("octocat", payload["author"])
+        self.assertEqual("The dashboard hangs on startup.", payload["body"])
+        self.assertEqual([], result.collection_errors)
+        self.assertEqual(
+            [("get", f"/repos/{REPOSITORY}/issues/42")],
+            [call for call in client.calls if call[1].endswith("/issues/42")],
+        )
+
     def test_collect_queries_all_actionable_test_issue_labels(self) -> None:
         labels = (
             "ci-failure-cause",

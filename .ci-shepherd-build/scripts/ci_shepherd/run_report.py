@@ -144,8 +144,18 @@ def _owner(row: Mapping[str, Any]) -> str:
 def _tracking_summary(records: list[Mapping[str, Any]]) -> str:
     return "; ".join(
         f"task {_text(record.get('taskId'))}: {_text(record.get('lifecycle'))}; "
+        + f"task state: {_text(record.get('taskState'))}; "
+        + (f"task observation: {_text(record['taskObservation'])}; " if record.get("taskObservation") else "")
+        + f"attempt: {_text(record.get('attemptOutcome', record.get('lifecycle')))}; "
+        + ("new decision required; " if record.get("requiresNewDecision") is True else "")
+        + ("issue remains open; " if record.get("issueOpen") is True else "issue closed; " if record.get("issueOpen") is False else "")
+        + ("issue observation unavailable; " if record.get("issueObservation") == "unavailable" else "")
         + ("human-owned; " if record.get("humanAssigned") is True else "")
-        + "PRs: " + _text([f"#{pull['number']}" for pull in _rows(record.get("pullRequests")) if pull.get("number")])
+        + "PRs: " + _text([
+            f"#{pull['number']} ({pull.get('state', 'unknown')})"
+            + (f" [last verified: {pull['lastKnownState']}]" if pull.get("lastKnownState") else "")
+            for pull in _rows(record.get("pullRequests")) if pull.get("number")
+        ])
         for record in records
     )
 
@@ -278,12 +288,24 @@ def _operational_state(
     recommendations: list[Mapping[str, Any]], tracking: list[Mapping[str, Any]],
     attempts: list[Mapping[str, Any]], history: str,
 ) -> tuple[str, object]:
+    if tracking:
+        # Historical failed attempts must not hide a newer running or merged fix.
+        tracking = [max(enumerate(tracking), key=lambda item: (
+            str(item[1].get("startedAt", "")), item[0],
+        ))[1]]
+        current = tracking[0]
+        if current.get("attemptOutcome") == "merged" and current.get("lifecycle") != "association_pending":
+            return "Fix PR merged", "Issue monitoring remains separate from the completed attempt."
+        if current.get("attemptOutcome") == "closed-unmerged" and current.get("lifecycle") != "association_pending":
+            return "PR closed unmerged", "A new attempt requires a fresh decision."
+        if current.get("attemptOutcome") == "legacy-unknown":
+            return "Prior attempt outcome unknown", "Review legacy history before deciding on another attempt."
     state_effects = [
         row["result"]["issueState"]
         for row in sorted(attempts, key=lambda row: str(row.get("recordedAt", "")))
         if row.get("outcome") == "executed" and (row.get("result") or {}).get("issueState")
     ]
-    if state_effects and state_effects[-1] == "closed":
+    if state_effects and state_effects[-1] == "closed" and not tracking:
         return "Closed", "No next event recorded after closure."
 
     requests = [
@@ -595,6 +617,11 @@ def render_run_markdown(
             state += f"; fix handoff: {_text(actionability.get('status'))} (not an executed fix)"
         if tracking:
             state += "; Copilot tracking: " + _tracking_summary(tracking)
+            if "quarantined-test" in labels and any(
+                record.get("attemptOutcome") == "merged" and record.get("issueOpen") is True
+                for record in tracking
+            ):
+                state += "; quarantine reliability review still required; a merged fix does not authorize unquarantine"
         wakeups = [
             f"{record['nextWakeup']['evaluateAt']} ({record['nextWakeup']['reason']})"
             for record in tracking if record.get("nextWakeup")

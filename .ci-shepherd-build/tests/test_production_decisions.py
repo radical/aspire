@@ -654,12 +654,13 @@ class InvestigationCoveragePipelineTests(unittest.TestCase):
                 compact = build_compact_poc_input(attached)
                 self.assertNotEqual("delegate-copilot", compact["issues"][0]["defaultJudgment"]["recommendations"][0]["disposition"])
 
-    def test_delegation_projectability_rejects_model_only_actionability(self) -> None:
+    def test_delegation_projectability_accepts_ci_investigation_without_claiming_actionability(self) -> None:
         _, compact, judgments, _ = assess(recovery_snapshot(success="skipped"))
         recommendation = judgments["issues"][0]["recommendations"][0]
         recommendation.update(disposition="delegate-copilot", target={"kind": "issue", "value": 21})
-        with self.assertRaisesRegex(ValueError, "code handoff"):
-            validate_poc_projectability(compact, judgments)
+        validate_poc_projectability(compact, judgments)
+        self.assertIsNone(compact["issues"][0].get("machineActionability"))
+        self.assertEqual("investigate-and-fix", compact["issues"][0]["delegationReadiness"]["intent"])
 
     def test_current_fixable_investigation_derives_one_structured_assignment(self) -> None:
         value = recovery_snapshot(success="skipped")
@@ -837,6 +838,7 @@ class HandoffPipelineTests(unittest.TestCase):
                     patch.object(collect_script, "observe_delegation_status", return_value=(
                         {"status": "complete", "records": [record]}, (),
                     )),
+                    patch.object(collect_script.ActionEventStore, "append_delegation_observations"),
                     patch.object(Collector, "enrich_github_evidence", side_effect=lambda inventory, **kwargs: inventory),
                     patch.object(Collector, "enrich_ownership_evidence", side_effect=lambda inventory, **kwargs: inventory),
                 ):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 import json
 import os
@@ -11,6 +12,7 @@ from typing import Any, Mapping
 
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import build_dry_run
+from ci_shepherd.collector import MAX_DELEGATION_REQUESTS, validate_delegation_requests
 from ci_shepherd.comment_selection import (
     build_comment_selection,
     render_comment_selection_section,
@@ -583,7 +585,11 @@ def start_cycle(
     full_refresh: bool = False,
     repository_policy_path: Path = DEFAULT_REPOSITORY_POLICY_PATH,
     max_comments: int = 5,
+    delegation_requests: Iterable[int] = (),
 ) -> dict[str, object]:
+    delegation_requests = validate_delegation_requests(delegation_requests)
+    if delegation_requests and input_path is not None:
+        raise ValueError("--delegate-issue requires live collection and cannot be combined with --input.")
     started_at = format_utc_z(datetime.now(UTC))
     _ensure_separate_directories(state_dir, work_dir)
     if work_dir.exists() and any(work_dir.iterdir()):
@@ -610,6 +616,7 @@ def start_cycle(
             full_refresh=full_refresh,
             shepherd_author=shepherd_author,
             repository_policy_path=repository_policy_path,
+            delegation_requests=delegation_requests,
         )
     else:
         supplied_input = input_path.expanduser().resolve(strict=True)
@@ -619,6 +626,10 @@ def start_cycle(
         target_input.chmod(0o600)
 
     snapshot = _load_json(target_input, "snapshot")
+    if input_path is not None:
+        # Replaying collection artifacts must not renew an earlier operator request.
+        snapshot.pop("delegationRequests", None)
+        _write_private_json(target_input, snapshot)
     validate_snapshot(snapshot)
     if str(snapshot.get("repository", "")).casefold() != repository.casefold():
         raise ValueError("Snapshot repository does not match the requested repository.")
@@ -702,8 +713,19 @@ def start_cycle(
         prepared,
         previous_prepared,
     )
+    assessed_issue_numbers = {issue["issueNumber"] for issue in compact["issues"]}
+    requested_delegation_issue_numbers = (
+        set(snapshot.get("delegationRequests", [])) & assessed_issue_numbers
+    )
+    withdrawn_delegation_issue_numbers = (
+        set((previous_snapshot or {}).get("delegationRequests", []))
+        - requested_delegation_issue_numbers
+    ) & assessed_issue_numbers
+    # Operator intent belongs to this invocation. Both renewal and withdrawal
+    # invalidate retained judgments, even when the issue's source is unchanged.
     changed_issue_numbers = (
         source_changed_issue_numbers | derived_changed_issue_numbers
+        | requested_delegation_issue_numbers | withdrawn_delegation_issue_numbers
     )
     change_reasons_by_issue = {
         issue_number: [
@@ -715,6 +737,16 @@ def start_cycle(
             *(
                 ["derived-assessment-changed"]
                 if issue_number in derived_changed_issue_numbers
+                else []
+            ),
+            *(
+                ["operator-delegation-request"]
+                if issue_number in requested_delegation_issue_numbers
+                else []
+            ),
+            *(
+                ["operator-delegation-request-withdrawn"]
+                if issue_number in withdrawn_delegation_issue_numbers
                 else []
             ),
         ]
@@ -798,6 +830,7 @@ def start_cycle(
         ),
         "shepherdAuthor": shepherd_author,
         "maxComments": max_comments,
+        "maxDelegationRequests": MAX_DELEGATION_REQUESTS,
         "baseRunId": (
             getattr(current_history, "run_id", None)
             if current_history is not None
@@ -928,7 +961,13 @@ def finish_cycle(
         read_quarantine_session_events(state_dir),
     )
     _write_private_json(paths["quarantineSession"], quarantine_plan)
-    labeled_test_names = quarantine_labeled_test_names(prepared)
+    labeled_test_names = quarantine_labeled_test_names({
+        **prepared,
+        "issues": [
+            issue for issue in prepared["issues"]
+            if issue["issueNumber"] not in snapshot.get("delegationRequests", [])
+        ],
+    })
     quarantine_reconciliation = reconcile_quarantine_source(
         prepared,
         (
@@ -1347,6 +1386,10 @@ def main() -> int:
     start.add_argument("--shepherd-author", required=True)
     start.add_argument("--input", type=Path)
     start.add_argument("--full-refresh", action="store_true")
+    start.add_argument(
+        "--delegate-issue", type=int, action="append", default=[],
+        help=f"Nominate an open issue in --repository for delegation review (repeatable; maximum {MAX_DELEGATION_REQUESTS}). Not approval.",
+    )
     start.add_argument("--max-comments", type=int, default=5)
     start.add_argument(
         "--repository-policy",
@@ -1360,6 +1403,11 @@ def main() -> int:
     response.add_argument("--agent-judgments", type=Path)
     finish.add_argument("--pull-request-judgments", type=Path)
     args = parser.parse_args()
+    if args.command == "start":
+        try:
+            validate_delegation_requests(args.delegate_issue)
+        except ValueError as error:
+            parser.error(str(error))
 
     old_umask = os.umask(0o077)
     try:
@@ -1374,6 +1422,7 @@ def main() -> int:
                 full_refresh=args.full_refresh,
                 repository_policy_path=args.repository_policy,
                 max_comments=args.max_comments,
+                delegation_requests=args.delegate_issue,
             )
         else:
             result = finish_cycle(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 import json
@@ -10,11 +11,18 @@ from pathlib import Path
 import subprocess
 import time
 
-from ci_shepherd.collector import BOT_AUTHORS, Collector, InventoryResult
+from ci_shepherd.collector import (
+    BOT_AUTHORS,
+    MAX_DELEGATION_REQUESTS,
+    Collector,
+    InventoryResult,
+    validate_delegation_requests,
+)
 from ci_shepherd.delegation_observer import observe_delegations
 from ci_shepherd.delegations import (
     active_owned_task_ids_from_events,
     delegation_starts_from_events,
+    delegation_records_from_events,
     derive_capacity_usage,
     derive_delegation_tracking,
 )
@@ -59,7 +67,9 @@ def build_snapshot(
     *,
     repository_policy: RepositoryPolicy | None = None,
     delegation_status: dict[str, object] | None = None,
+    delegation_requests: Iterable[int] = (),
 ) -> dict[str, object]:
+    delegation_requests = validate_delegation_requests(delegation_requests)
     snapshot: dict[str, object] = {
         "schemaVersion": 1,
         "collectionVersion": COLLECTION_VERSION,
@@ -110,6 +120,8 @@ def build_snapshot(
             **repository_policy.as_public_dict(),
             "digest": repository_policy.digest,
         }
+    if delegation_requests:
+        snapshot["delegationRequests"] = list(delegation_requests)
     return snapshot
 
 
@@ -142,6 +154,7 @@ def observe_delegation_status(
     now: datetime,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     starts = delegation_starts_from_events(events)
+    known_records = delegation_records_from_events(events)
     active_task_ids = set(active_owned_task_ids_from_events(events))
     retired_task_ids = frozenset(
         start.task_id
@@ -157,8 +170,8 @@ def observe_delegation_status(
             start.issue_number
             for start in starts
             if start.issue_number is not None
-            and start.task_id in active_task_ids
         },
+        **({"known_records": known_records} if known_records else {}),
     )
     usage = derive_capacity_usage(
         tasks=observation.tasks,
@@ -168,6 +181,7 @@ def observe_delegation_status(
         now=now,
         issues=observation.issues,
         retired_task_ids=retired_task_ids,
+        task_pull_request_ids=getattr(observation, "task_pull_request_ids", {}),
     )
     tracking_records = [
         record
@@ -176,23 +190,44 @@ def observe_delegation_status(
             tasks=observation.tasks,
             pull_requests=observation.pull_requests,
             issues=observation.issues,
+            task_pull_request_ids=getattr(observation, "task_pull_request_ids", {}),
+            unavailable_task_ids=getattr(observation, "unavailable_task_ids", frozenset()),
+            unavailable_issue_numbers=getattr(observation, "unavailable_issue_numbers", frozenset()),
         )
-        if record.get("taskId") in active_task_ids
-        or record.get("taskId") is None
     ]
     for record in tracking_records:
         for pull in record.get("pullRequests", []):
-            source = observation.pull_request_sources.get(pull["databaseId"])
+            source = getattr(observation, "pull_request_sources", {}).get(pull["databaseId"])
             if source is not None:
                 pull["progressSource"] = dict(source)
     episode_ordinals: dict[str, int] = {}
+    episode_counts: dict[str, int] = {}
+    historical_retirements = {
+        event.get("taskId") for event in events
+        if event.get("eventType") == "delegation-retired"
+    }
     for start in starts:
         if start.issue_number is None:
             continue
         key = str(start.issue_number)
+        episode_counts[key] = episode_counts.get(key, 0) + 1
         episode_ordinals.setdefault(key, 1)
-        if start.task_id in retired_task_ids:
+        if start.task_id in historical_retirements:
             episode_ordinals[key] += 1
+    for number, record in {
+        record["issueNumber"]: record for record in tracking_records
+    }.items():
+        key = str(number)
+        # This is an idempotency namespace, never permission to start again.
+        # An exact new decision can also replace an unresolved no-PR attempt.
+        next_attempt = (
+            record.get("requiresNewDecision") is True
+            and record.get("taskId") is not None
+        )
+        episode_ordinals[key] = max(
+            episode_ordinals.get(key, 1),
+            episode_counts.get(key, 0) + int(next_attempt),
+        )
     status: dict[str, object] = {
         "status": "complete",
         "records": tracking_records,
@@ -211,18 +246,13 @@ def observe_delegation_status(
         sorted(
             str(record["taskId"])
             for record in tracking_records
-            if (
-                record.get("lifecycle") == "completed"
-                or (
-                    record.get("lifecycle") == "handoff_required"
-                    and record.get("taskState") == "completed"
-                )
-            )
+            if record.get("attemptOutcome") in {"merged", "closed-unmerged"}
             and isinstance(record.get("taskId"), str)
             and (
-                record.get("issueOpen") is False
-                or record.get("copilotAssigned") is False
+                record.get("taskObservation") != "available"
+                or record.get("taskState") not in {"queued", "in_progress"}
             )
+            and bool(record.get("pullRequests"))
             and all(
                 pull.get("state") not in {"open", "unknown"}
                 for pull in record.get("pullRequests", [])
@@ -277,6 +307,8 @@ def retain_tracked_delegations(
         if isinstance(record.get("issueNumber"), int)
         and not isinstance(record.get("issueNumber"), bool)
         and record.get("requiresHuman") is not True
+        and record.get("retired") is not True
+        and record.get("lifecycle") not in {"completed", "closed_unmerged", "retired"}
     }
     pull_request_numbers = {
         pull_request["number"]
@@ -343,7 +375,9 @@ def collect(
     full_refresh: bool = False,
     shepherd_author: str | None = None,
     repository_policy_path: Path | None = None,
+    delegation_requests: Iterable[int] = (),
 ) -> Path:
+    delegation_requests = validate_delegation_requests(delegation_requests)
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     output_dir.chmod(0o700)
     progress = ProgressTracker(output_dir)
@@ -373,6 +407,8 @@ def collect(
             "budgets": budgets,
             "bot_authors": BOT_AUTHORS,
         }
+        if delegation_requests:
+            collector_options["delegation_requests"] = delegation_requests
         if shepherd_author is not None:
             collector_options["shepherd_author"] = shepherd_author
         repository_policy = (
@@ -407,6 +443,14 @@ def collect(
                         now=now,
                     )
                 )
+                if delegation_status["records"]:
+                    # The snapshot may fail later. Never retire the only task
+                    # lookup before its verified PR binding is durable.
+                    event_store.append_delegation_observations(
+                        repository=repository,
+                        records=delegation_status["records"],
+                        at=now,
+                    )
                 if retired_task_ids:
                     event_store.append_delegation_retirements(
                         repository=repository,
@@ -418,6 +462,25 @@ def collect(
                     previous_snapshot,
                     exc,
                 )
+        monitored_issue_numbers = sorted({
+            start.issue_number
+            for start in delegation_starts_from_events(events)
+            if start.issue_number is not None
+        })
+        if monitored_issue_numbers:
+            # Baseline ownership survives task retirement; it is monitoring, not a new request.
+            collector_options["monitored_issue_numbers"] = monitored_issue_numbers
+        latest_delegations = {
+            record["issueNumber"]: record
+            for record in delegation_status["records"]
+        }
+        released_issue_numbers = sorted(
+            number for number, record in latest_delegations.items()
+            if record.get("retired") is True
+            or record.get("lifecycle") in {"completed", "closed_unmerged", "retired"}
+        )
+        if released_issue_numbers:
+            collector_options["released_delegation_issue_numbers"] = released_issue_numbers
         collector = Collector(
             client,
             repository,
@@ -499,6 +562,7 @@ def collect(
             inventory,
             repository_policy=repository_policy,
             delegation_status=delegation_status,
+            delegation_requests=delegation_requests,
         )
         attach_meaningful_progress(snapshot, previous_snapshot, shepherd_author=shepherd_author)
         if snapshot["delegationStatus"]["status"] == "complete" and repository_policy is not None:
@@ -506,7 +570,15 @@ def collect(
                 snapshot["delegationStatus"]["records"], events, repository_policy.handoff_reminders,
             )
         prepared = prepare_assessment(snapshot)
-        labeled_test_names = quarantine_labeled_test_names(prepared)
+        # An operator can delegate investigation without first inspecting attributes.
+        # Other managed quarantine issues still require their usual source evidence.
+        labeled_test_names = quarantine_labeled_test_names({
+            **prepared,
+            "issues": [
+                issue for issue in prepared["issues"]
+                if issue["issueNumber"] not in delegation_requests
+            ],
+        })
         if labeled_test_names is not None:
             current_stage = "quarantine-source"
             progress.update(current_stage, "started", message="Inspecting existing quarantine targets.")
@@ -558,6 +630,10 @@ def main() -> int:
     parser.add_argument("--checkout", type=Path)
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--full-refresh", action="store_true")
+    parser.add_argument(
+        "--delegate-issue", type=int, action="append", default=[],
+        help=f"Nominate an open issue in --repository for delegation review (repeatable; maximum {MAX_DELEGATION_REQUESTS}). Not approval.",
+    )
     parser.add_argument("--shepherd-author")
     parser.add_argument(
         "--repository-policy",
@@ -580,6 +656,10 @@ def main() -> int:
         default=DEFAULT_COLLECTION_BUDGETS["max_commit_refs_per_issue"],
     )
     args = parser.parse_args()
+    try:
+        validate_delegation_requests(args.delegate_issue)
+    except ValueError as error:
+        parser.error(str(error))
 
     old_umask = os.umask(0o077)
     try:
@@ -594,6 +674,7 @@ def main() -> int:
             full_refresh=args.full_refresh,
             shepherd_author=args.shepherd_author,
             repository_policy_path=args.repository_policy,
+            delegation_requests=args.delegate_issue,
         )
     finally:
         os.umask(old_umask)

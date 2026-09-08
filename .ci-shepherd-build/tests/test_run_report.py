@@ -7,6 +7,20 @@ from ci_shepherd.run_report import render_run_markdown
 
 
 class RunReportTests(unittest.TestCase):
+    def test_retired_quarantine_fix_reports_merge_separately_from_failed_task_and_open_issue(self) -> None:
+        self.snapshot["issues"][0]["labels"] = ["quarantined-test"]
+        self.snapshot["delegationStatus"] = {"records": [{
+            "issueNumber": 1, "taskId": "task-1", "taskState": "failed",
+            "lifecycle": "completed", "attemptOutcome": "merged", "retired": True,
+            "requiresHuman": False, "requiresNewDecision": True, "issueOpen": True,
+            "copilotAssigned": False,
+            "pullRequests": [{"number": 2, "state": "merged", "changedFiles": 4}],
+        }]}
+        report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
+        for expected in ("task state: failed", "#2 (merged)", "attempt: merged",
+                         "issue remains open", "quarantine reliability", "new decision required"):
+            self.assertIn(expected, report)
+
     def test_expansion_rounds_count_each_reviewed_item_once(self) -> None:
         report = render_run_markdown(
             self.snapshot, self.prepared, self.judgments,

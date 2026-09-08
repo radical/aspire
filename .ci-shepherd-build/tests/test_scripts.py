@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.refresh import RefreshPlan
 from ci_shepherd.repository_policy import load_repository_policy
 from ci_shepherd.review_selection import SELECTION_SCHEMA_VERSION
+from tests.test_collector import ScriptedClient, make_issue
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1] / "scripts"
@@ -198,6 +200,205 @@ def load_script(name: str):
 
 
 class PrototypeScriptTests(unittest.TestCase):
+    def test_collect_inspects_only_unnominated_quarantine_test_names(self) -> None:
+        collect_script = load_script("collect")
+        nominated = make_issue(
+            42, labels=["quarantined-test"], body="Test name: Namespace.Nominated.Test",
+        )
+        managed = make_issue(
+            43, labels=["quarantined-test"], body="Test name: Namespace.Managed.Test",
+        )
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=quarantined-test&per_page=100": [nominated, managed],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+                "/repos/owner/repo/issues/43/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": nominated},
+        )
+        with TemporaryDirectory() as scratch:
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=client),
+                patch.object(collect_script, "collect_quarantine_source_state", return_value=None) as inspect_source,
+            ):
+                collect_script.collect(
+                    "owner/repo", Path(scratch) / "output", None, delegation_requests=[42],
+                    repository_policy_path=(
+                        Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                    ),
+                )
+            inspect_source.assert_called_once_with(None, ["Namespace.Managed.Test"])
+
+    def test_collect_quarantined_nomination_does_not_require_source_inspection(self) -> None:
+        collect_script = load_script("collect")
+        issue = make_issue(42, labels=["quarantined-test"])
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=quarantined-test&per_page=100": [issue],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": issue},
+        )
+        with TemporaryDirectory() as scratch:
+            output = Path(scratch) / "output"
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=client),
+                patch.object(
+                    collect_script, "collect_quarantine_source_state",
+                    side_effect=AssertionError("Nomination must not require local source inspection"),
+                ) as inspect_source,
+            ):
+                collect_script.collect(
+                    "owner/repo", output, None, delegation_requests=[42],
+                    repository_policy_path=(
+                        Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                    ),
+                )
+                inspect_source.assert_not_called()
+            value = json.loads((output / "input.json").read_text(encoding="utf-8"))
+            self.assertEqual([42], value["delegationRequests"])
+            self.assertEqual(["quarantined-test"], value["evidence"]["issue:42"]["payload"]["labels"])
+
+    def test_collect_monitors_retired_baseline_issue_without_renominating(self) -> None:
+        collect_script = load_script("collect")
+        events = [
+            {
+                "eventType": "delegation-baseline", "operation": "assign-copilot",
+                "actionId": "action:42", "repository": "owner/repo",
+                "recordedAt": "2026-08-31T00:00:00Z",
+                "target": {"kind": "issue", "number": 42}, "taskIdsBefore": [],
+            },
+            {
+                "eventType": "terminal", "actionId": "action:42",
+                "outcome": "executed", "result": {"taskId": "task-42"},
+            },
+            {"eventType": "delegation-retired", "taskId": "task-42"},
+        ]
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": make_issue(42)},
+        )
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            state.mkdir(mode=0o700)
+            output = root / "output"
+            with (
+                patch.object(collect_script, "GitHubClient", return_value=client),
+                patch.object(collect_script, "ActionEventStore", return_value=SimpleNamespace(
+                    events=lambda **kwargs: events,
+                    append_delegation_observations=lambda **kwargs: None,
+                )),
+                patch.object(collect_script, "observe_delegation_status", return_value=(
+                    {"status": "complete", "records": []}, (),
+                )),
+            ):
+                collect_script.collect(
+                    "owner/repo", output, None, state_dir=state,
+                    repository_policy_path=(
+                        Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                    ),
+                )
+            value = json.loads((output / "input.json").read_text(encoding="utf-8"))
+            self.assertEqual([42], value["openIssues"])
+            self.assertEqual([], value.get("delegationRequests", []))
+            self.assertEqual([], value["evidence"]["issue:42"]["payload"]["labels"])
+
+    def test_nomination_clis_reject_invalid_ids_before_api_or_artifacts(self) -> None:
+        for name in ("collect", "cycle"):
+            script = load_script(name)
+            for requests in (["0"], ["-1"], ["not-an-id"], ["1", "1"], list(map(str, range(1, 7)))):
+                with self.subTest(script=name, requests=requests), TemporaryDirectory() as scratch:
+                    output = Path(scratch) / "output"
+                    arguments = (
+                        ["cycle.py", "start", "--work-dir", str(output), "--shepherd-author", "ankj"]
+                        if name == "cycle"
+                        else ["collect.py", "--output-dir", str(output)]
+                    )
+                    arguments += ["--repository", "owner/repo"]
+                    for number in requests:
+                        arguments += ["--delegate-issue", number]
+                    with (
+                        patch.object(sys, "argv", arguments),
+                        (
+                            patch.object(script, "GitHubClient")
+                            if name == "collect"
+                            else patch("collect.GitHubClient")
+                        ) as client,
+                        contextlib.redirect_stderr(io.StringIO()),
+                        self.assertRaises(SystemExit) as failure,
+                    ):
+                        script.main()
+                    self.assertEqual(2, failure.exception.code)
+                    client.assert_not_called()
+                    self.assertFalse(output.exists())
+
+    def test_collect_explicit_requests_apply_to_initial_and_incremental_only(self) -> None:
+        collect_script = load_script("collect")
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": make_issue(42)},
+        )
+        with TemporaryDirectory() as scratch, patch.object(
+            collect_script, "GitHubClient", return_value=client,
+        ):
+            root = Path(scratch)
+            previous = None
+            repository_policy_path = (
+                Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+            )
+            for index, requests in enumerate(([42], [42], [])):
+                output = root / f"cycle-{index}"
+                with patch.object(collect_script, "load_current", return_value=previous):
+                    if index == 0:
+                        with (
+                            patch.object(sys, "argv", [
+                                "collect.py", "--repository", "owner/repo",
+                                "--output-dir", str(output), "--state-dir", str(root / "state"),
+                                "--repository-policy", str(repository_policy_path), "--delegate-issue", "42",
+                            ]),
+                            contextlib.redirect_stdout(io.StringIO()),
+                        ):
+                            self.assertEqual(0, collect_script.main())
+                    else:
+                        collect_script.collect(
+                            "owner/repo", output, None, state_dir=root / "state",
+                            delegation_requests=requests, repository_policy_path=repository_policy_path,
+                        )
+                value = json.loads((output / "input.json").read_text(encoding="utf-8"))
+                self.assertEqual(requests, value.get("delegationRequests", []))
+                self.assertEqual(requests, value["openIssues"])
+                if requests:
+                    self.assertEqual([], value["evidence"]["issue:42"]["payload"]["labels"])
+                (output / "snapshot.json").write_text(json.dumps(value), encoding="utf-8")
+                previous = SimpleNamespace(
+                    run_directory=output,
+                    document={
+                        "schemaVersion": 1, "repository": "owner/repo",
+                        "sourceSchemaVersions": {"snapshot": 1}, "evidence": {},
+                    },
+                )
+
+        self.assertEqual(
+            2, client.calls.count(("get", "/repos/owner/repo/issues/42")),
+        )
+
     def test_ci_shepherd_is_registered_as_a_repository_skill(self) -> None:
         registered = REGISTERED_SKILL_PATH.read_text(encoding="utf-8")
 
@@ -413,6 +614,7 @@ class PrototypeScriptTests(unittest.TestCase):
             full_refresh=False,
             shepherd_author=None,
             repository_policy_path=collect_script.DEFAULT_REPOSITORY_POLICY_PATH,
+            delegation_requests=[],
         )
 
     def test_collect_cli_exposes_incremental_state_and_full_refresh(self) -> None:
@@ -449,6 +651,7 @@ class PrototypeScriptTests(unittest.TestCase):
             full_refresh=True,
             shepherd_author=None,
             repository_policy_path=collect_script.DEFAULT_REPOSITORY_POLICY_PATH,
+            delegation_requests=[],
         )
 
     def test_collect_with_missing_state_runs_full_live_collection(self) -> None:
@@ -774,7 +977,7 @@ class PrototypeScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(artifact_root, ignore_errors=True)
 
-    def test_merged_pull_stays_tracked_until_source_issue_reconciles(self) -> None:
+    def test_merged_attempt_retires_independently_of_source_issue(self) -> None:
         collect_script = load_script("collect")
         task = normalize_agent_task(
             {
@@ -848,9 +1051,10 @@ class PrototypeScriptTests(unittest.TestCase):
             {"headSha": "current-head"},
             status["records"][0]["pullRequests"][0]["progressSource"],
         )
-        self.assertEqual((), retired_task_ids)
+        self.assertEqual(("task-1",), retired_task_ids)
+        self.assertTrue(status["records"][0]["requiresNewDecision"])
 
-    def test_terminal_handoff_retires_after_issue_closure_or_unassignment(
+    def test_no_pr_handoff_survives_issue_closure_or_unassignment(
         self,
     ) -> None:
         collect_script = load_script("collect")
@@ -910,7 +1114,7 @@ class PrototypeScriptTests(unittest.TestCase):
                     "handoff_required",
                     status["records"][0]["lifecycle"],
                 )
-                self.assertEqual(("task-1",), retired_task_ids)
+                self.assertEqual((), retired_task_ids)
 
     def test_unresolved_pull_evidence_blocks_terminal_handoff_retirement(
         self,
@@ -1162,6 +1366,7 @@ class PrototypeScriptTests(unittest.TestCase):
 
     def test_collect_validates_delegation_lifecycle_fields_end_to_end(self) -> None:
         collect_script = load_script("collect")
+        persisted_records = []
 
         class FakeCollector:
             def __init__(self, *args, **kwargs):
@@ -1182,6 +1387,9 @@ class PrototypeScriptTests(unittest.TestCase):
 
             def events(self, *, repository):
                 return []
+
+            def append_delegation_observations(self, *, repository, records, at):
+                persisted_records.extend(records)
 
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
         state_dir = scratch / "state"
@@ -1292,6 +1500,7 @@ class PrototypeScriptTests(unittest.TestCase):
 
             snapshot = json.loads((output_dir / "input.json").read_text())
             validate_snapshot(snapshot)
+            self.assertEqual(3, len(persisted_records))
             reminder = snapshot["delegationStatus"]["records"][2][
                 "handoffReminder"
             ]

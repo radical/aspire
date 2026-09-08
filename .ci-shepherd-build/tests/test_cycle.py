@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import io
 import json
 from datetime import UTC, datetime
 from dataclasses import replace
@@ -21,6 +23,7 @@ from ci_shepherd.investigations import (
 from ci_shepherd.models import ValidationError
 from ci_shepherd.poc_state import load_review_schedule, record_review_wakeup
 from ci_shepherd.repository_policy import load_repository_policy
+from tests.test_collector import ScriptedClient, make_issue
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_POLICY = load_repository_policy(
@@ -293,6 +296,258 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_quarantined_nomination_finishes_without_source_inspection(self) -> None:
+        issue = make_issue(42, labels=["quarantined-test"])
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=quarantined-test&per_page=100": [issue],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": issue},
+        )
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            work = root / "work"
+            with (
+                patch("collect.GitHubClient", return_value=client),
+                patch(
+                    "collect.collect_quarantine_source_state",
+                    side_effect=AssertionError("Collection must not inspect a nomination"),
+                ) as collect_source,
+                patch.object(
+                    cycle_script, "collect_quarantine_source_state",
+                    side_effect=AssertionError("Finishing must not inspect a nomination"),
+                ) as finish_source,
+            ):
+                cycle_script.start_cycle(
+                    repository="owner/repo", state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="ankj", delegation_requests=[42],
+                    repository_policy_path=(
+                        Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                    ),
+                )
+                cycle_script.finish_cycle(
+                    work_dir=work, agent_judgments_path=work / "agent-judgments.json",
+                )
+                collect_source.assert_not_called()
+                finish_source.assert_not_called()
+            proposals = json.loads((work / "action-proposals.json").read_text(encoding="utf-8"))
+            assignment, = [item for item in proposals["proposals"] if item["operation"] == "assign-copilot"]
+            self.assertEqual("operator-request", assignment["evidenceBasis"])
+
+    def test_withdrawn_nomination_discards_previous_delegation(self) -> None:
+        issue = make_issue(42, title="[main CI failure] Build is broken", labels=["ci-failure-cause"])
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [issue],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": issue},
+        )
+        with TemporaryDirectory() as scratch, patch("collect.GitHubClient", return_value=client):
+            root = Path(scratch)
+            first = root / "first"
+            arguments = {
+                "repository": "owner/repo", "state_dir": root / "state",
+                "checkout": None, "shepherd_author": "ankj",
+                "repository_policy_path": (
+                    Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                ),
+            }
+            cycle_script.start_cycle(
+                **arguments, work_dir=first, delegation_requests=[42],
+            )
+            cycle_script.finish_cycle(
+                work_dir=first, agent_judgments_path=first / "agent-judgments.json",
+            )
+            proposals = json.loads((first / "action-proposals.json").read_text(encoding="utf-8"))
+            assignment, = [item for item in proposals["proposals"] if item["operation"] == "assign-copilot"]
+            self.assertEqual("operator-request", assignment["evidenceBasis"])
+            second = root / "second"
+            result = cycle_script.start_cycle(**arguments, work_dir=second)
+
+            self.assertEqual("awaiting-review", result["stage"])
+            collected = json.loads((second / "input.json").read_text(encoding="utf-8"))
+            self.assertEqual([], collected.get("delegationRequests", []))
+            self.assertEqual([], collected["refreshSummary"]["changedIssueNumbers"])
+            selection = json.loads((second / "review-selection.json").read_text(encoding="utf-8"))
+            selected, = selection["selected"]
+            self.assertEqual(42, selected["issueNumber"])
+            self.assertEqual("changed", selected["changeClass"])
+            self.assertIn("operator-delegation-request-withdrawn", selected["changeReasons"])
+            self.assertEqual([], selection["omitted"])
+            cycle_script.finish_cycle(
+                work_dir=second, agent_judgments_path=second / "agent-judgments.json",
+            )
+            proposals = json.loads((second / "action-proposals.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                [], [item for item in proposals["proposals"] if item["operation"] == "assign-copilot"],
+            )
+
+    def test_fresh_nomination_requires_live_collection_not_supplied_input(self) -> None:
+        with TemporaryDirectory() as scratch, patch("collect.GitHubClient") as client:
+            root = Path(scratch)
+            work = root / "work"
+            with self.assertRaisesRegex(ValueError, "--delegate-issue.*--input"):
+                cycle_script.start_cycle(
+                    repository="owner/repo", state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="ankj",
+                    input_path=root / "old-input.json", delegation_requests=[42],
+                )
+            client.assert_not_called()
+            self.assertFalse(work.exists())
+
+    def test_evidence_expansion_restart_preserves_current_nomination(self) -> None:
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={
+                "/repos/owner/repo/issues/42": make_issue(
+                    42, body="https://github.com/owner/repo/actions/runs/123",
+                ),
+            },
+        )
+        requests = {
+            "schemaVersion": 1, "repository": "owner/repo", "round": 1,
+            "requests": [{
+                "type": "workflow-run", "sourceIssueNumber": 42, "evidenceId": "run:123",
+                "decisionGate": "current-failing-run", "reason": "Refresh the cited run.",
+            }],
+        }
+        with TemporaryDirectory() as scratch, patch("collect.GitHubClient", return_value=client):
+            root = Path(scratch)
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo", state_dir=root / "state", work_dir=work,
+                checkout=None, shepherd_author="ankj", delegation_requests=[42],
+                repository_policy_path=(
+                    Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                ),
+            )
+            with (
+                patch.object(cycle_script, "build_proposal_evidence_requests", return_value=(requests, [])),
+                patch("expand.GitHubClient", return_value=client),
+            ):
+                result = cycle_script.finish_cycle(
+                    work_dir=work, agent_judgments_path=work / "agent-judgments.json",
+                )
+
+            self.assertEqual("awaiting-review", result["stage"])
+            self.assertEqual(1, result["evidenceExpansionRound"])
+            collected = json.loads((work / "input.json").read_text(encoding="utf-8"))
+            self.assertEqual([42], collected["delegationRequests"])
+            selected = json.loads((work / "agent-input.json").read_text(encoding="utf-8"))
+            self.assertEqual([42], [issue["issueNumber"] for issue in selected["issues"]])
+            self.assertEqual({"origin": "operator"}, selected["issues"][0]["delegationRequest"])
+
+    def test_fresh_nomination_reassesses_unchanged_issue_without_renewing_later(self) -> None:
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+            },
+            singles={"/repos/owner/repo/issues/42": make_issue(42)},
+        )
+        with TemporaryDirectory() as scratch, patch("collect.GitHubClient", return_value=client):
+            root = Path(scratch)
+            for index, requests in enumerate(([42], [42], [])):
+                work = root / f"work-{index}"
+                result = cycle_script.start_cycle(
+                    repository="owner/repo", state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="ankj", delegation_requests=requests,
+                    repository_policy_path=(
+                        Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"
+                    ),
+                )
+                collected = json.loads((work / "input.json").read_text(encoding="utf-8"))
+                self.assertEqual(requests, collected.get("delegationRequests", []))
+                self.assertEqual(requests, collected["openIssues"])
+                if index == 1:
+                    self.assertEqual([], collected["refreshSummary"]["newIssueNumbers"])
+                    self.assertEqual([], collected["refreshSummary"]["changedIssueNumbers"])
+                selected = json.loads((work / "agent-input.json").read_text(encoding="utf-8"))
+                self.assertEqual(requests, [issue["issueNumber"] for issue in selected["issues"]])
+                if requests:
+                    self.assertEqual({"origin": "operator"}, selected["issues"][0]["delegationRequest"])
+                    selection = json.loads((work / "review-selection.json").read_text(encoding="utf-8"))
+                    self.assertIn(
+                        "operator-delegation-request", selection["selected"][0]["changeReasons"],
+                    )
+                    self.assertEqual("awaiting-review", result["stage"])
+                    cycle_script.finish_cycle(
+                        work_dir=work, agent_judgments_path=work / "agent-judgments.json",
+                    )
+        self.assertEqual(2, client.calls.count(("get", "/repos/owner/repo/issues/42")))
+
+    def test_replaying_input_does_not_renew_prior_delegation_request(self) -> None:
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            value = snapshot("2026-08-28T20:00:00Z")
+            value["delegationRequests"] = [1]
+            input_path = root / "input.json"
+            input_path.write_text(json.dumps(value), encoding="utf-8")
+            work = root / "work"
+
+            cycle_script.start_cycle(
+                repository="owner/repo", state_dir=root / "state", work_dir=work,
+                checkout=None, shepherd_author="ankj", input_path=input_path,
+            )
+
+            collected = json.loads((work / "input.json").read_text(encoding="utf-8"))
+            self.assertEqual([], collected.get("delegationRequests", []))
+            prepared = json.loads((work / "assessment-input.json").read_text(encoding="utf-8"))
+            self.assertIsNone(prepared["issues"][0].get("delegationRequest"))
+
+    def test_start_cli_accepts_repeatable_arbitrary_issue_nominations(self) -> None:
+        client = ScriptedClient(
+            pages={
+                "/repos/owner/repo/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&labels=automation-broken&per_page=100": [],
+                "/repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100": [],
+                "/repos/owner/repo/issues/42/comments": [],
+                "/repos/owner/repo/issues/43/comments": [],
+            },
+            singles={
+                "/repos/owner/repo/issues/42": make_issue(42),
+                "/repos/owner/repo/issues/43": make_issue(43),
+            },
+        )
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            work = root / "work"
+            output = io.StringIO()
+            with (
+                patch("collect.GitHubClient", return_value=client),
+                patch.object(sys, "argv", [
+                    "cycle.py", "start", "--repository", "owner/repo",
+                    "--state-dir", str(root / "state"), "--work-dir", str(work),
+                    "--shepherd-author", "ankj", "--repository-policy",
+                    str(Path(__file__).parent / "fixtures" / "repository-policy-widget-v1.json"),
+                    "--delegate-issue", "42", "--delegate-issue", "43",
+                ]),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(0, cycle_script.main())
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(5, result["maxDelegationRequests"])
+            collected = json.loads((work / "input.json").read_text(encoding="utf-8"))
+            self.assertEqual([42, 43], collected["delegationRequests"])
+            self.assertEqual([42, 43], collected["openIssues"])
+            prepared = json.loads((work / "agent-input.json").read_text(encoding="utf-8"))
+            self.assertEqual([42, 43], [issue["issueNumber"] for issue in prepared["issues"]])
+
     def test_no_action_case_needing_positive_coverage_gets_one_durable_wakeup(
         self,
     ) -> None:

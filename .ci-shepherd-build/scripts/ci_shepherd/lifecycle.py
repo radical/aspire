@@ -50,6 +50,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "updatedAt",
         "closedAt",
         "labels",
+        "assignees",
         "author",
         "producer",
         "autoclose",
@@ -261,6 +262,8 @@ def prepare_assessment(
         for issue_number in sorted(issue_numbers)
     ]
     for candidate in candidates:
+        if candidate["issueNumber"] in snapshot.get("delegationRequests", []):
+            candidate["delegationRequest"] = {"origin": "operator"}
         context = delegation_context(snapshot, candidate["issueNumber"])
         if context is not None:
             candidate["delegationContext"] = context
@@ -332,20 +335,26 @@ def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[s
         copy.deepcopy(record) for record in status.get("records", [])
         if record.get("issueNumber") == issue_number
         and record.get("repository") == snapshot.get("repository")
-        and record.get("lifecycle") not in {"retired", "completed"}
     ]
     if not records:
         return None
     decision = False
     reason = "delegation-evidence-incomplete"
-    if status.get("status") == "complete" and len(records) == 1:
-        record = records[0]
+    if status.get("status") == "complete":
+        record = max(records, key=lambda item: (item["startedAt"], item["actionId"]))
         reminder = record.get("handoffReminder", {})
         reason = str(record.get("lifecycle") or reason)
         if (
             record.get("lifecycle") == "handoff_required"
             and record.get("requiresHuman") is True
             and record.get("taskState") is not None
+            and record.get("taskObservation", "available") == "available"
+            and not any(
+                other is not record
+                and other.get("taskObservation") == "available"
+                and other.get("taskState") in {"queued", "in_progress"}
+                for other in records
+            )
             and record.get("issueOpen") is True
             and record.get("copilotAssigned") is True
             and record.get("humanAssigned") is False

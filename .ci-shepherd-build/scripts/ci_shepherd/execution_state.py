@@ -754,6 +754,63 @@ class ActionEventStore:
                     }
                 )
 
+    def append_delegation_observations(
+        self,
+        *,
+        repository: str,
+        records: Sequence[Mapping[str, Any]],
+        at: datetime,
+    ) -> None:
+        """Persist changed issue/task/PR bindings before retiring an attempt."""
+        from .models import _validate_delegation_status
+
+        if at.tzinfo is None:
+            raise ExecutionStateError("Delegation observation time must be aware.")
+        _validate_delegation_status({"status": "complete", "records": list(records)})
+        with self._locked():
+            events = [
+                event for event in self._load_events()
+                if event.get("repository") == repository
+            ]
+            baselines = {
+                event["actionId"]: event for event in events
+                if event.get("eventType") == "delegation-baseline"
+            }
+            previous = {
+                event["actionId"]: event["record"] for event in events
+                if event.get("eventType") == "delegation-observed"
+            }
+            terminals = {
+                event["actionId"]: event for event in events
+                if event.get("eventType") == "terminal"
+            }
+            for record in records:
+                action_id = record["actionId"]
+                baseline = baselines.get(action_id)
+                if (
+                    record["repository"] != repository
+                    or baseline is None
+                    or baseline.get("target") != {
+                        "kind": "issue", "number": record["issueNumber"],
+                    }
+                ):
+                    raise ExecutionStateError("Delegation observation does not match its assignment.")
+                result = terminals.get(action_id, {}).get("result")
+                expected_task = result.get("taskId") if isinstance(result, Mapping) else None
+                if record.get("taskId") != expected_task:
+                    raise ExecutionStateError("Delegation observation task identity does not match its assignment.")
+                if previous.get(action_id) == record:
+                    continue
+                self._append_event({
+                    "schemaVersion": 1,
+                    "eventType": "delegation-observed",
+                    "repository": repository,
+                    "actionId": action_id,
+                    "recordedAt": at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                    "record": dict(record),
+                })
+                previous[action_id] = dict(record)
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
         self._ensure_state_directory()
