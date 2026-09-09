@@ -22,6 +22,10 @@ from ci_shepherd.comment_selection import (
     build_comment_selection,
     render_comment_selection_section,
 )
+from ci_shepherd.ci_failure_triage import (
+    attach_ci_failure_triage,
+    build_ci_failure_triage,
+)
 from ci_shepherd.coordinator_state import (
     CoordinatorStateStore,
     make_lock_free_durable_intent_reader,
@@ -51,6 +55,7 @@ from ci_shepherd.models import ValidationError, stable_json, validate_snapshot
 from ci_shepherd.operation_policy import load_operation_policy_document
 from ci_shepherd.policy import load_policy
 from ci_shepherd.poc import build_compact_poc_input
+from ci_shepherd.poc_history import current_triage_events, read_ledger_rows
 from ci_shepherd.poc_state import (
     load_review_schedule,
     record_review_events,
@@ -481,15 +486,14 @@ def _restart_after_evidence_expansion(
         **expanded_snapshot,
         "openIssues": sorted(set(expanded_snapshot["openIssues"]) | reviewed_delegations),
     }
-    prepared = attach_latest_investigation_results(
-        prepare_assessment(
-            assessment_snapshot,
-            issue_update_times=assessment_issue_update_times(
-                assessment_snapshot, snapshot,
-                _load_json(work_dir / "assessment-input.json", "pre-expansion assessment"),
-            ),
+    state_dir = Path(str(manifest["stateDirectory"]))
+    prepared, triage = _prepare_with_ci_failure_triage(
+        assessment_snapshot,
+        state_dir,
+        issue_update_times=assessment_issue_update_times(
+            assessment_snapshot, snapshot,
+            _load_json(work_dir / "assessment-input.json", "pre-expansion assessment"),
         ),
-        read_investigation_results(Path(str(manifest["stateDirectory"]))),
     )
     compact = build_compact_poc_input(prepared)
     expanded_issue_numbers = {
@@ -536,6 +540,7 @@ def _restart_after_evidence_expansion(
         snapshot_id=str(prepared["snapshotId"]),
     )
     _write_private_json(work_dir / "assessment-input.json", prepared)
+    _write_private_json(work_dir / "ci-failure-triage.json", triage)
     _write_private_json(work_dir / "assessment-defaults.json", compact)
     _write_private_json(work_dir / "agent-input.json", agent_compact)
     _write_private_json(work_dir / "review-selection.json", selection)
@@ -592,6 +597,11 @@ def _changed_prepared_issues(
             context = issue.get("delegationContext", {})
             if isinstance(context.get("activity"), dict):
                 context["activity"].pop("issueUpdatedAt", None)
+            # Reported test identities can cite the issue itself. Its raw
+            # timestamp changes this audit fingerprint even when all independent
+            # evidence is proven unchanged. Keep rules, facts and history compared.
+            for case in issue.get("ciFailureTriage", {}).get("cases", []):
+                case.pop("evidenceFingerprint", None)
     previous = {
         issue["issueNumber"]: issue
         for issue in previous_compact.get("issues", [])
@@ -607,6 +617,27 @@ def _changed_prepared_issues(
         and not isinstance(issue.get("issueNumber"), bool)
         and previous.get(issue["issueNumber"]) != issue
     }
+
+
+def _prepare_with_ci_failure_triage(
+    snapshot: Mapping[str, Any],
+    state_dir: Path,
+    *,
+    issue_update_times: Mapping[int, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    prepared = prepare_assessment(snapshot, issue_update_times=issue_update_times)
+    triage = build_ci_failure_triage(
+        prepared,
+        history_rows=current_triage_events(
+            read_ledger_rows(state_dir / "ledgers" / "fingerprints.jsonl")
+        ),
+    )
+    prepared = attach_ci_failure_triage(prepared, triage)
+    prepared = attach_latest_investigation_results(
+        prepared,
+        read_investigation_results(state_dir),
+    )
+    return prepared, triage
 
 
 def start_cycle(
@@ -746,14 +777,12 @@ def start_cycle(
                 open_issue_numbers | assessment_delegated_issue_numbers
             ),
         }
-    prepared = attach_latest_investigation_results(
-        prepare_assessment(
-            assessment_snapshot,
-            issue_update_times=assessment_issue_update_times(
-                assessment_snapshot, previous_snapshot, previous_prepared,
-            ),
+    prepared, triage = _prepare_with_ci_failure_triage(
+        assessment_snapshot,
+        state_dir,
+        issue_update_times=assessment_issue_update_times(
+            assessment_snapshot, previous_snapshot, previous_prepared,
         ),
-        read_investigation_results(state_dir),
     )
     compact = build_compact_poc_input(prepared)
     control_only_issue_numbers = frozenset(control_comment_only_issue_numbers(snapshot, previous_snapshot))
@@ -764,6 +793,11 @@ def start_cycle(
         prepared,
         previous_prepared,
         control_only_issue_numbers=control_only_issue_numbers,
+    )
+    triage_rule_changed = (
+        previous_prepared is not None
+        and previous_prepared.get("triageRuleVersion")
+        != prepared.get("triageRuleVersion")
     )
     assessed_issue_numbers = {issue["issueNumber"] for issue in compact["issues"]}
     requested_delegation_issue_numbers = (
@@ -789,6 +823,11 @@ def start_cycle(
             *(
                 ["derived-assessment-changed"]
                 if issue_number in derived_changed_issue_numbers
+                else []
+            ),
+            *(
+                ["triage-rule-changed"]
+                if triage_rule_changed
                 else []
             ),
             *(
@@ -844,12 +883,14 @@ def start_cycle(
     }
     paths = {
         "prepared": work_dir / "assessment-input.json",
+        "triage": work_dir / "ci-failure-triage.json",
         "defaults": work_dir / "assessment-defaults.json",
         "compact": work_dir / "agent-input.json",
         "selection": work_dir / "review-selection.json",
         "pullRequests": work_dir / "pull-request-review.json",
     }
     _write_private_json(paths["prepared"], prepared)
+    _write_private_json(paths["triage"], triage)
     _write_private_json(paths["defaults"], compact)
     _write_private_json(paths["compact"], agent_compact)
     _write_private_json(paths["selection"], selection)
@@ -1018,6 +1059,7 @@ def finish_cycle(
     paths = {
         "input": work_dir / "input.json",
         "prepared": work_dir / "assessment-input.json",
+        "triage": work_dir / "ci-failure-triage.json",
         "defaults": work_dir / "assessment-defaults.json",
         "compact": work_dir / "agent-input.json",
         "selection": work_dir / "review-selection.json",
@@ -1393,6 +1435,7 @@ def finish_cycle(
             paths["quarantineSession"],
             paths["quarantineReconciliation"],
             paths["investigationPlan"],
+            paths["triage"],
             paths["reviewSchedule"],
             paths["managedCoverage"],
             *[

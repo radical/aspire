@@ -9,10 +9,12 @@ from typing import Sequence
 
 from ci_shepherd.history import (
     HistoryError,
+    _validate_triage_artifact,
     load_current,
     load_recorded_run,
     record_poc_history,
 )
+from ci_shepherd.ci_failure_triage import validate_prepared_ci_failure_triage
 from ci_shepherd.poc_state import record_poc_ledgers
 
 
@@ -44,12 +46,20 @@ def record_poc_cycle(
     snapshot = _read_json(resolved_paths["input"], "snapshot")
     prepared = _read_json(resolved_paths["prepared"], "prepared assessment")
     judgments = _read_json(resolved_paths["judgments"], "judgments")
+    try:
+        validate_prepared_ci_failure_triage(prepared, allow_absent=True)
+    except ValueError as error:
+        raise HistoryError(f"Invalid prepared CI failure triage: {error}") from error
     report_markdown = resolved_paths["report"].read_text(encoding="utf-8")
     artifacts = _read_artifacts(
         artifact_paths,
         excluded=set(resolved_paths.values()),
         state_dir=resolved_state,
     )
+    # Validate before the interrupted-write recovery path can reuse a prior run.
+    for path, content in artifacts:
+        if path == "ci-failure-triage.json":
+            _validate_triage_artifact(prepared, content)
     run_id = _run_id(snapshot)
     repository = str(snapshot.get("repository", ""))
     try:

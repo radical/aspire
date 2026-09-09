@@ -8,14 +8,21 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ci_shepherd.ci_failure_triage import (
+    attach_ci_failure_triage,
+    build_ci_failure_triage,
+)
+from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.poc_history import (
     append_new_rows,
     collect_rows_from_prepared,
     compute_fingerprint,
+    current_triage_events,
     group_rows_by_fingerprint,
     merge_occurrence_dimensions,
     read_ledger_rows,
 )
+from test_workflow_health import add_execution, workflow_snapshot
 
 
 def _identity(
@@ -73,6 +80,67 @@ class ComputeFingerprintTests(unittest.TestCase):
 
 
 class CollectRowsFromPreparedTests(unittest.TestCase):
+    def test_current_unknown_revision_replaces_stale_proof_before_history_projection(self) -> None:
+        value = workflow_snapshot()
+        value["evidence"]["run:100"]["payload"]["workflowPath"] = ".github/workflows/ci.yml"
+        log = value["evidence"]["run:100:attempt:1:job:900:log"]["payload"]
+        original_diagnostic = log["excerpt"]
+        prepared = prepare_assessment(value)
+        rows = collect_rows_from_prepared(
+            attach_ci_failure_triage(prepared, build_ci_failure_triage(prepared))
+        )
+        log.update(excerpt="Process exited with code 1", facts=[])
+        add_execution(value, 101, "2026-08-19T15:45:00Z", excerpt=original_diagnostic)
+        value["evidence"]["run:101"]["payload"]["workflowPath"] = ".github/workflows/ci.yml"
+        current = build_ci_failure_triage(prepare_assessment(value), history_rows=current_triage_events(rows))
+        verified, = [case for case in current["assessments"] if case["family"]["status"] == "verified"]
+        self.assertEqual(1, verified["history"]["windows"]["7d"]["failedRuns"])
+        self.assertEqual([101], [attempt["runId"] for attempt in verified["history"]["attempts"]])
+
+    def test_reclassification_supersedes_the_same_physical_occurrence(self) -> None:
+        rows = []
+        for excerpt in ("src/File.cs(1): error CS1002: ; expected", "Process exited with code 1"):
+            value = workflow_snapshot()
+            value["evidence"]["run:100"]["payload"]["workflowPath"] = ".github/workflows/ci.yml"
+            value["evidence"]["run:100:attempt:1:job:900:log"]["payload"].update(excerpt=excerpt, facts=[])
+            prepared = prepare_assessment(value)
+            row, = collect_rows_from_prepared(
+                attach_ci_failure_triage(prepared, build_ci_failure_triage(prepared))
+            )
+            rows.append(row)
+
+        self.assertEqual(["verified", "unknown"], [row["familyStatus"] for row in rows])
+        self.assertEqual(rows[0]["logicalOccurrenceId"], rows[1]["logicalOccurrenceId"])
+        self.assertEqual([rows[1]], current_triage_events(rows))
+
+    def test_logical_identity_survives_occurrence_ordinal_renumbering(self) -> None:
+        first_snapshot = workflow_snapshot()
+        first_snapshot["evidence"]["run:100:attempt:1:job:900:log"]["payload"][
+            "excerpt"
+        ] = "Failed Namespace.Type.Z [42 ms]\nSystem.Exception: failed"
+        first = prepare_assessment(first_snapshot)
+        first_rows = collect_rows_from_prepared(
+            attach_ci_failure_triage(first, build_ci_failure_triage(first))
+        )
+
+        expanded_snapshot = workflow_snapshot()
+        expanded_snapshot["evidence"]["run:100:attempt:1:job:900:log"]["payload"][
+            "excerpt"
+        ] = (
+            "Failed Namespace.Type.A [42 ms]\nSystem.Exception: other\n"
+            "Failed Namespace.Type.Z [42 ms]\nSystem.Exception: failed"
+        )
+        expanded = prepare_assessment(expanded_snapshot)
+        expanded_rows = collect_rows_from_prepared(
+            attach_ci_failure_triage(expanded, build_ci_failure_triage(expanded))
+        )
+
+        old_z = next(row for row in first_rows if row["testName"] == "Namespace.Type.Z")
+        new_z = next(row for row in expanded_rows if row["testName"] == "Namespace.Type.Z")
+        new_a = next(row for row in expanded_rows if row["testName"] == "Namespace.Type.A")
+        self.assertEqual(old_z["logicalOccurrenceId"], new_z["logicalOccurrenceId"])
+        self.assertNotEqual(old_z["logicalOccurrenceId"], new_a["logicalOccurrenceId"])
+
     def test_collects_rows_using_source_run_or_run_id(self) -> None:
         prepared = {
             "issues": [
@@ -161,6 +229,130 @@ class CollectRowsFromPreparedTests(unittest.TestCase):
 
 
 class LedgerAppendTests(unittest.TestCase):
+    def test_returning_to_previous_evidence_or_rules_appends_a_current_revision(self) -> None:
+        for change in ("diagnostic", "rule"):
+            with self.subTest(change=change), TemporaryDirectory() as scratch:
+                path = Path(scratch) / "fingerprints.jsonl"
+                appended_counts = []
+                for index in range(4):
+                    value = workflow_snapshot()
+                    value["evidence"]["run:100"]["payload"]["workflowPath"] = ".github/workflows/ci.yml"
+                    excerpt = "Failed Namespace.Type.Test [42 ms]"
+                    if change != "diagnostic" or index != 1:
+                        excerpt += "\nAssert.Equal() Failure: Expected 1 Actual 2"
+                    value["evidence"]["run:100:attempt:1:job:900:log"]["payload"]["excerpt"] = excerpt
+                    prepared = prepare_assessment(value)
+                    triage = build_ci_failure_triage(prepared)
+                    if change == "rule" and index == 1:
+                        triage["ruleVersion"] += "-revised"
+                    rows = collect_rows_from_prepared(attach_ci_failure_triage(prepared, triage))
+                    appended_counts.append(len(append_new_rows(path, rows)))
+                    current, = current_triage_events(read_ledger_rows(path))
+                    self.assertEqual(rows[0]["familyStatus"], current["familyStatus"])
+                    self.assertEqual(rows[0]["ruleVersion"], current["ruleVersion"])
+                self.assertEqual([1, 1, 1, 0], appended_counts)
+
+    def test_v1_row_does_not_suppress_v2_enrichment(self) -> None:
+        with TemporaryDirectory() as scratch:
+            path = Path(scratch) / "fingerprints.jsonl"
+            legacy = {
+                "fingerprint": "test:namespace.type.test",
+                "issueNumber": 101,
+                "runId": 1001,
+                "attempt": 1,
+                "date": "2026-08-17",
+                "job": "Tests / Linux",
+                "testName": "Namespace.Type.Test",
+            }
+            enriched = {
+                **legacy,
+                "schemaVersion": 2,
+                "eventId": "triage-event:one",
+                "logicalOccurrenceId": "triage-occurrence:one",
+                "familyStatus": "verified",
+                "familyId": "fnv1a64:0000000000000001",
+                "caseId": "triage:occurrence:one",
+                "evidenceFingerprint": "fnv1a64:0000000000000002",
+                "ruleVersion": "aspire-ci-triage-v1",
+                "occurredAt": "2026-08-17T10:00:00Z",
+                "observedAt": "2026-08-18T10:00:00Z",
+                "outcome": "failure",
+            }
+
+            append_new_rows(path, [legacy])
+            appended = append_new_rows(path, [enriched])
+
+            self.assertEqual([enriched], appended)
+            self.assertEqual([enriched], current_triage_events(read_ledger_rows(path)))
+
+    def test_current_triage_events_selects_latest_revision_per_occurrence(self) -> None:
+        base = {
+            "schemaVersion": 2,
+            "fingerprint": "test:namespace.type.test",
+            "issueNumber": 101,
+            "runId": 1001,
+            "attempt": 1,
+            "date": "2026-08-17",
+            "job": "Tests / Linux",
+            "testName": "Namespace.Type.Test",
+            "logicalOccurrenceId": "triage-occurrence:one",
+            "caseId": "triage:occurrence:one",
+            "occurredAt": "2026-08-17T10:00:00Z",
+            "observedAt": "2026-08-18T10:00:00Z",
+            "outcome": "failure",
+        }
+        verified = {
+            **base,
+            "eventId": "triage-event:one",
+            "familyStatus": "verified",
+            "familyId": "fnv1a64:0000000000000001",
+            "evidenceFingerprint": "fnv1a64:0000000000000002",
+            "ruleVersion": "aspire-ci-triage-v1",
+        }
+        corrected = {
+            **base,
+            "eventId": "triage-event:two",
+            "familyStatus": "unknown",
+            "familyId": None,
+            "evidenceFingerprint": "fnv1a64:0000000000000003",
+            "ruleVersion": "aspire-ci-triage-v2",
+        }
+
+        self.assertEqual([corrected], current_triage_events([verified, corrected]))
+
+    def test_v2_events_distinguish_two_families_in_same_attempt(self) -> None:
+        with TemporaryDirectory() as scratch:
+            path = Path(scratch) / "fingerprints.jsonl"
+            base = {
+                "schemaVersion": 2,
+                "fingerprint": "test:namespace.type.test",
+                "issueNumber": 101,
+                "runId": 1001,
+                "attempt": 1,
+                "date": "2026-08-17",
+                "job": "Tests / Linux",
+                "testName": "Namespace.Type.Test",
+                "familyStatus": "verified",
+                "evidenceFingerprint": "fnv1a64:0000000000000002",
+                "ruleVersion": "aspire-ci-triage-v1",
+                "occurredAt": "2026-08-17T10:00:00Z",
+                "observedAt": "2026-08-18T10:00:00Z",
+                "outcome": "failure",
+            }
+            rows = [
+                {
+                    **base,
+                    "eventId": f"triage-event:{value}",
+                    "logicalOccurrenceId": f"triage-occurrence:{value}",
+                    "caseId": f"triage:occurrence:{value}",
+                    "familyId": f"fnv1a64:{value:016x}",
+                }
+                for value in (1, 2)
+            ]
+
+            self.assertEqual(rows, append_new_rows(path, rows))
+            self.assertEqual(rows, current_triage_events(read_ledger_rows(path)))
+
     def test_append_and_read_round_trips_rows(self) -> None:
         with TemporaryDirectory() as scratch:
             path = Path(scratch) / "fingerprints.jsonl"

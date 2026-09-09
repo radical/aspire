@@ -72,6 +72,46 @@ def resolved_snapshot():
 
 
 class SemanticReviewChangeTests(unittest.TestCase):
+    def test_control_updates_do_not_reselect_triage_with_reported_test_evidence(self):
+        from test_observations import fact
+        from test_workflow_health import workflow_snapshot
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            value = workflow_snapshot()
+            value.pop("workflowDiscovery")
+            issue = value["evidence"]["issue:12"]["payload"]
+            issue["facts"] = [fact("testName", "Namespace.Type.Test")]
+            value["evidence"]["run:100:attempt:1:job:900:log"]["payload"].update(
+                excerpt="Process exited with code 1", facts=[],
+            )
+            value["evidence"]["issue:12:comment:900"] = {
+                "kind": "issue-comment", "availability": "available",
+                "url": "https://github.com/microsoft/aspire/issues/12#issuecomment-900",
+                "payload": {
+                    "id": 900, "sourceIssueNumber": 12, "author": "shepherd",
+                    "createdAt": issue["updatedAt"], "updatedAt": issue["updatedAt"],
+                    "body": "[automated] Awaiting evidence.",
+                    "markers": [], "facts": [], "references": [],
+                    "shepherdStatus": {"role": "status", "idempotencyKey": "issue:12:status", "owned": True},
+                },
+            }
+            self.assertEqual(1, self.run_cycle(root, value, 0)[0]["issueReviewCount"])
+            initial = json.loads((root / "work-0" / "ci-failure-triage.json").read_text())["assessments"][0]
+            self.assertIn("issue:12", initial["evidenceIds"])
+            issue["updatedAt"] = "2026-08-19T16:01:00Z"
+            value["evidence"]["issue:12:comment:900"]["payload"].update(
+                body="[automated] Still awaiting evidence.", updatedAt=issue["updatedAt"],
+            )
+            value["refreshSummary"] = {"changedIssueNumbers": [12]}
+            self.assertEqual(0, self.run_cycle(root, value, 1)[0]["issueReviewCount"])
+            current = json.loads((root / "work-1" / "ci-failure-triage.json").read_text())["assessments"][0]
+            self.assertNotEqual(initial["evidenceFingerprint"], current["evidenceFingerprint"])
+            value["refreshSummary"] = {"changedIssueNumbers": []}
+            self.assertEqual(0, self.run_cycle(root, value, 2)[0]["issueReviewCount"])
+            issue["body"] = "Independent diagnostic changed."
+            self.assertEqual(1, self.run_cycle(root, value, 3)[0]["issueReviewCount"])
+
     def run_cycle(self, root, value, index):
         value["collectedAt"] = f"{value['collectedAt'][:14]}{index:02}:00Z"
         for record in value["evidence"].values():

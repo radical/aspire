@@ -297,6 +297,207 @@ def pull_request_snapshot(collected_at: str) -> dict[str, object]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_advisory_triage_does_not_gate_direct_repair_in_real_cycle(self) -> None:
+        from test_repair_routing import repair_snapshot
+
+        for diagnostic in ("missing", "complete"):
+            with self.subTest(diagnostic=diagnostic), TemporaryDirectory() as scratch:
+                root = Path(scratch).resolve()
+                value = repair_snapshot()
+                if diagnostic == "complete":
+                    for record in value["evidence"].values():
+                        if record["kind"] == "workflow-log":
+                            record["payload"]["excerpt"] += "\nSystem.TimeoutException: browser did not start"
+                source = root / "input.json"
+                source.write_text(json.dumps(value), encoding="utf-8")
+                work = root / "work"
+                cycle_script.start_cycle(
+                    repository=value["repository"], state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="ankj", input_path=source,
+                )
+                prepared = json.loads((work / "assessment-input.json").read_text())
+                issue, = prepared["issues"]
+                self.assertEqual(2, len(issue["ciFailureTriage"]["cases"]))
+                for case in issue["ciFailureTriage"]["cases"]:
+                    self.assertEqual("unknown" if diagnostic == "missing" else "verified", case["family"]["status"])
+                    self.assertEqual("watch", case["assessment"]["disposition"])
+                    self.assertEqual("unknown", case["history"]["windows"]["7d"]["denominatorStatus"])
+                completed = finish_reviewed_cycle(
+                    work_dir=work, agent_judgments_path=work / "agent-judgments.json",
+                )
+                self.assertEqual("completed", completed["stage"])
+                judgments = json.loads((work / "judgments.json").read_text())
+                self.assertEqual("delegate-copilot", judgments["issues"][0]["recommendations"][0]["disposition"])
+                proposals = json.loads((work / "action-proposals.json").read_text())
+                assignment, = [p for p in proposals["proposals"] if p["operation"] == "assign-copilot"]
+                self.assertTrue(assignment["executionEligibility"]["eligible"])
+                plan = json.loads((work / "investigation-plan.json").read_text())
+                self.assertEqual([], plan["requests"])
+
+    def test_triage_rule_change_reselects_once_and_ledger_replay_converges(self) -> None:
+        from ci_shepherd.ci_failure_triage import TRIAGE_RULE_VERSION
+        from test_repair_routing import repair_snapshot
+
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch).resolve()
+            state = root / "state"
+            original_ledger = None
+            for index, version in enumerate((
+                TRIAGE_RULE_VERSION, TRIAGE_RULE_VERSION,
+                TRIAGE_RULE_VERSION + "-revised", TRIAGE_RULE_VERSION + "-revised",
+            )):
+                value = repair_snapshot()
+                value["collectedAt"] = f"2026-08-19T16:{index:02}:00Z"
+                source = root / f"input-{index}.json"
+                source.write_text(json.dumps(value), encoding="utf-8")
+                work = root / f"work-{index}"
+                with patch("ci_shepherd.ci_failure_triage.TRIAGE_RULE_VERSION", version):
+                    started = cycle_script.start_cycle(
+                        repository=value["repository"], state_dir=state, work_dir=work,
+                        checkout=None, shepherd_author="ankj", input_path=source,
+                    )
+                    self.assertEqual(1 if index in (0, 2) else 0, started["issueReviewCount"])
+                    if started["stage"] == "awaiting-review":
+                        finish_reviewed_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+                if index == 2:
+                    selection = json.loads((work / "review-selection.json").read_text())
+                    self.assertIn("triage-rule-changed", selection["selected"][0]["changeReasons"])
+                ledger = (state / "ledgers" / "fingerprints.jsonl").read_bytes()
+                if index in (1, 3):
+                    self.assertEqual(original_ledger, ledger)
+                else:
+                    rows = [json.loads(line) for line in ledger.splitlines()]
+                    self.assertEqual(2 if index == 0 else 4, len(rows))
+                    original_ledger = ledger
+
+    def test_triage_expansion_preserves_control_normalized_recovery(self) -> None:
+        from test_semantic_review_changes import resolved_snapshot
+
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch).resolve()
+            state = root / "state"
+            source = root / "input.json"
+            value = resolved_snapshot()
+            for record in value["evidence"].values():
+                record["collectedAt"] = value["collectedAt"]
+            source.write_text(json.dumps(value), encoding="utf-8")
+            work = root / "first"
+            cycle_script.start_cycle(
+                repository=value["repository"], state_dir=state, work_dir=work,
+                checkout=None, shepherd_author="ankj", input_path=source,
+            )
+            finish_reviewed_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+            value["collectedAt"] = "2026-08-19T16:01:00Z"
+            value["evidence"]["issue:14"]["payload"]["updatedAt"] = value["collectedAt"]
+            value["evidence"]["issue:14:comment:900"]["payload"].update(
+                body="[automated] Updated recovery status.", updatedAt=value["collectedAt"],
+            )
+            value["refreshSummary"] = {"changedIssueNumbers": [14]}
+            source.write_text(json.dumps(value), encoding="utf-8")
+            record_review_wakeup(
+                state, value["repository"], target_kind="issue", target_number=14,
+                evaluate_at=value["collectedAt"], reason="positive-coverage-review",
+            )
+            work = root / "second"
+            cycle_script.start_cycle(
+                repository=value["repository"], state_dir=state, work_dir=work,
+                checkout=None, shepherd_author="ankj", input_path=source,
+            )
+            request_document = {
+                "schemaVersion": 1, "repository": value["repository"], "round": 1,
+                "requests": [{
+                    "type": "workflow-run", "sourceIssueNumber": 14, "evidenceId": "run:201",
+                    "decisionGate": "current-failing-run", "reason": "Refresh matching execution evidence.",
+                }],
+            }
+
+            def expand(source_path, requests_path, output_path, errors_path, **kwargs):
+                expanded = json.loads(source_path.read_text())
+                expanded["expansions"] = [{
+                    "round": 1, "requests": request_document["requests"],
+                    "status": "complete", "errors": [],
+                }]
+                output_path.write_text(json.dumps(expanded), encoding="utf-8")
+                errors_path.write_text("[]\n", encoding="utf-8")
+                return output_path
+
+            with (
+                patch.object(cycle_script, "build_proposal_evidence_requests", return_value=(request_document, [])),
+                patch.object(cycle_script, "expand_files", side_effect=expand),
+            ):
+                restarted = finish_reviewed_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+                self.assertEqual("awaiting-review", restarted["stage"])
+                prepared = json.loads((work / "assessment-input.json").read_text())
+                issue, = prepared["issues"]
+                self.assertEqual("resolved", issue["candidateState"])
+                self.assertEqual("verified", issue["recovery"]["status"])
+                triage = json.loads((work / "ci-failure-triage.json").read_text())
+                self.assertEqual(restarted["snapshotId"], triage["snapshotId"])
+                self.assertEqual(issue["ciFailureTriage"]["cases"], triage["assessments"])
+                completed = finish_reviewed_cycle(work_dir=work, agent_judgments_path=work / "agent-judgments.json")
+            sealed = Path(completed["runDirectory"])
+            self.assertEqual(triage, json.loads((sealed / "ci-failure-triage.json").read_text()))
+            self.assertEqual(
+                value["collectedAt"],
+                json.loads((sealed / "snapshot.json").read_text())["evidence"]["issue:14"]["payload"]["updatedAt"],
+            )
+
+    def test_start_writes_advisory_triage_into_cycle_inputs(self) -> None:
+        artifacts = Path(__file__).resolve().parent / ".artifacts"
+        artifacts.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=artifacts) as scratch:
+            root = Path(scratch)
+            input_path = root / "input.json"
+            input_path.write_text(
+                json.dumps(snapshot("2026-09-09T12:00:00Z")),
+                encoding="utf-8",
+            )
+            work = root / "work"
+
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=root / "state",
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+
+            triage = json.loads(
+                (work / "ci-failure-triage.json").read_text(encoding="utf-8")
+            )
+            prepared = json.loads(
+                (work / "assessment-input.json").read_text(encoding="utf-8")
+            )
+            compact = json.loads(
+                (work / "agent-input.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(prepared["snapshotId"], triage["snapshotId"])
+            self.assertEqual(
+                prepared["issues"][0]["ciFailureTriage"],
+                compact["issues"][0]["ciFailureTriage"],
+            )
+            judgments_path = work / "agent-judgments.json"
+            judgments_path.write_text(
+                json.dumps({
+                    "schemaVersion": 1,
+                    "snapshotId": prepared["snapshotId"],
+                    "issues": [compact["issues"][0]["defaultJudgment"]],
+                }),
+                encoding="utf-8",
+            )
+            completed = finish_reviewed_cycle(
+                work_dir=work,
+                agent_judgments_path=judgments_path,
+            )
+            recorded = Path(completed["runDirectory"])
+            self.assertEqual(
+                triage,
+                json.loads(
+                    (recorded / "ci-failure-triage.json").read_text(encoding="utf-8")
+                ),
+            )
+
     def test_quarantined_nomination_finishes_without_source_inspection(self) -> None:
         issue = make_issue(42, labels=["quarantined-test"])
         client = ScriptedClient(

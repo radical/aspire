@@ -578,6 +578,57 @@ Use these starting rules:
 | An existing Copilot task or repair PR | Follow that attempt; do not start duplicate work |
 | Incomplete identity, skipped jobs, or unavailable evidence | Preserve the gap; never present it as recovery |
 
+## Aspire CI failure triage
+
+`scripts/ci_shepherd/ci_failure_triage.py` adds a deterministic, advisory-only
+qualification stage before prior investigation results are attached. The stage
+separates observed compiler, setup/network, failed-test, and harness-abort
+evidence from test names and causes asserted by an issue producer. Missing or
+truncated evidence remains explicit; a green workflow, skipped test, retry
+success, or quarantine label does not prove recovery or erase a failed
+occurrence.
+
+`ci-failure-triage.json` is recorded as an immutable cycle artifact; per-issue
+`ciFailureTriage` cases are embedded in the prepared, compact analyst, and
+assessment-batch inputs. Its cases cite only their bounded occurrence evidence
+and may add context to the existing investigation request and worker prompt.
+They do not emit actions, commands, grants, executable recommendations, or new
+GitHub writes. Existing lifecycle, selection, authorization, and executor
+guards remain authoritative.
+
+Triage's `watch` or `investigate` disposition, unknown family, and unknown
+denominator are advisory context, not additional repair-readiness gates.
+Sufficiently evidenced failures can still reach direct cloud repair without
+a complete local diagnosis. Bounded classification retains its repair-specific
+question and deadline while receiving triage's concrete missing-evidence reasons.
+
+Verified failure families require the workflow ID, path, event, job, lane, OS,
+observed phase, and evidence-specific diagnostic signature; test failures also
+require the exact test identity. Otherwise family identity is unknown rather
+than inferred from a test name, error code, or bot claim. The fingerprint
+ledger preserves its legacy fields and adds schema-v2 `eventId` and
+`logicalOccurrenceId` revisions. New triage reads select the latest revision
+while legacy readers retain their existing compact view. Logical identity is
+independent of diagnosis; current evidence replaces older family proof even
+before recording. Repeated current evidence is a no-op, while returning to an
+earlier evidence state after a correction records a new transition.
+
+Signatures exclude recognized log timestamp envelopes but retain the failing
+resource and diagnostic text. Generic setup transport errors remain unknown
+families. The standalone artifact must match its embedded assessments on
+recording, replay, and persisted reads. Control-only comment updates retain
+raw audit fingerprints without triggering another assessment by themselves.
+
+The 7/14/30-day windows count distinct failed runs at the execution timestamp
+and use frozen `sourceCollectedAt` as their clock. Retries remain visible as
+attempts but do not become independent failed runs. The current projection
+always reports `observedExecutions: null` and `denominatorStatus: "unknown"`;
+it does not infer a rate. An observed test failure may use the existing
+`flaky-test` category without establishing statistical flakiness or authorizing
+quarantine. `TRIAGE_RULE_VERSION` participates in investigation freshness so a
+rule correction reassesses unchanged evidence. Rolling history and advisory
+text do not invalidate otherwise unchanged investigation results.
+
 The current-failure window is 14 days. Recurrence joins the verified workflow ID, path, event,
 job/lane/OS, and normalized failure identity. Retries of one run do not count as
 independent occurrences. A couple of green runs do not erase three matching
@@ -1788,6 +1839,7 @@ The live trial uses this artifact set:
 ```text
 input.json
 assessment-input.json
+ci-failure-triage.json
 assessment-defaults.json
 agent-input.json
 review-selection.json

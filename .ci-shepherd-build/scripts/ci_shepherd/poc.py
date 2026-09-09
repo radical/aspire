@@ -11,6 +11,7 @@ from ci_shepherd.eligibility import (
     related_repairs_block_delegation,
     reported_issue_requires_human_decision as _reported_issue_requires_human_decision,
 )
+from ci_shepherd.ci_failure_triage import validate_prepared_ci_failure_triage
 from ci_shepherd.investigations import derive_machine_actionability
 from ci_shepherd.models import ValidationError, validate_issue_body_payload, validate_workflow_log_payload
 from ci_shepherd.poc_history import compute_fingerprint, merge_occurrence_dimensions
@@ -650,6 +651,7 @@ def build_compact_poc_input(
     history_occurrences: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     prepared_mapping = _require_mapping(prepared, "prepared assessment")
+    validate_prepared_ci_failure_triage(prepared_mapping, allow_absent=True)
     _require_exact_int(prepared_mapping, "schemaVersion", ASSESSMENT_SCHEMA_VERSION)
     snapshot_id = _require_nonempty_string(prepared_mapping, "snapshotId")
     issues = _require_list(prepared_mapping, "issues")
@@ -1039,6 +1041,8 @@ def _build_compact_issue(
     for key in ("repairEvidence", "producerAdmission"):
         if key in issue:
             compact_issue[key] = copy.deepcopy(issue[key])
+    if isinstance(issue.get("ciFailureTriage"), Mapping):
+        compact_issue["ciFailureTriage"] = copy.deepcopy(issue["ciFailureTriage"])
     if isinstance(issue.get("repairFollowup"), Mapping):
         # The task/PR history is already carried by delegationContext.
         compact_issue["repairFollowup"] = copy.deepcopy({

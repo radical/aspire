@@ -362,6 +362,7 @@ def _validate_poc_inputs(
     report_markdown: object,
     artifacts: object,
 ) -> list[tuple[str, bytes]]:
+    from .ci_failure_triage import validate_prepared_ci_failure_triage
     from .lifecycle import snapshot_id_for
     from .poc import validate_poc_judgments
 
@@ -369,8 +370,12 @@ def _validate_poc_inputs(
     _validate_run_id(run_id)
     try:
         validate_snapshot(snapshot)
+        validate_prepared_ci_failure_triage(
+            _mapping(prepared_assessment, "prepared assessment"),
+            allow_absent=True,
+        )
         validate_poc_judgments(prepared_assessment, judgments)
-    except ValidationError as error:
+    except (ValidationError, ValueError) as error:
         raise HistoryError(f"Invalid POC cycle: {error}") from error
 
     snapshot_mapping = _mapping(snapshot, "snapshot")
@@ -407,10 +412,24 @@ def _validate_poc_inputs(
         ]
     except (TypeError, ValueError, UnicodeError) as error:
         raise HistoryError("POC cycle records must be JSON-compatible UTF-8.") from error
-    prepared.extend(
-        _validate_artifacts(artifacts, reserved_paths=_POC_RESERVED_RUN_FILES)
-    )
+    validated_artifacts = _validate_artifacts(artifacts, reserved_paths=_POC_RESERVED_RUN_FILES)
+    for path, content in validated_artifacts:
+        if path == "ci-failure-triage.json":
+            _validate_triage_artifact(prepared_mapping, content)
+    prepared.extend(validated_artifacts)
     return prepared
+
+
+def _validate_triage_artifact(prepared: Mapping[str, Any], content: bytes) -> None:
+    from .ci_failure_triage import attach_ci_failure_triage, validate_prepared_ci_failure_triage
+
+    try:
+        validate_prepared_ci_failure_triage(prepared, allow_absent=False)
+        attached = attach_ci_failure_triage(prepared, json.loads(content))
+        if attached != prepared:
+            raise ValueError("Standalone triage does not match embedded assessment.")
+    except (ValueError, UnicodeError) as error:
+        raise HistoryError(f"Invalid CI failure triage artifact: {error}") from error
 
 
 def _validate_repository(repository: object) -> None:
@@ -794,12 +813,16 @@ def _load_valid_run(path: Path, repository: str) -> dict[str, Any]:
         )
         judgments = _read_json_file(path / "judgments.json", "judgments")
         try:
+            from .ci_failure_triage import validate_prepared_ci_failure_triage
             from .poc import validate_poc_judgments
 
             validate_snapshot(snapshot)
+            validate_prepared_ci_failure_triage(prepared, allow_absent=True)
             validate_poc_judgments(prepared, judgments)
+            if "ci-failure-triage.json" in expected_files:
+                _validate_triage_artifact(prepared, (path / "ci-failure-triage.json").read_bytes())
             report_markdown = (path / "report.md").read_text(encoding="utf-8")
-        except (ValidationError, OSError, UnicodeError) as error:
+        except (ValidationError, ValueError, OSError, UnicodeError) as error:
             raise HistoryError(
                 f"Run {path.name!r} contains an invalid POC cycle: {error}"
             ) from error

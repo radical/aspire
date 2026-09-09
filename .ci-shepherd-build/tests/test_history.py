@@ -6,17 +6,29 @@ import stat
 import tempfile
 import threading
 import unittest
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
+
+import record_poc
+from ci_shepherd.ci_failure_triage import (
+    _fingerprint,
+    attach_ci_failure_triage,
+    build_ci_failure_triage,
+)
 
 from ci_shepherd.history import (
     FRESHNESS_CLASSES,
     HistoryError,
     load_current,
+    load_recorded_run,
     record_history,
     record_poc_history,
 )
+from ci_shepherd.lifecycle import prepare_assessment
+from ci_shepherd.poc import build_compact_poc_input
+from test_workflow_health import workflow_snapshot
 
 
 TEST_TEMP_ROOT = Path(__file__).parent / ".tmp"
@@ -240,6 +252,241 @@ class HistoryTests(unittest.TestCase):
             )
 
         self.assertFalse(self.root.exists())
+
+    def test_record_poc_rejects_malformed_triage_before_persisting_state(self) -> None:
+        prepared = prepared_assessment()
+        prepared["triageRuleVersion"] = "aspire-ci-triage-v1"
+        prepared["issues"][0]["ciFailureTriage"] = {
+            "ruleVersion": "aspire-ci-triage-v2",
+            "cases": [],
+        }
+
+        with self.assertRaisesRegex(HistoryError, "ruleVersion"):
+            record_poc_history(
+                self.root,
+                "owner/repo",
+                "cycle-001",
+                snapshot(),
+                prepared,
+                poc_judgments(),
+                "# CI Shepherd POC Assessment\n",
+            )
+
+        self.assertFalse(self.root.exists())
+
+    def test_standalone_triage_is_validated_before_recording_history(self) -> None:
+        prepared = prepared_assessment()
+        triage = build_ci_failure_triage(prepared)
+        prepared = attach_ci_failure_triage(prepared, triage)
+        for name, content in (
+            ("malformed", b"{broken"),
+            ("wrong-snapshot", json.dumps({**triage, "snapshotId": "wrong"}).encode()),
+            ("different-rules", json.dumps({**triage, "ruleVersion": "different"}).encode()),
+        ):
+            with self.subTest(name=name):
+                state = self.root / name
+                with self.assertRaisesRegex(HistoryError, "triage"):
+                    record_poc_history(
+                        state, "owner/repo", "cycle-001", snapshot(), prepared,
+                        poc_judgments(), "# report\n", {"ci-failure-triage.json": content},
+                    )
+                self.assertFalse(state.exists())
+
+    def test_standalone_triage_is_validated_on_persisted_reads(self) -> None:
+        prepared = prepared_assessment()
+        triage = build_ci_failure_triage(prepared)
+        prepared = attach_ci_failure_triage(prepared, triage)
+        record_poc_history(
+            self.root, "owner/repo", "cycle-001", snapshot(), prepared,
+            poc_judgments(), "# report\n",
+            {"ci-failure-triage.json": json.dumps(triage).encode()},
+        )
+        run = self.root / "runs" / "cycle-001"
+        content = json.dumps({**triage, "ruleVersion": "different"}).encode()
+        (run / "ci-failure-triage.json").write_bytes(content)
+        manifest_path = run / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        entry = next(item for item in manifest["files"] if item["path"] == "ci-failure-triage.json")
+        entry.update(size=len(content), crc32=f"{zlib.crc32(content):08x}")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(HistoryError, "triage"):
+            load_recorded_run(self.root, "owner/repo", "cycle-001")
+
+    def test_recorded_cycle_replay_cannot_hide_invalid_standalone_triage(self) -> None:
+        inputs = self.root.parent / "triage-replay-inputs"
+        inputs.mkdir()
+        prepared = prepared_assessment()
+        triage = build_ci_failure_triage(prepared)
+        prepared = attach_ci_failure_triage(prepared, triage)
+        for name, value in (
+            ("input.json", snapshot()), ("prepared.json", prepared),
+            ("judgments.json", poc_judgments()), ("ci-failure-triage.json", triage),
+        ):
+            (inputs / name).write_text(json.dumps(value), encoding="utf-8")
+        (inputs / "report.md").write_text("# report\n", encoding="utf-8")
+        options = {
+            "state_dir": self.root, "input_path": inputs / "input.json",
+            "prepared_path": inputs / "prepared.json", "judgments_path": inputs / "judgments.json",
+            "report_path": inputs / "report.md", "artifact_paths": [inputs / "ci-failure-triage.json"],
+        }
+        record_poc.record_poc_cycle(**options)
+        before = {path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        (inputs / "ci-failure-triage.json").write_text(
+            json.dumps({**triage, "ruleVersion": "different"}), encoding="utf-8",
+        )
+        with self.assertRaisesRegex(HistoryError, "triage"):
+            record_poc.record_poc_cycle(**options)
+        self.assertEqual(
+            before,
+            {path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()},
+        )
+
+    def test_record_poc_cycle_rejects_malformed_triage_before_any_state_write(self) -> None:
+        self.root.mkdir(parents=True)
+        preserved = {
+            "current.json": b'{"runId":"preserved"}\n',
+            "runs/preserved/manifest.json": b'{"complete":true}\n',
+            "ledgers/fingerprints.jsonl": b'{"preserved":true}\n',
+        }
+        for relative, content in preserved.items():
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+
+        inputs = self.root.parent / "record-inputs"
+        inputs.mkdir()
+        paths = {
+            "input": inputs / "input.json",
+            "prepared": inputs / "prepared.json",
+            "judgments": inputs / "judgments.json",
+            "report": inputs / "report.md",
+        }
+        paths["input"].write_text(json.dumps(snapshot()), encoding="utf-8")
+        prepared = prepared_assessment()
+        prepared["triageRuleVersion"] = "aspire-ci-triage-v1"
+        prepared["issues"][0]["ciFailureTriage"] = {
+            "ruleVersion": "aspire-ci-triage-v2",
+            "cases": [],
+        }
+        paths["prepared"].write_text(json.dumps(prepared), encoding="utf-8")
+        paths["judgments"].write_text(json.dumps(poc_judgments()), encoding="utf-8")
+        paths["report"].write_text("# report\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(HistoryError, "ruleVersion"):
+            record_poc.record_poc_cycle(
+                state_dir=self.root,
+                input_path=paths["input"],
+                prepared_path=paths["prepared"],
+                judgments_path=paths["judgments"],
+                report_path=paths["report"],
+                artifact_paths=[],
+            )
+
+        self.assertEqual(
+            preserved,
+            {
+                relative: (self.root / relative).read_bytes()
+                for relative in preserved
+            },
+        )
+
+    def test_record_poc_cycle_rejects_dangling_and_mismatched_triage_before_state_write(
+        self,
+    ) -> None:
+        raw = workflow_snapshot()
+        raw["evidence"]["run:100"]["payload"]["workflowPath"] = (
+            ".github/workflows/ci.yml"
+        )
+        prepared = prepare_assessment(raw)
+        prepared = attach_ci_failure_triage(
+            prepared,
+            build_ci_failure_triage(prepared),
+        )
+        compact = build_compact_poc_input(prepared)
+        judgments = {
+            "schemaVersion": 1,
+            "snapshotId": prepared["snapshotId"],
+            "issues": [compact["issues"][0]["defaultJudgment"]],
+        }
+
+        mutations = {}
+        dangling = json.loads(json.dumps(prepared))
+        dangling["observations"]["occurrences"] = []
+        mutations["dangling"] = dangling
+        mismatched = json.loads(json.dumps(prepared))
+        family = mismatched["issues"][0]["ciFailureTriage"]["cases"][0]["family"]
+        family["dimensions"]["workflowId"] = "not-a-workflow"
+        family["dimensions"]["testName"] = "Foreign.Test"
+        family["familyId"] = _fingerprint(family["dimensions"])
+        mutations["mismatched"] = mismatched
+
+        for name, candidate in mutations.items():
+            with self.subTest(name=name):
+                inputs = self.root.parent / f"record-inputs-{name}"
+                inputs.mkdir()
+                paths = {
+                    "input": inputs / "input.json",
+                    "prepared": inputs / "prepared.json",
+                    "judgments": inputs / "judgments.json",
+                    "report": inputs / "report.md",
+                }
+                paths["input"].write_text(json.dumps(raw), encoding="utf-8")
+                paths["prepared"].write_text(json.dumps(candidate), encoding="utf-8")
+                paths["judgments"].write_text(json.dumps(judgments), encoding="utf-8")
+                paths["report"].write_text("# report\n", encoding="utf-8")
+                state = self.root / name
+
+                with self.assertRaises((HistoryError, KeyError, ValueError)):
+                    record_poc.record_poc_cycle(
+                        state_dir=state,
+                        input_path=paths["input"],
+                        prepared_path=paths["prepared"],
+                        judgments_path=paths["judgments"],
+                        report_path=paths["report"],
+                        artifact_paths=[],
+                    )
+
+                self.assertFalse(state.exists())
+
+    def test_load_recorded_run_rejects_malformed_persisted_triage(self) -> None:
+        record_poc_history(
+            self.root,
+            "owner/repo",
+            "cycle-001",
+            snapshot(),
+            prepared_assessment(),
+            poc_judgments(),
+            "# CI Shepherd POC Assessment\n",
+        )
+        run_directory = self.root / "runs" / "cycle-001"
+        prepared_path = run_directory / "assessment-input.json"
+        prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+        prepared["triageRuleVersion"] = "aspire-ci-triage-v1"
+        prepared["issues"][0]["ciFailureTriage"] = {
+            "ruleVersion": "aspire-ci-triage-v2",
+            "cases": [],
+        }
+        content = (
+            json.dumps(prepared, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        prepared_path.write_bytes(content)
+
+        manifest_path = run_directory / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entry = next(
+            item
+            for item in manifest["files"]
+            if item["path"] == "assessment-input.json"
+        )
+        entry["size"] = len(content)
+        entry["crc32"] = f"{zlib.crc32(content):08x}"
+        manifest_path.write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(HistoryError, "ruleVersion"):
+            load_recorded_run(self.root, "owner/repo", "cycle-001")
 
     def test_missing_or_malformed_current_is_rebuilt_from_runs(self) -> None:
         expected = record_history(self.root, "owner/repo", "run-001", snapshot(), report())

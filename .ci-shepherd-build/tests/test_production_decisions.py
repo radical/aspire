@@ -13,6 +13,10 @@ from tests.test_collector import ScriptedClient, make_issue
 
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import validate_action_proposals
+from ci_shepherd.ci_failure_triage import (
+    attach_ci_failure_triage,
+    build_ci_failure_triage,
+)
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.poc import build_compact_poc_input, validate_poc_judgments, validate_poc_projectability
 from ci_shepherd.investigations import (
@@ -1162,6 +1166,10 @@ class NetworkFreeConvergenceTests(unittest.TestCase):
         policy = load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH)
         value["repositoryPolicy"] = {**policy.as_public_dict(), "digest": policy.digest}
         prepared, _, judgments, _ = assess(value)
+        prepared = attach_ci_failure_triage(
+            prepared,
+            build_ci_failure_triage(prepared),
+        )
         with TemporaryDirectory() as directory:
             root = Path(directory)
             completed_investigation(root, prepared, judgments)

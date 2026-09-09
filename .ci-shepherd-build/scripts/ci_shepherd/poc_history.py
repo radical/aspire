@@ -14,9 +14,11 @@ already derived by the prepare stage.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+import json
 from pathlib import Path
 from typing import Any
 
+from .ci_failure_triage import logical_occurrence_id, validate_prepared_ci_failure_triage
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
 
 
@@ -53,6 +55,13 @@ def collect_rows_from_prepared(prepared: Mapping[str, Any]) -> list[dict[str, An
     Ledger rows without a positive run ID are skipped: they cannot prove an
     independent occurrence (a distinct CI run) actually happened.
     """
+    validate_prepared_ci_failure_triage(prepared, allow_absent=True)
+    if prepared.get("triageRuleVersion") is not None:
+        return _collect_triage_rows(prepared)
+    return _collect_legacy_rows(prepared)
+
+
+def _collect_legacy_rows(prepared: Mapping[str, Any]) -> list[dict[str, Any]]:
     issues = prepared.get("issues")
     if not isinstance(issues, list):
         return []
@@ -118,7 +127,100 @@ def collect_rows_from_prepared(prepared: Mapping[str, Any]) -> list[dict[str, An
     return rows
 
 
-def _row_identity(row: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
+def _collect_triage_rows(prepared: Mapping[str, Any]) -> list[dict[str, Any]]:
+    occurrences = {
+        occurrence["occurrenceId"]: occurrence
+        for occurrence in prepared.get("observations", {}).get("occurrences", [])
+        if isinstance(occurrence, Mapping)
+        and isinstance(occurrence.get("occurrenceId"), str)
+    }
+    repository = prepared.get("repository")
+    observed_at = prepared.get("sourceCollectedAt")
+    rows = []
+    for issue in prepared.get("issues", []):
+        if not isinstance(issue, Mapping):
+            continue
+        issue_number = issue["issueNumber"]
+        fingerprint = compute_fingerprint(issue.get("identity", {}))
+        legacy_rows = issue.get("ledger", {}).get("rows", [])
+        for case in issue["ciFailureTriage"]["cases"]:
+            occurrence = occurrences[case["occurrenceId"]]
+            run_id = occurrence["runId"]
+            attempt = occurrence.get("attempt") or 1
+            occurred_at = occurrence.get("observedAt")
+            if not isinstance(occurred_at, str) or not occurred_at:
+                continue
+            legacy = next(
+                (
+                    row
+                    for row in legacy_rows
+                    if isinstance(row, Mapping)
+                    and row.get("sourceRun", row.get("runId")) == run_id
+                    and (
+                        not row.get("job")
+                        or row.get("job") == occurrence.get("jobName")
+                    )
+                ),
+                {},
+            )
+            date = legacy.get("date")
+            if not isinstance(date, str) or not date:
+                date = occurred_at[:10]
+            job = legacy.get("job")
+            if not isinstance(job, str) or not job:
+                job = occurrence.get("jobName")
+            family = case["family"]
+            logical_id = logical_occurrence_id(repository, occurrence)
+            event_identity = {
+                "logicalOccurrenceId": logical_id,
+                "evidenceFingerprint": case["evidenceFingerprint"],
+                "familyStatus": family["status"],
+                "familyId": family.get("familyId"),
+                "ruleVersion": issue["ciFailureTriage"]["ruleVersion"],
+            }
+            rows.append({
+                "schemaVersion": 2,
+                "eventId": "triage-event:" + _stable_fingerprint(event_identity).removeprefix("fnv1a64:"),
+                "logicalOccurrenceId": logical_id,
+                # Preserve the original compact-reader fields. They remain a
+                # legacy lookup key and are not the verified family identity.
+                "fingerprint": fingerprint,
+                "issueNumber": issue_number,
+                "runId": run_id,
+                "attempt": attempt,
+                "date": date,
+                "job": job,
+                "testName": occurrence.get("testName"),
+                "familyStatus": family["status"],
+                "familyId": family.get("familyId"),
+                "caseId": case["caseId"],
+                "evidenceFingerprint": case["evidenceFingerprint"],
+                "ruleVersion": issue["ciFailureTriage"]["ruleVersion"],
+                "occurredAt": occurred_at,
+                "observedAt": observed_at,
+                "outcome": "failure",
+            })
+    rows.sort(key=lambda row: (str(row["fingerprint"]), row["issueNumber"], row["runId"], row["attempt"], row["eventId"]))
+    return rows
+
+
+def _stable_fingerprint(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    result = 0xCBF29CE484222325
+    for byte in encoded:
+        result ^= byte
+        result = (result * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"fnv1a64:{result:016x}"
+
+
+def _row_identity(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    if row.get("schemaVersion") == 2:
+        return ("v2", row.get("eventId"))
     return (row.get("fingerprint"), row.get("runId"), row.get("attempt"), row.get("issueNumber"))
 
 
@@ -128,7 +230,7 @@ def read_ledger_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def append_new_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Append only rows whose identity tuple is not already recorded.
+    """Append legacy identities once and changed current triage revisions.
 
     Returns the rows that were actually appended (empty if all were already
     present), so recording the same prepared snapshot twice is a no-op.
@@ -136,13 +238,25 @@ def append_new_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> list[dict[
     with exclusive_jsonl_lock(path):
         existing = read_ledger_rows(path)
         seen = {_row_identity(row) for row in existing}
+        latest = {
+            row["logicalOccurrenceId"]: _row_identity(row)
+            for row in current_triage_events(existing)
+        }
 
         new_rows: list[dict[str, Any]] = []
         for row in rows:
             identity_tuple = _row_identity(row)
-            if identity_tuple in seen:
-                continue
-            seen.add(identity_tuple)
+            if row.get("schemaVersion") == 2:
+                logical_id = row["logicalOccurrenceId"]
+                # A -> B -> A is a real revision, not replay of the first A.
+                # Content identities may recur; append order determines current.
+                if latest.get(logical_id) == identity_tuple:
+                    continue
+                latest[logical_id] = identity_tuple
+            else:
+                if identity_tuple in seen:
+                    continue
+                seen.add(identity_tuple)
             new_rows.append(dict(row))
 
         append_jsonl_rows(path, new_rows)
@@ -160,6 +274,24 @@ def group_rows_by_fingerprint(
             continue
         grouped.setdefault(fingerprint, []).append(dict(row))
     return grouped
+
+
+def current_triage_events(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select the latest append-only revision of every v2 occurrence."""
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("schemaVersion") != 2:
+            continue
+        logical_id = row.get("logicalOccurrenceId")
+        event_id = row.get("eventId")
+        if not isinstance(logical_id, str) or not logical_id:
+            raise ValueError("Triage history row requires logicalOccurrenceId.")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("Triage history row requires eventId.")
+        latest[logical_id] = dict(row)
+    return [latest[key] for key in sorted(latest)]
 
 
 def merge_occurrence_dimensions(

@@ -16,6 +16,11 @@ from ci_shepherd.investigations import (
     record_investigation_session_event,
     select_investigation_request,
 )
+from ci_shepherd.ci_failure_triage import (
+    attach_ci_failure_triage,
+    build_ci_failure_triage,
+)
+from ci_shepherd.lifecycle import prepare_assessment
 
 
 def _prepared() -> dict[str, object]:
@@ -101,6 +106,118 @@ def _clean_checkout(root: Path) -> Path:
 
 
 class InvestigationLifecycleTests(unittest.TestCase):
+    def test_triage_missing_evidence_preserves_repair_question_and_deadline(self) -> None:
+        from test_repair_routing import repair_snapshot
+
+        prepared = prepare_assessment(repair_snapshot(runs=(100,)))
+        prepared = attach_ci_failure_triage(prepared, build_ci_failure_triage(prepared))
+        issue = prepared["issues"][0]
+        missing_facts = issue["repairEvidence"]["missingFacts"]
+        self.assertTrue(missing_facts)
+        judgments = _judgments()
+        judgments["snapshotId"] = prepared["snapshotId"]
+        judgments["issues"][0]["recommendations"][0]["evidenceIds"] = ["issue:21"]
+        triage_missing = {
+            value for case in issue["ciFailureTriage"]["cases"]
+            for value in case["missingEvidence"]
+        }
+        self.assertEqual({"failed-test diagnostic content"}, triage_missing)
+
+        request, = build_investigation_plan(prepared, judgments, [])["requests"]
+
+        self.assertEqual(missing_facts[0], request["question"])
+        self.assertEqual(
+            sorted({"diagnostic logs", *missing_facts, *triage_missing}),
+            request["missingEvidence"],
+        )
+        self.assertIn("do not require a full local diagnosis", request["stopCondition"])
+        self.assertIn("WORK_BUDGET_SECONDS: 180", request["workerPrompt"])
+        self.assertIn("failed-test diagnostic content", request["workerPrompt"])
+
+    def test_plan_embeds_matching_bounded_triage_context(self) -> None:
+        from test_workflow_health import workflow_snapshot
+
+        prepared = prepare_assessment(workflow_snapshot())
+        prepared = attach_ci_failure_triage(
+            prepared,
+            build_ci_failure_triage(prepared),
+        )
+        issue = prepared["issues"][0]
+        judgments = {
+            "schemaVersion": 1,
+            "snapshotId": prepared["snapshotId"],
+            "issues": [{
+                "issueNumber": 12,
+                "category": "unknown",
+                "recommendations": [{
+                    "disposition": "investigate",
+                    "target": {"kind": "issue", "value": 12},
+                    "confidence": "low",
+                    "summary": "Resolve the observed failure.",
+                    "evidenceIds": ["issue:12"],
+                    "missingEvidence": ["operator context"],
+                    "reassessWhen": "After diagnostics change.",
+                }],
+            }],
+        }
+
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+
+        self.assertEqual(issue["ciFailureTriage"], request["ciFailureTriage"])
+        self.assertIn('"compiler-diagnostic"', request["workerPrompt"])
+        self.assertIn("bounded advisory context", request["workerPrompt"])
+        self.assertNotIn('"actionId"', request["workerPrompt"])
+        self.assertNotIn('"grant"', request["workerPrompt"])
+
+    def test_triage_rule_change_invalidates_investigation_result(self) -> None:
+        from test_workflow_health import workflow_snapshot
+
+        prepared = prepare_assessment(workflow_snapshot())
+        prepared = attach_ci_failure_triage(
+            prepared,
+            build_ci_failure_triage(prepared),
+        )
+        judgments = {
+            "schemaVersion": 1,
+            "snapshotId": prepared["snapshotId"],
+            "issues": [{
+                "issueNumber": 12,
+                "category": "unknown",
+                "recommendations": [{
+                    "disposition": "investigate",
+                    "target": {"kind": "issue", "value": 12},
+                    "confidence": "low",
+                    "summary": "Resolve the observed failure.",
+                    "evidenceIds": ["issue:12"],
+                    "missingEvidence": [],
+                    "reassessWhen": "After diagnostics change.",
+                }],
+            }],
+        }
+        first = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        result = {
+            "repository": prepared["repository"],
+            "issueNumber": 12,
+            "target": first["target"],
+            "sourceEvidenceFingerprint": first["sourceEvidenceFingerprint"],
+            "investigationId": first["investigationId"],
+            "outcome": "inconclusive",
+        }
+        self.assertIn(
+            "investigationResults",
+            attach_latest_investigation_results(prepared, [result])["issues"][0],
+        )
+
+        changed = copy.deepcopy(prepared)
+        changed["triageRuleVersion"] = "aspire-ci-triage-v2"
+        changed["issues"][0]["ciFailureTriage"]["ruleVersion"] = "aspire-ci-triage-v2"
+        self.assertNotIn(
+            "investigationResults",
+            attach_latest_investigation_results(changed, [result])["issues"][0],
+        )
+        next_request = build_investigation_plan(changed, judgments, [result])["requests"][0]
+        self.assertNotEqual(first["investigationId"], next_request["investigationId"])
+
     def test_plan_embeds_only_assigned_evidence_payloads(self) -> None:
         prepared = _prepared()
         prepared["issues"][0]["evidenceBundle"] = [

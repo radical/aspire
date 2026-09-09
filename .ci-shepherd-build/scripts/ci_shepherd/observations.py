@@ -5,8 +5,8 @@ from __future__ import annotations
 Shared surface with :mod:`ci_shepherd.lifecycle`: ``is_scoped_to_issue`` is public
 precisely because lifecycle scopes its evidence bundles with the same rule. Timestamp
 parsing and formatting live in :mod:`ci_shepherd.timeutils`; lifecycle decision
-helpers live in :mod:`ci_shepherd.lifecycle`. Everything else here is private to
-Task 2.
+helpers live in :mod:`ci_shepherd.lifecycle`. Log normalization and diagnostic
+subject detection are shared with advisory triage.
 """
 
 import re
@@ -363,9 +363,13 @@ def build_observations(
         issue_number = int(occurrence["issueNumber"])
         run_id = int(occurrence["runId"])
         reported_scope = reported_issue_scope(records[f"issue:{issue_number}"].payload, run_id)
-        verified_scope = verified_run_scope(runs_by_id[run_id].payload, default_branch=default_branch)
+        run_payload = runs_by_id[run_id].payload
+        verified_scope = verified_run_scope(run_payload, default_branch=default_branch)
         occurrence["reportedScope"] = reported_scope
         occurrence["verifiedScope"] = verified_scope
+        occurrence["workflowId"] = run_payload.get("workflowId")
+        occurrence["workflowPath"] = run_payload.get("workflowPath")
+        occurrence["event"] = run_payload.get("event")
         occurrence["scopeConflict"] = scopes_conflict(reported_scope, verified_scope)
         incomplete_diagnostics = [
             evidence_id for evidence_id in occurrence["evidenceIds"]
@@ -1199,6 +1203,9 @@ def _build_coverage(
                 "subjectKind": "lane",
                 "subjectId": subject_base,
                 "workflow": workflow,
+                "workflowId": run_record.payload.get("workflowId"),
+                "workflowPath": run_record.payload.get("workflowPath"),
+                "event": run_record.payload.get("event"),
                 "jobName": job.payload.get("name"),
                 "lane": lane,
                 "os": os_name,
@@ -1229,6 +1236,9 @@ def _build_coverage(
                     # percent-encoded, so two raw spellings never collide.
                     "subjectId": f"{subject_base}:test:{normalize_component(test_name)}",
                     "workflow": workflow,
+                    "workflowId": run_record.payload.get("workflowId"),
+                    "workflowPath": run_record.payload.get("workflowPath"),
+                    "event": run_record.payload.get("event"),
                     "jobName": job.payload.get("name"),
                     "lane": lane,
                     "os": os_name,
@@ -1769,25 +1779,33 @@ def _diagnostic_lines(text: str) -> list[str]:
     ]
 
 
-def _repair_diagnostic_lines(text: str) -> list[str]:
+def normalize_log_text(text: str) -> str:
     # Downloaded logs contain "2026-08-19T15:01:00.123Z ##[error]...".
     # Strip only the transport prefix; keep resource names, paths and URLs so
     # unrelated failures cannot become matching repair evidence.
-    normalized = "\n".join(
+    return "\n".join(
         re.sub(rf"^{_LOG_TIMESTAMP}", "", line).strip()
         for line in text.splitlines()
     )
+
+
+def has_diagnostic_subject(line: str) -> bool:
+    subjects = _HTTP_DIAGNOSTIC_SUBJECT_RE.findall(_HTTP_STATUS_RE.sub("", line))
+    return any(
+        set(re.findall(r"[a-z]+", subject.casefold())).difference(_GENERIC_HTTP_DIAGNOSTIC_WORDS)
+        for subject in subjects
+    )
+
+
+def _repair_diagnostic_lines(text: str) -> list[str]:
+    normalized = normalize_log_text(text)
     diagnostics: set[str] = set()
     for line in _diagnostic_lines(normalized):
         line = line.removeprefix("##[error]").strip()
         if _ASSERTION_LINE_RE.match(line) or _GENERIC_FAILURE_RE.fullmatch(line):
             continue
         if _HTTP_STATUS_RE.search(line):
-            subjects = _HTTP_DIAGNOSTIC_SUBJECT_RE.findall(_HTTP_STATUS_RE.sub("", line))
-            if not any(
-                set(re.findall(r"[a-z]+", subject.casefold())).difference(_GENERIC_HTTP_DIAGNOSTIC_WORDS)
-                for subject in subjects
-            ):
+            if not has_diagnostic_subject(line):
                 continue
         diagnostics.add(line)
         # Never truncate identity: different tails would become the same
