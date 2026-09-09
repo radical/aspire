@@ -1,15 +1,65 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import copy
 import unittest
 
-from ci_shepherd.delegations import active_owned_task_ids_from_events, delegation_records_from_events, derive_delegation_tracking, normalize_agent_task
+from ci_shepherd.delegations import DelegatedPullRequest, PullRequestState, active_owned_task_ids_from_events, delegation_records_from_events, derive_delegation_tracking, normalize_agent_task
 from ci_shepherd.collector import InventoryResult
 from tests.test_delegation_observer import ScriptedClient
 from tests.test_scripts import load_script
 
 
 class DelegationHistoryTests(unittest.TestCase):
+    def test_tracking_records_merge_facts_without_mutating_assignment_history(self) -> None:
+        events = self._retired_events()
+        original = copy.deepcopy(events)
+        record = derive_delegation_tracking(
+            events=events, tasks=[], pull_requests=[DelegatedPullRequest(
+                database_id=101, global_id="PR_101", number=201, state=PullRequestState.MERGED,
+                is_draft=False, changed_files=4, merged_at=datetime(2026, 9, 2, 18, 30, tzinfo=UTC),
+                merge_commit_sha="a" * 40,
+            )],
+        )[0]
+        self.assertEqual("2026-09-02T18:30:00Z", record["pullRequests"][0]["mergedAt"])
+        self.assertEqual("a" * 40, record["pullRequests"][0]["mergeCommitSha"])
+        self.assertEqual("merged", record["attemptOutcome"])
+        self.assertTrue(record["requiresNewDecision"])
+        self.assertEqual(original, events)
+
+    def test_merge_facts_survive_unavailable_observation_and_cannot_be_rewritten(self) -> None:
+        events = self._retired_events()
+        record = events[2]["record"]
+        record.update(lifecycle="completed", attemptOutcome="merged")
+        record["pullRequests"][0].update(
+            state="merged", mergedAt="2026-09-02T18:30:00Z", mergeCommitSha="a" * 40,
+        )
+        original = copy.deepcopy(events)
+        unavailable = DelegatedPullRequest(
+            database_id=101, global_id="PR_101", number=201,
+            state=PullRequestState.UNKNOWN, is_draft=False,
+        )
+        observed = derive_delegation_tracking(events=events, tasks=[], pull_requests=[unavailable])[0]
+        pull = observed["pullRequests"][0]
+        self.assertEqual(("unknown", "merged", "2026-09-02T18:30:00Z", "a" * 40), tuple(
+            pull[key] for key in ("state", "lastKnownState", "mergedAt", "mergeCommitSha")
+        ))
+        self.assertEqual("merged", observed["attemptOutcome"])
+        self.assertTrue(observed["requiresNewDecision"])
+        for merged_at, sha in (
+            (datetime(2026, 9, 2, 18, 30, tzinfo=UTC), "b" * 40),
+            (datetime(2026, 9, 2, 18, 31, tzinfo=UTC), "a" * 40),
+        ):
+            with self.subTest(merged_at=merged_at, sha=sha):
+                conflicting = DelegatedPullRequest(
+                    database_id=101, global_id="PR_101", number=201,
+                    state=PullRequestState.MERGED, is_draft=False,
+                    merged_at=merged_at, merge_commit_sha=sha,
+                )
+                with self.assertRaisesRegex(ValueError, "contradict"):
+                    derive_delegation_tracking(events=events, tasks=[], pull_requests=[conflicting])
+        self.assertEqual(original, events)
+
     def test_empty_current_artifacts_do_not_erase_a_verified_binding(self) -> None:
         collect = load_script("collect")
         client = ScriptedClient({

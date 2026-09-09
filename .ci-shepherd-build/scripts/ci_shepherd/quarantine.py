@@ -32,6 +32,11 @@ _TEST_METHOD_NAME_RE = re.compile(
 )
 
 
+def is_quarantine_test_method_name(value: str) -> bool:
+    """Check supported identifier syntax, not whether a test exists in source."""
+    return _TEST_METHOD_NAME_RE.fullmatch(value) is not None
+
+
 def _fingerprint(value: object) -> str:
     encoded = json.dumps(
         value,
@@ -265,25 +270,31 @@ def build_quarantine_session_request(
             candidates_by_name.setdefault(test_name, []).append(candidate)
 
     tests: list[dict[str, object]] = []
-    blocked_targets: list[dict[str, str]] = []
+    blocked_targets: list[dict[str, object]] = []
     for test_name, candidates in sorted(candidates_by_name.items()):
         source_issues = sorted(
             candidates,
             key=lambda item: int(item["issueNumber"]),
         )
+        source_links = {
+            "issueNumbers": [candidate["issueNumber"] for candidate in source_issues],
+            "issueUrls": [candidate["issueUrl"] for candidate in source_issues],
+        }
         if not repository_policy_available:
             blocked_targets.append(
                 {
                     "testName": test_name,
                     "reason": "repository-policy-unavailable",
+                    **source_links,
                 }
             )
             continue
-        if _TEST_METHOD_NAME_RE.fullmatch(test_name) is None:
+        if not is_quarantine_test_method_name(test_name):
             blocked_targets.append(
                 {
                     "testName": test_name,
                     "reason": "not-a-test-method",
+                    **source_links,
                 }
             )
             continue
@@ -296,6 +307,7 @@ def build_quarantine_session_request(
                 {
                     "testName": test_name,
                     "reason": "already-quarantined-by-label",
+                    **source_links,
                 }
             )
             continue
@@ -304,6 +316,7 @@ def build_quarantine_session_request(
                 {
                     "testName": test_name,
                     "reason": "source-labels-unavailable",
+                    **source_links,
                 }
             )
             continue
@@ -317,12 +330,7 @@ def build_quarantine_session_request(
                 {
                     "testName": test_name,
                     "reason": "insufficient-evidence-class",
-                    "issueNumbers": [
-                        candidate["issueNumber"] for candidate in source_issues
-                    ],
-                    "issueUrls": [
-                        candidate["issueUrl"] for candidate in source_issues
-                    ],
+                    **source_links,
                     "evidenceReason": evidence_gap,
                 }
             )

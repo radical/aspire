@@ -177,9 +177,10 @@ Run the mutation phase as a deterministic sequential loop:
    completion, class budgets, and rolling budgets are re-evaluated from the
    ledger.
 
-Never execute multiple mutations concurrently. Investigation sessions use
-rolling concurrency instead: start at most three at once, then start another as
-a slot becomes available until the cycle's maximum of five is reached.
+Never execute multiple mutations concurrently. Investigation attempts use
+rolling concurrency instead: reserve or start at most three at once, then admit
+another as a slot becomes available until the cycle's maximum of five is reached.
+Prepared attempts and uncertain dispatches retain their slots until reconciled.
 Authorization, stale-checkout, or execution failure stops the mutation phase
 visibly; do not blindly reselect an action that failed before recording an
 intent. A capacity-blocked Copilot assignment records a terminal `skipped`
@@ -200,7 +201,8 @@ artifacts under `$STATE/runs/<cycle-id>/`. `--max-comments` is an invocation
 policy input from 1 through 5; it does not authorize mutation. The legacy
 selection file deterministically ranks eligible issue
 comments as human input, quarantine reconciliation, delegation handoff, watch
-status, status retirement, closure review, then other comments. Editing wins
+status, status retirement, closure review, quarantine target-format status,
+then other comments. Editing wins
 ties over creation, followed by issue number and action ID. `report-details.md` discloses
 the complete ranking and any applied cut.
 
@@ -299,6 +301,11 @@ run; the usage projection exposes `latestCumulativeEventId` and
 `latestCumulativeAsOf` for that purpose. A dedicated session instead requires a
 matching `session.start` at or after invocation start. Unbound identities,
 missing baselines and counter resets remain unavailable, not guessed totals.
+
+One-shot investigation `attemptId` values are logical ownership identities, not
+runtime sessions. Keep them in the investigation inventory; never substitute
+one for a roster's `sessionId` or `runtimeSessionId`. If the launcher exposes no
+runtime binding, that worker's usage remains unavailable.
 
 Mark old worker results `reused: true` and unlaunched workers `skipped: true`.
 Use `includedInRuntimeSessionId` only when the source already includes that
@@ -467,6 +474,149 @@ comment identity only for idempotency. An unchanged watch state must not create
 or edit a comment. A changed comment body is a new reviewable proposal and
 requires separate approval.
 
+## Default-branch workflow health
+
+Workflow discovery is GET-only and starts from actual workflow executions,
+not the assumption that an issue-producing bot reported every failure.
+Use the repository's verified default branch. Exclude pull-request,
+pull-request-target, and merge-group executions. A failed workflow without an
+associated issue must remain visible as a missing tracker; do not silently
+create an issue or invent an association from a matching display name.
+
+`collect.py` enables discovery by default. `--skip-workflow-discovery` is an
+explicit legacy/offline opt-out, not a healthy-workflow result. Default-branch
+automation events, including `workflow_run` and issue-event workflows, are
+observed when the run and head both identify the requested repository and
+contain no associated PR. A target repository may itself be a fork; a different
+head repository is never admitted.
+
+The bounds in `scripts/ci_shepherd/workflow_discovery.py` limit the recent scan
+to 50 runs over seven days, eight workflow/path/event windows, and five
+independent completed runs per window. Infrequent workflows can use bounded
+history back to 90 days. Discovery allows at most 128 requests, 2,500 jobs,
+12 failed-job logs of 200,000 bytes each, and 8,000,000 response-body bytes.
+Expired logs, pagination limits, unverified identities, and uncollected windows
+remain explicit gaps. These limits are not a claim of repository-wide coverage.
+
+`scripts/ci_shepherd/workflow_health.py` derives `workflowHealth` from frozen
+run, job, diagnostic, and coverage observations. Only snapshots carrying
+`workflowDiscovery` activate this policy; legacy frozen snapshots retain their
+original interpretation. The default branch must be verified, and recurrence
+samples come from the declared matching workflow/path/event window, not all
+retained history. An incomplete window cannot prove recurrence or permit
+closure; a missing job remains an unknown sample even in a complete run list.
+An unrelated discovery gap does not invalidate a complete subject window.
+Fully observed failures remain associated even when another run makes the
+window incomplete; that gap blocks recurrence/recovery proof, not reporting a
+current failure. The collected runner-label identity is carried through
+observations, repair matching, and recovery, so an X64 success cannot recover
+an ARM64 failure with the same display name.
+These are factual inputs to assessment, not
+model-authored authority.
+
+Current default-branch failures take precedence over old test investigations
+and routine issue housekeeping. `policy_selection.py` applies the derived
+`workflowPriority` before ordinary semantic ordering, but never before
+eligibility, ownership, policy denials, or budgets. Within that priority group,
+existing comment precedence and exact-action authorization still apply.
+
+Use these starting rules:
+
+| Evidence | Decision |
+|---|---|
+| Current build/configuration failure | Ask Copilot to investigate and propose a focused fix; do not require local root-cause analysis |
+| One apparently transient network failure | Watch for another matching failure or positive execution coverage |
+| Same failure in two consecutive independent runs, or three of the last five | Investigate and fix without waiting for a second calendar day |
+| A known human-owned decision or access blocker | Ask the specific question; do not repeatedly assign a code agent |
+| An existing Copilot task or repair PR | Follow that attempt; do not start duplicate work |
+| Incomplete identity, skipped jobs, or unavailable evidence | Preserve the gap; never present it as recovery |
+
+The current-failure window is 14 days. Recurrence joins the verified workflow ID, path, event,
+job/lane/OS, and normalized failure identity. Retries of one run do not count as
+independent occurrences. A couple of green runs do not erase three matching
+failures in the five-run window. Unknown samples are not passes.
+When one issue covers multiple failure subjects, surface the subject needing
+repair first; a newer isolated failure must not hide another broken workflow.
+Closure must satisfy the recovery and retention rules for every subject.
+Workflow assessments retain at most 16 compact evidence citations. Keep the
+complete proof for the two or three executions establishing the recurrence
+threshold rather than truncating diagnostics to include redundant failures.
+Each witness run contributes its most recent matching failure's complete
+citations, not the accumulated evidence from all retries of that same run.
+Ordinary previews remain capped at eight; existing worker byte and case limits
+remain enforced.
+
+An assessment cannot bypass a known human decision by changing its disposition
+to delegation. Explicit operator nominations remain a separate decision path.
+
+Transient-incident cleanup requires at least 30 days since the last matching
+failure **and** a newer independent successful execution of the affected
+default-branch job. A green workflow, same-run retry, skipped job, issue age,
+or silence is insufficient. No active repair or contradictory evidence may
+remain. Quarantine trackers retain their separate reliability requirements.
+
+Workflow repair instructions request a draft PR using `Refs #<issue>`, not an
+auto-closing `Fixes` reference. Human review remains required. Keep the
+issue/task/PR chain through merge and verification that the affected job ran
+successfully on a commit containing the repair. A later matching failure must
+retain the prior repair link and prompt reassessment; it does not establish
+that the root cause is identical. Do not automatically merge, reopen issues,
+disable checks, suppress failures, or remove quarantine to make CI green.
+
+`lifecycle.py` derives `repairFollowup` from the retained task/PR history and
+execution evidence using `repair_followup.py`. The report distinguishes work
+in progress, human handoff, awaiting post-fix success, verified success,
+reassessment, and unknown evidence. A successful job at a later SHA requires a
+source-bound `commitComparisons` entry proving it contains the merged fix.
+Missing ancestry evidence remains unknown, not successful recovery.
+The same containment requirement applies to failed executions: a failure on
+code proven not to contain the fix is not a post-fix failure. An unproven failed
+revision keeps verification unknown until the comparison is available.
+`scripts/collect.py` gathers these exact repository/base/head pairs from open
+and closed follow-ups, deduplicating them within a 12-GET collection budget.
+Unavailable responses and unqueried pairs remain explicit issue-scoped
+`repair-comparison` diagnostic gaps; they cannot become recovery evidence.
+Previously validated available comparisons survive refresh while their merge
+and observed head SHAs remain relevant. Full commit identities are immutable;
+an API outage does not invalidate already-observed ancestry.
+
+The actor rebuilds this context from the frozen snapshot. A model-supplied
+`verified` flag cannot release the delegation-history closure guard. Actual
+verification releases only that guard: active work, all-subject recovery,
+retention, and ordinary closure authorization still apply.
+
+Retained closed workflow issues are evaluated separately through the explicit
+issue selector in `build_observations`. They appear in
+`prepared.closedIssueFollowups`, not the actionable `prepared.issues` inventory.
+Reports preserve their observed closed state and prior issue/task/PR links;
+following a later failure does not reopen or nominate the old issue.
+Refresh keeps the original pre-assignment executions and prior verification,
+recurrence, or uncertainty witnesses, rather than accumulating every moving
+window. Every unresolved failed head survives until its ancestry is classified;
+discarding one would let missing evidence masquerade as recovery later.
+Historical issue payloads used as proof are marked as retained and do
+not become actionable inventory or a claim about current issue state.
+Recurrence can be reported by a new issue. The repair view matches the original
+execution subject across retained issue evidence and preserves the new
+`sourceIssueNumber`; it does not rewrite that failure's issue association.
+
+The run report shows failed jobs without an associated collected tracker,
+failed runs with incomplete job coverage, and scoped discovery gaps. "No
+tracker in collected evidence" does not establish that no such issue exists.
+Untracked failures are report-only; issue creation remains a separate approved
+action.
+
+`relatedWorkflowRepairs` links matching repository/default-branch workflow,
+job/lane/OS, test, and failure signatures to pre-assignment evidence. Another
+issue number does not bypass an active or unresolved repair. Ended work needs
+a fresh operator nomination before another assignment, and active work still
+blocks that nomination. An allowed replacement receives the already-known
+prior issue/PR links as bounded context, not instructions or proof of a common
+root cause.
+
+This is part of the existing Shepherd cycle, not another scheduler or lifecycle
+engine. The optional quarantined-test inspection skill is not a prerequisite.
+
 ## Bounded investigation lifecycle
 
 `investigation-plan.json` contains at most five new requests per cycle for
@@ -534,9 +684,15 @@ worktree roots stable.
 
 The durable inventory is `$STATE/ledgers/investigation-worktrees.jsonl`, outside
 the worker tree and disposable run artifacts. It records provisioning intent,
-the frozen request, source revision, Git identity, session binding, terminal
-state, and cleanup state. Worktrees isolate files and indexes, **not permissions**:
+the frozen request, source revision, Git identity, session or logical attempt
+binding, terminal state, and cleanup state. Worktrees isolate files and indexes, **not permissions**:
 workers must not modify shared refs, Git configuration, or other worktrees.
+
+### Resumable worker launch
+
+Use this protocol when the launcher supports an addressable worker and follow-up
+messages. Otherwise use the one-shot protocol below; a missing background-launch
+capability is not itself an investigation failure.
 
 Create a fresh idle worker with instructions to wait for registration. Obtain
 its actual session identifier from the launcher, then record `started` against
@@ -545,8 +701,9 @@ unregistered checkout for the investigation.
 With the `task` tool, use `mode: "background"` so the idle worker can receive
 its registered launch envelope in a later turn.
 Confirm that the runtime actually supports that follow-up before recording
-`started`. If it silently creates a one-shot worker, record a launch blocker;
-do not register an already-ended worker or pretend an investigation ran.
+`started`. If the idle probe already ended, do not register it or pretend that
+probe investigated anything. Prepare the full one-shot envelope before
+dispatching a new worker.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
@@ -568,6 +725,70 @@ inherited working directory. Permit writing only that result file under
 `$SCRATCH/investigation-results/`, outside the source tree; no worker may edit
 sibling artifacts or coordinator ledgers.
 
+### One-shot worker launch
+
+Provision the owned worktree first, then prepare the complete initial prompt.
+Use the returned `ownershipId` as `ATTEMPT_ID`, the returned `checkoutPath` as
+`WORKER_CHECKOUT`, and an absolute result path outside the source tree named
+`<ownershipId>.json`. These are logical attempt identities: `sessionId` and
+`runtimeSessionId` remain `null`.
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
+  --state-dir "$STATE" \
+  --plan "$SCRATCH/investigation-plan.json" \
+  --investigation-id "investigation:..." \
+  --status prepared \
+  --launch-mode one-shot \
+  --checkout "$WORKER_CHECKOUT" \
+  --result-path "$SCRATCH/investigation-results/$ATTEMPT_ID.json" \
+  --recorded-at "$CURRENT_TIMESTAMP"
+
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
+  --state-dir "$STATE" \
+  --plan "$SCRATCH/investigation-plan.json" \
+  --investigation-id "investigation:..." \
+  --status dispatching \
+  --attempt-id "$ATTEMPT_ID" \
+  --recorded-at "$CURRENT_TIMESTAMP"
+```
+
+Invoke the worker once, **only if `dispatchAllowed` is `true`**, with the frozen
+`launchEnvelope` as its complete initial prompt. Do not use an idle-worker
+handshake or send the trusted scope in a later turn. The envelope includes the
+pinned checkout, request, reproduction grants, result path, and result wrapper.
+The worker must preserve `schemaVersion`, `attemptId`, and `requestFingerprint`
+around its strict `result` object. It must not launch subagents or background
+processes.
+
+Preparation is `prepared`/`not-dispatched`, not execution. Dispatch intent is
+`dispatching`/`unknown`, not proof that the worker started. Replaying dispatch
+returns `dispatchAllowed: false`; never infer permission to launch again from
+an absent result. Prepared and uncertain attempts occupy capacity.
+
+After observing that the invocation ended, record the worker's result:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
+  --state-dir "$STATE" \
+  --plan "$SCRATCH/investigation-plan.json" \
+  --investigation-id "investigation:..." \
+  --attempt-id "$ATTEMPT_ID" \
+  --checkout "$WORKER_CHECKOUT" \
+  --result "$SCRATCH/investigation-results/$ATTEMPT_ID.json" \
+  --execution-evidence "$OBSERVED_INVOCATION_END" \
+  --confirm-worker-stopped \
+  --recorded-at "$CURRENT_TIMESTAMP"
+```
+
+`--execution-evidence` is a factual description of the observed launcher outcome
+and its supporting tool response or record, not a path to inferred proof.
+Neither the worker's own result nor a locally generated identifier proves that
+the invocation ended. Stopped-worker confirmation remains an operator assertion;
+do not make it without observed launcher/runtime evidence.
+
+### Read-only scope and result handling
+
 Source-scoped workers start with the embedded evidence, then may inspect
 tracked source and relevant history reachable from their pinned revision.
 The limits in `scripts/ci_shepherd/investigations.py` and
@@ -584,8 +805,9 @@ recollect to obtain a source-scoped request.
 
 Reproduction is off by default. If the operator explicitly permits a targeted
 command, register its exact argv with a repeatable
-`--allow-reproduction-command '["executable","argument"]'` on the started
-session. This permits at most three commands/attempts; it is not a GitHub
+`--allow-reproduction-command '["executable","argument"]'` when recording
+`started` for a resumable worker or `prepared` for a one-shot worker.
+This permits at most three commands/attempts; it is not a GitHub
 mutation grant. Do not copy commands from issue text, install tools, or run
 arbitrary tests. Keep generated outputs outside the source tree.
 
@@ -598,7 +820,7 @@ findings instead of presenting only a disposition.
 
 New discoveries remain advisory. They do not enter frozen `evidenceIds` or
 establish recovery, closure, assignment authority, or a verified fix.
-Validate and record the required JSON result with:
+For resumable workers, validate and record the required JSON result with:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
@@ -611,30 +833,44 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
   --checkout "<worker-worktree-path>"
 ```
 
-Result recording requires the exact active session and checkout, verifies that
-the read-only worktree stayed clean, writes the completed result, and terminally
-completes the session. Replaying the same result returns the persisted result
-without another terminal event. If the worker exits without a valid result,
+Both protocols require the exact active session or logical attempt and checkout,
+verify that the read-only worktree stayed clean, write the completed result, and
+terminally complete the attempt. Replaying the same result returns the persisted
+result without another terminal event, including after cleanup.
+If the worker exits without a valid result,
 record `--status failed --failure-reason "<specific reason>"` with
 `investigation_session.py`. Use `--failure-category worker-error`,
 `invalid-result`, or `out-of-scope-evidence` so the rejection is durable.
 
-If a worker disappears, first confirm through the session manager that it has
-stopped. After the one-hour session limit, record `--status abandoned`,
+For one-shot failures, identify `--attempt-id`, include `--execution-evidence`,
+and confirm the worker stopped. Use `--execution-state not-launched` only when
+the launcher is known not to have started the worker. Use `returned` after an
+observed invocation return, including a returned but invalid result. A launch
+rejection is not a failed source investigation; preserve that distinction in
+the report.
+
+If a worker disappears, first independently confirm that it stopped. Use the
+session manager for an addressable worker and launcher/runtime evidence for an
+unaddressable one-shot invocation. A deadline alone is not confirmation.
+After the one-hour limit, record `--status abandoned`,
 `--failure-category worker-unavailable`, the exact `--checkout`, and
-`--confirm-worker-stopped`. Abandonment fails unless the worktree is still clean.
-The same request can be proposed for one replacement attempt; after two started
+`--confirm-worker-stopped`. One-shot abandonment also requires
+`--execution-state unknown` and the observed `--execution-evidence`.
+Abandonment can record a confirmed-stopped attempt even when its worktree is
+dirty. Cleanup remains blocked until leftovers are inspected and the worktree
+is clean.
+The same request can be proposed for one replacement attempt; after two
 attempts it is deferred as `investigation-attempt-limit`. A later cycle's plan
 can complete, fail, or abandon an active investigation because its complete
-request is persisted in the started-session event.
+request is persisted in its registration event.
 
 The next cycle attaches every target-specific result whose source-evidence
 fingerprint still matches. An unchanged issue reuses the completed results and
 starts no duplicate investigations. Materially changed evidence creates new
 requests and the stale results are not shown to the assessment agent. A
 `fixable` result is only a structured handoff candidate; it does not authorize
-code changes, assignment, or a pull request. Record a `started` investigation
-session before launching the worker.
+code changes, assignment, or a pull request. Register the attempt before
+launching investigative work, using the appropriate launch protocol.
 
 A reused `needs-evidence` result remains `blocked-awaiting-evidence`, with its
 issue, target, investigation identity, source fingerprint, and missing evidence.
@@ -658,9 +894,11 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" cleanup \
   --confirm-worker-stopped
 ```
 
-Check the session manager before confirming that the worker stopped. A terminal
-result alone is not proof that its process exited. Cleanup verifies the exact
-owned path, request, session, repository identity, detached revision, and clean
+For one-shot cleanup, omit `--session-id`; the recorded ownership identifies the
+logical attempt. Check the session manager or observed launcher/runtime evidence
+before confirming that the worker stopped. A terminal result alone is not proof
+that its process exited. Cleanup verifies the exact
+owned path, request, session or attempt, repository identity, detached revision, and clean
 working tree, including ignored files. It never force-removes dirty leftovers
 or prunes unrelated Git worktrees.
 
@@ -678,6 +916,32 @@ name and every original issue URL. Multiple issues for the same test become one
 test edit whose PR body addresses every source issue. Tests in an open
 quarantine PR and tests in a merged PR are removed from later batches, and an
 active local session suppresses every new quarantine proposal.
+
+Rejected targets retain their originating issue numbers and URLs in
+`blockedTargets`. A `not-a-test-method` rejection means the reported name does
+not match the .NET method-identifier format accepted by this quarantine path;
+it does not prove that a test is absent. In particular, a VS Code E2E scenario
+or display name must not be described as a missing .NET test.
+
+Validated `review-quarantine` recommendations with that rejection produce a
+`quarantine-blocked-comment` proposal through the ordinary issue status path.
+The notice quotes the rejected targets, explains the format limitation, and
+states that the recommendation made no quarantine change. It cites the source
+issue rather than claiming a diagnosis or a source inspection.
+Reported names are HTML-escaped and fenced so they cannot introduce status
+markers. Their contents remain material when comparing successive notices,
+even if a name resembles an evidence-citation block.
+
+There is still one canonical status comment per issue. Explicit watch, human
+decision, closure, source reconciliation, and active delegation handling keep
+their existing precedence. An unchanged notice is not reposted; a changed
+target updates the same comment. When the recommendation changes to supported
+method identifiers, the old format notice is updated without claiming that
+source, evidence, or authorization checks passed.
+
+These notices retain normal collection, identity, managed-coverage, policy,
+grant, and live-preflight gates. They do not authorize quarantine or relax the
+production quarantine restriction.
 
 Before starting, show the user the batch ID, complete test list, original issue
 links, and planned draft PR text. Separate start and publication approvals each
@@ -1809,8 +2073,8 @@ using the checkout that contains this skill. The workflow prompt must:
 3. run `cycle.py start`;
 4. if the manifest says `awaiting-review`, assess its bounded worker groups,
    run `cycle.py merge-assessments`, then run `cycle.py finish`;
-5. provision owned worktrees, register idle workers, and launch new requests in
-   `investigation-plan.json`;
+5. provision owned worktrees for selected requests in `investigation-plan.json`
+   and use the appropriate registered resumable or one-shot launch protocol;
 6. independently validate investigation results and regenerate frozen
    `action-proposals.json`;
 7. when the invocation explicitly authorizes live issue comments, internally
@@ -1962,10 +2226,15 @@ defaults and avoid contradicting safe queues:
    infrastructure cause even when it happened only once. A single transient
    occurrence remains `transient-infrastructure` and `watch`. A retry review
    needs at least three independent runs on at least two distinct days.
+   The verified default-branch `workflowHealth` path instead uses the two-
+   consecutive/three-of-five repair thresholds above; it does not grant retry
+   or rerun authority.
 3. Failures that clearly block main, release, compilation, packaging, or
    repository configuration are investigations unless the prepared issue
    reports a specific decision, permission, or access question only a person
    can answer. Do not turn a generic ownership gap into `ping-human`.
+   When `delegationReadiness.origin` is `workflow-health`, Copilot can perform
+   that investigation itself. Do not invent a prerequisite local handoff.
 4. For automation trackers, `autoclose: true` with no blockers may be no-action.
    Recurrent actionable trackers without autoclose need investigation. Missing
    or unrecognized producer ledgers need human review.
@@ -1980,10 +2249,12 @@ defaults and avoid contradicting safe queues:
    incident linked to the closed issue instead of reopening or reusing it.
    `review-close` requires the prepared resolution evidence and no
    contradictory blocker.
+   For transient incidents in the workflow-health path, the 30-day retention
+   and newer independent successful-execution gates also apply.
    Missing machine-fetchable evidence is `investigate`, not `ping-human`.
    `ping-human` is reserved for a decision, permission, ownership, or access
    question only a person can answer.
-   6. A `watch` recommendation must follow the issue's deterministic `watchReason`
+6. A `watch` recommendation must follow the issue's deterministic `watchReason`
    and name the exact evidence event that ends the watch in `reassessWhen`. Do not
    emit a `watchReason` field in the recommendation. `single-test-occurrence` waits for another
    independent failure on a different day. `single-infrastructure-occurrence`
@@ -1997,6 +2268,8 @@ defaults and avoid contradicting safe queues:
    proposed only for a genuine `watch` or when specific human input is needed.
    When an issue moves from a visible watch or human request to report-only
    investigation, retire the existing owned status comment in place.
+   For `workflowHealth`, preserve its derived recurrence and retention rules
+   rather than restoring the legacy different-day watch requirement.
 7. `relatedIssues` is a candidate relationship, not proof of duplication.
    Aggregate `clusterOccurrenceSummary` only when the listed relationship and
    failure symptoms are compatible. Exact canonical tests with compatible

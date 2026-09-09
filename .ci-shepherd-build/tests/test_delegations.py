@@ -58,6 +58,15 @@ class AgentTaskNormalizationTests(unittest.TestCase):
 
 
 class TaskLifecycleTests(unittest.TestCase):
+    def test_merge_facts_require_a_verified_merged_pull_request(self) -> None:
+        for state in (PullRequestState.OPEN, PullRequestState.CLOSED, PullRequestState.UNKNOWN):
+            with self.subTest(state=state):
+                with self.assertRaisesRegex(ValueError, "Merge facts require"):
+                    DelegatedPullRequest(
+                        database_id=101, global_id="PR_101", state=state, is_draft=False,
+                        merged_at=datetime(2026, 9, 1, tzinfo=UTC), merge_commit_sha="a" * 40,
+                    )
+
     def test_multiple_pulls_cannot_complete_while_any_are_open_or_unknown(self) -> None:
         task = normalize_agent_task({
             "id": "task-1", "state": "completed", "created_at": "2026-09-01T12:00:00Z",

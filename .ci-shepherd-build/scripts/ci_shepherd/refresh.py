@@ -114,6 +114,11 @@ def plan_refresh(
         if not isinstance(evidence_id, str):
             continue
         record = value if isinstance(value, Mapping) else None
+        if record is not None and record.get("discoveredBy") == "workflow-discovery":
+            # Discovery renews its bounded window each invocation. Completed runs
+            # outside that window must not survive as implicitly current coverage.
+            retire.add(evidence_id)
+            continue
         associated_issues = _associated_issue_numbers(evidence_id, record)
         live_root_anchors = {
             root

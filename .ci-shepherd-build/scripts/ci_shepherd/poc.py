@@ -5,7 +5,12 @@ import re
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
-from ci_shepherd.eligibility import delegation_readiness
+from ci_shepherd.eligibility import (
+    delegation_readiness,
+    issue_body_field as _issue_body_field,
+    related_repairs_block_delegation,
+    reported_issue_requires_human_decision as _reported_issue_requires_human_decision,
+)
 from ci_shepherd.investigations import derive_machine_actionability
 from ci_shepherd.models import ValidationError, validate_issue_body_payload, validate_workflow_log_payload
 from ci_shepherd.poc_history import compute_fingerprint, merge_occurrence_dimensions
@@ -213,14 +218,20 @@ def delegation_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
     if isinstance(readiness, Mapping) and "machineActionability" not in compact_issue:
         maintenance = compact_issue.get("testMaintenance", {})
         operator = compact_issue.get("delegationRequest") == {"origin": "operator"}
+        health = compact_issue.get("workflowHealth")
+        workflow = (
+            isinstance(health, Mapping) and health.get("current") is True
+            and health.get("route") == "delegate-copilot" and not operator
+        )
         expected_ids = (
-            maintenance.get("evidenceIds", [])
+            health.get("evidenceIds", []) if workflow
+            else maintenance.get("evidenceIds", [])
             if maintenance.get("state") == "quarantined" and not operator
             else [f"issue:{compact_issue['issueNumber']}"]
         )
         return (
             set(readiness) == {"origin", "intent", "evidenceIds", "quarantine"}
-            and readiness["origin"] == ("operator" if operator else "assessment")
+            and readiness["origin"] == ("operator" if operator else "workflow-health" if workflow else "assessment")
             and readiness["intent"] == "investigate-and-fix"
             and type(readiness["quarantine"]) is bool
             and bool(expected_ids)
@@ -261,6 +272,8 @@ def close_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
         and action_cluster.get("role") == "superseded"
     ):
         return True
+    if compact_issue.get("workflowHealth", {}).get("closureAllowed", True) is not True:
+        return False
     recovery = compact_issue.get("recovery")
     return (
         isinstance(recovery, Mapping)
@@ -780,8 +793,11 @@ def _build_compact_issue(
     if delegation is not None:
         actionability = None
     proof_ids = recovery["evidenceIds"] if recovery.get("status") == "verified" else []
+    workflow_health = issue.get("workflowHealth")
+    workflow_evidence_ids = workflow_health["evidenceIds"] if isinstance(workflow_health, Mapping) else []
     allowed_evidence, allowed_evidence_ids = _select_allowed_evidence(
-        evidence_bundle, [*proof_ids, *(actionability["evidenceIds"] if actionability else [])],
+        evidence_bundle, [*proof_ids, *workflow_evidence_ids, *(actionability["evidenceIds"] if actionability else [])],
+        max_records=_MAX_WORKFLOW_ALLOWED_EVIDENCE if workflow_evidence_ids else _MAX_ALLOWED_EVIDENCE,
     )
     if actionability and not set(actionability["evidenceIds"]).issubset(allowed_evidence_ids):
         actionability = None
@@ -842,6 +858,74 @@ def _build_compact_issue(
         ),
     )
     maintenance = issue.get("testMaintenance")
+    related_repair_blocks = related_repairs_block_delegation(issue)
+    if isinstance(workflow_health, Mapping):
+        default_judgment["category"] = workflow_health["category"]
+        recommendation = default_judgment["recommendations"][0]
+        if workflow_health["closureAllowed"] is not True and recommendation["disposition"] == "review-close":
+            recommendation.update(
+                disposition="no-action" if delegation is not None else "watch",
+                summary="Keep tracking the incident until its workflow recovery requirements are met.",
+                missingEvidence=[],
+                reassessWhen="After the tracked repair changes state or a matching default-branch job executes.",
+            )
+            if human_context is not None and human_context.get("decisionRequired") is True:
+                escalation = _build_human_escalation(title=title, human_context=human_context)
+                recommendation.update(
+                    disposition="ping-human",
+                    humanEscalation=escalation,
+                    summary=f"Human decision needed: {escalation['question']}",
+                )
+        if (
+            workflow_health["category"] == "transient-infrastructure"
+            and workflow_health["route"] == "watch"
+            and workflow_health["closureAllowed"] is not True
+            and recommendation["disposition"] != "ping-human"
+            and delegation is None
+        ):
+            recommendation.update(
+                disposition="watch",
+                target={"kind": "issue", "value": issue_number},
+                summary="Watch this transient workflow incident; age alone does not establish recovery.",
+                evidenceIds=list(workflow_evidence_ids),
+                missingEvidence=[],
+                reassessWhen="After another matching failure, or after 30 days from the last failure with newer matching success.",
+            )
+        if (
+            workflow_health["current"] is True
+            and human_context is not None
+            and human_context.get("decisionRequired") is True
+        ):
+            escalation = _build_human_escalation(title=title, human_context=human_context)
+            recommendation.update(
+                disposition="ping-human",
+                target={"kind": "issue", "value": issue_number},
+                humanEscalation=escalation,
+                evidenceIds=list(workflow_evidence_ids),
+                missingEvidence=[],
+                summary=f"Human decision needed: {escalation['question']}",
+                reassessWhen="After the reported human-owned blocker is resolved.",
+            )
+        elif (
+            delegation is not None and workflow_health["closureAllowed"] is not True
+            and not (human_context is not None and human_context.get("decisionRequired") is True)
+        ):
+            recommendation.update(
+                disposition="no-action",
+                target={"kind": "issue", "value": issue_number},
+                summary="Follow the existing Copilot task and repair pull request; do not start duplicate work.",
+                missingEvidence=[],
+                reassessWhen="After the task, pull request, or matching post-merge workflow evidence changes.",
+            )
+        if related_repair_blocks and recommendation["disposition"] not in {"review-close", "ping-human"}:
+            numbers = ", ".join(str(repair["issueNumber"]) for repair in issue["relatedWorkflowRepairs"])
+            recommendation.update(
+                disposition="no-action",
+                target={"kind": "issue", "value": issue_number},
+                summary=f"Follow the repair for this workflow failure tracked by issue(s) {numbers}; do not duplicate work.",
+                missingEvidence=[],
+                reassessWhen="After existing work is resolved and an operator explicitly requests another attempt.",
+            )
     if isinstance(maintenance, Mapping):
         if maintenance.get("state") == "quarantined":
             default_judgment["category"] = "flaky-test"
@@ -864,7 +948,7 @@ def _build_compact_issue(
     if not isinstance(maintenance, Mapping) or maintenance.get("state") != "quarantined":
         _apply_superseded_default(default_judgment, issue_number, action_context)
     if (
-        actionability is not None and delegation is None
+        actionability is not None and delegation is None and not related_repair_blocks
         and default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human"}
     ):
         default_judgment["recommendations"] = [{
@@ -880,13 +964,25 @@ def _build_compact_issue(
         and not (isinstance(maintenance, Mapping) and maintenance.get("state") == "quarantined")
     ):
         readiness = None
-    if readiness is not None and readiness["origin"] == "operator":
+    if (
+        readiness is not None
+        and set(readiness["evidenceIds"]).issubset(allowed_evidence_ids)
+        and (
+            readiness["origin"] == "operator"
+            or readiness["origin"] == "workflow-health"
+            and default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human"}
+        )
+    ):
         actionability = None
         default_judgment["recommendations"] = [{
             "disposition": "delegate-copilot",
             "target": {"kind": "issue", "value": issue_number},
             "confidence": "medium",
-            "summary": "Investigate and fix the explicitly selected issue.",
+            "summary": (
+                "Investigate and fix the current default-branch workflow failure."
+                if readiness["origin"] == "workflow-health"
+                else "Investigate and fix the explicitly selected issue."
+            ),
             "evidenceIds": readiness["evidenceIds"],
             "missingEvidence": [],
             "reassessWhen": "After the delegated task and linked pull request change state.",
@@ -898,7 +994,8 @@ def _build_compact_issue(
     if not isinstance(maintenance, Mapping) or maintenance.get("state") != "quarantined":
         _apply_canonical_cluster_summary(default_judgment, action_context)
     watch_reason = _watch_reason(default_judgment, effective_occurrence_summary)
-    _apply_watch_explanation(default_judgment, watch_reason)
+    if not isinstance(workflow_health, Mapping):
+        _apply_watch_explanation(default_judgment, watch_reason)
     review_required = _review_required(
         default_judgment=default_judgment,
         candidate_action=candidate_action,
@@ -938,6 +1035,15 @@ def _build_compact_issue(
         compact_issue["delegationContext"] = copy.deepcopy(delegation)
     if isinstance(maintenance, Mapping):
         compact_issue["testMaintenance"] = copy.deepcopy(maintenance)
+    if isinstance(workflow_health, Mapping):
+        compact_issue["workflowHealth"] = copy.deepcopy(workflow_health)
+    if isinstance(issue.get("repairFollowup"), Mapping):
+        # The task/PR history is already carried by delegationContext.
+        compact_issue["repairFollowup"] = copy.deepcopy({
+            key: value for key, value in issue["repairFollowup"].items() if key != "attempts"
+        })
+    if issue.get("relatedWorkflowRepairs"):
+        compact_issue["relatedWorkflowRepairs"] = copy.deepcopy(issue["relatedWorkflowRepairs"])
     if actionability is not None:
         compact_issue["machineActionability"] = actionability
     if readiness is not None:
@@ -1769,42 +1875,6 @@ def _has_issue_label(
     return False
 
 
-def _issue_body_field(body: str, field: str) -> str | None:
-    match = re.search(rf"(?im)^-\s*{re.escape(field)}:\s*(.+)$", body)
-    return match.group(1).strip() if match else None
-
-
-# This POC only has a grounded known decision gate for Azure tenant/workflow
-# identity failures (see the "Deployment Environment Cleanup" fixture in
-# test_poc.py). Generic words like "renew", "replace", "credential", or
-# "permission" show up in unrelated issues too (an ordinary secret rotation,
-# a yanked package, a permissions bug) and must not turn those into a human
-# escalation on their own. Require one of the specific Azure tenant/identity
-# evidence shapes actually seen in reported assessments/suggestions instead.
-_HUMAN_DECISION_EVIDENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # "tenant ... is expired" / "the expired ... tenant" (either order).
-    re.compile(r"\btenant\b[^.]{0,80}\bexpired\b"),
-    re.compile(r"\bexpired\b[^.]{0,80}\btenant\b"),
-    # AADSTS5000229 is the Azure AD STS error code for a disabled/expired
-    # tenant, so its presence alongside "tenant" is unambiguous evidence.
-    re.compile(r"\baadsts5000229\b"),
-    # Migrating away from the current service-principal identity (either
-    # phrase order).
-    re.compile(r"\bservice[\s-]principal\b[^.]{0,80}\bidentity migration\b"),
-    re.compile(r"\bidentity migration\b[^.]{0,80}\bservice[\s-]principal\b"),
-)
-
-
-def _reported_issue_requires_human_decision(
-    assessment: str | None,
-    suggestion: str | None,
-) -> bool:
-    if assessment is None or suggestion is None:
-        return False
-    text = f"{assessment} {suggestion}".lower()
-    return any(pattern.search(text) for pattern in _HUMAN_DECISION_EVIDENCE_PATTERNS)
-
-
 def _latest_referenced_failed_run_instant(evidence_bundle: Sequence[Any]) -> datetime | None:
     """Return the latest directly referenced failed workflow-run instant, if any.
 
@@ -2591,6 +2661,9 @@ def _resolution_evidence_ids(resolution_evidence: Mapping[str, Any]) -> list[str
 
 
 _MAX_ALLOWED_EVIDENCE = 8
+# Three-of-five recurrence needs ten citations for the issue and three
+# run/job/log triples. Retain its proof without widening ordinary previews.
+_MAX_WORKFLOW_ALLOWED_EVIDENCE = 16
 # The source issue always leads; workflow runs come next because a recovery
 # judgment (verificationContext) cites a specific run, and that run must
 # survive the cap regardless of how many pull requests or source-path records
@@ -2607,6 +2680,8 @@ _ALLOWED_EVIDENCE_DEFAULT_PRIORITY = 3
 def _select_allowed_evidence(
     evidence_bundle: Sequence[Any],
     priority_ids: Sequence[str] = (),
+    *,
+    max_records: int = _MAX_ALLOWED_EVIDENCE,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Deterministically cap the evidence bundle for the agent-visible allowedEvidence.
 
@@ -2622,7 +2697,7 @@ def _select_allowed_evidence(
             record.get("id") not in priority_ids,
             _ALLOWED_EVIDENCE_PRIORITY_BY_KIND.get(record.get("kind"), _ALLOWED_EVIDENCE_DEFAULT_PRIORITY),
         ),
-    )[:_MAX_ALLOWED_EVIDENCE]
+    )[:max_records]
     allowed_evidence: list[dict[str, Any]] = []
     allowed_evidence_ids: list[str] = []
     for record in records:

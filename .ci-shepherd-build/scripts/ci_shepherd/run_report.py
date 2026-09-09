@@ -7,6 +7,7 @@ from html import escape
 import math
 from typing import Any
 
+from ci_shepherd.eligibility import related_repairs_block_delegation
 from ci_shepherd.lifecycle import latest_occurrence_timestamp
 
 
@@ -193,7 +194,7 @@ def _investigation(
     launch_blockers: object = None,
 ) -> tuple[str, list[object], object, object]:
     requests = [
-        row for key in ("requests", "deferredRequests", "activeInvestigations", "blockedAwaitingEvidence")
+        row for key in ("requests", "deferredRequests", "activeInvestigations", "pendingInvestigations", "blockedAwaitingEvidence")
         for row in _rows(plan.get(key)) if row.get("issueNumber") == number
     ]
     ids = {row.get("investigationId") for row in requests}
@@ -211,13 +212,17 @@ def _investigation(
             row for row in sessions
             if row.get("investigationId") == result.get("investigationId")
             and row.get("sessionId") == result.get("sessionId")
+            and row.get("launchMode") == result.get("launchMode")
+            and row.get("attemptId") == result.get("attemptId")
             and row.get("repository", repository) == repository
         ]
         starts = [row.get("recordedAt") for row in events if row.get("status") in ("started", "running")]
         ends = [row.get("recordedAt") for row in events if row.get("status") == "completed"]
-        elapsed = _duration(min(starts), max(ends)) if starts and ends else "unknown"
+        elapsed = _duration(min(starts), max(ends)) if starts and ends and result.get("launchMode") != "one-shot" else "unknown"
         prefix = "♻ Reused result" if result.get("investigationId") in reused else "✅ Investigation completed"
         text = f"{prefix}; duration: {elapsed}; conclusion: {_text(result.get('outcome'))} — {_text(result.get('summary'))}"
+        if result.get("launchMode") == "one-shot":
+            text += "; one-shot; runtime session: unknown"
         if result.get("validation"):
             text += "; validation: " + _text(result["validation"])
         work = []
@@ -241,10 +246,20 @@ def _investigation(
     ]
     if matching_sessions:
         latest = max(matching_sessions, key=lambda row: str(row.get("recordedAt", "")))
+        if latest.get("launchMode") == "one-shot":
+            if latest.get("status") == "prepared":
+                return "Investigation prepared; not dispatched; runtime session: unknown", [], None, None
+            if latest.get("status") == "dispatching":
+                return "Investigation dispatch unconfirmed; execution: unknown; runtime session: unknown", [], None, None
+            if latest.get("executionState") == "not-launched":
+                return "Investigation not launched; not performed; runtime session: unknown; " + _text(latest.get("failureReason")), [], None, None
+            if latest.get("executionState", "unknown") == "unknown":
+                return "Investigation stopped; execution unknown; runtime session: unknown; " + _text(latest.get("failureReason")), [], None, None
         if latest.get("status") in ("started", "running"):
             return "🔄 Investigation running; duration: unknown; conclusion: pending", [], None, latest.get("sessionId")
-        if latest.get("status") in ("failed", "completed"):
-            return "⛔ Investigation ended without a recorded conclusion; duration: unknown", ["investigation-result-missing"], None, latest.get("sessionId")
+        if latest.get("status") in ("failed", "completed", "abandoned"):
+            identity = "; one-shot; runtime session: unknown" if latest.get("launchMode") == "one-shot" else ""
+            return "⛔ Investigation ended without a recorded conclusion; duration: unknown" + identity, ["investigation-result-missing"], None, latest.get("sessionId")
     if any(row.get("issueNumber") == number for row in _rows(plan.get("activeInvestigations"))):
         return "🔄 Investigation running; duration: unknown; conclusion: pending", [], None, None
     blockers = [
@@ -290,6 +305,10 @@ def _investigation_summary(description: str) -> tuple[str, str, str]:
     # "✅ Investigation completed; duration: 120s; conclusion: needs-evidence — ..."
     # The conclusion is opaque and may contain further semicolons.
     states = (
+        ("Investigation prepared", "prepared"),
+        ("Investigation dispatch unconfirmed", "dispatch-unconfirmed"),
+        ("Investigation not launched", "not-launched"),
+        ("Investigation stopped; execution unknown", "execution-unknown"),
         ("⛔ Investigation blocked before start", "launch-blocked"),
         ("✅ Investigation completed", "completed"),
         ("🔄 Investigation running", "running"),
@@ -303,6 +322,23 @@ def _investigation_summary(description: str) -> tuple[str, str, str]:
     duration = suffix.partition(";")[0] if delimiter else "unknown"
     conclusion = description.partition("; conclusion: ")[2]
     return state, duration, conclusion
+
+
+def _repair_progress(followup: Mapping[str, Any]) -> tuple[str, str]:
+    return {
+        "work-in-progress": ("Copilot repair in progress", "Task or pull-request progress; human review remains required."),
+        "human-handoff": ("Repair needs human decision", "Review the ended attempt before authorizing any replacement."),
+        "awaiting-post-fix-success": (
+            "Merged; awaiting workflow recovery",
+            "A successful affected job on the fix commit or a proven descendant.",
+        ),
+        "verified": ("Post-fix workflow verified", "Any later failure requires reassessment."),
+        "reassessment-required": (
+            "Post-merge failure; reassessment needed",
+            "Investigate the later failure; do not automatically reopen or reassign.",
+        ),
+        "unknown": ("Repair verification unknown", _text(followup.get("reason"))),
+    }[followup["status"]]
 
 
 def _operational_state(
@@ -331,7 +367,7 @@ def _operational_state(
         return "Closed", "No next event recorded after closure."
 
     requests = [
-        row for key in ("requests", "deferredRequests", "activeInvestigations", "blockedAwaitingEvidence")
+        row for key in ("requests", "deferredRequests", "activeInvestigations", "pendingInvestigations", "blockedAwaitingEvidence")
         for row in _rows(plan.get(key)) if row.get("issueNumber") == number
     ]
     ids = {row.get("investigationId") for row in requests} | set(plan.get("reusedInvestigationIds", []))
@@ -341,10 +377,14 @@ def _operational_state(
     for row in sorted(sessions, key=lambda row: str(row.get("recordedAt", ""))):
         if (row.get("investigationId") in ids and row.get("issueNumber") == number
                 and row.get("repository", repository) == repository):
-            latest_sessions[(row.get("investigationId"), row.get("sessionId"))] = row
+            latest_sessions[(row.get("investigationId"), row.get("launchMode"), row.get("attemptId"), row.get("sessionId"))] = row
     if (any(row.get("status") in ("started", "running") for row in latest_sessions.values())
             or not latest_sessions and any(row.get("issueNumber") == number for row in _rows(plan.get("activeInvestigations")))):
         return "Investigation running", "Investigation result."
+    if any(row.get("status") == "dispatching" for row in latest_sessions.values()):
+        return "Investigation dispatch unconfirmed", "Reconcile the original invocation; never dispatch this attempt again."
+    if any(row.get("status") == "prepared" for row in latest_sessions.values()):
+        return "Investigation prepared", "One authorized initial invocation with the frozen launch envelope."
 
     decisions = {row.get("disposition"): row for row in recommendations}
     if "ping-human" in decisions:
@@ -355,6 +395,10 @@ def _operational_state(
     history_state, _, conclusion = _investigation_summary(history)
     if history_state == "launch-blocked":
         return "Investigation blocked before start", "Resolve the recorded launch blocker before starting the worker."
+    if history_state == "not-launched":
+        return "Investigation not launched", "A new bounded attempt after resolving the launcher failure."
+    if history_state == "execution-unknown":
+        return "Investigation execution unknown", "Review the stopped-invocation evidence before considering another attempt."
     outcome = conclusion.partition(" — ")[0]
     for lifecycle, label in (
         ("running", "Copilot fix in progress" if outcome == "fixable" else "Copilot task in progress"),
@@ -394,6 +438,10 @@ def _append_investigation_overview(
         "blocked": "Ended without a result", "reused": "Prior evidence review reused",
         "deferred": "Not started", "requested": "Not started",
         "launch-blocked": "Launch blocked; not started",
+        "prepared": "Prepared; not dispatched",
+        "dispatch-unconfirmed": "Dispatch intent only; execution unknown",
+        "not-launched": "Not launched; not performed",
+        "execution-unknown": "Stopped; execution unknown",
     }
     active, deferred = [], []
     for row in rows:
@@ -415,7 +463,9 @@ def _append_investigation_overview(
             f"[Issue #{identity.removeprefix('issue-')}: {_short(title, 48)}](#{identity})",
             current_state, f"{states[state]}; duration: {duration}", summary,
         ]
-        (deferred if state in ("deferred", "requested", "launch-blocked") else active).append((state, output))
+        (deferred if state in (
+            "deferred", "requested", "launch-blocked", "prepared", "dispatch-unconfirmed", "not-launched", "execution-unknown",
+        ) else active).append((state, output))
     lines.extend(["## Investigations this run", ""])
     header = [
         "| Item | Current state | Investigation | Conclusion / next event |",
@@ -429,7 +479,11 @@ def _append_investigation_overview(
         lines.append("No performed or reused investigations recorded.")
     lines.append("")
     if deferred:
-        lines.extend(["<details>", f"<summary>{len(deferred)} deferred / not-started investigations</summary>", "", *header])
+        label = (
+            "pending / execution-unconfirmed" if any(state in {"dispatch-unconfirmed", "execution-unknown"} for state, _ in deferred)
+            else "deferred / not-started"
+        )
+        lines.extend(["<details>", f"<summary>{len(deferred)} {label} investigations</summary>", "", *header])
         lines.extend("| " + " | ".join(row) + " |" for _, row in deferred)
         lines.extend(["", "</details>", ""])
 
@@ -458,6 +512,10 @@ def _append_group(
             "blocked": "⛔ Investigation blocked", "reused": "♻ Reused investigation",
             "deferred": "⏸ Deferred", "requested": "🔎 Not started", "none": "⚪ No investigation",
             "launch-blocked": "⛔ Investigation blocked before start",
+            "prepared": "Prepared; not dispatched",
+            "dispatch-unconfirmed": "Dispatch unconfirmed",
+            "not-launched": "Not launched",
+            "execution-unknown": "Execution unknown",
         }[state]
         if conclusion:
             work += ": " + _short(conclusion.partition(" — ")[0], 50)
@@ -574,6 +632,7 @@ def render_run_markdown(
             if _number(pull) is not None:
                 tracked_pulls[_number(pull)] = pull
     prepared_issues = {_number(row): row for row in _rows(prepared.get("issues"))}
+    closed_followups = {_number(row): row for row in _rows(prepared.get("closedIssueFollowups"))}
     issue_judgments = {_number(row): row for row in _rows(judgments.get("issues"))}
     previous = {_number(row): row for row in _rows((prior_snapshot or {}).get("issues"))}
     plan = investigation_plan or {}
@@ -605,11 +664,18 @@ def render_run_markdown(
     groups: dict[str, list[list[str]]] = {
         "Pull requests": [], "Other issues": [], "Flaky / failing test issues": [], "Workflow / CI incidents": [],
     }
+    if "workflowDiscovery" in snapshot:
+        groups = {
+            heading: groups[heading] for heading in (
+                "Workflow / CI incidents", "Pull requests",
+                "Flaky / failing test issues", "Other issues",
+            )
+        }
     identities: dict[str, str] = {}
     brief_decisions: dict[str, str] = {}
     next_evidence: dict[str, str] = {}
     operational_states: dict[str, tuple[str, object]] = {}
-    issue_numbers = set(metadata) | set(prepared_issues) | set(issue_judgments) | set(selected) | set(tracking_by_issue)
+    issue_numbers = set(metadata) | set(prepared_issues) | set(closed_followups) | set(issue_judgments) | set(selected) | set(tracking_by_issue)
     issue_numbers.update(number for kind, number in attempts if kind == "issue")
     unchanged: list[str] = []
 
@@ -621,7 +687,11 @@ def render_run_markdown(
 
     for number in sorted(value for value in issue_numbers if value is not None):
         item = metadata.get(number, {})
-        assessment = prepared_issues.get(number, {})
+        assessment = prepared_issues.get(number, closed_followups.get(number, {}))
+        repair_followup = assessment.get("repairFollowup") or {}
+        repair_missing = [
+            row["url"] for row in _rows(repair_followup.get("missingEvidence")) if row.get("url")
+        ]
         judgment = issue_judgments.get(number, {})
         recommendations = _rows(judgment.get("recommendations"))
         selection = selected.get(number, {})
@@ -630,14 +700,14 @@ def render_run_markdown(
             number, plan, results, sessions, repository,
             (invocation_window or {}).get("investigationBlockers"),
         )
-        if (review_selection is not None and number not in selected
+        if (review_selection is not None and number not in selected and not repair_followup
                 and investigation == "⚪ No investigation recorded"
                 and ("issue", number) not in attempts and not tracking):
             unchanged.append(f"issue #{number}")
             continue
         labels = [str(label.get("name") if isinstance(label, Mapping) else label).casefold() for label in item.get("labels", [])]
         category = judgment.get("category", assessment.get("producer", item.get("producer")))
-        if category in ("workflow-failure", "infrastructure-failure", "ci-failure", "ci-failure-cause", "transient-infrastructure", "automation-tracker"):
+        if assessment.get("workflowHealth") or repair_followup or category in ("workflow-failure", "infrastructure-failure", "ci-failure", "ci-failure-cause", "transient-infrastructure", "automation-tracker"):
             group = "Workflow / CI incidents"
         elif ("testMaintenance" in assessment
                 or any(label in labels for label in ("failing-test", "flaky-test", "quarantined-test"))
@@ -662,7 +732,15 @@ def render_run_markdown(
             row["humanEscalation"].get("routingHint")
             for row in recommendations if isinstance(row.get("humanEscalation"), Mapping)
         ]
-        state = _text(item.get("state"))
+        state = _text(assessment.get("issueState", item.get("state")))
+        workflow_health = assessment.get("workflowHealth") or {}
+        if workflow_health:
+            state += (
+                f"; default-branch workflow: {_text(workflow_health.get('workflow'))}"
+                f" / {_text(workflow_health.get('job'))}"
+                f"; current failure: {_text(workflow_health.get('current'))}"
+                f"; recent run outcomes: {_text([sample['outcome'] for sample in workflow_health.get('samples', [])])}"
+            )
         for effect in sorted(attempts.get(("issue", number), []), key=lambda row: str(row.get("recordedAt", ""))):
             if effect.get("outcome") == "executed" and effect.get("result", {}).get("issueState"):
                 state = _text(effect["result"]["issueState"]) + " (recorded action)"
@@ -685,6 +763,35 @@ def render_run_markdown(
                 for record in tracking
             ):
                 state += "; quarantine reliability review still required; a merged fix does not authorize unquarantine"
+        verification = repair_followup.get("verification") or {}
+        if repair_followup:
+            state += "; workflow repair: " + _repair_progress(repair_followup)[0]
+            if verification:
+                state += (
+                    f"; post-fix success: run {_text(verification.get('runId'))}"
+                    f", job {_text(verification.get('jobId'))}"
+                    f", commit `{_text(verification.get('headSha'))}`"
+                )
+            if repair_followup.get("laterFailures"):
+                state += f"; later failures: {len(repair_followup['laterFailures'])}; same root cause: unknown"
+                source_issues = sorted({
+                    failure["sourceIssueNumber"] for failure in repair_followup["laterFailures"]
+                    if type(failure.get("sourceIssueNumber")) is int and failure["sourceIssueNumber"] != number
+                })
+                if source_issues:
+                    state += "; source issue(s): " + ", ".join(
+                        f"[#{source}](https://github.com/{repository}/issues/{source})" for source in source_issues
+                    )
+            if repair_followup.get("unverifiedFailures"):
+                state += f"; failed executions awaiting ancestry proof: {len(repair_followup['unverifiedFailures'])}"
+            if repair_followup.get("reason"):
+                blockers.append(repair_followup["reason"])
+            blockers.extend(repair_missing)
+        related_repairs = _rows(assessment.get("relatedWorkflowRepairs"))
+        if related_repairs:
+            state += "; related repair issue(s): " + ", ".join(
+                f"[#{repair['issueNumber']}]({_text(repair['issueUrl'])})" for repair in related_repairs
+            )
         wakeups = [
             f"{record['nextWakeup']['evaluateAt']} ({record['nextWakeup']['reason']})"
             for record in tracking if record.get("nextWakeup")
@@ -697,6 +804,7 @@ def render_run_markdown(
             _text(list(dict.fromkeys([
                 *[value for row in recommendations for value in row.get("evidenceIds", [])],
                 *maintenance.get("evidenceIds", []),
+                *verification.get("evidenceIds", []),
             ]))),
             investigation,
             "; ".join(f"{_status(row.get('disposition'))}: {_text(row.get('summary'))}" for row in recommendations) or "No decision recorded",
@@ -709,11 +817,18 @@ def render_run_markdown(
         label = groups[group][-1][0]
         identities[label] = f"issue-{number}"
         brief_decisions[label] = "; ".join(_status(row.get("disposition")) for row in recommendations) or "No decision recorded"
-        next_evidence[label] = _text(missing)
+        next_evidence[label] = _text([*missing, *repair_missing])
         operational_states[label] = _operational_state(
             number, plan, sessions, repository, recommendations, tracking,
             attempts.get(("issue", number), []), investigation,
         )
+        if repair_followup:
+            operational_states[label] = _repair_progress(repair_followup)
+        elif related_repairs_block_delegation(assessment):
+            operational_states[label] = (
+                "Related workflow repair needs resolution",
+                "Follow the linked repair; another assignment requires resolved work and a fresh operator decision.",
+            )
 
     pr_judgments = {_number(row): row for row in _rows((pull_request_judgments or {}).get("pullRequests"))}
     tasks = {
@@ -807,6 +922,7 @@ def render_run_markdown(
         "Recording windows may overlap; collection/cycle windows are not a substitute for whole-invocation timing.",
         "Inferred intervals are not measured model compute. These windows do not establish request-level latency or billable usage.", "",
     ])
+    _append_workflow_discovery(lines, snapshot)
     _append_investigation_overview(
         lines, [row for rows in groups.values() for row in rows], identities, next_evidence, operational_states,
     )
@@ -841,6 +957,64 @@ def render_run_markdown(
                   f"[Full collection audit]({_text(audit_details_url)})" if audit_details_url else "No separate collection audit supplied.",
                   "Ages use recorded matching failures or meaningful changes only; updatedAt is not an age signal.", ""])
     return "\n".join(lines)
+
+
+def _append_workflow_discovery(lines: list[str], snapshot: Mapping[str, Any]) -> None:
+    discovery = snapshot.get("workflowDiscovery")
+    if not isinstance(discovery, Mapping):
+        return
+    lines.extend([
+        "## Default-branch workflow discovery", "",
+        f"**{_text(discovery.get('status'))}**; verified default branch: "
+        f"{_text(discovery.get('defaultBranch')) if discovery.get('defaultBranchVerified') else 'unknown'}; "
+        f"recent scan complete: {_text(discovery.get('recentScanComplete'))}.",
+        "This bounded observation does not create issues or assign Copilot without an eligible tracked issue.", "",
+    ])
+    associations: dict[str, set[int]] = {}
+    for association in discovery.get("issueAssociations", []):
+        associations.setdefault(association["laneId"], set()).add(association["issueNumber"])
+    failures = []
+    for run in discovery.get("runs", []):
+        for job in run.get("jobs", []):
+            if job.get("conclusion") not in {"failure", "timed_out"}:
+                continue
+            issues = associations.get(job["laneId"], set())
+            failures.append([
+                f"[{_text(run.get('workflow') or run['workflowPath'])} / {_text(job['name'])}]({_text(job['url'])})",
+                str(run["runId"]), _text(run["event"]),
+                ", ".join(f"[#{number}](https://github.com/{snapshot['repository']}/issues/{number})"
+                          for number in sorted(issues)) if issues else "No tracker in collected evidence",
+                "Complete log prefix" if job.get("diagnosticsComplete") else "Missing or bounded diagnostics",
+            ])
+        if run.get("conclusion") in {"failure", "timed_out"} and not run.get("jobsComplete"):
+            failures.append([
+                f"[{_text(run.get('workflow') or run['workflowPath'])}](https://github.com/{snapshot['repository']}/actions/runs/{run['runId']})",
+                str(run["runId"]), _text(run["event"]), "Job coverage incomplete",
+                "Some failed jobs may be unobserved",
+            ])
+    if failures:
+        lines.extend(["| Workflow / job | Run | Event | Tracker | Evidence |", "|---|---|---|---|---|"])
+        lines.extend("| " + " | ".join(row) + " |" for row in failures[:20])
+        if len(failures) > 20:
+            lines.append(f"{len(failures) - 20} additional failure rows remain in the discovery snapshot.")
+    else:
+        lines.append("No failed jobs observed in the collected window; this is not proof that every workflow is healthy.")
+    lines.extend(["", "No tracker means none was associated in collected evidence, not a repository-wide absence."])
+    windows = discovery.get("workflows", [])
+    lines.append(
+        f"Comparable windows: {sum(window.get('windowComplete') is True for window in windows)} complete / {len(windows)} collected. "
+        f"Excluded runs: {len(discovery.get('excludedRuns', []))}."
+    )
+    gaps = discovery.get("gaps", [])
+    if gaps:
+        lines.extend(["", "<details>", f"<summary>{len(gaps)} discovery coverage / diagnostic gaps</summary>", ""])
+        for gap in gaps[:30]:
+            lines.append(f"- {_text(gap.get('code'))}: {_text(gap.get('detail') or gap.get('message'))} "
+                         f"(workflow {_text(gap.get('workflowId'))}, run {_text(gap.get('runId'))})")
+        if len(gaps) > 30:
+            lines.append(f"- {len(gaps) - 30} additional gaps remain in workflowDiscovery.gaps.")
+        lines.extend(["", "</details>"])
+    lines.append("")
 
 
 def usage_markdown(usage: Mapping[str, Any]) -> list[str]:

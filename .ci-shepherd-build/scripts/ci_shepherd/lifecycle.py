@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from ci_shepherd.eligibility import executable_ci_labels, label_names
 from ci_shepherd.investigations import _fingerprint
 from ci_shepherd.models import (
     WORKFLOW_LOG_FACT_FIELDS, WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT,
@@ -15,8 +16,10 @@ from ci_shepherd.models import (
 from ci_shepherd.observations import build_observations, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue
 from ci_shepherd.policy import load_policy
 from ci_shepherd.quarantine_reconciliation import add_test_maintenance_context
+from ci_shepherd.repair_followup import build_related_workflow_repairs, build_repair_followup
 from ci_shepherd.run_scope import verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
+from ci_shepherd.workflow_health import build_workflow_health
 
 
 ASSESSMENT_SCHEMA_VERSION = 1
@@ -291,6 +294,16 @@ def prepare_assessment(
         prepared["repositoryPolicy"] = dict(repository_policy)
         prepared["repositoryPolicyDigest"] = repository_policy.get("digest")
     add_test_maintenance_context(prepared, snapshot)
+    repair_observations = observations
+    if isinstance(snapshot.get("workflowDiscovery"), Mapping):
+        prepared["defaultBranch"] = snapshot["workflowDiscovery"].get("defaultBranch")
+        repair_observations = _build_repair_observations(snapshot, observations)
+    for candidate in candidates:
+        _add_workflow_context(snapshot, observations, candidate, repair_observations)
+    if isinstance(snapshot.get("workflowDiscovery"), Mapping):
+        closed_followups = _closed_issue_followups(snapshot, repair_observations)
+        if closed_followups:
+            prepared["closedIssueFollowups"] = closed_followups
     source_state = snapshot.get("quarantineSourceState") or {}
     source_revision = snapshot.get("sourceRevision")
     if source_revision is not None:
@@ -335,6 +348,96 @@ def candidate_for(
     if len(matches) != 1:
         raise ValueError(f"Expected exactly one candidate for issue #{issue_number}.")
     return matches[0]
+
+
+def _add_workflow_context(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue: dict[str, Any],
+    repair_observations: Mapping[str, Any],
+) -> None:
+    health = build_workflow_health(snapshot, observations, issue)
+    payload = snapshot["evidence"].get(f"issue:{issue['issueNumber']}", {}).get("payload", {})
+    if (
+        isinstance(snapshot.get("workflowDiscovery"), Mapping)
+        and "testMaintenance" not in issue
+        and "quarantined-test" not in label_names(payload.get("labels"))
+        and (health is not None or executable_ci_labels(payload.get("labels")))
+    ):
+        followup = build_repair_followup(snapshot, repair_observations, issue, health)
+        if followup is not None:
+            issue["repairFollowup"] = followup
+            if followup["status"] == "verified":
+                health = build_workflow_health(snapshot, observations, issue)
+        if health is not None:
+            related = build_related_workflow_repairs(snapshot, repair_observations, issue, health)
+            if related:
+                issue["relatedWorkflowRepairs"] = related
+    if health is not None:
+        issue["workflowHealth"] = health
+
+
+def _build_repair_observations(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    selected = set(snapshot["openIssues"])
+    for source in snapshot["evidence"].values():
+        if source.get("retainedForRepair") and source.get("kind") == "issue-event":
+            selected.add(source["payload"]["number"])
+    for record in snapshot.get("delegationStatus", {}).get("records", []):
+        number = record.get("issueNumber")
+        if record.get("repository") != snapshot["repository"] or type(number) is not int or number < 1:
+            continue
+        source = snapshot["evidence"].get(f"issue:{number}", {})
+        if source.get("kind") == "issue-event" and source.get("payload", {}).get("number") == number:
+            selected.add(number)
+    if selected == set(snapshot["openIssues"]):
+        return observations
+    try:
+        # Repair correlations may cross issue boundaries. This wider view stays
+        # separate from the actionable open-issue observation inventory.
+        return build_observations(
+            snapshot,
+            policy=load_policy(Path(__file__).resolve().parents[2] / "policies/manual-v1.json"),
+            issue_numbers=sorted(selected),
+        )
+    except ValueError as error:
+        return {"occurrences": [], "coverage": [], "fingerprints": [], "error": str(error)}
+
+
+def _closed_issue_followups(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    evidence = snapshot["evidence"]
+    tracked = {
+        record["issueNumber"]
+        for record in snapshot.get("delegationStatus", {}).get("records", [])
+        if record.get("repository") == snapshot["repository"]
+        and type(record.get("issueNumber")) is int and record["issueNumber"] > 0
+    }
+    closed = []
+    for number in sorted(tracked - set(snapshot["openIssues"])):
+        record = evidence.get(f"issue:{number}", {})
+        payload = record.get("payload", {})
+        if (
+            record.get("kind") == "issue-event" and record.get("availability") == "available"
+            and payload.get("number") == number and payload.get("state") == "closed"
+        ):
+            closed.append(number)
+    if not closed:
+        return []
+    followups = []
+    for number in closed:
+        payload = evidence[f"issue:{number}"]["payload"]
+        item = {
+            "issueNumber": number, "issueState": "closed",
+            "issueUrl": f"https://github.com/{snapshot['repository']}/issues/{number}",
+            "title": payload.get("title"),
+        }
+        _add_workflow_context(snapshot, observations, item, observations)
+        if "repairFollowup" in item:
+            if observations.get("error"):
+                item["blockers"] = [observations["error"]]
+            followups.append(item)
+    return followups
 
 
 def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[str, Any] | None:

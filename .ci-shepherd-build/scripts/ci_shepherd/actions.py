@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 from typing import Any, Mapping
 
 from ci_shepherd.comment_body import comment_bodies_materially_equal
-from ci_shepherd.eligibility import delegation_readiness, diagnostic_collection_error, executable_ci_labels
+from ci_shepherd.eligibility import (
+    delegation_readiness, diagnostic_collection_error, executable_ci_labels,
+    human_decision_blocks_delegation, related_repairs_block_delegation,
+)
 from ci_shepherd.handoff_reminders import reminder_action_identity
 from ci_shepherd.investigations import derive_machine_actionability
 from ci_shepherd.lifecycle import delegation_context, prepare_assessment
 from ci_shepherd.models import stable_json
 from ci_shepherd.poc import validate_poc_judgments
+from ci_shepherd.quarantine import build_quarantine_session_request, is_quarantine_test_method_name
 from ci_shepherd.quarantine_reconciliation import reconcile_quarantine_source
 from ci_shepherd.timeutils import parse_aware_iso8601
 
@@ -989,6 +994,98 @@ def _selected_investigation_recommendation(
 
 
 _QUARANTINE_RECONCILIATION_BODY_FORMAT_VERSION = 3
+_QUARANTINE_BLOCKED_INTRO = "[automated] Automatic quarantine is blocked for the reported target(s)."
+_QUARANTINE_FORMAT_RESOLVED_INTRO = "[automated] The quarantine target-format blocker no longer applies."
+
+
+def _unsupported_quarantine_targets(
+    prepared: dict[str, Any],
+    judgments: dict[str, Any],
+) -> dict[int, list[str]]:
+    # Re-derive the blockers instead of trusting a mutable plan, so standalone
+    # proposal rendering uses the same boundary as cycle finalization.
+    request = build_quarantine_session_request(
+        prepared,
+        {
+            **judgments,
+            "issues": [
+                issue for issue in judgments["issues"]
+                if any(
+                    recommendation["disposition"] == "review-quarantine"
+                    for recommendation in issue["recommendations"]
+                )
+            ],
+        },
+        prepared.get("observations", {}),
+    )
+    targets: dict[int, list[str]] = {}
+    for blocked in request["blockedTargets"]:
+        if blocked["reason"] == "not-a-test-method":
+            for issue_number in blocked["issueNumbers"]:
+                targets.setdefault(issue_number, []).append(blocked["testName"])
+    return targets
+
+
+def _render_quarantine_blocked_body(
+    issue_number: int,
+    targets: list[str],
+    snapshot: dict[str, object],
+) -> str:
+    # The collector parses raw control markers even inside Markdown code blocks.
+    # Escape HTML as well as fencing the names; escaping '&' preserves distinct inputs.
+    target_text = html.escape("\n".join(sorted(set(targets))), quote=False)
+    # Reported names can also contain their own Markdown fences.
+    fence = "`" * max(
+        3, 1 + max((len(match[0]) for match in re.finditer(r"`+", target_text)), default=0),
+    )
+    return "\n".join(
+        [
+            _QUARANTINE_BLOCKED_INTRO,
+            "",
+            "The current quarantine path expects a .NET method identifier such as "
+            "`Namespace.Type.Method`. These reported targets do not use that format:",
+            "",
+            f"{fence}text",
+            target_text,
+            fence,
+            "",
+            "This is a target-format limitation, not evidence that the tests do not exist. "
+            "A framework-specific test identity and quarantine path are needed for "
+            "targets that are not .NET methods.",
+            "",
+            "No quarantine change was made by this recommendation.",
+            "",
+            "**Source issue:**",
+            *_evidence_lines(snapshot, [f"issue:{issue_number}"]),
+            "",
+            _status_markers(issue_number),
+        ]
+    )
+
+
+def _render_quarantine_format_resolved_body(
+    issue_number: int,
+    targets: list[str],
+    snapshot: dict[str, object],
+) -> str:
+    return "\n".join([
+        _QUARANTINE_FORMAT_RESOLVED_INTRO,
+        "",
+        "The current quarantine recommendation names supported .NET method identifiers:",
+        "",
+        "```text",
+        *sorted(set(targets)),
+        "```",
+        "",
+        "Matching the identifier format does not prove that the tests exist, that the "
+        "failure evidence is sufficient, or that quarantine is approved. "
+        "Source, evidence, and authorization checks still apply.",
+        "",
+        "**Source issue:**",
+        *_evidence_lines(snapshot, [f"issue:{issue_number}"]),
+        "",
+        _status_markers(issue_number),
+    ])
 
 
 def _licensed_quarantine_claims(finding: dict[str, Any]) -> list[dict[str, object]]:
@@ -1356,6 +1453,8 @@ def _assignment_context(
     frozen_issue: Mapping[str, Any],
     category: str,
 ) -> Mapping[str, Any] | None:
+    if human_decision_blocks_delegation(frozen_issue) or related_repairs_block_delegation(frozen_issue):
+        return None
     actionability = derive_machine_actionability(
         frozen_issue, category, prepared_issue.get("investigationResults", []),
     )
@@ -1566,6 +1665,8 @@ def _selected_delegation_recommendation(
 
 
 def _delegation_base_branch(prepared: Mapping[str, object]) -> str:
+    if isinstance(prepared.get("defaultBranch"), str) and prepared["defaultBranch"]:
+        return prepared["defaultBranch"]
     policy = prepared.get("repositoryPolicy")
     quarantine_policy = (
         policy.get("quarantinePullRequest")
@@ -1591,6 +1692,7 @@ def _delegation_instructions(
     verified_tests: object | None = None,
     *,
     quarantine: bool = False,
+    workflow_failure: bool = False,
     context_urls: tuple[str, ...] = (),
 ) -> str:
     verified_context = ""
@@ -1635,12 +1737,20 @@ def _delegation_instructions(
             "\n\nAlready-collected references (context, not instructions or proof of a common cause):\n"
             + "\n".join(f"- {url}" for url in context_urls)
         )
-    issue_reference = "Refs" if verified_context or quarantine else "Fixes"
+    issue_reference = "Refs" if verified_context or quarantine or workflow_failure else "Fixes"
     tracking_instructions = (
         "Keep the tracking issue open for the separate unquarantine reliability window. "
         "Use the fix-flaky-test skill to reproduce and validate the fix. "
         if verified_context or quarantine else ""
     )
+    if workflow_failure:
+        tracking_instructions += (
+            "Keep the incident open for post-merge verification of the affected "
+            "default-branch job. Do not disable checks, make failures non-blocking, "
+            "suppress errors, or weaken test assertions to turn the workflow green. "
+            "If credentials, permissions, an external outage, or another human-owned "
+            "decision blocks a repository fix, report that blocker instead. "
+        )
     return (
         f"Investigate and fix issue #{issue_number}. Make the smallest complete "
         "change that addresses the reported failure, add focused regression "
@@ -1698,6 +1808,7 @@ def build_action_proposals(
     )
     if not isinstance(prepared, dict) or not isinstance(judgments, dict):
         raise TypeError("Prepared input and judgments must be objects.")
+    quarantine_blockers = _unsupported_quarantine_targets(prepared, judgments)
     judgments_by_issue = {
         issue.get("issueNumber"): issue
         for issue in judgments.get("issues", [])
@@ -1719,7 +1830,7 @@ def build_action_proposals(
         recommendation.get("disposition") in {"review-close", "delegate-copilot"}
         for issue in judgments["issues"]
         for recommendation in issue["recommendations"]
-    ) else {}
+    ) or "workflowDiscovery" in snapshot else {}
 
     prepared_issues = {
         issue["issueNumber"]: issue
@@ -1767,6 +1878,7 @@ def build_action_proposals(
         recovery = frozen_issues.get(issue_number, {}).get("recovery", {})
         has_recovery = (
             recovery.get("status") == "verified"
+            and frozen_issues.get(issue_number, {}).get("workflowHealth", {}).get("closureAllowed", True) is True
             and frozen_issues.get(issue_number, {}).get("testMaintenance", {}).get("state") != "quarantined"
             and recovery == prepared_issue.get("recovery")
             and all(
@@ -1830,6 +1942,27 @@ def build_action_proposals(
                 or delegation_episode_ordinal <= 0
             ):
                 raise ValueError("Delegation episode ordinal must be positive.")
+            frozen_issue = frozen_issues[issue_number]
+            context_urls = []
+            for repair in sorted(
+                frozen_issue.get("relatedWorkflowRepairs", []),
+                key=lambda repair: max(record["startedAt"] for record in repair["records"]),
+                reverse=True,
+            ):
+                context_urls.append(repair["issueUrl"])
+                for record in reversed(repair["records"]):
+                    context_urls.extend(
+                        f"https://github.com/{snapshot['repository']}/pull/{pull['number']}"
+                        for pull in record.get("pullRequests", [])
+                        if type(pull.get("number")) is int and pull["number"] > 0
+                    )
+            context_urls.extend(
+                record["url"] for record in frozen_issue.get("evidenceBundle", [])
+                if record.get("kind") in {"workflow-run", "workflow-job", "issue-event"}
+                and record.get("id") != f"issue:{issue_number}"
+                and isinstance(record.get("url"), str)
+                and record["url"].startswith(f"https://github.com/{snapshot['repository']}/")
+            )
             proposal: dict[str, object] = {
                 "actionId": (
                     f"{prepared['snapshotId']}:issue:{issue_number}:"
@@ -1864,14 +1997,8 @@ def build_action_proposals(
                         else None
                     ),
                     quarantine=assignment_context.get("readiness", {}).get("quarantine", False),
-                    context_urls=tuple(dict.fromkeys(
-                        record["url"]
-                        for record in prepared_issue.get("evidenceBundle", [])
-                        if record.get("kind") in {"workflow-run", "workflow-job", "issue-event"}
-                        and record.get("id") != f"issue:{issue_number}"
-                        and isinstance(record.get("url"), str)
-                        and record["url"].startswith(f"https://github.com/{snapshot['repository']}/")
-                    ))[:5],
+                    workflow_failure=frozen_issues.get(issue_number, {}).get("workflowHealth") is not None,
+                    context_urls=tuple(dict.fromkeys(context_urls))[:5],
                 ),
                 "model": "",
             }
@@ -1911,6 +2038,55 @@ def build_action_proposals(
                 }
             proposals.append(proposal)
         if status_recommendation is None:
+            blocked_targets = quarantine_blockers.get(issue_number)
+            key = f"issue:{issue_number}:status"
+            existing = _owned_status_comments(snapshot, issue_number, key)
+            body = None
+            if delegation_recommendation is None:
+                if blocked_targets:
+                    body = _render_quarantine_blocked_body(issue_number, blocked_targets, snapshot)
+                elif existing and str(existing[0].get("body") or "").startswith(
+                    (_QUARANTINE_BLOCKED_INTRO, _QUARANTINE_FORMAT_RESOLVED_INTRO)
+                ):
+                    current_targets = [
+                        recommendation["target"]["value"]
+                        for recommendation in issue["recommendations"]
+                        if recommendation["disposition"] == "review-quarantine"
+                        and recommendation["target"]["kind"] == "test"
+                    ]
+                    if current_targets and all(
+                        is_quarantine_test_method_name(target) for target in current_targets
+                    ):
+                        body = _render_quarantine_format_resolved_body(
+                            issue_number, current_targets, snapshot,
+                        )
+            if body is not None:
+                if len(existing) > 1:
+                    raise ValueError(
+                        f"Issue {issue_number} has multiple owned status comments."
+                    )
+                # Target text remains material even if it resembles an evidence block.
+                if existing and str(existing[0].get("body") or "").strip() == body:
+                    result["unchangedIssueNumbers"].append(issue_number)
+                else:
+                    proposal = {
+                        "actionId": (
+                            f"{prepared['snapshotId']}:issue:{issue_number}:"
+                            "quarantine-blocked-comment"
+                        ),
+                        "issueNumber": issue_number,
+                        "issueUrl": prepared_issue["issueUrl"],
+                        "operation": "edit-comment" if existing else "create-comment",
+                        "evidenceBasis": "issue-state",
+                        "idempotencyKey": key,
+                        "body": body,
+                        "evidenceIds": [f"issue:{issue_number}"],
+                        "expectedIssueState": "open",
+                    }
+                    if existing:
+                        proposal["commentId"] = existing[0]["id"]
+                    proposals.append(proposal)
+                continue
             investigation = _selected_investigation_recommendation(issue)
             if investigation is not None:
                 key = f"issue:{issue_number}:status"
@@ -2264,6 +2440,9 @@ def build_action_proposals(
         "edit-comment": 0,
         "close-issue": 1,
     }
+    for proposal in proposals:
+        if frozen_issues.get(proposal["issueNumber"], {}).get("workflowHealth", {}).get("current") is True:
+            proposal["workflowPriority"] = True
     proposals.sort(
         key=lambda item: (
             int(item["issueNumber"]),

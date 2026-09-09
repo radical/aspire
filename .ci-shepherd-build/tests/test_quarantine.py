@@ -233,10 +233,14 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 {
                     "testName": "Tests.FirstTest",
                     "reason": "repository-policy-unavailable",
+                    "issueNumbers": [21],
+                    "issueUrls": ["https://github.com/owner/repo/issues/21"],
                 },
                 {
                     "testName": "Tests.SecondTest",
                     "reason": "repository-policy-unavailable",
+                    "issueNumbers": [22],
+                    "issueUrls": ["https://github.com/owner/repo/issues/22"],
                 },
             ],
             request["blockedTargets"],
@@ -612,6 +616,11 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 {
                     "testName": "Tests (Ubuntu shard 3)",
                     "reason": "not-a-test-method",
+                    "issueNumbers": [21, 22],
+                    "issueUrls": [
+                        "https://github.com/owner/repo/issues/21",
+                        "https://github.com/owner/repo/issues/22",
+                    ],
                 }
             ],
             request["blockedTargets"],
@@ -644,6 +653,8 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 {
                     "testName": "Tests.SecondTest",
                     "reason": "already-quarantined-by-label",
+                    "issueNumbers": [22],
+                    "issueUrls": ["https://github.com/owner/repo/issues/22"],
                 }
             ],
             request["blockedTargets"],
@@ -671,6 +682,8 @@ class QuarantineSessionRequestTests(unittest.TestCase):
                 {
                     "testName": "Tests.SecondTest",
                     "reason": "source-labels-unavailable",
+                    "issueNumbers": [22],
+                    "issueUrls": ["https://github.com/owner/repo/issues/22"],
                 }
             ],
             request["blockedTargets"],

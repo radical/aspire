@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ci_shepherd.delegation_observer import _human_identity, observe_delegations
+from ci_shepherd.delegation_observer import _human_identity, observe_commit_comparison, observe_delegations
 from ci_shepherd.delegations import PullRequestState, TaskState
 from ci_shepherd.github import GitHubApiError
+from ci_shepherd.models import validate_commit_comparison
 
 
 class ScriptedClient:
@@ -34,6 +36,92 @@ class ScriptedClient:
 
 
 class DelegationObserverTests(unittest.TestCase):
+    def test_observed_comparisons_always_satisfy_the_frozen_proof_contract(self) -> None:
+        base = "b" * 40
+        for status, head, merge_base, behind, expected in (
+            ("identical", base, base, 0, "available"),
+            ("ahead", "c" * 40, base, 0, "available"),
+            ("behind", "c" * 40, "c" * 40, 1, "available"),
+            ("diverged", "c" * 40, "d" * 40, 1, "available"),
+            ("behind", "c" * 40, base, 0, "unknown"),
+            ("diverged", "c" * 40, base, 1, "unknown"),
+            ("ahead", base, base, 0, "unknown"),
+        ):
+            with self.subTest(status=status, head=head, merge_base=merge_base, behind=behind):
+                path = f"/repos/owner/repo/compare/{base}...{head}"
+                client = ScriptedClient({}, {f"{path}?per_page=1": {
+                    "url": f"https://api.github.com{path}", "status": status, "behind_by": behind,
+                    "base_commit": {"sha": base}, "merge_base_commit": {"sha": merge_base},
+                }})
+                result = observe_commit_comparison(client, "owner/repo", base, head)
+                self.assertEqual(expected, result["availability"])
+                validate_commit_comparison(result, "owner/repo")
+
+    def test_comparison_binds_exact_commits_without_reading_unbounded_commit_pages(self) -> None:
+        base, head = "b" * 40, "c" * 40
+        path = f"/repos/owner/repo/compare/{base}...{head}"
+        client = ScriptedClient({}, {f"{path}?per_page=1": {
+            "url": f"https://api.github.com{path}", "status": "ahead", "behind_by": 0,
+            "base_commit": {"sha": base}, "merge_base_commit": {"sha": base},
+            "commits": [{"sha": "d" * 40}],
+        }})
+        observed = observe_commit_comparison(client, "owner/repo", base, head)
+        self.assertEqual({
+            "repository": "owner/repo", "baseSha": base, "headSha": head,
+            "url": f"https://api.github.com{path}", "availability": "available",
+            "status": "ahead", "baseCommitSha": base, "mergeBaseSha": base, "behindBy": 0,
+        }, observed)
+        self.assertEqual([(f"{path}?per_page=1", None)], client.calls)
+
+    def test_unavailable_or_malformed_comparison_preserves_requested_identity(self) -> None:
+        base, head = "b" * 40, "c" * 40
+        path = f"/repos/owner/repo/compare/{base}...{head}"
+        valid = {
+            "url": f"https://api.github.com{path}", "status": "ahead", "behind_by": 0,
+            "base_commit": {"sha": base}, "merge_base_commit": {"sha": base},
+        }
+        for change in (
+            {"status": {}}, {"url": "https://api.github.com/repos/another/repo/compare/x...y"},
+            {"base_commit": {"sha": head}}, {"merge_base_commit": {"sha": head}},
+            {"behind_by": True}, {"behind_by": 1}, {"status": "unrecognized"},
+        ):
+            with self.subTest(change=change):
+                client = ScriptedClient({}, {f"{path}?per_page=1": {**valid, **change}})
+                result = observe_commit_comparison(client, "owner/repo", base, head)
+                self.assertEqual(("unknown", "unknown", base, head), tuple(
+                    result[key] for key in ("availability", "status", "baseSha", "headSha")
+                ))
+        client = ScriptedClient({})
+        result = observe_commit_comparison(client, "owner/repo", base, head)
+        self.assertEqual(("unavailable", "unknown", base, head), tuple(
+            result[key] for key in ("availability", "status", "baseSha", "headSha")
+        ))
+        with patch.object(client, "get", side_effect=TypeError("client bug")):
+            with self.assertRaisesRegex(TypeError, "client bug"):
+                observe_commit_comparison(client, "owner/repo", base, head)
+
+    def test_merge_facts_come_only_from_a_merged_pull_request_detail(self) -> None:
+        for state, merged_at in (("open", None), ("closed", None), ("closed", "2026-09-01T14:00:00Z")):
+            with self.subTest(state=state, merged_at=merged_at):
+                client = ScriptedClient({
+                    ("/agents/repos/owner/repo/tasks?state=queued%2Cin_progress&is_archived=false&per_page=100", "tasks"): [],
+                }, {
+                    "/repos/owner/repo/pulls/201": {
+                        "id": 101, "number": 201, "node_id": "PR_101", "state": state,
+                        "draft": False, "changed_files": 4, "merged_at": merged_at,
+                        "merged": merged_at is not None, "merge_commit_sha": "a" * 40,
+                    },
+                })
+                observation = observe_delegations(
+                    client, "owner/repo", owned_task_ids=set(),
+                    known_records=[{"taskId": "task-1", "pullRequests": [
+                        {"databaseId": 101, "number": 201, "globalId": "PR_101"},
+                    ]}],
+                )
+                pull = observation.pull_requests[0]
+                self.assertEqual(datetime(2026, 9, 1, 14, tzinfo=UTC) if merged_at else None, pull.merged_at)
+                self.assertEqual("a" * 40 if merged_at else None, pull.merge_commit_sha)
+
     def test_unexpected_client_failure_is_not_treated_as_unavailable_evidence(self) -> None:
         client = ScriptedClient({
             ("/agents/repos/owner/repo/tasks?state=queued%2Cin_progress&is_archived=false&per_page=100", "tasks"): [],

@@ -149,6 +149,272 @@ class InventoryResult:
     open_bot_scan: dict[str, Any] | None = None
     delegated_issues: list[dict[str, Any]] = field(default_factory=list)
     delegated_pull_requests: list[dict[str, Any]] = field(default_factory=list)
+    workflow_discovery: dict[str, Any] | None = None
+
+
+def enrich_workflow_discovery(
+    inventory: InventoryResult, client: Any, repository: str, now: datetime,
+    *, previous_discovery: Mapping[str, Any] | None = None,
+    previous_snapshot: Mapping[str, Any] | None = None,
+) -> InventoryResult:
+    from .workflow_discovery import discover_workflows
+
+    normalizer = Collector(client, repository, now)
+    inventory = _retain_repair_evidence(inventory, previous_snapshot, repository, normalizer)
+    requests = []
+    tracked_issues = {
+        issue["number"]: issue for issue in [*inventory.delegated_issues, *inventory.open_issues]
+    }
+    for issue in tracked_issues.values():
+        number = issue["number"]
+        references = list(inventory.references.get(number, []))
+        for evidence_id, record in inventory.evidence.items():
+            payload = record.get("payload", {})
+            if record.get("kind") != "workflow-run" or record.get("availability") != "available":
+                continue
+            for owner in payload.get("referencedBy", []):
+                if owner.get("sourceIssueNumber") == number:
+                    source_id = owner.get("sourceEvidenceId")
+                    if source_id in inventory.evidence and not any(
+                        reference.get("runId") == payload["runId"] for reference in references
+                    ):
+                        references.append({
+                            "targetType": "workflow-run", "targetRepository": repository,
+                            "runId": payload["runId"], "sourceEvidenceId": source_id,
+                        })
+        for reference in references:
+            if (
+                reference.get("targetType") != "workflow-run"
+                or str(reference.get("targetRepository", "")).casefold() != repository.casefold()
+                or type(reference.get("runId")) is not int or reference["runId"] <= 0
+            ):
+                continue
+            source_id = reference["sourceEvidenceId"]
+            source = inventory.evidence.get(source_id, {}).get("payload", {})
+            facts = source.get("facts", [])
+            names = {
+                fact["raw"].strip("`") for fact in facts
+                if fact.get("field") == "job" and isinstance(fact.get("raw"), str) and fact["raw"]
+            }
+            names.update(
+                occurrence["job"] for occurrence in source.get("occurrences", [])
+                if occurrence.get("sourceRun") == reference["runId"] and occurrence.get("job")
+            )
+            attempts = [
+                record["payload"]["attempt"] for record in inventory.evidence.values()
+                if record.get("kind") == "workflow-job" and record.get("availability") == "available"
+                and record["payload"].get("runId") == reference["runId"]
+                and record["payload"].get("conclusion") in {"failure", "timed_out"}
+                and (not names or record["payload"].get("name") in names)
+                and type(record["payload"].get("attempt")) is int
+                and record["payload"]["attempt"] > 0
+            ]
+            requests.append({
+                "issueNumber": number, "sourceRunId": reference["runId"],
+                "sourceAttempt": max(attempts) if attempts else None,
+                "sourceEvidenceId": source_id, "jobNames": sorted(names),
+                "testTracker": bool(
+                    {
+                        label["name"] if isinstance(label, dict) else label
+                        for label in issue.get("labels", [])
+                    } & {"quarantined-test", "failing-test", "test-failure"}
+                    or any(fact.get("field") == "testName" for fact in [
+                        *facts, *inventory.evidence.get(f"issue:{number}", {}).get("payload", {}).get("facts", []),
+                    ])
+                ),
+            })
+    result = discover_workflows(
+        client, repository, now, normalize_job=normalizer._normalize_workflow_job, source_requests=requests,
+        extract_log_facts=normalizer._extract_facts, existing_evidence=inventory.evidence,
+    )
+    discovery = result.document
+    evidence = dict(inventory.evidence)
+    cached_log_ids = {item["evidenceId"] for item in discovery["diagnostics"] if item["fromCache"]}
+    for evidence_id, payload in result.logs.items():
+        if evidence_id in cached_log_ids:
+            continue
+        record = normalizer._make_evidence_record(
+            "workflow-log",
+            f"https://github.com/{repository}/actions/runs/{payload['runId']}/job/{payload['jobId']}", payload,
+        )
+        if evidence_id not in evidence or evidence[evidence_id].get("discoveredBy") == "workflow-discovery":
+            record["discoveredBy"] = "workflow-discovery"
+        evidence[evidence_id] = record
+    for association in discovery["issueAssociations"]:
+        if association["testTracker"]:
+            continue
+        reference = {
+            "sourceIssueNumber": association["issueNumber"], "sourceEvidenceId": association["sourceEvidenceId"],
+            "sourceUrl": f"https://github.com/{repository}/issues/{association['issueNumber']}",
+            "extractionMethod": "verified-workflow-lane",
+        }
+        for item in [*discovery["sourceRuns"], *discovery["runs"]]:
+            run_id = f"run:{item['runId']}"
+            for job in item["jobs"]:
+                job_id = f"{run_id}:attempt:{job['attempt']}:job:{job['jobId']}"
+                if job_id not in association["evidenceIds"]:
+                    continue
+                for evidence_id, kind, url, payload in (
+                    (job_id, "workflow-job", job["url"], job),
+                    (run_id, "workflow-run", f"https://github.com/{repository}/actions/runs/{item['runId']}",
+                     {key: value for key, value in item.items() if key not in {"jobs", "gaps"}}),
+                    *(
+                        (log_id, "workflow-log", job["url"], evidence[log_id]["payload"])
+                        for log_id in job.get("logEvidenceIds", []) if log_id in association["evidenceIds"]
+                    ),
+                ):
+                    existing = evidence.get(evidence_id)
+                    combined = {**(existing["payload"] if existing is not None else {}), **payload}
+                    if (
+                        kind == "workflow-run" and existing is not None
+                        and type(existing["payload"].get("attempt")) is int
+                        and existing["payload"]["attempt"] > payload["attempt"]
+                    ):
+                        # An issue can cite an earlier failed attempt of a run
+                        # whose later attempt has already been observed.
+                        for key in ("attempt", "status", "conclusion", "updatedAt", "runStartedAt", "jobsComplete"):
+                            if key in existing["payload"]:
+                                combined[key] = existing["payload"][key]
+                    references = list(combined.get("referencedBy", []))
+                    if reference not in references:
+                        references.append(reference)
+                    combined["referencedBy"] = references
+                    record = normalizer._make_evidence_record(kind, url, combined)
+                    if evidence_id in cached_log_ids:
+                        record["collectedAt"] = existing["collectedAt"]
+                    if existing is None or existing.get("discoveredBy") == "workflow-discovery":
+                        record["discoveredBy"] = "workflow-discovery"
+                    evidence[evidence_id] = record
+    return mark_workflow_issues_changed(
+        replace(inventory, workflow_discovery=discovery, evidence=dict(sorted(evidence.items()))),
+        previous_discovery,
+    )
+
+
+def _retain_repair_evidence(
+    inventory: InventoryResult, previous: Mapping[str, Any] | None,
+    repository: str, normalizer: Collector,
+) -> InventoryResult:
+    evidence = copy.deepcopy(inventory.evidence)
+    tracked = {issue["number"] for issue in inventory.delegated_issues}
+    if previous is not None and previous.get("repository") == repository:
+        from .lifecycle import prepare_assessment
+
+        assignments = previous.get("delegationStatus", {}).get("records", [])
+        tracked.update(
+            record["issueNumber"] for record in assignments
+            if record.get("repository") == repository
+        )
+        current = {issue["number"] for issue in [*inventory.open_issues, *inventory.delegated_issues]}
+        tracked &= current
+        prior_evidence = previous.get("evidence", {})
+        prepared = prepare_assessment(previous) if assignments else {}
+        proof_ids = set()
+        preserve_retained = False
+        for item in [*prepared.get("issues", []), *prepared.get("closedIssueFollowups", [])]:
+            if item["issueNumber"] not in tracked:
+                continue
+            followup = item.get("repairFollowup", {})
+            # An outage can hide the subject itself, so a fresh unknown result
+            # need not repeat the prior proof IDs. That is not proof retirement.
+            preserve_retained |= followup.get("status") == "unknown"
+            proof_ids.update(followup.get("verification", {}).get("evidenceIds", []))
+            # One proven recurrence is sufficient. Every unresolved failed head
+            # must survive until classified: dropping one could turn another
+            # head's negative ancestry result into a false clean bill of health.
+            for failure in [
+                *followup.get("laterFailures", [])[:1], *followup.get("unverifiedFailures", []),
+            ]:
+                proof_ids.update(failure["evidenceIds"])
+        initial_run_ids = set()
+        for evidence_id, record in prior_evidence.items():
+            payload = record.get("payload", {})
+            if (
+                record.get("kind") != "workflow-job" or record.get("availability") != "available"
+                or payload.get("conclusion") not in {"failure", "timed_out"}
+            ):
+                continue
+            owner_numbers = {owner.get("sourceIssueNumber") for owner in payload.get("referencedBy", [])}
+            completed = payload.get("completedAt")
+            if completed and any(
+                assignment["issueNumber"] in owner_numbers & tracked
+                and _parse_timestamp(completed) <= _parse_timestamp(assignment["startedAt"])
+                for assignment in assignments
+            ):
+                initial_run_ids.add(payload["runId"])
+        for evidence_id, record in prior_evidence.items():
+            payload = record.get("payload", {})
+            if (
+                record.get("kind") not in {
+                    "workflow-run", "workflow-job", "workflow-log", "workflow-test-results", "issue-comment",
+                }
+                or record.get("availability") != "available"
+            ):
+                continue
+            owners = [
+                owner for owner in payload.get("referencedBy", [])
+                if owner.get("sourceIssueNumber") in tracked or evidence_id in proof_ids
+                or preserve_retained and record.get("retainedForRepair")
+            ]
+            if not owners:
+                continue
+            if record["kind"] != "issue-comment":
+                run = prior_evidence.get(f"run:{payload.get('runId')}", {}).get("payload", {})
+                if run.get("targetRepository") != repository or run.get("status") != "completed":
+                    continue
+                if (
+                    payload.get("runId") not in initial_run_ids and evidence_id not in proof_ids
+                    and not (preserve_retained and record.get("retainedForRepair"))
+                ):
+                    continue
+            if evidence_id not in evidence:
+                retained = copy.deepcopy(record)
+                retained["payload"]["referencedBy"] = owners
+                retained["retainedForRepair"] = True
+                evidence[evidence_id] = retained
+            else:
+                references = evidence[evidence_id]["payload"].setdefault("referencedBy", [])
+                for owner in owners:
+                    if owner not in references:
+                        references.append(copy.deepcopy(owner))
+                evidence[evidence_id]["retainedForRepair"] = True
+            for owner in owners:
+                source_id = owner.get("sourceEvidenceId")
+                source = prior_evidence.get(source_id, {})
+                if source_id not in evidence and source.get("kind") == "issue-comment":
+                    evidence[source_id] = copy.deepcopy(source)
+                issue_id = f"issue:{owner['sourceIssueNumber']}"
+                source_issue = prior_evidence.get(issue_id, {})
+                if issue_id not in evidence and source_issue.get("kind") == "issue-event":
+                    evidence[issue_id] = {**copy.deepcopy(source_issue), "retainedForRepair": True}
+    for issue in inventory.delegated_issues:
+        number = issue["number"]
+        key = f"issue:{number}"
+        if key in evidence and not evidence[key].get("retainedForRepair"):
+            continue
+        payload = normalizer._normalize_issue(issue, _extract_labels(issue))
+        payload["facts"] = normalizer._extract_facts(payload["body"], "issue-body")
+        evidence[key] = normalizer._make_evidence_record("issue-event", payload["url"], payload)
+    return replace(inventory, evidence=evidence)
+
+
+def mark_workflow_issues_changed(
+    inventory: InventoryResult, previous_discovery: Mapping[str, Any] | None,
+) -> InventoryResult:
+    plan = inventory.refresh_plan
+    if plan is not None:
+        managed = {issue["number"] for issue in inventory.open_issues}
+        previous_associations = previous_discovery.get("issueAssociations", []) if previous_discovery is not None else []
+        current_associations = inventory.workflow_discovery["issueAssociations"] if inventory.workflow_discovery is not None else []
+        # Renew these decisions even when GitHub did not edit the tracker. Losing
+        # coverage must also invalidate a previously retained workflow judgment.
+        affected = {
+            association["issueNumber"]
+            for association in [*previous_associations, *current_associations]
+            if association["issueNumber"] in managed
+        }
+        plan = replace(plan, changed_issues=tuple(sorted(set(plan.changed_issues) | affected)))
+    return replace(inventory, refresh_plan=plan)
 
 
 @dataclass(slots=True)
@@ -945,6 +1211,7 @@ class Collector:
             open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
             delegated_issues=copy.deepcopy(inventory.delegated_issues),
             delegated_pull_requests=copy.deepcopy(inventory.delegated_pull_requests),
+            workflow_discovery=copy.deepcopy(inventory.workflow_discovery),
         )
 
     def _restore_supporting_roots_from_evidence(
@@ -1245,6 +1512,7 @@ class Collector:
                     delegated_pull_requests=copy.deepcopy(
                         inventory.delegated_pull_requests
                     ),
+                    workflow_discovery=copy.deepcopy(inventory.workflow_discovery),
                 )
 
         codeowners_document: ownership.CodeownersDocument | None = None
@@ -1284,6 +1552,7 @@ class Collector:
                     delegated_pull_requests=copy.deepcopy(
                         inventory.delegated_pull_requests
                     ),
+                    workflow_discovery=copy.deepcopy(inventory.workflow_discovery),
                 )
 
             try:
@@ -1374,6 +1643,7 @@ class Collector:
             open_bot_scan=copy.deepcopy(inventory.open_bot_scan),
             delegated_issues=copy.deepcopy(inventory.delegated_issues),
             delegated_pull_requests=copy.deepcopy(inventory.delegated_pull_requests),
+            workflow_discovery=copy.deepcopy(inventory.workflow_discovery),
         )
 
     def _fetch_open_inventory(self) -> dict[int, dict[str, Any]]:
@@ -1436,6 +1706,8 @@ class Collector:
             self._delegated_issues.pop(raw_issue["number"], None)
             if raw_issue["state"] == "open":
                 self._merge_issue_inventory(open_seed, [raw_issue], None)
+            else:
+                self._delegated_issues[raw_issue["number"]] = copy.deepcopy(raw_issue)
         return open_seed
 
     def _fetch_inventory_issue(self, number: int, *, require_open: bool) -> dict[str, Any]:

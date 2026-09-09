@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import copy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+import re
 from typing import Mapping, Sequence
 
 from .timeutils import parse_aware_iso8601
@@ -147,6 +148,8 @@ class DelegatedPullRequest:
     number: int | None = None
     changed_files: int | None = None
     human_authored: bool | None = None
+    merged_at: datetime | None = None
+    merge_commit_sha: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -178,6 +181,15 @@ class DelegatedPullRequest:
             bool,
         ):
             raise ValueError("human_authored must be a boolean when supplied.")
+        if self.merged_at is not None:
+            _require_aware(self.merged_at, "merged_at")
+        if self.merge_commit_sha is not None and (
+            not isinstance(self.merge_commit_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", self.merge_commit_sha) is None
+        ):
+            raise ValueError("merge_commit_sha must be a full lowercase commit SHA when supplied.")
+        if (self.merged_at is not None or self.merge_commit_sha is not None) and self.state is not PullRequestState.MERGED:
+            raise ValueError("Merge facts require a verified merged pull request.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -652,6 +664,7 @@ def derive_delegation_tracking(
             )
         task = tasks_by_id.get(task_id) if task_id is not None else None
         known_pulls = previous.get("pullRequests", [])
+        known_pulls_by_id = {pull["databaseId"]: pull for pull in known_pulls}
         known_states = {
             pull["databaseId"]: pull.get("lastKnownState") if pull["state"] == "unknown" else pull["state"]
             for pull in known_pulls
@@ -784,6 +797,7 @@ def derive_delegation_tracking(
                             else {}
                         ),
                         "isDraft": pull_request.is_draft,
+                        **_merge_facts(pull_request, known_pulls_by_id.get(pull_request.database_id, {})),
                         **(
                             {"globalId": pull_request.global_id}
                             if pull_request.global_id is not None
@@ -811,6 +825,27 @@ def derive_delegation_tracking(
         )
 
     return tuple(tracking)
+
+
+def _merge_facts(
+    pull: DelegatedPullRequest, previous: Mapping[str, object],
+) -> dict[str, object]:
+    facts = {}
+    for field, current in (
+        ("mergedAt", pull.merged_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+         if pull.merged_at is not None else None),
+        ("mergeCommitSha", pull.merge_commit_sha),
+    ):
+        old = previous.get(field)
+        if old is not None and field == "mergedAt":
+            old = parse_aware_iso8601(old, "mergedAt").astimezone(UTC).isoformat().replace("+00:00", "Z")
+        if old is not None and current is not None and old != current:
+            raise ValueError("Observed pull request merge facts contradict verified history.")
+        if old is not None and pull.state in {PullRequestState.OPEN, PullRequestState.CLOSED}:
+            raise ValueError("Previously merged pull request cannot be observed as unmerged.")
+        if current is not None or old is not None:
+            facts[field] = current if current is not None else old
+    return facts
 
 
 def derive_task_lifecycle(

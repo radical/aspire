@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 
-def verified_run_scope(payload: Mapping[str, Any]) -> dict[str, object]:
+def verified_run_scope(payload: Mapping[str, Any], *, default_branch: str = "main") -> dict[str, object]:
     repository = payload.get("targetRepository")
     event = payload.get("event")
     ref = payload.get("branch") or payload.get("headBranch")
@@ -19,7 +19,7 @@ def verified_run_scope(payload: Mapping[str, Any]) -> dict[str, object]:
         return {"kind": "unknown", "reason": "incomplete-run-identity"}
 
     if event != "pull_request":
-        if ref == "main":
+        if ref == default_branch:
             return {"kind": "main", **identity}
         return {"kind": "branch", **identity}
 

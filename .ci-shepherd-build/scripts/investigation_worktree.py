@@ -46,7 +46,7 @@ def main() -> int:
         if name in {"finish", "cleanup"}:
             command.add_argument(
                 "--confirm-worker-stopped", action="store_true",
-                help="Operator assertion after checking the session manager; this CLI cannot verify worker processes.",
+                help="Operator assertion after checking the runtime or observing the one-shot invocation end; this CLI cannot verify worker processes.",
             )
     args = parser.parse_args()
     try:
@@ -71,11 +71,15 @@ def main() -> int:
             if len(matches) != 1:
                 raise ValueError("No exact ownershipId exists in this registry.")
             record = matches[0]
+            if args.operation == "finish" and record.get("launchMode") == "one-shot":
+                raise ValueError("Record the one-shot terminal outcome with investigation_session.py or investigation_result.py before cleanup.")
             kwargs = {"checkout": Path(record["checkoutPath"])}
             if args.operation != "verify":
                 kwargs["recorded_at"] = args.recorded_at
             if args.operation in {"bind", "verify", "finish", "cleanup"}:
                 kwargs["session_id"] = args.session_id
+            if args.operation in {"verify", "finish", "cleanup"} and record.get("launchMode") == "one-shot":
+                kwargs["attempt_id"] = record["attemptId"]
             if args.operation in {"finish", "cleanup"}:
                 kwargs["confirm_worker_stopped"] = args.confirm_worker_stopped
             if args.operation == "finish":

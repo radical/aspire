@@ -10,15 +10,19 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from typing import Any, Mapping
 
 from ci_shepherd.collector import (
     BOT_AUTHORS,
     MAX_DELEGATION_REQUESTS,
+    CollectionError,
     Collector,
     InventoryResult,
+    enrich_workflow_discovery,
+    mark_workflow_issues_changed,
     validate_delegation_requests,
 )
-from ci_shepherd.delegation_observer import observe_delegations
+from ci_shepherd.delegation_observer import DelegationReadClient, observe_commit_comparison, observe_delegations
 from ci_shepherd.delegations import (
     active_owned_task_ids_from_events,
     delegation_starts_from_events,
@@ -30,7 +34,7 @@ from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.github import GitHubClient
 from ci_shepherd.history import load_current
 from ci_shepherd.handoff_reminders import derive_handoff_reminders
-from ci_shepherd.models import stable_json, validate_snapshot
+from ci_shepherd.models import stable_json, validate_commit_comparison, validate_snapshot
 from ci_shepherd.meaningful_progress import attach_meaningful_progress
 from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.quarantine import collect_quarantine_source_state
@@ -58,6 +62,59 @@ DEFAULT_REPOSITORY_POLICY_PATH = (
     / "repositories"
     / "aspire-v1.json"
 )
+_MAX_REPAIR_COMPARISON_GETS = 12
+
+
+def collect_repair_comparisons(
+    snapshot: dict[str, Any], client: DelegationReadClient, prepared: Mapping[str, Any],
+) -> tuple[int, int]:
+    validate_snapshot(snapshot)
+    comparisons = {
+        (record["baseSha"], record["headSha"]): record
+        for record in snapshot.get("commitComparisons", [])
+    }
+    attempted = set()
+    requests_made = 0
+    gaps = 0
+    while True:
+        pending = {}
+        for issue in [*prepared["issues"], *prepared.get("closedIssueFollowups", [])]:
+            for missing in issue.get("repairFollowup", {}).get("missingEvidence", []):
+                pair = (missing["baseSha"], missing["headSha"])
+                if pair in attempted:
+                    continue
+                unknown = {
+                    "repository": snapshot["repository"], "baseSha": pair[0], "headSha": pair[1],
+                    "url": missing["url"], "availability": "unknown", "status": "unknown",
+                    "baseCommitSha": None, "mergeBaseSha": None, "behindBy": None,
+                }
+                validate_commit_comparison(unknown, snapshot["repository"])
+                pending.setdefault(pair, (unknown, set()))[1].add(issue["issueNumber"])
+        if not pending:
+            return requests_made, gaps
+        for pair, (unknown, issue_numbers) in sorted(pending.items()):
+            attempted.add(pair)
+            if requests_made < _MAX_REPAIR_COMPARISON_GETS:
+                requests_made += 1
+                comparison = observe_commit_comparison(client, snapshot["repository"], *pair)
+                message = f"Commit comparison evidence is {comparison['availability']}."
+            else:
+                comparison = unknown
+                message = f"Commit comparison was not queried: {_MAX_REPAIR_COMPARISON_GETS}-request collection limit reached."
+            comparisons[pair] = comparison
+            if comparison["availability"] != "available":
+                gaps += 1
+                snapshot["collectionErrors"].append(asdict(CollectionError(
+                    "repair-comparison",
+                    f"/repos/{snapshot['repository']}/compare/{pair[0]}...{pair[1]}?per_page=1",
+                    message,
+                    effect="Post-fix verification and recurrence remain unproven for this commit pair.",
+                    scope={"kind": "issue", "issueNumbers": sorted(issue_numbers)},
+                )))
+        snapshot["commitComparisons"] = [comparisons[pair] for pair in sorted(comparisons)]
+        # Resolving a failed execution may expose a previously masked successful
+        # head. Re-prepare only within the same unique-pair GET budget.
+        prepared = prepare_assessment(snapshot)
 
 
 def build_snapshot(
@@ -122,6 +179,8 @@ def build_snapshot(
         }
     if delegation_requests:
         snapshot["delegationRequests"] = list(delegation_requests)
+    if inventory.workflow_discovery is not None:
+        snapshot["workflowDiscovery"] = inventory.workflow_discovery
     return snapshot
 
 
@@ -376,6 +435,7 @@ def collect(
     shepherd_author: str | None = None,
     repository_policy_path: Path | None = None,
     delegation_requests: Iterable[int] = (),
+    include_workflow_discovery: bool = True,
 ) -> Path:
     delegation_requests = validate_delegation_requests(delegation_requests)
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -529,6 +589,25 @@ def collect(
             message=f"Collected {len(inventory.evidence)} evidence records.",
         )
 
+        if include_workflow_discovery:
+            current_stage = "workflow-discovery"
+            progress.update(current_stage, "started", message="Observing bounded default-branch workflow windows.")
+            inventory = enrich_workflow_discovery(
+                inventory, client, repository, now,
+                previous_discovery=previous_snapshot.get("workflowDiscovery") if previous_snapshot is not None else None,
+                previous_snapshot=previous_snapshot,
+            )
+            discovery = inventory.workflow_discovery
+            assert discovery is not None
+            progress.update(
+                current_stage, "completed",
+                message=f"Workflow discovery {discovery['status']}; {len(discovery['gaps'])} scoped gaps.",
+            )
+        else:
+            inventory = mark_workflow_issues_changed(
+                inventory, previous_snapshot.get("workflowDiscovery") if previous_snapshot is not None else None,
+            )
+
         current_stage = "ownership-enrichment"
         progress.update(current_stage, "started", message="Resolving repository ownership evidence.")
         inventory = collector.enrich_ownership_evidence(
@@ -574,6 +653,27 @@ def collect(
                 # to ask cloud Copilot to investigate without a local diagnosis.
                 snapshot["warnings"].append(f"Local investigation source unavailable: {error}")
         attach_meaningful_progress(snapshot, previous_snapshot, shepherd_author=shepherd_author)
+        if previous_snapshot is not None:
+            repair_shas = {
+                pull["mergeCommitSha"]
+                for record in snapshot["delegationStatus"]["records"]
+                for pull in record.get("pullRequests", []) if pull.get("mergeCommitSha")
+            }
+            observed_heads = {
+                record["payload"]["headSha"] for record in snapshot["evidence"].values()
+                if record.get("kind") == "workflow-run" and record.get("availability") == "available"
+                and record["payload"].get("targetRepository") == repository and record["payload"].get("headSha")
+            }
+            # Ancestry between full immutable commit IDs does not change when
+            # an API endpoint becomes unavailable. Keep only still-relevant,
+            # previously validated proof; unavailable comparisons are retried.
+            comparisons = [
+                comparison for comparison in previous_snapshot.get("commitComparisons", [])
+                if comparison["availability"] == "available" and comparison["repository"] == repository
+                and comparison["baseSha"] in repair_shas and comparison["headSha"] in observed_heads
+            ]
+            if comparisons:
+                snapshot["commitComparisons"] = comparisons
         if snapshot["delegationStatus"]["status"] == "complete" and repository_policy is not None:
             derive_handoff_reminders(
                 snapshot["delegationStatus"]["records"], events, repository_policy.handoff_reminders,
@@ -601,6 +701,20 @@ def collect(
                     if snapshot["quarantineSourceState"] is not None
                     else "Source inspection unavailable; quarantine targets remain unverified."
                 ),
+            )
+            current_stage = "write-artifacts"
+        if labeled_test_names is not None:
+            prepared = prepare_assessment(snapshot)
+        if any(
+            issue.get("repairFollowup", {}).get("missingEvidence")
+            for issue in [*prepared["issues"], *prepared.get("closedIssueFollowups", [])]
+        ):
+            current_stage = "repair-comparison"
+            progress.update(current_stage, "started", message="Observing bounded post-repair commit comparisons.")
+            requests_made, gaps = collect_repair_comparisons(snapshot, client, prepared)
+            progress.update(
+                current_stage, "completed",
+                message=f"Observed {requests_made} commit comparisons; {gaps} scoped proof gaps.",
             )
             current_stage = "write-artifacts"
         validate_snapshot(snapshot)
@@ -639,6 +753,10 @@ def main() -> int:
     parser.add_argument("--checkout", type=Path)
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--full-refresh", action="store_true")
+    parser.add_argument(
+        "--skip-workflow-discovery", action="store_true",
+        help="Omit default-branch workflow discovery for legacy/offline collection callers.",
+    )
     parser.add_argument(
         "--delegate-issue", type=int, action="append", default=[],
         help=f"Nominate an open issue in --repository for delegation review (repeatable; maximum {MAX_DELEGATION_REQUESTS}). Not approval.",
@@ -684,6 +802,7 @@ def main() -> int:
             shepherd_author=args.shepherd_author,
             repository_policy_path=args.repository_policy,
             delegation_requests=args.delegate_issue,
+            include_workflow_discovery=not args.skip_workflow_discovery,
         )
     finally:
         os.umask(old_umask)

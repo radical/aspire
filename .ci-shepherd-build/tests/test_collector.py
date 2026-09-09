@@ -448,8 +448,8 @@ class CollectorTests(unittest.TestCase):
                     client, REPOSITORY, NOW, monitored_issue_numbers=[42],
                 ).collect(include_supporting=False, include_timeline=False)
                 self.assertEqual([], result.open_issues)
-                self.assertEqual([], result.delegated_issues)
                 if isinstance(response, Exception):
+                    self.assertEqual([], result.delegated_issues)
                     self.assertEqual(1, len(result.collection_errors))
                     self.assertEqual("monitored-issue", result.collection_errors[0].stage)
                     self.assertEqual(endpoint, result.collection_errors[0].endpoint)
@@ -457,6 +457,7 @@ class CollectorTests(unittest.TestCase):
                         {"kind": "issue", "issueNumbers": [42]}, result.collection_errors[0].scope,
                     )
                 else:
+                    self.assertEqual([response], result.delegated_issues)
                     self.assertEqual([], result.collection_errors)
 
     def test_monitored_arbitrary_issue_remains_visible_after_terminal_release(self) -> None:

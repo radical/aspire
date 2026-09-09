@@ -1121,6 +1121,59 @@ class ModelsTests(unittest.TestCase):
 
         self.assertIsNone(validate_snapshot(snapshot))
 
+    def test_delegation_merge_facts_validate_without_requiring_new_fields_on_legacy_records(self) -> None:
+        snapshot = minimal_snapshot()
+        pull = {"databaseId": 101, "state": "merged", "isDraft": False}
+        snapshot["delegationStatus"] = {"status": "complete", "records": [{
+            "actionId": "assignment:21", "repository": snapshot["repository"], "issueNumber": 21,
+            "startedAt": "2026-09-01T12:00:00Z", "taskId": "task-21", "taskState": "completed",
+            "lifecycle": "completed", "requiresHuman": False, "pullRequests": [pull],
+        }]}
+        validate_snapshot(snapshot)
+        pull.update(mergedAt="2026-09-01T13:00:00+01:00", mergeCommitSha="a" * 40)
+        validate_snapshot(snapshot)
+        pull.update(state="unknown", lastKnownState="merged")
+        validate_snapshot(snapshot)
+        original = dict(pull)
+        for change in (
+            {"mergedAt": "2026-09-01T12:00:00"}, {"mergedAt": 12},
+            {"mergeCommitSha": "A" * 40}, {"mergeCommitSha": "a" * 7},
+            {"mergeCommitSha": True}, {"state": "open"}, {"lastKnownState": "closed"},
+        ):
+            with self.subTest(change=change):
+                pull.clear()
+                pull.update({**original, **change})
+                with self.assertRaises(ValidationError):
+                    validate_snapshot(snapshot)
+
+    def test_comparisons_reject_malformed_or_conflicting_proof(self) -> None:
+        snapshot = minimal_snapshot()
+        base, head = "a" * 40, "b" * 40
+        comparison = {
+            "repository": snapshot["repository"], "baseSha": base, "headSha": head,
+            "url": f"https://api.github.com/repos/{snapshot['repository']}/compare/{base}...{head}",
+            "availability": "available", "status": "ahead",
+            "baseCommitSha": base, "mergeBaseSha": base, "behindBy": 0,
+        }
+        snapshot["commitComparisons"] = [comparison]
+        validate_snapshot(snapshot)
+        for change in (
+            {"repository": "different/repo"}, {"url": "https://example.com"},
+            {"url": comparison["url"] + "?per_page=1"}, {"headSha": "c" * 40},
+            {"baseSha": "a" * 7}, {"baseCommitSha": head}, {"mergeBaseSha": head},
+            {"behindBy": True}, {"behindBy": -1}, {"behindBy": 1},
+            {"availability": "unavailable"}, {"availability": "unknown"}, {"availability": "missing"},
+            {"status": "identical"}, {"status": "diverged"}, {"status": "unknown"},
+            {"status": {}}, {"mergeBaseSha": None}, {"extra": "untrusted"},
+        ):
+            with self.subTest(change=change):
+                snapshot["commitComparisons"] = [{**comparison, **change}]
+                with self.assertRaises(ValidationError):
+                    validate_snapshot(snapshot)
+        snapshot["commitComparisons"] = [comparison, dict(comparison)]
+        with self.assertRaisesRegex(ValidationError, "duplicate"):
+            validate_snapshot(snapshot)
+
     def test_collection_error_scope_is_validated(self) -> None:
         snapshot = minimal_snapshot()
         snapshot["collectionErrors"] = [

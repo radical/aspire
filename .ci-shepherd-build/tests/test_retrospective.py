@@ -22,6 +22,37 @@ from tests.assessment_helpers import write_assessment_receipts
 
 
 class RetrospectiveContextTests(unittest.TestCase):
+    def test_seal_distinguishes_one_shot_pending_from_execution_and_failed_launch(self) -> None:
+        rows = [
+            ("prepared", "prepared", "not-dispatched"),
+            ("dispatching", "dispatch-unconfirmed", "unknown"),
+            ("failed", "not-launched", "not-launched"),
+            ("abandoned", "abandoned", "unknown"),
+        ]
+        self.write(self.work / "investigation-plan.json", {
+            **self.identity, "requests": [],
+            "pendingInvestigations": [{"investigationId": f"investigation:{status}"} for status, _, _ in rows],
+        })
+        (self.state / "ledgers").mkdir()
+        (self.state / "ledgers" / "investigation-sessions.jsonl").write_text(
+            "".join(json.dumps({
+                "repository": "owner/repo", "investigationId": f"investigation:{status}", "status": status,
+                "launchMode": "one-shot", "attemptId": f"logical:{status}", "executionState": execution,
+                "sessionId": None, "runtimeSessionId": None, "workerIdentityKind": "unknown",
+            }) + "\n" for status, _, execution in rows), encoding="utf-8",
+        )
+        completion = build_run_completion(self.work, self.state, sealed_at="2026-09-09T00:00:00Z")
+        self.assertEqual(
+            {f"investigation:{status}": expected for status, expected, _ in rows},
+            {row["investigationId"]: row["status"] for row in completion["investigationWork"]},
+        )
+        for row in completion["investigationWork"]:
+            self.assertIsNone(row["runtimeSessionId"])
+            self.assertEqual("unknown", row["workerIdentityKind"])
+            self.assertEqual("one-shot", row["launchMode"])
+        self.assertEqual(4, len(completion["missingInvestigationIds"]))
+        self.assertEqual([], completion["investigationResults"])
+
     def setUp(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)

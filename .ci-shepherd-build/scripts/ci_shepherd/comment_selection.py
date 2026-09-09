@@ -25,6 +25,7 @@ PRIORITY_SUFFIXES = (
     ("watch-comment", "watch status"),
     ("retire-status-comment", "status retirement"),
     ("review-close-comment", "closure review"),
+    ("quarantine-blocked-comment", "quarantine target-format status"),
 )
 # Legacy private aliases: nothing outside this module referenced these names,
 # but they are kept so any future in-module or external private access still

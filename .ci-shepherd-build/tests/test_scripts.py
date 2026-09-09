@@ -659,6 +659,7 @@ class PrototypeScriptTests(unittest.TestCase):
             shepherd_author=None,
             repository_policy_path=collect_script.DEFAULT_REPOSITORY_POLICY_PATH,
             delegation_requests=[],
+            include_workflow_discovery=True,
         )
 
     def test_collect_cli_exposes_incremental_state_and_full_refresh(self) -> None:
@@ -696,6 +697,7 @@ class PrototypeScriptTests(unittest.TestCase):
             shepherd_author=None,
             repository_policy_path=collect_script.DEFAULT_REPOSITORY_POLICY_PATH,
             delegation_requests=[],
+            include_workflow_discovery=True,
         )
 
     def test_collect_with_missing_state_runs_full_live_collection(self) -> None:
@@ -778,6 +780,8 @@ class PrototypeScriptTests(unittest.TestCase):
                     ("inventory", "completed"),
                     ("github-enrichment", "started"),
                     ("github-enrichment", "completed"),
+                    ("workflow-discovery", "started"),
+                    ("workflow-discovery", "completed"),
                     ("ownership-enrichment", "started"),
                     ("ownership-enrichment", "completed"),
                     ("write-artifacts", "started"),
@@ -1732,7 +1736,14 @@ class PrototypeScriptTests(unittest.TestCase):
             "The fresh assessment agent must never access GitHub",
             "Collection, assessment, and investigation must never write to GitHub.",
             "The coordinator and a bounded issue investigator may use GET-only GitHub access.",
-            "Record a `started` investigation session before launching the worker.",
+            "Register the attempt before launching investigative work, using the appropriate launch protocol.",
+            "### One-shot worker launch",
+            "--status prepared",
+            "--launch-mode one-shot",
+            "only if `dispatchAllowed` is `true`",
+            "Replaying dispatch returns `dispatchAllowed: false`",
+            "Abandonment can record a confirmed-stopped attempt even when its worktree is dirty.",
+            "Cleanup remains blocked until leftovers are inspected and the worktree is clean.",
             "The coordinator collects, prepares, validates, renders, and records artifacts.",
         ):
             with self.subTest(phrase=phrase):

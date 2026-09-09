@@ -443,7 +443,9 @@ def build_run_completion(
         for identity in investigation_ids
     }
     awaited_ids = set(investigation_ids)
-    for field, disposition in (("activeInvestigations", "active"), ("deferredRequests", "deferred")):
+    for field, disposition in (
+        ("activeInvestigations", "active"), ("pendingInvestigations", "pending"), ("deferredRequests", "deferred"),
+    ):
         rows = investigation_plan.get(field, [])
         if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
             raise ValueError(f"Investigation plan {field} must contain objects.")
@@ -455,7 +457,7 @@ def build_run_completion(
                 "investigationId": identity, "planDisposition": disposition,
                 **({"reason": row["reason"]} if row.get("reason") else {}),
             }
-            if disposition == "active":
+            if disposition in {"active", "pending"}:
                 awaited_ids.add(identity)
     investigation_ids = set(planned)
     investigation_rows = read_jsonl_rows(
@@ -563,12 +565,21 @@ def build_run_completion(
         session = latest.get(identity, {})
         session_status = session.get("status", "unrecorded")
         item["sessionStatus"] = session_status
+        if session.get("launchMode") == "one-shot":
+            item.update({
+                "launchMode": "one-shot", "attemptId": session.get("attemptId"), "runtimeSessionId": None,
+                "workerIdentityKind": "unknown", "executionState": session.get("executionState", "unknown"),
+            })
         if identity in completed_investigation_ids:
             item["status"] = "result-recorded"
+        elif session.get("launchMode") == "one-shot" and session_status in {"prepared", "dispatching"}:
+            item["status"] = "prepared" if session_status == "prepared" else "dispatch-unconfirmed"
         elif session_status == "started" and session.get("sessionId"):
             item["status"] = "active"
         elif session_status in {"failed", "abandoned"}:
             item["status"] = session_status
+            if session.get("launchMode") == "one-shot" and session.get("executionState") == "not-launched":
+                item["status"] = "not-launched"
             item["reason"] = session.get("failureReason", "Reason not recorded")
         elif session_status == "completed":
             item["status"] = "completed-without-result"
@@ -618,7 +629,9 @@ def _worker_prompt(request: Mapping[str, Any], work_dir: Path) -> str:
         "prohibitions, launch blockers, state/bootstrap choices, and the final operator report. "
         "In action-free mode, absence of mutations is explained by the prohibition, "
         "not solely readiness. Consider readiness and policy blockers independently. "
-        "A planned or budget-deferred investigation is not evidence of an active session. "
+        "A planned, prepared, or budget-deferred investigation is not evidence of an active session. "
+        "One-shot dispatch intent records uncertainty, not proof that a worker ran. "
+        "A logical attempt ID is not a runtime session ID; do not infer timing from preparation. "
         "Distinguish not-started launch failures from capacity deferrals and worker failures. "
         "Missing outcomes, absent ledgers, or missing final reports remain unknown, not success. "
         "A missing or unavailable stateBinding means ledger reconciliation is not bound to "

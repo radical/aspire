@@ -40,12 +40,18 @@ def main() -> int:
     parser.add_argument("--investigation-id", required=True)
     parser.add_argument(
         "--status",
-        choices=("started", "failed", "abandoned"),
+        choices=("started", "prepared", "dispatching", "failed", "abandoned"),
         required=True,
     )
     parser.add_argument("--recorded-at", required=True)
-    parser.add_argument("--session-id", required=True)
+    identity = parser.add_mutually_exclusive_group()
+    identity.add_argument("--session-id", help="Actual addressable runtime session ID (resumable workers only).")
+    identity.add_argument("--attempt-id", help="Logical registry attempt ID; never a runtime session ID.")
+    parser.add_argument("--launch-mode", choices=("resumable", "one-shot"), default="resumable")
     parser.add_argument("--checkout", type=Path)
+    parser.add_argument("--result-path", type=Path, help="Exact external <attemptId>.json path to freeze during preparation.")
+    parser.add_argument("--execution-state", choices=("not-launched", "returned", "unknown"))
+    parser.add_argument("--execution-evidence", help="Observed launcher/return evidence; not inferred from a local identifier.")
     parser.add_argument("--failure-reason")
     parser.add_argument(
         "--failure-category",
@@ -65,9 +71,9 @@ def main() -> int:
 
     request = _select_request(
         args.plan, args.investigation_id, args.state_dir,
-        prefer_recorded=args.status != "started",
+        prefer_recorded=args.status not in {"started", "prepared"},
     )
-    if args.status == "started" and (
+    if args.status in {"started", "prepared"} and (
         request.get("investigationScope") is None or request.get("sourceRevision") is None
     ):
         parser.error(
@@ -87,6 +93,11 @@ def main() -> int:
             failure_category=args.failure_category,
             confirm_worker_stopped=args.confirm_worker_stopped,
             reproduction_commands=args.allow_reproduction_command,
+            launch_mode=args.launch_mode,
+            attempt_id=args.attempt_id,
+            result_path=args.result_path,
+            execution_state=args.execution_state,
+            execution_evidence=args.execution_evidence,
         )
     finally:
         os.umask(old_umask)

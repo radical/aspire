@@ -53,6 +53,7 @@ EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
         "licensedClaims",
         "sourceCommentFingerprint",
         "sourceEvidenceFingerprint",
+        "workflowPriority",
     }
 )
 EXECUTION_ELIGIBILITY_FIELDS = frozenset(
@@ -229,6 +230,8 @@ def _validate_proposal(
         raise ValueError(
             f"{action_id} has unsupported fields: {sorted(unsupported_fields)}"
         )
+    if "workflowPriority" in proposal and proposal["workflowPriority"] is not True:
+        raise ValueError(f"{action_id}.workflowPriority must be true when present.")
 
     target_kind, target_number, target_url, expected_state = _proposal_target(
         proposal,

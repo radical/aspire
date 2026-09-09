@@ -360,12 +360,76 @@ def validate_snapshot(snapshot: object) -> None:
     evidence = _require_mapping(mapping.get("evidence"), "evidence")
     for evidence_id, record in evidence.items():
         _validate_evidence_record(evidence_id, record)
+    if "workflowDiscovery" in mapping:
+        from .workflow_discovery import validate_workflow_discovery
+
+        try:
+            validate_workflow_discovery(mapping["workflowDiscovery"], mapping["repository"], evidence)
+        except ValueError as error:
+            raise ValidationError(str(error)) from error
     _validate_repository_policy_identity(mapping)
     _validate_expansion_manifests(mapping)
     _validate_delegation_status(mapping.get("delegationStatus"))
+    if "commitComparisons" in mapping:
+        pairs: set[tuple[str, str]] = set()
+        for comparison in _require_list(mapping, "commitComparisons"):
+            validate_commit_comparison(comparison, mapping["repository"])
+            pair = (comparison["baseSha"], comparison["headSha"])
+            if pair in pairs:
+                raise ValidationError("commitComparisons contains a duplicate base/head pair.")
+            pairs.add(pair)
     for pull in mapping.get("pullRequests", []):
         if isinstance(pull, Mapping) and "meaningfulProgress" in pull:
             _validate_progress(pull["meaningfulProgress"])
+
+
+def validate_commit_comparison(value: object, repository: str) -> None:
+    comparison = _require_mapping(value, "commitComparison")
+    fields = {
+        "repository", "baseSha", "headSha", "url", "availability", "status",
+        "baseCommitSha", "mergeBaseSha", "behindBy",
+    }
+    _require_only_fields(comparison, fields, "commitComparison")
+    if set(comparison) != fields:
+        raise ValidationError("commitComparison requires identity, availability, and nullable proof fields.")
+    if _require_repository(comparison) != repository:
+        raise ValidationError("commitComparison.repository must match the snapshot repository.")
+    for name in ("baseSha", "headSha"):
+        sha = _require_nonempty_string(comparison, name)
+        if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+            raise ValidationError(f"commitComparison.{name} must be a full lowercase commit SHA.")
+    base, head = comparison["baseSha"], comparison["headSha"]
+    if comparison["url"] != f"https://api.github.com/repos/{repository}/compare/{base}...{head}":
+        raise ValidationError("commitComparison.url must bind the exact same-repository base/head pair.")
+    availability = _require_nonempty_string(comparison, "availability")
+    status = _require_nonempty_string(comparison, "status")
+    if availability not in {"available", "unavailable", "unknown"}:
+        raise ValidationError("commitComparison.availability is invalid.")
+    if availability != "available":
+        if status != "unknown" or any(
+            comparison[name] is not None for name in ("baseCommitSha", "mergeBaseSha", "behindBy")
+        ):
+            raise ValidationError("Unobserved commit comparisons must have unknown status and null proof.")
+        return
+    merge_base = comparison["mergeBaseSha"]
+    behind = comparison["behindBy"]
+    if (
+        comparison["baseCommitSha"] != base
+        or not isinstance(merge_base, str) or re.fullmatch(r"[0-9a-f]{40}", merge_base) is None
+        or type(behind) is not int or behind < 0
+    ):
+        raise ValidationError("Available commitComparison requires exact base and valid merge-base/count proof.")
+    # GitHub's compare response binds the requested pair through its URL; a
+    # paginated `commits` array cannot establish HEAD. Validate metadata instead.
+    # https://docs.github.com/en/rest/commits/commits#compare-two-commits
+    consistent = (
+        status == "identical" and base == head and merge_base == base and behind == 0
+        or status == "ahead" and base != head and merge_base == base and behind == 0
+        or status == "behind" and base != head and merge_base == head and behind > 0
+        or status == "diverged" and base != head and merge_base not in {base, head} and behind > 0
+    )
+    if not consistent:
+        raise ValidationError("commitComparison status contradicts its commit identities or ancestry proof.")
 
 
 def _validate_delegated_inventory(
@@ -652,6 +716,8 @@ def _validate_delegation_status(value: object) -> None:
                     "changedFiles",
                     "humanAuthored",
                     "progressSource",
+                    "mergedAt",
+                    "mergeCommitSha",
                 },
                 pull_field,
             )
@@ -681,6 +747,22 @@ def _validate_delegation_status(value: object) -> None:
             _require_nonempty_string(pull, "state")
             if "lastKnownState" in pull and pull["lastKnownState"] not in {"open", "closed", "merged"}:
                 raise ValidationError(f"{pull_field}.lastKnownState is invalid.")
+            if pull.get("mergedAt") is not None:
+                try:
+                    parse_aware_iso8601(
+                        _require_nonempty_string(pull, "mergedAt"), f"{pull_field}.mergedAt",
+                    )
+                except ValueError as error:
+                    raise ValidationError(str(error)) from error
+            if pull.get("mergeCommitSha") is not None:
+                sha = pull["mergeCommitSha"]
+                if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+                    raise ValidationError(f"{pull_field}.mergeCommitSha must be a full lowercase commit SHA.")
+            if any(pull.get(key) is not None for key in ("mergedAt", "mergeCommitSha")) and not (
+                pull["state"] == "merged"
+                or pull["state"] == "unknown" and pull.get("lastKnownState") == "merged"
+            ):
+                raise ValidationError(f"{pull_field} merge facts require a verified current or historical merge.")
             if not isinstance(pull.get("isDraft"), bool):
                 raise ValidationError(f"{pull_field}.isDraft must be a boolean.")
             changed_files = pull.get("changedFiles")

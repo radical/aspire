@@ -1632,6 +1632,69 @@ class CycleTests(unittest.TestCase):
                 plan["blockedTargets"][0]["reason"],
             )
 
+    def test_unsupported_quarantine_target_reaches_finalized_comment_proposals(self) -> None:
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            input_snapshot = snapshot("2026-08-28T20:00:00Z")
+            issue = input_snapshot["evidence"]["issue:1"]["payload"]
+            issue["labels"] = ["ci-failure-cause"]
+            issue["updatedAt"] = "2026-08-28T19:59:00Z"
+            test_name = "VS Code extension E2E (Linux, azure-functions)"
+            add_class_a_retry_evidence(input_snapshot, test_name)
+            input_path = root / "input.json"
+            input_path.write_text(json.dumps(input_snapshot), encoding="utf-8")
+            work = root / "work"
+            cycle_script.start_cycle(
+                repository="owner/repo",
+                state_dir=root / "state",
+                work_dir=work,
+                checkout=None,
+                shepherd_author="ankj",
+                input_path=input_path,
+            )
+            prepared = json.loads((work / "assessment-input.json").read_text(encoding="utf-8"))
+            agent_path = work / "agent-judgments.json"
+            agent_path.write_text(
+                json.dumps({
+                    "schemaVersion": 1,
+                    "snapshotId": prepared["snapshotId"],
+                    "issues": [{
+                        "issueNumber": 1,
+                        "category": "flaky-test",
+                        "recommendations": [{
+                            "disposition": "review-quarantine",
+                            "target": {"kind": "test", "value": test_name},
+                            "confidence": "high",
+                            "summary": "Review the reported E2E target for quarantine.",
+                            "evidenceIds": ["issue:1"],
+                            "missingEvidence": [],
+                            "reassessWhen": "After the quarantine decision.",
+                        }],
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            result = finish_reviewed_cycle(work_dir=work, agent_judgments_path=agent_path)
+
+            self.assertEqual("completed", result["stage"])
+            plan = json.loads((work / "quarantine-session.json").read_text(encoding="utf-8"))
+            self.assertIsNone(plan["proposal"])
+            self.assertEqual([{
+                "testName": test_name,
+                "reason": "not-a-test-method",
+                "issueNumbers": [1],
+                "issueUrls": ["https://github.com/owner/repo/issues/1"],
+            }], plan["blockedTargets"])
+            proposals = json.loads((work / "action-proposals.json").read_text(encoding="utf-8"))
+            proposal, = proposals["proposals"]
+            self.assertEqual("create-comment", proposal["operation"])
+            self.assertTrue(proposal["actionId"].endswith("quarantine-blocked-comment"))
+            self.assertTrue(proposal["executionEligibility"]["eligible"])
+            selection = json.loads((work / "comment-selection.json").read_text(encoding="utf-8"))
+            self.assertEqual([proposal["actionId"]], selection["selectedActionIds"])
+            self.assertFalse((root / "state" / "action-events.jsonl").exists())
+
     def test_proposes_only_a_source_resolved_quarantine_candidate(self) -> None:
         artifacts = Path(__file__).parent / ".artifacts"
         artifacts.mkdir(exist_ok=True)

@@ -75,6 +75,7 @@ def build_managed_item_coverage(
         )
         for reason, field in (
             ("active-investigation", "activeInvestigations"),
+            ("pending-investigation", "pendingInvestigations"),
             ("queued-investigation", "requests"),
             ("deferred-investigation", "deferredRequests"),
         )
@@ -386,6 +387,7 @@ def _project_item(
         "awaiting-new-decision",
         "active-delegation",
         "active-investigation",
+        "pending-investigation",
         "blocked-awaiting-evidence",
         "queued-investigation",
         "deferred-investigation",
@@ -506,6 +508,13 @@ def _investigation_issue_numbers(
             # registered session events whose status is started.
             active_ids = plan.get("activeInvestigationIds")
             if not isinstance(active_ids, list) or identity not in active_ids:
+                continue
+        if field == "pendingInvestigations":
+            pending_ids = plan.get("pendingInvestigationIds")
+            if (
+                not isinstance(pending_ids, list) or identity not in pending_ids
+                or row.get("status") not in {"prepared", "dispatching"}
+            ):
                 continue
         if field == "deferredRequests" and not _nonempty(row.get("reason")):
             continue

@@ -114,10 +114,22 @@ def build_observations(
     *,
     policy: ManualPolicy,
     history: Mapping[str, Any] | None = None,
+    issue_numbers: list[int] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     evidence = _require_mapping(snapshot.get("evidence"), "Snapshot evidence")
-    issue_numbers = _require_int_list(snapshot.get("openIssues"), "Snapshot openIssues")
+    if issue_numbers is None:
+        issue_numbers = _require_int_list(snapshot.get("openIssues"), "Snapshot openIssues")
+    else:
+        issue_numbers = _require_int_list(issue_numbers, "Observation issue_numbers")
+        if len(issue_numbers) != len(set(issue_numbers)):
+            raise ValueError("Observation issue_numbers must not contain duplicates.")
     collected_at = parse_aware_iso8601(snapshot.get("collectedAt"), "Snapshot collectedAt")
+    discovery = snapshot.get("workflowDiscovery")
+    default_branch = (
+        discovery["defaultBranch"]
+        if isinstance(discovery, Mapping) and isinstance(discovery.get("defaultBranch"), str)
+        and discovery["defaultBranch"] else "main"
+    )
     window_cutoff = collected_at - timedelta(days=policy.systemic_transient_window_days)
     _require_factual_history(history)
 
@@ -182,7 +194,7 @@ def build_observations(
         issue_number = int(occurrence["issueNumber"])
         run_id = int(occurrence["runId"])
         reported_scope = reported_issue_scope(records[f"issue:{issue_number}"].payload, run_id)
-        verified_scope = verified_run_scope(runs_by_id[run_id].payload)
+        verified_scope = verified_run_scope(runs_by_id[run_id].payload, default_branch=default_branch)
         occurrence["reportedScope"] = reported_scope
         occurrence["verifiedScope"] = verified_scope
         occurrence["scopeConflict"] = scopes_conflict(reported_scope, verified_scope)
@@ -202,7 +214,15 @@ def build_observations(
         test_results_by_key,
         window_cutoff=window_cutoff,
         collected_at=collected_at,
+        default_branch=default_branch,
     )
+    for sample in [*occurrences, *coverage]:
+        for evidence_id in sample["evidenceIds"]:
+            record = records[evidence_id]
+            if record.is_job and record.payload.get("jobId") == sample.get("jobId"):
+                if isinstance(record.payload.get("laneId"), str):
+                    sample["laneId"] = record.payload["laneId"]
+                break
     _attach_positive_coverage(occurrences, coverage)
     fingerprints = _build_fingerprint_summaries(
         occurrences,
@@ -967,6 +987,7 @@ def _build_coverage(
     *,
     window_cutoff: datetime,
     collected_at: datetime,
+    default_branch: str,
 ) -> list[dict[str, Any]]:
     coverage: list[dict[str, Any]] = []
     for job in sorted(
@@ -1000,7 +1021,7 @@ def _build_coverage(
                 "attempt": attempt,
                 "jobId": job_id,
                 "headSha": run_record.payload.get("headSha"),
-                "verifiedScope": verified_run_scope(run_record.payload),
+                "verifiedScope": verified_run_scope(run_record.payload, default_branch=default_branch),
                 "observedAt": observed_at,
                 "status": "succeeded",
                 "independentRecoveryEligible": _independent_recovery_eligible(attempt),
@@ -1030,7 +1051,7 @@ def _build_coverage(
                     "attempt": attempt,
                     "jobId": job_id,
                     "headSha": run_record.payload.get("headSha"),
-                    "verifiedScope": verified_run_scope(run_record.payload),
+                    "verifiedScope": verified_run_scope(run_record.payload, default_branch=default_branch),
                     "observedAt": observed_at,
                     "status": "succeeded",
                     "independentRecoveryEligible": _independent_recovery_eligible(attempt),
@@ -1075,7 +1096,7 @@ def _coverage_matches_occurrence(
         return False
     if any(
         occurrence.get(field) != coverage.get(field)
-        for field in ("workflow", "jobName", "lane", "os")
+        for field in ("workflow", "jobName", "lane", "os", "laneId")
     ):
         return False
     failure_observed_at = occurrence.get("observedAt")

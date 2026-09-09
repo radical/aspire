@@ -15,6 +15,8 @@ from .investigation_worktrees import (
     finish_investigation_worktree,
     get_investigation_worktree,
     list_investigation_worktrees,
+    reserve_one_shot_worktree,
+    validate_one_shot_result_path,
     validate_investigation_worktree,
 )
 from .timeutils import parse_aware_iso8601
@@ -31,7 +33,7 @@ _OUTCOMES = frozenset(
         "inconclusive",
     }
 )
-_SESSION_STATUSES = frozenset({"started", "completed", "failed", "abandoned"})
+_SESSION_STATUSES = frozenset({"started", "prepared", "dispatching", "completed", "failed", "abandoned"})
 _SESSION_FAILURE_CATEGORIES = frozenset(
     {
         "worker-error",
@@ -316,7 +318,7 @@ def build_investigation_plan(
                 f"Unsupported investigation session status for {investigation_id}: {status}"
             )
         latest_session_by_id[investigation_id] = event
-        if status == "started":
+        if status in {"started", "prepared"}:
             attempt_count_by_id[investigation_id] = (
                 attempt_count_by_id.get(investigation_id, 0) + 1
             )
@@ -325,10 +327,15 @@ def build_investigation_plan(
         for investigation_id, event in latest_session_by_id.items()
         if event.get("status") == "started"
     }
+    pending_ids = {
+        identity for identity, event in latest_session_by_id.items()
+        if event.get("status") in {"prepared", "dispatching"}
+    }
     requests: list[dict[str, object]] = []
     reused: list[str] = []
     active: list[str] = []
     active_investigations: list[dict[str, object]] = []
+    pending_investigations: list[dict[str, object]] = []
     exhausted: list[dict[str, object]] = []
     # A judgment may change queues without changing evidence. Persisted,
     # fingerprint-matched blockers therefore belong to the current issue facts,
@@ -429,6 +436,12 @@ def build_investigation_plan(
             if investigation_id in completed_ids:
                 reused.append(investigation_id)
                 continue
+            if investigation_id in pending_ids:
+                pending_investigations.append({
+                    "investigationId": investigation_id, "issueNumber": issue_number,
+                    "target": dict(target), "status": latest_session_by_id[investigation_id]["status"],
+                })
+                continue
             if investigation_id in active_ids:
                 active.append(investigation_id)
                 active_investigations.append(
@@ -504,6 +517,7 @@ def build_investigation_plan(
 
     requests.sort(
         key=lambda item: (
+            prepared_issues[int(item["issueNumber"])].get("workflowHealth", {}).get("current") is not True,
             int(item["issueNumber"]),
             str(item["target"].get("kind")),
             json.dumps(item["target"].get("value"), sort_keys=True),
@@ -537,6 +551,8 @@ def build_investigation_plan(
         "reusedInvestigationIds": reused,
         "activeInvestigationIds": active,
         "activeInvestigations": active_investigations,
+        "pendingInvestigationIds": sorted(row["investigationId"] for row in pending_investigations),
+        "pendingInvestigations": pending_investigations,
         "blockedAwaitingEvidence": blocked_awaiting_evidence,
     }
 
@@ -587,7 +603,7 @@ def select_investigation_request(
             latest is not None
             and isinstance(persisted_request, dict)
             and (
-                latest.get("status") == "started"
+                latest.get("status") in {"started", "prepared", "dispatching"}
                 or (prefer_recorded and persisted_request.get("investigationScope") is not None
                     and latest.get("status") in {"completed", "failed", "abandoned"})
             )
@@ -606,10 +622,12 @@ def select_investigation_request(
             f"Investigation plan must contain exactly one {investigation_id} request."
         )
     active_ids = plan.get("activeInvestigationIds")
+    pending_ids = plan.get("pendingInvestigationIds")
     reused_ids = plan.get("reusedInvestigationIds")
     if (
         not (
             (isinstance(active_ids, list) and investigation_id in active_ids)
+            or (isinstance(pending_ids, list) and investigation_id in pending_ids)
             or (isinstance(reused_ids, list) and investigation_id in reused_ids)
         )
         or not isinstance(repository, str)
@@ -628,7 +646,7 @@ def select_investigation_request(
         latest is None
         or not isinstance(persisted_request, dict)
         or (
-            latest.get("status") != "started"
+            latest.get("status") not in {"started", "prepared", "dispatching"}
             and not (
                 latest.get("status") in {"completed", "failed", "abandoned"}
                 and persisted_request.get("investigationScope") is not None
@@ -741,7 +759,7 @@ def _validate_session_transition(
     status = event["status"]
     session_id = event["sessionId"]
     if status == "started":
-        if previous is not None and previous.get("status") == "started":
+        if previous is not None and previous.get("status") in {"started", "prepared", "dispatching"}:
             raise ValueError(
                 f"Investigation {investigation_id} already has an active session."
             )
@@ -772,13 +790,34 @@ def record_investigation_session_event(
     *,
     status: str,
     recorded_at: str,
-    session_id: str,
+    session_id: str | None,
     checkout: Path | None = None,
     failure_reason: str | None = None,
     failure_category: str | None = None,
     confirm_worker_stopped: bool = False,
     reproduction_commands: list[list[str]] | None = None,
+    launch_mode: str = "resumable",
+    attempt_id: str | None = None,
+    result_path: Path | None = None,
+    execution_state: str | None = None,
+    execution_evidence: str | None = None,
 ) -> dict[str, object]:
+    if launch_mode not in {"resumable", "one-shot"}:
+        raise ValueError("Unsupported investigation launch mode.")
+    if launch_mode == "one-shot" or attempt_id is not None:
+        if session_id is not None:
+            raise ValueError("One-shot attempts cannot claim an unverified runtime sessionId.")
+        return _record_one_shot_session(
+            state_directory, request, status=status, recorded_at=recorded_at,
+            checkout=checkout, attempt_id=attempt_id, result_path=result_path,
+            reproduction_commands=reproduction_commands, failure_reason=failure_reason,
+            failure_category=failure_category, execution_state=execution_state,
+            execution_evidence=execution_evidence, confirm_worker_stopped=confirm_worker_stopped,
+        )
+    if status in {"prepared", "dispatching"} or any(
+        value is not None for value in (result_path, execution_state, execution_evidence)
+    ):
+        raise ValueError("Prepared/dispatching and launch observations require the one-shot protocol.")
     if reproduction_commands is not None and status != "started":
         raise ValueError("Reproduction authorization belongs to session registration only.")
     if reproduction_commands is not None and request.get("investigationScope") is None:
@@ -805,8 +844,9 @@ def record_investigation_session_event(
     repository = str(event["repository"])
     path = _sessions_path(state_directory)
     with exclusive_jsonl_lock(path):
+        history = read_jsonl_rows(path)
         previous = _latest_session_event(
-            read_jsonl_rows(path),
+            history,
             repository=repository,
             investigation_id=investigation_id,
         )
@@ -821,6 +861,8 @@ def record_investigation_session_event(
                 "confirm_worker_stopped is valid only for abandoned sessions."
             )
         _validate_session_transition(previous, event)
+        if status == "started":
+            _validate_investigation_limits(history, request, worktree_attempt=None)
         append_jsonl_rows(path, [event])
     return event
 
@@ -831,10 +873,28 @@ def record_investigation_result(
     result: Mapping[str, Any],
     *,
     recorded_at: str,
-    session_id: str,
+    session_id: str | None,
     checkout: Path,
+    attempt_id: str | None = None,
+    execution_evidence: str | None = None,
+    confirm_worker_stopped: bool = False,
 ) -> dict[str, object]:
     parse_aware_iso8601(recorded_at, "recordedAt")
+    if attempt_id is not None:
+        if session_id is not None or request.get("investigationScope") is None:
+            raise ValueError("One-shot results require a source-pinned logical attempt, not a sessionId.")
+        _require_one_shot_ended(execution_evidence, confirm_worker_stopped)
+        if (
+            set(result) != {"schemaVersion", "attemptId", "requestFingerprint", "result"}
+            or type(result.get("schemaVersion")) is not int or result["schemaVersion"] != 1
+            or result.get("attemptId") != attempt_id
+            or result.get("requestFingerprint") != _fingerprint(dict(request))
+            or not isinstance(result.get("result"), Mapping)
+        ):
+            raise ValueError("One-shot result wrapper has a stale attempt or request fingerprint.")
+        result = result["result"]
+    elif execution_evidence is not None or confirm_worker_stopped:
+        raise ValueError("One-shot execution observations require an attemptId.")
     outcome = result.get("outcome")
     if request.get("investigationScope") is not None:
         validate_scoped_result(result)
@@ -890,7 +950,8 @@ def record_investigation_result(
     if request.get("investigationScope") is not None:
         return _record_scoped_result(
             state_directory, request, result, event, checkout=checkout,
-            session_id=session_id, recorded_at=recorded_at,
+            session_id=session_id, recorded_at=recorded_at, attempt_id=attempt_id,
+            execution_evidence=execution_evidence, confirm_worker_stopped=confirm_worker_stopped,
         )
 
     session_event = _session_event(
@@ -965,15 +1026,222 @@ def _binding_fields(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_investigation_limits(
+    history: list[Mapping[str, Any]], request: Mapping[str, Any], *, worktree_attempt: int | None,
+) -> None:
+    """Check new admissions under the session-ledger lock; exact replay is not new work."""
+    investigation_id, repository = _investigation_identity(request)
+    scoped = [
+        row for row in history
+        if str(row.get("repository", "")).casefold() == repository.casefold()
+    ]
+    registrations = [row for row in scoped if row.get("status") in {"started", "prepared"}]
+    if sum(row.get("investigationId") == investigation_id for row in registrations) >= _MAX_INVESTIGATION_ATTEMPTS:
+        raise ValueError("Investigation attempt limit reached.")
+    latest = {row["investigationId"]: row for row in scoped}
+    if sum(row.get("status") in {"started", "prepared", "dispatching"} for row in latest.values()) >= 3:
+        raise ValueError("Three investigation slots are already reserved or active.")
+    if sum(row.get("request", {}).get("snapshotId") == request.get("snapshotId") for row in registrations) >= 5:
+        raise ValueError("Five investigation attempts are already reserved in this cycle.")
+    if worktree_attempt is not None and (
+        worktree_attempt > _MAX_INVESTIGATION_ATTEMPTS or worktree_attempt != request.get("attempt")
+    ):
+        raise ValueError("Owned worktree attempt does not match the bounded request attempt.")
+
+
+def _require_one_shot_ended(evidence: str | None, stopped: bool) -> None:
+    if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 4000:
+        raise ValueError("One-shot completion requires bounded observed launcher/return evidence.")
+    if stopped is not True:
+        raise ValueError("One-shot completion requires explicit confirmation that the invocation stopped.")
+
+
+def _one_shot_envelope(event: Mapping[str, Any]) -> str:
+    wrapper = {
+        "schemaVersion": 1, "attemptId": event["attemptId"],
+        "requestFingerprint": event["requestFingerprint"],
+        "result": "<the investigation result object specified below>",
+    }
+    return (
+        "Trusted one-shot investigation launch envelope. Begin the investigation now; "
+        "there is no idle-worker or follow-up handshake.\n"
+        f"WORKTREE_PATH: {event['checkoutPath']}\nRESULT_PATH: {event['resultPath']}\n"
+        f"SOURCE_REVISION: {event['checkoutHead']}\n"
+        f"LOGICAL_ATTEMPT_ID: {event['attemptId']} (not a runtime session ID)\n"
+        "Do NOT switch branches; operate explicitly within WORKTREE_PATH, never the "
+        "launcher's inherited checkout. Do not edit source, Git metadata, coordinator "
+        "state, or sibling artifacts. You may write only RESULT_PATH outside the worktree.\n"
+        "Do not launch subagents or background processes: this invocation has no addressable "
+        "runtime identity for later stopping them. Wait for all foreground operations to exit "
+        "before returning.\n"
+        "Exact authorized reproduction argv arrays (empty means reproduction is forbidden): "
+        + json.dumps(event["reproductionCommands"], ensure_ascii=True) + "\n\n"
+        + event["request"]["workerPrompt"] + "\n\n"
+        "Write the required result to RESULT_PATH wrapped in this exact JSON envelope. "
+        "Replace the result placeholder with the required object, including workLog. "
+        "Do not substitute another attempt identity or invent a runtime session ID:\n"
+        + json.dumps(wrapper, ensure_ascii=True, indent=2)
+    )
+
+
+def _record_one_shot_session(
+    state_directory: Path, request: Mapping[str, Any], *, status: str, recorded_at: str,
+    checkout: Path | None, attempt_id: str | None, result_path: Path | None,
+    reproduction_commands: list[list[str]] | None, failure_reason: str | None,
+    failure_category: str | None, execution_state: str | None,
+    execution_evidence: str | None, confirm_worker_stopped: bool,
+) -> dict[str, object]:
+    if request.get("investigationScope") is None:
+        raise ValueError("One-shot preparation requires a frozen source-pinned request.")
+    if status not in {"prepared", "dispatching", "failed", "abandoned"}:
+        raise ValueError("One-shot status must be prepared, dispatching, failed or abandoned.")
+    parse_aware_iso8601(recorded_at, "recordedAt")
+    investigation_id, repository = _investigation_identity(request)
+    list_investigation_worktrees(state_directory)
+    path = _sessions_path(state_directory)
+    with exclusive_jsonl_lock(path):
+        history = read_jsonl_rows(path)
+        previous = _latest_session_event(history, repository=repository, investigation_id=investigation_id)
+        if status == "prepared":
+            if checkout is None or result_path is None or attempt_id is not None:
+                raise ValueError("Preparation requires checkout and result_path; the registry supplies attemptId.")
+            if any(value is not None for value in (failure_reason, failure_category, execution_state, execution_evidence)) or confirm_worker_stopped:
+                raise ValueError("Preparation cannot claim launch/worker execution or terminal observations.")
+            commands = validate_reproduction_commands([] if reproduction_commands is None else reproduction_commands)
+            if not isinstance(request.get("workerPrompt"), str) or not request["workerPrompt"]:
+                raise ValueError("Preparation requires the complete trusted worker prompt.")
+            replay = previous is not None and previous.get("status") == "prepared" and previous.get("checkoutPath") == str(checkout)
+            if not replay:
+                if previous is not None and previous.get("status") in {"prepared", "dispatching", "started", "completed"}:
+                    raise ValueError("Investigation already has a pending/active or completed attempt.")
+            allocation = get_investigation_worktree(state_directory, request, checkout=checkout)
+            if not replay:
+                _validate_investigation_limits(history, request, worktree_attempt=allocation["attempt"])
+            output = validate_one_shot_result_path(state_directory, allocation, result_path)
+            if output.exists():
+                raise ValueError("One-shot result path already exists before dispatch.")
+            allocation = reserve_one_shot_worktree(state_directory, request, checkout=checkout, recorded_at=recorded_at)
+            event = {
+                "schemaVersion": 1, "repository": repository, "investigationId": investigation_id,
+                "issueNumber": request.get("issueNumber"), "target": copy.deepcopy(request.get("target")),
+                "sourceEvidenceFingerprint": request.get("sourceEvidenceFingerprint"),
+                "request": copy.deepcopy(dict(request)), "requestFingerprint": allocation["requestFingerprint"],
+                **_binding_fields(allocation), "status": "prepared", "recordedAt": recorded_at,
+                "launchMode": "one-shot", "attemptId": allocation["attemptId"], "sessionId": None,
+                "runtimeSessionId": None, "workerIdentityKind": "unknown", "executionState": "not-dispatched",
+                "reproductionCommands": commands, "resultPath": str(output),
+            }
+            event["launchEnvelope"] = _one_shot_envelope(event)
+            if replay:
+                if not _same_record(previous, event):
+                    raise ValueError("Prepared attempt replay changed its trusted envelope.")
+                return dict(previous)
+            append_jsonl_rows(path, [event])
+            return event
+
+        if reproduction_commands is not None or result_path is not None:
+            raise ValueError("One-shot grants and result path can only be set during preparation.")
+        if (
+            previous is None or previous.get("launchMode") != "one-shot"
+            or not isinstance(attempt_id, str) or previous.get("attemptId") != attempt_id
+            or previous.get("request") != dict(request)
+        ):
+            raise ValueError("No matching prepared one-shot attempt; stale attempt or request.")
+        allocation, target = _scoped_session_binding(state_directory, request, previous, checkout, None, attempt_id)
+        if status == "dispatching":
+            if any(value is not None for value in (failure_reason, failure_category, execution_state, execution_evidence)) or confirm_worker_stopped:
+                raise ValueError("Dispatch intent is not an observation that a worker ran or stopped.")
+            if previous["status"] == "dispatching":
+                return {**previous, "dispatchAllowed": False}
+            if previous["status"] != "prepared" or allocation["terminalStatus"] is not None:
+                raise ValueError("Dispatch requires a prepared, nonterminal attempt.")
+            validate_investigation_worktree(state_directory, request, checkout=target, attempt_id=attempt_id)
+            output = validate_one_shot_result_path(state_directory, allocation, Path(previous["resultPath"]))
+            if output.exists():
+                raise ValueError("A result already exists before first dispatch.")
+            event = {**previous, "status": "dispatching", "executionState": "unknown", "recordedAt": recorded_at}
+            # Only this transition permits dispatch. A crash after it is ambiguous:
+            # replay cannot tell whether the external launcher was invoked.
+            append_jsonl_rows(path, [event])
+            return {**event, "dispatchAllowed": True}
+
+        _require_one_shot_ended(execution_evidence, confirm_worker_stopped)
+        if any(
+            row.get("repository") == repository and row.get("investigationId") == investigation_id
+            and row.get("attemptId") == attempt_id for row in read_investigation_results(state_directory)
+        ):
+            raise ValueError("A result is already durable; replay result recording to reconcile completion.")
+        if execution_state not in {"not-launched", "returned", "unknown"}:
+            raise ValueError("One-shot terminal recording requires an explicit execution state.")
+        if not isinstance(failure_reason, str) or not failure_reason.strip():
+            raise ValueError("One-shot failure requires a specific failure reason.")
+        category = failure_category or ("worker-unavailable" if status == "abandoned" else "worker-error")
+        if category not in _SESSION_FAILURE_CATEGORIES:
+            raise ValueError("Unsupported investigation failure category.")
+        if execution_state == "unknown" and status != "abandoned":
+            raise ValueError("An uncertain dispatch requires explicit stopped-worker abandonment.")
+        if previous["status"] == "prepared" and execution_state != "not-launched":
+            raise ValueError("A prepared attempt has no recorded dispatch.")
+        event = {
+            **previous, "status": status, "recordedAt": recorded_at,
+            "executionState": execution_state, "executionEvidence": execution_evidence,
+            "executionEvidenceKind": "operator-observation", "workerStopped": True,
+            "failureReason": failure_reason, "failureCategory": category,
+        }
+        if previous["status"] == status:
+            if not _same_record(previous, event):
+                raise ValueError("One-shot terminal replay changed its observation.")
+            event = dict(previous)
+        else:
+            if previous["status"] not in {"prepared", "dispatching"}:
+                raise ValueError("One-shot attempt is already terminal.")
+            if status == "abandoned" and (
+                parse_aware_iso8601(recorded_at, "recordedAt") - parse_aware_iso8601(previous["recordedAt"], "recordedAt")
+                < _MAX_INVESTIGATION_SESSION_AGE
+            ):
+                raise ValueError("Abandonment requires the one-hour investigation limit.")
+            append_jsonl_rows(path, [event])
+        finish_investigation_worktree(
+            state_directory, request, checkout=target, session_id=None, attempt_id=attempt_id,
+            status=status, recorded_at=str(event["recordedAt"]), confirm_worker_stopped=True,
+        )
+        return event
+
+
+def load_one_shot_result(
+    state_directory: Path, request: Mapping[str, Any], *, checkout: Path,
+    attempt_id: str, result_path: Path,
+) -> dict[str, Any]:
+    """Load only the exact prepared response path, including after source cleanup."""
+    investigation_id, repository = _investigation_identity(request)
+    previous = _latest_session_event(
+        read_investigation_session_events(state_directory),
+        repository=repository, investigation_id=investigation_id,
+    )
+    allocation, _ = _scoped_session_binding(state_directory, request, previous, checkout, None, attempt_id)
+    output = validate_one_shot_result_path(state_directory, allocation, result_path)
+    if previous.get("launchMode") != "one-shot" or previous.get("resultPath") != str(output):
+        raise ValueError("Result path does not match the prepared one-shot envelope.")
+    if not output.is_file():
+        raise ValueError("One-shot result must be a regular file at the prepared result path.")
+    result = json.loads(output.read_text(encoding="utf-8"))
+    if not isinstance(result, dict):
+        raise ValueError("One-shot response must be an object.")
+    return result
+
+
 def _scoped_session_binding(
     state_directory: Path,
     request: Mapping[str, Any],
     previous: Mapping[str, Any] | None,
     checkout: Path | None,
-    session_id: str,
+    session_id: str | None,
+    attempt_id: str | None = None,
 ) -> tuple[dict[str, Any], Path]:
     if previous is None or previous.get("sessionId") != session_id:
         raise ValueError("Investigation has no matching recorded worker session.")
+    if previous.get("attemptId") != attempt_id:
+        raise ValueError("Investigation belongs to another logical attempt.")
     if previous.get("request") != dict(request):
         raise ValueError("Investigation session belongs to another frozen request.")
     recorded_checkout = previous.get("checkoutPath")
@@ -986,7 +1254,7 @@ def _scoped_session_binding(
     if ".." in target.parts or str(target.expanduser().absolute()) != recorded_checkout:
         raise ValueError("Investigation belongs to another checkout.")
     allocation = get_investigation_worktree(
-        state_directory, request, checkout=target, session_id=session_id,
+        state_directory, request, checkout=target, session_id=session_id, attempt_id=attempt_id,
     )
     if any(previous.get(key) != value for key, value in _binding_fields(allocation).items()):
         raise ValueError("Investigation session does not match its worktree ownership registry.")
@@ -1023,8 +1291,9 @@ def _record_scoped_session_event(
     )
     path = _sessions_path(state_directory)
     with exclusive_jsonl_lock(path):
+        history = read_jsonl_rows(path)
         previous = _latest_session_event(
-            read_jsonl_rows(path), repository=str(event["repository"]),
+            history, repository=str(event["repository"]),
             investigation_id=str(event["investigationId"]),
         )
         if status == "started":
@@ -1032,6 +1301,10 @@ def _record_scoped_session_event(
             replay = previous is not None and previous.get("status") == "started" and previous.get("sessionId") == session_id
             if not replay:
                 _validate_session_transition(previous, event)
+                allocation = get_investigation_worktree(
+                    state_directory, request, checkout=Path(str(event["checkoutPath"])),
+                )
+                _validate_investigation_limits(history, request, worktree_attempt=allocation["attempt"])
             allocation = bind_investigation_worktree(
                 state_directory, request, checkout=Path(str(event["checkoutPath"])),
                 session_id=session_id, recorded_at=recorded_at,
@@ -1082,8 +1355,11 @@ def _record_scoped_result(
     event: dict[str, object],
     *,
     checkout: Path,
-    session_id: str,
+    session_id: str | None,
     recorded_at: str,
+    attempt_id: str | None = None,
+    execution_evidence: str | None = None,
+    confirm_worker_stopped: bool = False,
 ) -> dict[str, object]:
     list_investigation_worktrees(state_directory)
     sessions_path = _sessions_path(state_directory)
@@ -1093,7 +1369,16 @@ def _record_scoped_result(
             read_jsonl_rows(sessions_path), repository=str(event["repository"]),
             investigation_id=str(event["investigationId"]),
         )
-        allocation, target = _scoped_session_binding(state_directory, request, previous, checkout, session_id)
+        allocation, target = _scoped_session_binding(state_directory, request, previous, checkout, session_id, attempt_id)
+        if attempt_id is not None:
+            if previous.get("launchMode") != "one-shot" or previous.get("status") not in {"dispatching", "completed"}:
+                raise ValueError("One-shot result requires dispatch intent for a nonterminal attempt.")
+            event.update({
+                "launchMode": "one-shot", "attemptId": attempt_id, "runtimeSessionId": None,
+                "workerIdentityKind": "unknown", "executionState": "returned",
+                "executionEvidence": execution_evidence, "executionEvidenceKind": "operator-observation",
+                "workerStopped": True,
+            })
         if allocation["terminalStatus"] not in {None, "completed"}:
             raise ValueError("Investigation worktree has a conflicting terminal outcome.")
         commands = validate_reproduction_commands(previous.get("reproductionCommands"))
@@ -1113,14 +1398,20 @@ def _record_scoped_result(
                 event = dict(existing)
             else:
                 validate_investigation_worktree(
-                    state_directory, request, checkout=target, session_id=session_id,
+                    state_directory, request, checkout=target, session_id=session_id, attempt_id=attempt_id,
                 )
                 event["workLog"] = validate_work_log(request, result["workLog"], target, commands)
             completed = {
                 **dict(previous), "status": "completed", "recordedAt": event["recordedAt"],
             }
-            if existing is None or previous.get("status") == "started":
-                _validate_session_transition(previous, completed)
+            if attempt_id is not None:
+                completed.update({
+                    "executionState": "returned", "executionEvidence": execution_evidence,
+                    "executionEvidenceKind": "operator-observation", "workerStopped": True,
+                })
+            if existing is None or previous.get("status") in {"started", "dispatching"}:
+                if attempt_id is None:
+                    _validate_session_transition(previous, completed)
                 if existing is None:
                     append_jsonl_rows(results_path, [event])
                 append_jsonl_rows(sessions_path, [completed])
@@ -1129,6 +1420,7 @@ def _record_scoped_result(
         finish_investigation_worktree(
             state_directory, request, checkout=target, session_id=session_id,
             status="completed", recorded_at=str(event["recordedAt"]),
+            attempt_id=attempt_id, confirm_worker_stopped=confirm_worker_stopped,
         )
     return event
 

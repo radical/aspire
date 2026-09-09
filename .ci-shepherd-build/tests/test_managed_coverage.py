@@ -20,6 +20,33 @@ from ci_shepherd.policy_selection import build_policy_selection
 
 
 class ManagedCoverageTests(unittest.TestCase):
+    def test_owned_preparation_and_uncertain_dispatch_are_pending_coverage_not_active(self) -> None:
+        policy = replace(
+            load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
+            managed_issue_producers=frozenset({"ci-failure-cause"}), managed_automation_explicit=True,
+        )
+        for status, indexed, expected in (
+            ("prepared", True, "pending-investigation"),
+            ("dispatching", True, "pending-investigation"),
+            ("started", True, "uncovered"),
+            ("prepared", False, "uncovered"),
+        ):
+            with self.subTest(status=status, indexed=indexed):
+                coverage = build_managed_item_coverage(
+                    {"repository": "owner/repo", "openIssues": [1],
+                     "evidence": {"issue:1": {"payload": {"producer": "ci-failure-cause"}}}},
+                    policy=policy, proposals={"snapshotId": "snapshot:current", "proposals": []},
+                    investigation_plan={
+                        "repository": "owner/repo", "snapshotId": "snapshot:current",
+                        "pendingInvestigations": [{"issueNumber": 1, "investigationId": "investigation:1",
+                                                  "target": {"kind": "issue", "value": 1}, "status": status}],
+                        "pendingInvestigationIds": ["investigation:1"] if indexed else [],
+                    },
+                    review_schedule={}, observations={},
+                )
+                self.assertEqual(expected, coverage["items"][0]["coverageReason"])
+                self.assertEqual(0, coverage["counts"].get("active-investigation", 0))
+
     def test_planned_and_budget_deferred_work_are_not_active_sessions(self) -> None:
         policy = replace(
             load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),

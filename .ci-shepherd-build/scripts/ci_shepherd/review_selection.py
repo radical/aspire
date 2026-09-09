@@ -667,6 +667,28 @@ def _build_question(issue: Mapping[str, Any], issue_number: int) -> dict[str, An
     default_judgment = _require_mapping(issue.get("defaultJudgment"), "default judgment")
     recommendations = _require_list(default_judgment, "recommendations")
     recommendation = _require_mapping(recommendations[0], "default recommendation")
+    if (
+        issue.get("delegationReadiness", {}).get("origin") == "workflow-health"
+        and delegation_is_projectable(issue)
+    ):
+        return {
+            "observedIdentity": fingerprint,
+            "evidenceChecked": list(issue["delegationReadiness"]["evidenceIds"]),
+            "missingFacts": [],
+            "decisionGates": [],
+            "defaultDisposition": "delegate-copilot",
+            "ask": (
+                f"Issue #{issue_number} has a current default-branch workflow failure. "
+                "Check the frozen failure evidence for ownership, duplicate work, "
+                "or a human-only blocker. Copilot can investigate the cause itself."
+            ),
+            "stopCondition": (
+                "Do not require local diagnosis or additional investigation just to "
+                "prepare the task. Keep the delegation unless existing evidence "
+                "shows a blocker; execution still requires policy authorization."
+            ),
+            "costClass": "no-fetch",
+        }
     if issue.get("delegationRequest") == {"origin": "operator"} and delegation_is_projectable(issue):
         return {
             "observedIdentity": fingerprint,

@@ -7,6 +7,50 @@ from ci_shepherd.run_report import render_run_markdown
 
 
 class RunReportTests(unittest.TestCase):
+    def test_one_shot_preparation_and_dispatch_do_not_claim_performed_work(self) -> None:
+        for status, execution, label in (
+            ("prepared", "not-dispatched", "Investigation prepared; not dispatched"),
+            ("dispatching", "unknown", "Investigation dispatch unconfirmed"),
+            ("failed", "not-launched", "Investigation not launched; not performed"),
+            ("abandoned", "unknown", "Investigation stopped; execution unknown"),
+        ):
+            with self.subTest(status=status):
+                report = render_run_markdown(
+                    self.snapshot, self.prepared, self.judgments,
+                    investigation_plan={
+                        "requests": [], "pendingInvestigations": [{"issueNumber": 1, "investigationId": "inv:one"}],
+                    },
+                    investigation_sessions=[{
+                        "repository": self.snapshot["repository"], "issueNumber": 1, "investigationId": "inv:one",
+                        "launchMode": "one-shot", "attemptId": "logical-attempt", "sessionId": None,
+                        "runtimeSessionId": None, "status": status, "executionState": execution,
+                        "recordedAt": "2026-09-05T12:01:00Z", "failureReason": "Launcher rejected the call.",
+                    }],
+                )
+                self.assertIn(label, report)
+                self.assertIn("runtime session: unknown", report)
+                self.assertIn("No performed or reused investigations recorded.", report)
+
+    def test_one_shot_result_does_not_invent_duration_from_preparation_or_null_sessions(self) -> None:
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            investigation_plan={"requests": [{"issueNumber": 1, "investigationId": "inv:one"}]},
+            investigation_results=[{
+                "issueNumber": 1, "investigationId": "inv:one", "outcome": "inconclusive",
+                "summary": "The bounded worker returned.", "recordedAt": "2026-09-05T12:02:00Z",
+                "launchMode": "one-shot", "attemptId": "actual-attempt", "sessionId": None,
+                "runtimeSessionId": None,
+            }],
+            investigation_sessions=[
+                {"investigationId": "inv:one", "sessionId": None, "status": "started",
+                 "recordedAt": "2026-09-05T12:00:00Z"},
+                {"investigationId": "inv:one", "sessionId": None, "status": "completed",
+                 "recordedAt": "2026-09-05T12:01:00Z"},
+            ],
+        )
+        self.assertIn("Investigation completed; duration: unknown", report)
+        self.assertIn("one-shot; runtime session: unknown", report)
+
     def test_investigation_report_shows_work_and_observed_command_output(self) -> None:
         report = render_run_markdown(
             self.snapshot, self.prepared, self.judgments,

@@ -195,6 +195,7 @@ def build_policy_selection(
     pending = [record for record in base if record["status"] is None]
     pending.sort(
         key=lambda record: (
+            proposal_by_action_id[str(record["actionId"])].get("workflowPriority") is not True,
             priority_for_action_id(str(record["actionId"]))[0],
             operation_priority(str(record["operation"])),
             int(record["issueNumber"]),

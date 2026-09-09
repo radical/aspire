@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 from typing import Mapping, Protocol, Sequence
 from urllib.parse import urlencode
 
@@ -16,6 +17,7 @@ from .delegations import (
     normalize_agent_task,
 )
 from .github import GitHubApiError
+from .models import ValidationError, _require_repository_string, validate_commit_comparison
 from .timeutils import parse_aware_iso8601
 
 
@@ -35,6 +37,43 @@ class DelegationObservation:
     task_pull_request_ids: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
     unavailable_task_ids: frozenset[str] = frozenset()
     unavailable_issue_numbers: frozenset[int] = frozenset()
+
+
+def observe_commit_comparison(
+    client: DelegationReadClient, repository: str, base_sha: str, head_sha: str,
+) -> dict[str, object]:
+    _require_repository_string({"repository": repository}, "repository")
+    if any(not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None
+           for sha in (base_sha, head_sha)):
+        raise ValueError("Commit comparison requires full lowercase commit SHAs.")
+    endpoint = f"/repos/{repository}/compare/{base_sha}...{head_sha}"
+    result: dict[str, object] = {
+        "repository": repository, "baseSha": base_sha, "headSha": head_sha,
+        "url": f"https://api.github.com{endpoint}", "availability": "unknown", "status": "unknown",
+        "baseCommitSha": None, "mergeBaseSha": None, "behindBy": None,
+    }
+    try:
+        response = client.get(f"{endpoint}?per_page=1")
+    except GitHubApiError:
+        result["availability"] = "unavailable"
+        return result
+    if not isinstance(response, Mapping):
+        return result
+    base, merge_base = response.get("base_commit"), response.get("merge_base_commit")
+    if not isinstance(base, Mapping) or not isinstance(merge_base, Mapping):
+        return result
+    observed = {
+        **result, "url": response.get("url"), "availability": "available", "status": response.get("status"),
+        "baseCommitSha": base.get("sha"), "mergeBaseSha": merge_base.get("sha"),
+        "behindBy": response.get("behind_by"),
+    }
+    try:
+        validate_commit_comparison(observed, repository)
+    except ValidationError:
+        # Malformed source metadata is unknown evidence, retaining the requested
+        # pair rather than adopting an untrusted response URL or partial proof.
+        return result
+    return observed
 
 
 def observe_delegations(
@@ -365,6 +404,12 @@ def _normalize_pull_request(
         raise ValueError(
             f"pull_requests[{index}].changed_files must be nonnegative when supplied."
         )
+    # Before merge this is a synthetic test commit, not the landed fix.
+    # After merge it identifies the base-branch merge/squash/rebase result:
+    # https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request
+    merge_sha = pull_request.get("merge_commit_sha")
+    if state is not PullRequestState.MERGED or not isinstance(merge_sha, str) or re.fullmatch(r"[0-9a-fA-F]{40}", merge_sha) is None:
+        merge_sha = None
     return DelegatedPullRequest(
         database_id=database_id,
         global_id=global_id,
@@ -373,6 +418,9 @@ def _normalize_pull_request(
         number=number,
         changed_files=changed_files,
         human_authored=_human_identity(pull_request.get("user")),
+        merged_at=parse_aware_iso8601(pull_request["merged_at"], "merged_at")
+        if state is PullRequestState.MERGED else None,
+        merge_commit_sha=merge_sha.lower() if merge_sha is not None else None,
     )
 
 

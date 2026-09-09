@@ -19,7 +19,7 @@ from .timeutils import parse_aware_iso8601
 _TERMINAL = frozenset({"completed", "failed", "abandoned"})
 _STATES = frozenset({
     "provisioning", "ready", "bound", "terminal", "cleanup-pending", "cleaned",
-    "provisioning-failed", "blocked",
+    "provisioning-failed", "blocked", "reserved",
 })
 _IMMUTABLE = (
     "schemaVersion", "ownershipId", "repository", "investigationId", "attempt",
@@ -30,6 +30,7 @@ _FIELDS = frozenset((*_IMMUTABLE,
     "recordedAt", "state", "sessionId", "terminalStatus", "workerStopped", "error",
     "gitDirectory", "gitDirectoryIdentity", "checkoutIdentity",
 ))
+_ONE_SHOT_FIELDS = frozenset({"launchMode", "attemptId"})
 
 
 def default_worktree_root() -> Path:
@@ -187,7 +188,8 @@ def _read_registry(path: Path) -> list[dict[str, Any]]:
     paths: dict[str, str] = {}
     for row in read_jsonl_rows(path):
         if (
-            set(row) != _FIELDS or type(row["schemaVersion"]) is not int or row["schemaVersion"] != 1
+            set(row) not in (_FIELDS, _FIELDS | _ONE_SHOT_FIELDS)
+            or type(row["schemaVersion"]) is not int or row["schemaVersion"] != 1
             or not isinstance(row["state"], str) or row["state"] not in _STATES
             or not isinstance(row["ownershipId"], str)
             or re.fullmatch(r"[0-9a-f]{32}", row["ownershipId"]) is None
@@ -199,6 +201,11 @@ def _read_registry(path: Path) -> list[dict[str, Any]]:
             )
         ):
             raise ValueError("Malformed investigation worktree registry row.")
+        if _ONE_SHOT_FIELDS.intersection(row) and (
+            row.get("launchMode") != "one-shot" or row.get("attemptId") != row["ownershipId"]
+            or row["sessionId"] is not None
+        ):
+            raise ValueError("Malformed one-shot investigation worktree registry binding.")
         _validate_lifecycle_metadata(row)
         if row["stateDirectory"] != str(path.parent.parent):
             raise ValueError("Investigation worktree belongs to another state directory.")
@@ -221,6 +228,9 @@ def _read_registry(path: Path) -> list[dict[str, Any]]:
             or (previous["terminalStatus"] is not None and previous["terminalStatus"] != row["terminalStatus"])
             or (previous["workerStopped"] and not row["workerStopped"])
             or (previous["state"] == "cleaned" and row["state"] != "cleaned")
+            or (previous.get("launchMode") is not None and any(
+                previous.get(key) != row.get(key) for key in _ONE_SHOT_FIELDS
+            ))
             or (previous["gitDirectory"] is not None and any(
                 previous[key] != row[key]
                 for key in ("gitDirectory", "gitDirectoryIdentity", "checkoutIdentity")
@@ -247,9 +257,10 @@ def _validate_lifecycle_metadata(row: Mapping[str, Any]) -> None:
         ))
         or (row["error"] is not None and not isinstance(row["error"], str))
         or (row["state"] == "bound" and row["sessionId"] is None)
+        or (row["state"] == "reserved" and row.get("launchMode") != "one-shot")
         or (row["state"] in {"terminal", "cleanup-pending", "cleaned"} and row["terminalStatus"] is None)
         or (row["state"] in {"cleanup-pending", "cleaned"} and not row["workerStopped"])
-        or (row["state"] in {"provisioning", "ready", "bound"} and row["terminalStatus"] is not None)
+        or (row["state"] in {"provisioning", "ready", "bound", "reserved"} and row["terminalStatus"] is not None)
         or (row["workerStopped"] and row["terminalStatus"] is None)
     ):
         raise ValueError("Malformed investigation worktree registry lifecycle metadata.")
@@ -264,7 +275,7 @@ def _validate_lifecycle_metadata(row: Mapping[str, Any]) -> None:
             raise ValueError("Malformed investigation worktree registry filesystem identity.")
     if row["gitDirectory"] is not None and not isinstance(row["gitDirectory"], str):
         raise ValueError("Malformed investigation worktree registry Git directory.")
-    if row["state"] in {"ready", "bound", "cleanup-pending", "cleaned"} and row["gitDirectory"] is None:
+    if row["state"] in {"ready", "bound", "reserved", "cleanup-pending", "cleaned"} and row["gitDirectory"] is None:
         raise ValueError("Investigation worktree registry lacks verified filesystem identity.")
 
 
@@ -401,7 +412,7 @@ def provision_investigation_worktree(
                 raise ValueError("This investigation attempt belongs to a different frozen request.")
             if any(previous[key] != record[key] for key in ("commonGitDirectory", "commonGitIdentity", "managedRoot")):
                 raise ValueError("This investigation attempt belongs to another Git repository/root.")
-            if previous["state"] not in {"ready", "bound"}:
+            if previous["state"] not in {"ready", "bound", "reserved"}:
                 raise ValueError(f"Attempt is {previous['state']}; reconcile it explicitly rather than reprovisioning.")
             _verify(previous, state)
             return previous
@@ -464,15 +475,22 @@ def get_investigation_worktree(
     *,
     checkout: Path,
     session_id: str | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Read a durable binding without verifying disposable source or cleanup safety."""
     record = _find(state_directory, request, checkout)
-    if session_id is not None:
-        _session(record, session_id)
+    if session_id is not None or attempt_id is not None:
+        _session(record, session_id, attempt_id)
     return record
 
 
-def _session(record: Mapping[str, Any], session_id: str | None) -> None:
+def _session(record: Mapping[str, Any], session_id: str | None, attempt_id: str | None = None) -> None:
+    if record.get("launchMode") == "one-shot":
+        if session_id is not None or attempt_id != record["attemptId"]:
+            raise ValueError("Owned worktree belongs to another logical one-shot attempt.")
+        return
+    if attempt_id is not None:
+        raise ValueError("A resumable worktree requires its actual session binding.")
     if record["sessionId"] != session_id:
         raise ValueError("Owned worktree belongs to another session.")
 
@@ -483,15 +501,53 @@ def validate_investigation_worktree(
     *,
     checkout: Path,
     session_id: str | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Verify registry ownership, Git identity, frozen HEAD and full cleanliness."""
     record = _find(state_directory, request, checkout)
-    if session_id is not None:
-        _session(record, session_id)
-    if record["state"] not in {"ready", "bound", "terminal"}:
+    if session_id is not None or attempt_id is not None:
+        _session(record, session_id, attempt_id)
+    if record["state"] not in {"ready", "bound", "reserved", "terminal"}:
         raise ValueError(f"Worktree is {record['state']}, not a validated allocation.")
     _verify(record, state_directory)
     return record
+
+
+def reserve_one_shot_worktree(
+    state_directory: Path, request: Mapping[str, Any], *, checkout: Path, recorded_at: str,
+) -> dict[str, Any]:
+    """Reserve an owned attempt without fabricating a runtime session identity."""
+    path = _ledger(state_directory)
+    _safe_path(path)
+    with exclusive_jsonl_lock(path):
+        record = _find(state_directory, request, checkout)
+        if record["state"] not in {"ready", "reserved"} or record["sessionId"] is not None:
+            raise ValueError("One-shot preparation requires an unbound owned worktree.")
+        _verify(record, state_directory)
+        if record["state"] == "reserved":
+            return record
+        return _append(
+            path, record, state="reserved", launchMode="one-shot",
+            attemptId=record["ownershipId"], recordedAt=recorded_at,
+        )
+
+
+def validate_one_shot_result_path(
+    state_directory: Path, allocation: Mapping[str, Any], result_path: Path,
+) -> Path:
+    """Check the exact worker-writable artifact without granting access to siblings."""
+    if not result_path.is_absolute():
+        raise ValueError("One-shot result path must be absolute.")
+    result = _safe_path(result_path)
+    forbidden = [
+        Path(allocation["managedRoot"]), _safe_path(state_directory),
+        Path(allocation["commonGitDirectory"]),
+        *(Path(row["checkoutPath"]) for row in list_investigation_worktrees(state_directory)),
+    ]
+    if result.name != f"{allocation['ownershipId']}.json" or any(result.is_relative_to(root) for root in forbidden):
+        raise ValueError("Result path must be attempt-specific and outside worker source, Git metadata and state.")
+    _private_directory(result.parent)
+    return result
 
 
 def bind_investigation_worktree(
@@ -534,6 +590,7 @@ def finish_investigation_worktree(
     status: str,
     recorded_at: str,
     confirm_worker_stopped: bool = False,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Mirror a durable terminal lifecycle event; this never removes source."""
     if status not in _TERMINAL:
@@ -545,16 +602,16 @@ def finish_investigation_worktree(
     _safe_path(path)
     with exclusive_jsonl_lock(path):
         record = _find(state_directory, request, checkout)
-        _session(record, session_id)
+        _session(record, session_id, attempt_id)
         if record["terminalStatus"] is not None:
             if record["terminalStatus"] != status:
                 raise ValueError("Worktree already has another terminal outcome.")
             if record["workerStopped"] or not confirm_worker_stopped:
                 return record
-        elif record["state"] not in {"ready", "bound", "provisioning-failed", "blocked"}:
+        elif record["state"] not in {"ready", "bound", "reserved", "provisioning-failed", "blocked"}:
             raise ValueError("Worktree is not ready for a terminal lifecycle event.")
         if status == "completed":
-            if record["sessionId"] is None:
+            if record["sessionId"] is None and record.get("launchMode") != "one-shot":
                 raise ValueError("Completion requires a bound worker session.")
             _verify(record, state_directory)
         # Failed workers can leave dirty or changed source. Preserve their
@@ -581,6 +638,7 @@ def cleanup_investigation_worktree(
     session_id: str | None = None,
     recorded_at: str,
     confirm_worker_stopped: bool = False,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Remove only an owned, stopped, terminal and clean registered checkout."""
     parse_aware_iso8601(recorded_at, "recordedAt")
@@ -588,7 +646,7 @@ def cleanup_investigation_worktree(
     _safe_path(path)
     with exclusive_jsonl_lock(path):
         record = _find(state_directory, request, checkout)
-        _session(record, session_id)
+        _session(record, session_id, attempt_id)
         if record["state"] not in {"terminal", "cleanup-pending", "cleaned"}:
             raise ValueError("Cleanup requires a terminal investigation worktree.")
         if confirm_worker_stopped is not True:
@@ -651,14 +709,17 @@ def reconcile_investigation_worktree(
             if record["state"] == state and record["error"] == str(error):
                 return record
             return _append(path, record, state=state, error=str(error), recordedAt=recorded_at)
-        if record["state"] in {"ready", "bound", "terminal", "cleanup-pending"}:
+        if record["state"] in {"ready", "bound", "reserved", "terminal", "cleanup-pending"}:
             if record["error"] is None:
                 return record
             return _append(path, record, error=None, recordedAt=recorded_at)
         target = Path(record["checkoutPath"])
         git_directory = Path(_git(target, "rev-parse", "--absolute-git-dir").strip())
         target.chmod(0o700)
-        state = "terminal" if record["terminalStatus"] else "bound" if record["sessionId"] else "ready"
+        state = (
+            "terminal" if record["terminalStatus"] else "reserved" if record.get("launchMode") == "one-shot"
+            else "bound" if record["sessionId"] else "ready"
+        )
         return _append(
             path, record, state=state, error=None, recordedAt=recorded_at,
             gitDirectory=str(git_directory), gitDirectoryIdentity=_identity(git_directory),
