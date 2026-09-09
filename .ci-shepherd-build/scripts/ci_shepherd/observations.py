@@ -1797,6 +1797,26 @@ def has_diagnostic_subject(line: str) -> bool:
     )
 
 
+def workflow_log_preview(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    diagnostics = set(_repair_diagnostic_lines(text))
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        normalized = normalize_log_text(line).removeprefix("##[error]").strip()
+        if normalized in diagnostics:
+            if offset + len(line) <= limit:
+                return text[:limit]
+            # Checkout/bootstrap output often fills the preview before a failure
+            # such as "Program.cs(3,14): error CS1525: ..." appears. Keep a
+            # contiguous window with leading context, not detached diagnostic lines
+            # that could attribute a later test's error to an earlier test.
+            start = max(0, min(offset - limit // 4, len(text) - limit))
+            return text[start:start + limit]
+        offset += len(line)
+    return text[:limit]
+
+
 def _repair_diagnostic_lines(text: str) -> list[str]:
     normalized = normalize_log_text(text)
     diagnostics: set[str] = set()

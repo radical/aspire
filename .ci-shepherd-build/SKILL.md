@@ -72,7 +72,10 @@ do not sample it, split its assessment across workers, or claim completion.
 Each issue case contains its full prepared evidence in `input`, the actual
 default judgment in `defaultJudgment`, and compact-only routing context in
 `decisionContext`. The compact `allowedEvidence` copy is not repeated because
-`input.evidenceBundle` already carries the complete evidence. Large cases use
+`input.evidenceBundle` already carries the complete evidence. Other shared
+fields, including `ciFailureTriage` and `repairEvidence`, appear only in `input`
+when their compact value is identical. Different compact values remain in
+`decisionContext`. Large cases use
 byte-bounded JSON fragments; read them in `partIndex` order and reconstruct the
 whole case before assessing it. Every part still requires its own receipt.
 
@@ -769,6 +772,11 @@ the evidence ID and error code are unchanged. `excerptTruncated`,
 `errorMessageTruncated`, and `factsTruncated` indicate partial previews; they
 are distinct from collector `truncated`. A digest is not a substitute for
 missing diagnostic contents.
+
+When startup output exceeds the log preview budget, preparation retains a
+contiguous failure-centered window using the existing diagnostic selector.
+This keeps compiler errors and failed-test context visible without increasing
+the 4,000-character bound or clearing truncation indicators.
 
 ### Owned worker checkouts
 

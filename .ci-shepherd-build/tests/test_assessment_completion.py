@@ -49,6 +49,7 @@ class AssessmentCompletionTests(unittest.TestCase):
                 "decisionContext": {
                     key: value for key, value in compact.items()
                     if key not in {"allowedEvidence", "defaultJudgment"}
+                    and (key not in prepared["issues"][0] or prepared["issues"][0][key] != value)
                 },
                 "selection": selection,
             }

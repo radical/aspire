@@ -477,6 +477,17 @@ class CycleTests(unittest.TestCase):
                 prepared["issues"][0]["ciFailureTriage"],
                 compact["issues"][0]["ciFailureTriage"],
             )
+            packet = json.loads((work / "assessment-batch-0001.json").read_text())
+            case, = packet["cases"]
+            self.assertEqual(prepared["issues"][0]["ciFailureTriage"], case["input"]["ciFailureTriage"])
+            self.assertEqual(
+                {
+                    key: value for key, value in compact["issues"][0].items()
+                    if key not in {"allowedEvidence", "defaultJudgment"}
+                    and (key not in prepared["issues"][0] or prepared["issues"][0][key] != value)
+                },
+                case["decisionContext"],
+            )
             judgments_path = work / "agent-judgments.json"
             judgments_path.write_text(
                 json.dumps({

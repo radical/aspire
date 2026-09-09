@@ -391,6 +391,7 @@ def materialize_assessment(work_dir: Path) -> dict[str, Any]:
             "decisionContext": {
                 key: value for key, value in compact.items()
                 if key not in {"allowedEvidence", "defaultJudgment"}
+                and (key not in issue or issue[key] != value)
             },
             "selection": selected,
         })

@@ -24,6 +24,39 @@ from test_workflow_health import add_execution, workflow_snapshot
 
 
 class CiFailureTriageTests(unittest.TestCase):
+    def test_preview_preserves_setup_context_already_inside_prefix(self) -> None:
+        text = (
+            "Run dotnet restore\n"
+            + "Preparing dependency inputs.\n" * 95
+            + "error: downloading https://nuget.example/Foo failed: connection reset by peer\n"
+            + "Cleaning up dependency outputs.\n" * 90
+        )
+        prepared = self._prepared(text)
+        case = build_ci_failure_triage(prepared)["assessments"][0]
+        self.assertEqual("setup", case["observed"]["phase"])
+        self.assertEqual("verified", case["family"]["status"])
+        log = next(record["payload"] for record in prepared["issues"][0]["evidenceBundle"]
+                   if record["kind"] == "workflow-log")
+        self.assertEqual(text[:4000], log["excerpt"])
+
+    def test_bounded_log_preview_retains_failure_after_job_startup(self) -> None:
+        startup = "2026-08-19T15:00:00Z Preparing repository checkout and runner environment.\n" * 100
+        for diagnostic, phase in (
+            ("src/File.cs(1,1): error CS1525: Invalid expression term ';'", "build"),
+            ("Failed Namespace.Type.Test [42 ms]\nAssert.Equal() Failure: Expected 1 Actual 2", "test"),
+        ):
+            with self.subTest(phase=phase):
+                prepared = self._prepared(startup + diagnostic)
+                case = build_ci_failure_triage(prepared)["assessments"][0]
+                self.assertEqual(phase, case["observed"]["phase"])
+                self.assertEqual("verified", case["family"]["status"])
+                log = next(record["payload"] for record in prepared["issues"][0]["evidenceBundle"]
+                           if record["kind"] == "workflow-log")
+                self.assertLessEqual(len(log["excerpt"]), 4000)
+                self.assertTrue(log["excerptTruncated"])
+                self.assertEqual("incomplete", case["evidenceCompleteness"])
+                self.assertIn(diagnostic, log["excerpt"])
+
     def test_setup_family_retains_the_failing_resource(self) -> None:
         families = []
         for resource in ("Foo", "Bar"):

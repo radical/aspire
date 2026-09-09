@@ -13,7 +13,7 @@ from ci_shepherd.models import (
     WORKFLOW_LOG_FACT_FIELDS, WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT,
     stable_json, validate_issue_body_payload, validate_workflow_log_payload,
 )
-from ci_shepherd.observations import build_observations, build_repair_evidence, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue
+from ci_shepherd.observations import build_observations, build_repair_evidence, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue, workflow_log_preview
 from ci_shepherd.eligibility import workflow_producer_admission
 from ci_shepherd.policy import load_policy
 from ci_shepherd.quarantine_reconciliation import add_test_maintenance_context
@@ -864,7 +864,10 @@ def _compact_payload(evidence_id: str, record: Mapping[str, Any]) -> dict[str, A
         for field in ("excerpt", "errorMessage"):
             text = payload.get(field)
             if isinstance(text, str):
-                compact[field] = text[:WORKFLOW_LOG_TEXT_LIMIT]
+                compact[field] = (
+                    workflow_log_preview(text, WORKFLOW_LOG_TEXT_LIMIT)
+                    if field == "excerpt" else text[:WORKFLOW_LOG_TEXT_LIMIT]
+                )
                 compact[f"{field}Truncated"] = len(text) > WORKFLOW_LOG_TEXT_LIMIT
         facts = payload.get("facts")
         if isinstance(facts, list):
