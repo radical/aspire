@@ -12,12 +12,13 @@ from ci_shepherd.investigation_worktrees import (
     bind_investigation_worktree,
     cleanup_investigation_worktree,
     finish_investigation_worktree,
+    investigation_capacity_inventory,
     list_investigation_worktrees,
     provision_investigation_worktree,
     reconcile_investigation_worktree,
     validate_investigation_worktree,
 )
-from ci_shepherd.investigations import select_investigation_request
+from ci_shepherd.investigations import read_investigation_session_events, select_investigation_request
 from ci_shepherd.models import stable_json
 
 
@@ -28,6 +29,7 @@ def main() -> int:
         command = commands.add_parser(name)
         command.add_argument("--state-dir", type=Path, required=True)
         if name == "list":
+            command.add_argument("--repository", help="Limit capacity inventory to this owner/repository.")
             continue
         if name != "verify":
             command.add_argument("--recorded-at", required=True)
@@ -43,6 +45,8 @@ def main() -> int:
             command.add_argument("--session-id", required=name == "bind")
         if name == "finish":
             command.add_argument("--status", choices=("completed", "failed", "abandoned"), required=True)
+            command.add_argument("--launch-outcome", choices=("registration-rejected", "not-invoked"))
+            command.add_argument("--execution-evidence", help="Observed pre-launch rejection or non-invocation, not inferred from missing events.")
         if name in {"finish", "cleanup"}:
             command.add_argument(
                 "--confirm-worker-stopped", action="store_true",
@@ -51,7 +55,14 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.operation == "list":
-            output = {"schemaVersion": 1, "worktrees": list_investigation_worktrees(args.state_dir)}
+            worktrees = list_investigation_worktrees(args.state_dir)
+            repositories = {args.repository} if args.repository else {
+                row["repository"] for row in [*worktrees, *read_investigation_session_events(args.state_dir)]
+            }
+            output = {
+                "schemaVersion": 1, "worktrees": worktrees,
+                "capacity": [investigation_capacity_inventory(args.state_dir, repository) for repository in sorted(repositories)],
+            }
         elif args.operation == "provision":
             plan = json.loads(args.plan.read_text(encoding="utf-8"))
             if not isinstance(plan, dict):
@@ -84,6 +95,8 @@ def main() -> int:
                 kwargs["confirm_worker_stopped"] = args.confirm_worker_stopped
             if args.operation == "finish":
                 kwargs["status"] = args.status
+                kwargs["launch_outcome"] = args.launch_outcome
+                kwargs["execution_evidence"] = args.execution_evidence
             operations = {
                 "bind": bind_investigation_worktree,
                 "verify": validate_investigation_worktree,

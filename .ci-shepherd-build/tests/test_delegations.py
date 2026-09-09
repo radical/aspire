@@ -789,7 +789,7 @@ class CapacityAccountingTests(unittest.TestCase):
                 self.assertEqual(1, usage.starts_in_rolling_24h)
                 self.assertFalse(decide_new_start(usage, CapacityLimits(5, 5, 1)).permitted)
 
-    def test_only_recent_missing_owned_tasks_block_new_starts(self) -> None:
+    def test_missing_owned_tasks_block_until_authoritative_reconciliation(self) -> None:
         now = datetime(2026, 9, 1, 16, tzinfo=UTC)
         old = derive_capacity_usage(
             tasks=[],
@@ -818,8 +818,8 @@ class CapacityAccountingTests(unittest.TestCase):
             now=now,
         )
 
-        self.assertTrue(old.complete)
-        self.assertNotIn("owned_task_missing:expired-task", old.problems)
+        self.assertFalse(old.complete)
+        self.assertIn("owned_task_missing:expired-task", old.problems)
         self.assertFalse(recent.complete)
         self.assertIn("owned_task_missing:missing-task", recent.problems)
 
@@ -1051,7 +1051,7 @@ class CapacityAccountingTests(unittest.TestCase):
         self.assertFalse(decide_new_start(usage, limits).permitted)
         self.assertTrue(decide_new_start(boundary_only_usage, limits).permitted)
 
-    def test_old_indeterminate_start_does_not_block_unrelated_work_forever(
+    def test_old_indeterminate_start_ages_out_daily_but_keeps_unknown_capacity_blocked(
         self,
     ) -> None:
         now = datetime(2026, 9, 2, 16, tzinfo=UTC)
@@ -1069,9 +1069,9 @@ class CapacityAccountingTests(unittest.TestCase):
             now=now,
         )
 
-        self.assertTrue(usage.complete)
+        self.assertFalse(usage.complete)
         self.assertEqual(0, usage.starts_in_rolling_24h)
-        self.assertTrue(
+        self.assertFalse(
             decide_new_start(
                 usage,
                 CapacityLimits(

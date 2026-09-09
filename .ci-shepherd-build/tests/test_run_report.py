@@ -3,10 +3,132 @@ from __future__ import annotations
 import re
 import unittest
 
+from ci_shepherd.assessment_batches import build_assessment_batches
 from ci_shepherd.run_report import render_run_markdown
+from tests.test_assessment_batches import issue_case
 
 
 class RunReportTests(unittest.TestCase):
+    def test_cloud_outcome_keeps_reported_sources_separate_from_task_pr_and_assessment(self) -> None:
+        from ci_shepherd import delegation_observer
+        from tests.test_cloud_outcomes import outcome_snapshot
+        from tests.test_delegation_observer import ScriptedClient
+
+        value = outcome_snapshot(body="<script>untrusted</script> Need credentials. " + "x" * 4000)
+        record = value["delegationStatus"]["records"][0]
+        source = delegation_observer._outcome_pull_source("owner/repo", record["pullRequests"][0], {
+            "html_url": "https://github.com/owner/repo/pull/201", "comments": 1,
+        })
+        delegation_observer.initialize_cloud_outcome(record, {101: source})
+        delegation_observer.attach_cloud_outcomes(value, None, ScriptedClient({}, {
+            "/repos/owner/repo/issues/201/comments?per_page=5&page=1": [{
+                "id": 91, "html_url": "https://github.com/owner/repo/pull/201#issuecomment-91",
+                "issue_url": "https://api.github.com/repos/owner/repo/issues/201",
+                "user": {"login": "Copilot"}, "body": "Need current failure logs.",
+                "created_at": "2026-09-02T18:59:00Z", "updated_at": "2026-09-02T18:59:00Z",
+            }],
+        }))
+        report = render_run_markdown(value, self.prepared, self.judgments)
+        for expected in (
+            "task state: completed", "#201 (open); draft: True; changed files: 3",
+            "Reported cloud outcome (untrusted)", "attempt assignment:1, task task-1",
+            "PR body reported at https://github.com/owner/repo/pull/201 by Copilot",
+            "&lt;script&gt;untrusted&lt;/script&gt; Need credentials.",
+            "source preview truncated",
+            "PR comment reported at https://github.com/owner/repo/pull/201#issuecomment-91 by Copilot",
+            "Need current failure logs.", "observed head: " + "a" * 40,
+            "Assessed repair outcome:", "Task completion and draft contents are not verified repair.",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, report)
+
+    def test_legacy_cloud_tracking_does_not_invent_an_outcome(self) -> None:
+        self.snapshot["delegationStatus"] = {"records": [{
+            "issueNumber": 1, "actionId": "assignment:1", "taskId": "task-1",
+            "taskState": "completed", "pullRequests": [],
+        }]}
+        report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
+        self.assertIn("task task-1: outcome evidence unavailable", report)
+        self.assertIn("Task completion and draft contents are not verified repair.", report)
+
+    def test_report_shows_route_and_priority_from_frozen_repair_facts(self) -> None:
+        self.prepared["issues"][0]["repairEvidence"] = {
+            "current": True, "category": "blocking-build", "recurrent": True,
+        }
+        recommendation = self.judgments["issues"][0]["recommendations"][0]
+        for disposition, route in (
+            ("delegate-copilot", "cloud investigate-and-fix"),
+            ("investigate", "local classification"),
+        ):
+            with self.subTest(disposition=disposition):
+                recommendation["disposition"] = disposition
+                report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
+                self.assertIn(f"route: {route}; scheduling priority: current-workflow-break", report)
+                self.assertIn("matching recurrence: True", report)
+
+    def test_assessment_workload_uses_packet_manifest_not_receipt_or_token_counts(self) -> None:
+        manifest, _ = build_assessment_batches(
+            [issue_case(1)], snapshot_id=self.prepared["snapshotId"], source_fingerprints={},
+        )
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments, assessment_manifest=manifest,
+        )
+        byte_count = sum(group["byteCount"] for group in manifest["workerGroups"])
+        self.assertIn("| Current | 1 | 1 | 1 | " + str(byte_count) + " |", report)
+        self.assertIn("assessment packets, not package restore", report)
+        self.assertIn("not token counts or billed usage", report)
+        self.assertIn("0 issues / 0 PRs with assessment acknowledgements", report)
+
+    def test_assessment_workload_rejects_stale_or_inconsistent_manifests(self) -> None:
+        for change in ("snapshot", "bytes", "cases", "duplicate-case", "batch-membership", "packet-membership"):
+            manifest, _ = build_assessment_batches(
+                [issue_case(1)], snapshot_id=self.prepared["snapshotId"], source_fingerprints={},
+            )
+            if change == "snapshot":
+                manifest["snapshotId"] = "snapshot:other"
+            elif change == "bytes":
+                manifest["workerGroups"][0]["byteCount"] += 1
+            elif change == "cases":
+                manifest["caseCount"] = 999
+            elif change == "duplicate-case":
+                manifest["workerGroups"][0]["caseIds"].append("issue:1")
+            elif change == "batch-membership":
+                manifest["workerGroups"][0]["batchIds"][0] = "batch:unknown"
+            else:
+                manifest["workerGroups"][0]["packetFiles"][0] = "unknown.json"
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "Assessment workload"):
+                render_run_markdown(
+                    self.snapshot, self.prepared, self.judgments, assessment_manifest=manifest,
+                )
+
+    def test_missing_assessment_workload_is_unknown_not_zero(self) -> None:
+        report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
+        self.assertIn("Unknown: no assessment packet manifest supplied.", report)
+        self.assertIn("Unknown: current worktree and lifecycle capacity inventory was not supplied.", report)
+
+    def test_local_capacity_shows_unconfirmed_owner_outside_current_source_and_selection(self) -> None:
+        capacity = {
+            "repository": self.snapshot["repository"], "maxConcurrent": 3,
+            "occupiedSlots": 1, "availableSlots": 2,
+            "reservations": [{
+                "issueNumber": 999, "sessionId": "older-source-session",
+                "launchState": "termination-unconfirmed", "sourceRevision": "a" * 40,
+            }],
+        }
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            review_selection={"selectedIssues": [], "excludedIssues": []},
+            investigation_capacity=capacity,
+        )
+        self.assertIn("1 occupied of 3 slots; 2 available. Older source pins remain included.", report)
+        self.assertIn("| 999 | older-source-session | termination-unconfirmed | " + "a" * 40 + " |", report)
+        self.assertIn("A deadline or missing worker response is not proof", report)
+        with self.assertRaisesRegex(ValueError, "Investigation capacity"):
+            render_run_markdown(
+                self.snapshot, self.prepared, self.judgments,
+                investigation_capacity={**capacity, "occupiedSlots": 0},
+            )
+
     def test_one_shot_preparation_and_dispatch_do_not_claim_performed_work(self) -> None:
         for status, execution, label in (
             ("prepared", "not-dispatched", "Investigation prepared; not dispatched"),

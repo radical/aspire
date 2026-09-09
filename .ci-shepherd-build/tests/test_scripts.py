@@ -4698,6 +4698,8 @@ class PrototypeScriptTests(unittest.TestCase):
             shutil.rmtree(scratch, ignore_errors=True)
 
     def test_render_run_cli_joins_companions_without_treating_decisions_as_effects(self) -> None:
+        from ci_shepherd.assessment_batches import build_assessment_batches
+
         render_script = load_script("render")
         scratch = Path(__file__).parent / ".artifacts" / self._testMethodName
         scratch.mkdir(parents=True, exist_ok=True)
@@ -4705,11 +4707,16 @@ class PrototypeScriptTests(unittest.TestCase):
         judgments = poc_judgments(
             prepared, [(1, "flaky-test", "no-action", "issue", 1, "high", [], "New evidence.")],
         )
+        manifest, _ = build_assessment_batches(
+            [{"caseId": "issue:1", "evidenceIds": ["issue:1"], "input": prepared}],
+            snapshot_id=prepared["snapshotId"], source_fingerprints={},
+        )
         artifacts = {
             "assessment-input.json": prepared,
             "judgments.json": judgments,
             "input.json": {"repository": "owner/repo", "issues": [{"number": 1, "title": "Failure"}]},
             "review-selection.json": {"selected": [{"issueNumber": 1, "changeClass": "new"}]},
+            "assessment-batches.json": manifest,
             "invocation.json": {
                 "scope": "whole-invocation",
                 "runId": "invocation:one", "startedAt": "2026-09-05T12:00:00Z",
@@ -4729,6 +4736,7 @@ class PrototypeScriptTests(unittest.TestCase):
                 "--action-events", str(scratch / "missing-actions.jsonl"),
                 "--investigation-results", str(scratch / "missing-investigation-results.jsonl"),
                 "--investigation-sessions", str(scratch / "missing-investigation-sessions.jsonl"),
+                "--state-dir", str(scratch / "state"),
                 "--output", str(scratch / "operator" / "report.md"),
             ]), contextlib.redirect_stdout(io.StringIO()):
                 completion_path = scratch / "assessment-completion.json"
@@ -4748,6 +4756,8 @@ class PrototypeScriptTests(unittest.TestCase):
             self.assertIn("No executed action recorded", markdown)
             self.assertIn("**Whole invocation duration:** unknown", markdown)
             self.assertIn("Recorded whole-invocation window: 2m", markdown)
+            self.assertIn("| Current | 1 | 1 | 1 | " + str(manifest["workerGroups"][0]["byteCount"]) + " |", markdown)
+            self.assertIn("0 occupied of 3 slots; 3 available.", markdown)
         finally:
             shutil.rmtree(scratch)
 

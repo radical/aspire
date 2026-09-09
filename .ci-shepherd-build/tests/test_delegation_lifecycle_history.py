@@ -203,7 +203,8 @@ class DelegationHistoryTests(unittest.TestCase):
         self.assertFalse(record["copilotAssigned"])
         self.assertTrue(record["requiresNewDecision"])
         self.assertEqual(1, status["capacity"]["openDelegatedPullRequests"])
-        self.assertTrue(status["capacity"]["complete"])
+        self.assertFalse(status["capacity"]["complete"])
+        self.assertIn("owned_task_missing:task-1", status["capacity"]["problems"])
         events.append({"eventType": "delegation-observed", "actionId": record["actionId"], "record": record})
         self.assertEqual(frozenset({"task-1"}), active_owned_task_ids_from_events(events))
         again, _ = collect.observe_delegation_status(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime
 import unittest
 
 from ci_shepherd.refresh import (
@@ -211,6 +212,49 @@ def current_history(snapshot: dict[str, object] | None = None) -> dict[str, obje
 
 
 class RefreshPlanTests(unittest.TestCase):
+    def test_same_unavailable_run_is_reused_until_exact_retry_time_without_becoming_available(self) -> None:
+        snapshot = prior_snapshot()
+        record = snapshot["evidence"]["run:99"]
+        record["availability"] = "partial"
+        record["payload"]["errorCategory"] = "not-found"
+        history = current_history(snapshot)
+        for instant, expected in (
+            (datetime(2026, 8, 18, 23, 59, 59, tzinfo=UTC), "reuse"),
+            (datetime(2026, 8, 19, tzinfo=UTC), "retry"),
+        ):
+            with self.subTest(instant=instant):
+                plan = plan_refresh(REPOSITORY, [issue_summary(1)], snapshot, history, now=instant)
+                self.assertIn("run:99", getattr(plan, expected))
+                completed = complete_refresh_plan(plan, snapshot["evidence"])
+                self.assertIn("run:99", getattr(completed, expected))
+                if expected == "reuse":
+                    inventory = reconstruct_inventory(REPOSITORY, [issue_summary(1)], snapshot, plan)
+                    self.assertEqual(record, inventory.evidence["run:99"])
+                    self.assertEqual("partial", inventory.evidence["run:99"]["availability"])
+
+    def test_changed_source_and_current_discovery_bypass_historical_unavailable_backoff(self) -> None:
+        for condition in ("changed-source", "current-discovery", "unverified-error", "changed-identity", "full-refresh"):
+            with self.subTest(condition=condition):
+                snapshot = prior_snapshot()
+                record = snapshot["evidence"]["run:99"]
+                record["availability"] = "partial"
+                record["payload"]["errorCategory"] = "not-found"
+                if condition == "current-discovery":
+                    record["discoveredBy"] = "workflow-discovery"
+                elif condition == "unverified-error":
+                    record["payload"]["errorCategory"] = "generic"
+                history = current_history(snapshot)
+                if condition == "changed-identity":
+                    history["evidence"]["run:99"]["payload"]["runId"] = 100
+                summary = issue_summary(
+                    1, updated_at="2026-08-18T01:00:00Z" if condition == "changed-source" else UPDATED_AT,
+                )
+                plan = plan_refresh(
+                    REPOSITORY, [summary], snapshot, history,
+                    now=datetime(2026, 8, 18, 1, tzinfo=UTC), full_refresh=condition == "full-refresh",
+                )
+                self.assertNotIn("run:99", plan.reuse)
+
     def test_refresh_plan_normalizes_all_members_to_sorted_tuples(self) -> None:
         plan = RefreshPlan(
             reuse=("z", "a", "a"),

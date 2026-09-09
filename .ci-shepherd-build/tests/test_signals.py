@@ -740,6 +740,34 @@ Intermittent failure.
             ],
         )
 
+    def test_reporter_markdown_pull_request_field_preserves_source_provenance(self) -> None:
+        for repository in (REPOSITORY, "other/repo"):
+            with self.subTest(repository=repository):
+                url = f"https://github.com/{repository}/pull/50"
+                signals = extract(f"**Pull Request:** [#50]({url})")
+                self.assertEqual(
+                    [("pull-request", repository, 50, url, "triggering-pull-request")],
+                    [
+                        (ref["targetType"], ref["targetRepository"], ref["targetNumber"],
+                         ref["targetUrl"], ref["extractionMethod"])
+                        for ref in signals.references
+                    ],
+                )
+
+    def test_reporter_markdown_pull_request_requires_exact_unquoted_source_field(self) -> None:
+        source = "**Pull Request:** [#50](https://github.com/microsoft/aspire/pull/50)"
+        for text in (
+            f"```\n{source}\n```", f"> {source}", f"<!--\n{source}\n-->",
+            f"## Example\n{source}", source.replace("[#50]", "[#51]"),
+            source.replace("**Pull Request:**", "**Repair Pull Request:**"),
+            f"## Resolution\n{source}",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual([], [
+                    ref for ref in extract(text).references
+                    if ref["extractionMethod"] == "triggering-pull-request"
+                ])
+
     def test_only_whitelisted_html_markers_are_recognized(self) -> None:
         signals = extract(
             "\n".join(

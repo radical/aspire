@@ -38,6 +38,8 @@ See docs/superpowers/plans/2026-09-03-ci-shepherd-autonomous-policy.md
 
 from __future__ import annotations
 
+from .eligibility import repair_priority_key
+
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -195,7 +197,7 @@ def build_policy_selection(
     pending = [record for record in base if record["status"] is None]
     pending.sort(
         key=lambda record: (
-            proposal_by_action_id[str(record["actionId"])].get("workflowPriority") is not True,
+            *_repair_order(proposal_by_action_id[str(record["actionId"])]),
             priority_for_action_id(str(record["actionId"]))[0],
             operation_priority(str(record["operation"])),
             int(record["issueNumber"]),
@@ -339,6 +341,21 @@ def build_policy_selection(
         "maximumWriteExposure": maximum_write_exposure,
         **({"mutationBlocked": True} if global_stop else {}),
     }
+
+
+def _repair_order(proposal: Mapping[str, object]) -> tuple[object, ...]:
+    facts = proposal.get("repairPriorityFacts")
+    rank, not_recurrent, last_failure, _ = repair_priority_key({
+        **(facts if isinstance(facts, Mapping) else {}), "issueNumber": proposal["issueNumber"],
+    })
+    # Routine status upkeep must not take the next mutation ahead of a repair
+    # start. Human decision and prerequisite explanations keep the subject rank.
+    suffix = str(proposal["actionId"]).rsplit(":", 1)[-1]
+    if proposal["operation"] in COMMENT_OPERATIONS and suffix in {
+        "watch-comment", "retire-status-comment", "quarantine-blocked-comment", "quarantine-reconciliation-comment",
+    }:
+        rank = 5
+    return rank, not_recurrent, last_failure
 
 
 def render_policy_selection_section(

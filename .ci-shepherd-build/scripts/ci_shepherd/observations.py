@@ -16,13 +16,29 @@ from typing import Any, Mapping, NamedTuple
 from urllib.parse import quote
 
 from ci_shepherd.naming import normalize_component
-from ci_shepherd.models import validate_workflow_log_payload
+from ci_shepherd.models import (
+    WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT, stable_json, validate_workflow_log_payload,
+)
 from ci_shepherd.policy import ManualPolicy
+from ci_shepherd.quarantine import is_quarantine_test_method_name
 from ci_shepherd.run_scope import reported_issue_scope, scopes_conflict, verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 
 
 _FAILED_JOB_CONCLUSIONS = frozenset({"action_required", "failure", "startup_failure", "timed_out"})
+# Runner boilerplate such as "Process completed with exit code 1." names no
+# failing subject; repetition cannot turn it into an identified repair.
+_GENERIC_FAILURE_RE = re.compile(
+    r"(?i)(?:process completed with exit code \d+|(?:the )?(?:job|step|process|operation|command) "
+    r"(?:failed|timed out|exited with (?:code|status) \d+)|exit (?:code|status)[: ]+\d+|error|failed|failure)[.!]?"
+)
+# `dotnet --info` emits ".NET SDK:\n Version: 10.0.400". GitHub job
+# log downloads may prefix both lines with an RFC3339 timestamp.
+_LOG_TIMESTAMP = r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z )?"
+_DOTNET_SDK_RE = re.compile(
+    rf"(?m)^{_LOG_TIMESTAMP}\.NET SDK:\r?\n{_LOG_TIMESTAMP}[ \t]*Version:[ \t]*"
+    r"(?P<version>\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)[ \t]*\r?$"
+)
 # Matches an HTTP status inside raw log text, e.g.
 #   "download-artifact failed with HTTP 502"
 #   "##[error]Unable to download: status code returned was: 429"
@@ -31,6 +47,21 @@ _HTTP_STATUS_RE = re.compile(
     r"(?i)(?:\bHTTP(?:/[0-9](?:\.[0-9])?)?\s+|\bstatus code[^\r\n:]{0,80}:\s*)(?P<code>[1-5][0-9]{2})\b"
 )
 _RETRY_RELEVANT_HTTP_STATUSES = frozenset({408, 425, 429, *range(500, 600)})
+# Status/transport boilerplate identifies no downloaded resource or failing
+# component. Keep it useful for retry classification, not repair recurrence.
+_GENERIC_HTTP_DIAGNOSTIC_WORDS = frozenset({
+    "a", "an", "the", "to", "from", "with", "of", "for", "and", "is", "was",
+    "error", "failed", "failure", "unable", "download", "downloading", "fetch",
+    "fetching", "request", "response", "status", "code", "returned", "received",
+    "does", "not", "indicate", "success", "service", "unavailable", "bad",
+    "gateway", "timeout", "timed", "out", "internal", "server", "remote",
+    "too", "many", "requests", "connection", "file", "artifact", "package",
+})
+# An observed URL, path, resource identifier (runtime-archive), or quoted name
+# distinguishes HTTP repair subjects. Unnamed transport prose stays local.
+_HTTP_DIAGNOSTIC_SUBJECT_RE = re.compile(
+    r"https?://\S+|\b\w+(?:[-_./\\]\w+)+\b|[\"'`]\w+[\"'`]"
+)
 # MSBuild/Roslyn/NuGet/SDK diagnostic codes. Used with fullmatch against structured
 # `errorCode` facts, where the collector already isolated the bare code.
 _BUILD_BREAK_CODE_RE = re.compile(r"\b(?:CS[0-9]{4}|NU[0-9]{4}|NETSDK[0-9]{4})\b", re.IGNORECASE)
@@ -107,6 +138,144 @@ _OCCURRENCE_IDENTITY_FIELDS = ("fingerprintId", "testName", "issueNumber", "runI
 # History keys observations will read. Everything else - notably causes and
 # proposals - is a decision, not an observation.
 _FACTUAL_HISTORY_FIELDS = frozenset({"occurrences", "coverage"})
+
+
+def build_repair_evidence(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue_number: int,
+) -> dict[str, Any]:
+    """Derive repair witnesses separately from quarantine/recovery thresholds."""
+    now = parse_aware_iso8601(snapshot["collectedAt"], "collectedAt")
+    evidence = snapshot["evidence"]
+    groups: dict[tuple[object, ...], list[Mapping[str, Any]]] = defaultdict(list)
+    gaps: set[str] = set()
+    unverified_pr_scopes: set[tuple[object, ...]] = set()
+    for occurrence in observations.get("occurrences", []):
+        if occurrence["issueNumber"] != issue_number:
+            continue
+        run = evidence.get(f"run:{occurrence['runId']}", {}).get("payload", {})
+        scope = occurrence.get("verifiedScope", {})
+        if (
+            scope.get("kind") == "unknown" or scope.get("repository") != snapshot["repository"]
+            or type(run.get("workflowId")) is not int or not run.get("workflowPath")
+            or not all(occurrence.get(key) for key in ("jobName", "lane", "os", "observedAt"))
+        ):
+            gaps.add("Identify the verified workflow, run scope, failing job/lane and operating system.")
+            continue
+        observed_at = parse_aware_iso8601(occurrence["observedAt"], "occurrence.observedAt")
+        if not now - timedelta(days=14) <= observed_at <= now:
+            continue
+        if occurrence.get("incompleteDiagnosticEvidenceIds"):
+            gaps.add("Read the complete failing diagnostic to identify the repair subject.")
+            continue
+        if occurrence.get("testName") and evidence.get(occurrence.get("testNameEvidenceId"), {}).get("kind") not in {
+            "workflow-log", "workflow-job", "workflow-test-results",
+        }:
+            gaps.add("Verify the exact failing test or scenario in the execution output, not only the issue title.")
+            continue
+        failure_identity = occurrence["fingerprintId"]
+        diagnostic_identity = tuple(sorted({
+            (fact.get("field"), str(fact.get("normalized", fact.get("raw", ""))))
+            for eid in occurrence["evidenceIds"]
+            for fact in evidence.get(eid, {}).get("payload", {}).get("facts", [])
+            if fact.get("field") in {"errorCode", "exceptionType", "errorMessage"}
+        }))
+        if not occurrence.get("testName"):
+            execution_diagnostics = sorted({
+                line
+                for eid in occurrence["evidenceIds"]
+                if evidence.get(eid, {}).get("kind") == "workflow-log"
+                for line in _repair_diagnostic_lines(evidence[eid]["payload"].get("excerpt", ""))
+            })
+            # Coarse "infra:http-503:..." fingerprints deliberately group
+            # transports for retry/health analysis. Repair requires the actual
+            # subject: "runtime-archive download failed" is not "browser-package
+            # download failed", even on the same runner and failed step.
+            if not execution_diagnostics and failure_identity.startswith(("infra:", "diagnostic:")):
+                gaps.add("Identify the failing resource or component in the execution diagnostic, not only its HTTP status.")
+                continue
+            diagnostic_identity += tuple(("executionDiagnostic", line) for line in execution_diagnostics)
+        scope_identity = _scope_subject(scope)
+        shared_scope_identity = None
+        sdk_versions = {
+            match["version"]
+            for eid in occurrence["evidenceIds"]
+            if evidence.get(eid, {}).get("kind") == "workflow-log"
+            for match in _DOTNET_SDK_RE.finditer(evidence[eid]["payload"].get("excerpt", ""))
+        }
+        # A shared full source commit proves the relevant harness is identical.
+        # Without that stronger witness, do not infer equivalence between PRs
+        # from their base branch, runner image, issue text or error code.
+        if (
+            scope.get("kind") == "pull-request" and len(sdk_versions) == 1
+            and re.fullmatch(r"[0-9a-f]{40}", str(run.get("headSha", "")))
+            and (failure_identity.startswith("build:") or is_quarantine_test_method_name(occurrence.get("testName") or ""))
+        ):
+            shared_scope_identity = ("shared-harness", snapshot["repository"], next(iter(sdk_versions)), run["headSha"])
+        elif scope.get("kind") == "pull-request":
+            unverified_pr_scopes.add(scope_identity)
+        if failure_identity.startswith("unknown:"):
+            gaps.add("Identify the failing scenario, step or diagnostic rather than a generic job exit.")
+            continue
+        signature = (
+            run["workflowId"], run["workflowPath"], run.get("event"), scope_identity,
+            occurrence["jobName"], occurrence["lane"], occurrence["os"], occurrence.get("laneId"),
+            occurrence.get("testName"), failure_identity,
+            diagnostic_identity,
+        )
+        groups[signature].append(occurrence)
+        if shared_scope_identity is not None:
+            groups[(*signature[:3], shared_scope_identity, *signature[4:])].append(occurrence)
+    candidates = []
+    for signature, matching in groups.items():
+        runs = {
+            occurrence["runId"]: max(
+                (item for item in matching if item["runId"] == occurrence["runId"]),
+                key=lambda item: (item["observedAt"], item.get("attempt") or 0),
+            )
+            for occurrence in matching
+        }
+        latest = max(runs.values(), key=lambda item: item["observedAt"])
+        deterministic = "toolchain-build-break" in latest["allowedCauses"]
+        category = (
+            "blocking-build" if deterministic
+            else "flaky-test" if latest.get("testName") and is_quarantine_test_method_name(latest["testName"])
+            else "transient-infrastructure" if "infra-transient" in latest["allowedCauses"]
+            else "product-or-tooling"
+        )
+        recurrent = len(runs) >= 2
+        current = latest.get("coverageState") != "covered"
+        witnesses = sorted(runs.values(), key=lambda item: item["observedAt"], reverse=True)[:2]
+        candidates.append({
+            "current": current, "ready": current and (deterministic or recurrent), "category": category,
+            "subjectKey": stable_json(signature),
+            # These repository workflows exercise ordinary CI, unlike the
+            # dedicated quarantine workflow, which can also run on a PR.
+            "broaderImpact": evidence[f"run:{latest['runId']}"]["payload"]["workflowPath"] in {
+                ".github/workflows/ci.yml", ".github/workflows/tests.yml",
+            },
+            "quarantinedCoverage": evidence[f"run:{latest['runId']}"]["payload"]["workflowPath"] == ".github/workflows/tests-quarantine.yml",
+            "allowedCategories": sorted({category, "product-or-tooling", *(
+                ["flaky-test"] if latest.get("testName") else []
+            )}),
+            "recurrent": recurrent, "independentRunCount": len(runs), "lastFailureAt": latest["observedAt"],
+            "runIds": sorted(item["runId"] for item in witnesses),
+            "evidenceIds": sorted({f"issue:{issue_number}", *(eid for item in witnesses for eid in item["evidenceIds"])}),
+            "missingFacts": [] if deterministic or recurrent else [
+                "Verify the shared toolchain and harness revision before combining failures from different pull requests."
+                if len(unverified_pr_scopes) > 1 else
+                "Determine whether this one-off failure is transient, or observe a second matching independent run.",
+            ],
+        })
+    if candidates:
+        return max(candidates, key=lambda item: (
+            item["ready"], item["broaderImpact"], item["category"] == "blocking-build", item["lastFailureAt"], item["subjectKey"],
+        ))
+    return {
+        "current": False, "ready": False, "category": "unknown", "allowedCategories": [],
+        "recurrent": False, "independentRunCount": 0, "lastFailureAt": None,
+        "runIds": [], "evidenceIds": [],
+        "missingFacts": sorted(gaps) or ["Identify a current failed execution and its exact repair subject."],
+    }
 
 
 def build_observations(
@@ -740,6 +909,23 @@ def _build_job_occurrences(
                 allowed_causes=["infra-transient", "unknown"],
                 retry_safe=normalize_component(pattern_id) in policy.retry_safe_pattern_ids,
                 evidence_ids=evidence_ids,
+            )
+        ]
+
+    diagnostics = sorted({
+        line for log in log_records
+        for line in _repair_diagnostic_lines(log.payload.get("excerpt", ""))
+    })
+    if diagnostics:
+        return [
+            _non_test_occurrence(
+                issue_number=issue_number, run_id=run_id, attempt=attempt, job_id=job_id,
+                workflow=workflow, lane=lane, os_name=os_name, head_sha=head_sha,
+                observed_at=observed_at,
+                fingerprint_id=f"diagnostic:{normalize_component('|'.join(diagnostics))}",
+                fingerprint_components=_fingerprint_components(runner_os=os_name, job=job_name),
+                allowed_causes=["product-regression-suspect", "unknown"],
+                retry_safe=False, evidence_ids=evidence_ids,
             )
         ]
 
@@ -1581,6 +1767,34 @@ def _diagnostic_lines(text: str) -> list[str]:
         for line in text.splitlines()
         if not _ASSERTION_LINE_RE.match(line) and _DIAGNOSTIC_LINE_RE.search(line) is not None
     ]
+
+
+def _repair_diagnostic_lines(text: str) -> list[str]:
+    # Downloaded logs contain "2026-08-19T15:01:00.123Z ##[error]...".
+    # Strip only the transport prefix; keep resource names, paths and URLs so
+    # unrelated failures cannot become matching repair evidence.
+    normalized = "\n".join(
+        re.sub(rf"^{_LOG_TIMESTAMP}", "", line).strip()
+        for line in text.splitlines()
+    )
+    diagnostics: set[str] = set()
+    for line in _diagnostic_lines(normalized):
+        line = line.removeprefix("##[error]").strip()
+        if _ASSERTION_LINE_RE.match(line) or _GENERIC_FAILURE_RE.fullmatch(line):
+            continue
+        if _HTTP_STATUS_RE.search(line):
+            subjects = _HTTP_DIAGNOSTIC_SUBJECT_RE.findall(_HTTP_STATUS_RE.sub("", line))
+            if not any(
+                set(re.findall(r"[a-z]+", subject.casefold())).difference(_GENERIC_HTTP_DIAGNOSTIC_WORDS)
+                for subject in subjects
+            ):
+                continue
+        diagnostics.add(line)
+        # Never truncate identity: different tails would become the same
+        # subject. Oversized/multi-diagnostic output needs a narrower diagnosis.
+        if len(diagnostics) > WORKFLOW_LOG_FACT_LIMIT or len(stable_json(sorted(diagnostics))) > WORKFLOW_LOG_TEXT_LIMIT:
+            return []
+    return sorted(diagnostics)
 
 
 def _network_pattern(

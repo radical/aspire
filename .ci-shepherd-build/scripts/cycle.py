@@ -27,7 +27,10 @@ from ci_shepherd.coordinator_state import (
     make_lock_free_durable_intent_reader,
 )
 from ci_shepherd.delegations import render_delegation_status_section
-from ci_shepherd.evidence_planning import build_proposal_evidence_requests
+from ci_shepherd.evidence_planning import (
+    build_proposal_evidence_requests,
+    record_unavailable_evidence_wakeups,
+)
 from ci_shepherd.execution_state import ActionEventStore
 from ci_shepherd.history import load_current
 from ci_shepherd.investigations import (
@@ -37,7 +40,8 @@ from ci_shepherd.investigations import (
     read_investigation_results,
     render_investigation_section,
 )
-from ci_shepherd.lifecycle import prepare_assessment
+from ci_shepherd.investigation_worktrees import investigation_capacity_inventory
+from ci_shepherd.lifecycle import assessment_issue_update_times, cloud_outcome_issue_numbers, control_comment_only_issue_numbers, prepare_assessment
 from ci_shepherd.managed_coverage import (
     block_policy_selection,
     build_managed_item_coverage,
@@ -478,7 +482,13 @@ def _restart_after_evidence_expansion(
         "openIssues": sorted(set(expanded_snapshot["openIssues"]) | reviewed_delegations),
     }
     prepared = attach_latest_investigation_results(
-        prepare_assessment(assessment_snapshot),
+        prepare_assessment(
+            assessment_snapshot,
+            issue_update_times=assessment_issue_update_times(
+                assessment_snapshot, snapshot,
+                _load_json(work_dir / "assessment-input.json", "pre-expansion assessment"),
+            ),
+        ),
         read_investigation_results(Path(str(manifest["stateDirectory"]))),
     )
     compact = build_compact_poc_input(prepared)
@@ -564,11 +574,24 @@ def _restart_after_evidence_expansion(
 def _changed_prepared_issues(
     prepared: Mapping[str, Any],
     previous_prepared: Mapping[str, Any] | None,
+    *,
+    control_only_issue_numbers: frozenset[int] = frozenset(),
 ) -> set[int]:
     if previous_prepared is None:
         return set()
     compact = build_compact_poc_input(prepared)
     previous_compact = build_compact_poc_input(previous_prepared)
+    for document in (compact, previous_compact):
+        for issue in document["issues"]:
+            if issue["issueNumber"] not in control_only_issue_numbers:
+                continue
+            # Normalize comparison copies only. Frozen evidence timestamps still
+            # bind action preflight and remain visible in the assessment/report.
+            if isinstance(issue.get("automationContext"), dict):
+                issue["automationContext"].pop("updatedAt", None)
+            context = issue.get("delegationContext", {})
+            if isinstance(context.get("activity"), dict):
+                context["activity"].pop("issueUpdatedAt", None)
     previous = {
         issue["issueNumber"]: issue
         for issue in previous_compact.get("issues", [])
@@ -672,12 +695,16 @@ def start_cycle(
     )
     _write_private_json(work_dir / "review-schedule.json", review_schedule)
     due_issue_numbers = set(review_schedule["dueIssueNumbers"])
-    # The durable schedule includes passive delegations, but selection metadata
-    # must match assessment: open issues plus delegated issues whose wakeup is due.
+    outcome_delegated_issue_numbers = (
+        cloud_outcome_issue_numbers(snapshot) & active_delegated_issue_numbers
+    )
+    # Outcome assessment is independent of public reminder eligibility. Retain
+    # these attempts in ordinary validated history so unchanged conclusions carry
+    # forward instead of disappearing and being selected again on the next cycle.
     issue_reassessment_context = {
         int(number): context
         for number, context in review_schedule["issues"].items()
-        if int(number) in open_issue_numbers or int(number) in due_issue_numbers
+        if int(number) in open_issue_numbers | due_issue_numbers | outcome_delegated_issue_numbers
     }
     pull_request_reassessment_context = {
         int(number): context
@@ -708,25 +735,35 @@ def start_cycle(
     due_delegated_issue_numbers = (
         due_issue_numbers & active_delegated_issue_numbers
     )
+    assessment_delegated_issue_numbers = (
+        due_delegated_issue_numbers | outcome_delegated_issue_numbers
+    )
     assessment_snapshot = snapshot
-    if due_delegated_issue_numbers:
+    if assessment_delegated_issue_numbers:
         assessment_snapshot = {
             **snapshot,
             "openIssues": sorted(
-                open_issue_numbers | due_delegated_issue_numbers
+                open_issue_numbers | assessment_delegated_issue_numbers
             ),
         }
     prepared = attach_latest_investigation_results(
-        prepare_assessment(assessment_snapshot),
+        prepare_assessment(
+            assessment_snapshot,
+            issue_update_times=assessment_issue_update_times(
+                assessment_snapshot, previous_snapshot, previous_prepared,
+            ),
+        ),
         read_investigation_results(state_dir),
     )
     compact = build_compact_poc_input(prepared)
+    control_only_issue_numbers = frozenset(control_comment_only_issue_numbers(snapshot, previous_snapshot))
     source_changed_issue_numbers = set(
         _refresh_issue_numbers(snapshot, "changedIssueNumbers")
-    )
+    ) - control_only_issue_numbers
     derived_changed_issue_numbers = _changed_prepared_issues(
         prepared,
         previous_prepared,
+        control_only_issue_numbers=control_only_issue_numbers,
     )
     assessed_issue_numbers = {issue["issueNumber"] for issue in compact["issues"]}
     requested_delegation_issue_numbers = (
@@ -1304,6 +1341,7 @@ def finish_cycle(
         investigation_plan=investigation_plan,
         investigation_results=read_investigation_results(state_dir),
         investigation_sessions=read_investigation_session_events(state_dir),
+        investigation_capacity=investigation_capacity_inventory(state_dir, repository),
         action_events=ActionEventStore(state_dir).events(repository=repository),
         prior_snapshot=_previous_context(state_dir, repository)[1],
         as_of=report_as_of,
@@ -1318,6 +1356,11 @@ def finish_cycle(
         ),
         assessment_coverage=assessment_completion,
         pre_expansion_assessment_coverage=prior_assessment_completion,
+        assessment_manifest=_load_json(work_dir / "assessment-batches.json", "assessment manifest"),
+        pre_expansion_assessment_manifest=(
+            _load_json(work_dir / "assessment-batches.pre-expansion.json", "pre-expansion assessment manifest")
+            if (work_dir / "assessment-batches.pre-expansion.json").is_file() else None
+        ),
     )
     _write_private_text(paths["report"], report_markdown.rstrip() + "\n\n[Audit details](report-details.md)\n")
     dry_run = build_dry_run(proposals, action_id=None)
@@ -1423,6 +1466,7 @@ def finish_cycle(
         issue_numbers=sorted(reviewed_issue_numbers),
         pull_request_numbers=sorted(reviewed_pull_request_numbers),
     )
+    record_unavailable_evidence_wakeups(state_dir, snapshot)
     completed = {
         **manifest,
         "assessment": {**manifest["assessment"], **assessment_completion},

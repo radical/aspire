@@ -15,12 +15,51 @@ from unittest.mock import patch
 import cycle
 from ci_shepherd.assessment_batches import load_assessment_packets
 from ci_shepherd.investigations import _fingerprint
+from ci_shepherd.models import stable_json
 from tests.assessment_helpers import write_assessment_receipts
 from tests.test_assessment_batches import worker_response
 from tests.test_cycle import snapshot, pull_request_snapshot
 
 
 class AssessmentCompletionTests(unittest.TestCase):
+    def test_materialization_keeps_full_evidence_once_and_preserves_decision_context(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.json"
+            source.write_text(json.dumps(snapshot("2026-09-08T18:00:00Z")), encoding="utf-8")
+            work = root / "work"
+            started = cycle.start_cycle(
+                repository="owner/repo", state_dir=root / "state", work_dir=work,
+                checkout=None, shepherd_author="shepherd[bot]", input_path=source,
+            )
+            prepared = json.loads((work / "assessment-input.json").read_text())
+            compact = json.loads((work / "assessment-defaults.json").read_text())["issues"][0]
+            selection = json.loads((work / "review-selection.json").read_text())["selected"][0]
+            _, packets = load_assessment_packets(work, started["assessment"])
+            parts = [part for packet in packets.values() for part in packet["cases"]]
+            case = (
+                json.loads("".join(part["input"]["content"] for part in parts))
+                if "parentCaseId" in parts[0] else parts[0]
+            )
+            expected = {
+                "caseId": "issue:1",
+                "evidenceIds": [record["id"] for record in prepared["issues"][0]["evidenceBundle"]],
+                "input": prepared["issues"][0],
+                "defaultJudgment": compact["defaultJudgment"],
+                "decisionContext": {
+                    key: value for key, value in compact.items()
+                    if key not in {"allowedEvidence", "defaultJudgment"}
+                },
+                "selection": selection,
+            }
+            self.assertEqual(expected, case)
+            legacy = {key: value for key, value in expected.items() if key != "decisionContext"}
+            legacy["defaultJudgment"] = compact
+            self.assertLess(
+                len(stable_json(case).encode("utf-8")),
+                len(stable_json(legacy).encode("utf-8")),
+            )
+
     def test_matching_digests_do_not_replace_source_snapshot_identity_validation(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

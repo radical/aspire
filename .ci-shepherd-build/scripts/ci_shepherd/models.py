@@ -519,6 +519,110 @@ def _validate_progress(value: object) -> None:
         raise ValidationError(str(error)) from error
 
 
+def _validate_cloud_outcome(record: Mapping[str, Any]) -> None:
+    from .investigations import _fingerprint
+
+    outcome = _require_mapping(record["outcomeEvidence"], "outcomeEvidence")
+    fields = {"taskId", "taskState", "taskObservation", "assessmentRequired", "availability", "detail", "pullRequests", "fingerprint"}
+    if set(outcome) != fields:
+        raise ValidationError("outcomeEvidence has invalid fields.")
+    if any(outcome[key] != record.get(key, "available" if key == "taskObservation" else None)
+           for key in ("taskId", "taskState", "taskObservation")):
+        raise ValidationError("outcomeEvidence must bind the observed task identity and execution state.")
+    if type(outcome["assessmentRequired"]) is not bool:
+        raise ValidationError("outcomeEvidence.assessmentRequired must be a boolean.")
+    if (record.get("taskState") not in {"queued", "in_progress"} or record.get("taskObservation") == "unavailable") and not outcome["assessmentRequired"]:
+        raise ValidationError("An ended or unknown task outcome requires assessment.")
+    if outcome["availability"] not in {"reported", "unavailable"}:
+        raise ValidationError("outcomeEvidence availability is invalid.")
+    expected_detail = ("Untrusted reported outcome; not verified repair or execution authority."
+                       if outcome["availability"] == "reported" else "outcome evidence unavailable")
+    if outcome["detail"] != expected_detail:
+        raise ValidationError("outcomeEvidence cannot claim a verified repair.")
+    if outcome["fingerprint"] != _fingerprint({key: value for key, value in outcome.items() if key != "fingerprint"}):
+        raise ValidationError("outcomeEvidence fingerprint does not match its bound evidence.")
+    sources = _require_list(outcome, "pullRequests")
+    bound = _require_list(record, "pullRequests")
+    if len(sources) != len(bound):
+        raise ValidationError("outcomeEvidence must cover exactly the bound pull requests.")
+    for source, pull in zip(sources, bound):
+        source = _require_mapping(source, "outcome pull request")
+        if set(source) != {
+            "databaseId", "globalId", "number", "state", "isDraft", "changedFiles", "url",
+            "author", "headSha", "updatedAt", "body", "commentCount", "commentsAvailability",
+            "comments", "commentWindowTruncated",
+        }:
+            raise ValidationError("outcome pull request has invalid fields.")
+        if any(source[key] != pull.get(key) for key in ("databaseId", "globalId", "number", "state", "isDraft", "changedFiles")):
+            raise ValidationError("outcomeEvidence pull request identity does not match the task binding.")
+        expected_url = f"https://github.com/{record['repository']}/pull/{pull['number']}" if pull.get("number") else None
+        if source["url"] != expected_url or source["headSha"] != pull.get("progressSource", {}).get("headSha"):
+            raise ValidationError("outcomeEvidence must bind the exact pull request URL and observed head.")
+        for field in ("author", "headSha", "updatedAt"):
+            if source[field] is not None and (not isinstance(source[field], str) or not source[field]):
+                raise ValidationError(f"outcomeEvidence.{field} must be null or nonempty.")
+        if source["updatedAt"] is not None:
+            try:
+                parse_aware_iso8601(source["updatedAt"], "outcome updatedAt")
+            except ValueError as error:
+                raise ValidationError(str(error)) from error
+        if source["body"] is not None:
+            _validate_outcome_body(source["body"], 4000)
+        count = source["commentCount"]
+        if count is not None and (type(count) is not int or count < 0):
+            raise ValidationError("outcome commentCount must be null or nonnegative.")
+        if source["commentsAvailability"] not in {"available", "unavailable", "not-requested"}:
+            raise ValidationError("outcome commentsAvailability is invalid.")
+        if type(source["commentWindowTruncated"]) is not bool:
+            raise ValidationError("outcome commentWindowTruncated must be boolean.")
+        comments = _require_list(source, "comments")
+        if len(comments) > 5 or comments and source["commentsAvailability"] != "available":
+            raise ValidationError("outcome comments must be available and limited to five.")
+        seen = set()
+        for comment in comments:
+            comment = _require_mapping(comment, "outcome comment")
+            if set(comment) != {"id", "url", "author", "createdAt", "updatedAt", "body"}:
+                raise ValidationError("outcome comment has invalid fields.")
+            identity = comment["id"]
+            if type(identity) is not int or identity <= 0 or identity in seen:
+                raise ValidationError("outcome comment identity must be distinct and positive.")
+            seen.add(identity)
+            if comment["url"] != f"{expected_url}#issuecomment-{identity}":
+                raise ValidationError("outcome comment must bind the same pull request.")
+            if comment["author"] is not None and (not isinstance(comment["author"], str) or not comment["author"]):
+                raise ValidationError("outcome comment author must be null or nonempty.")
+            for field in ("createdAt", "updatedAt"):
+                try:
+                    parse_aware_iso8601(comment[field], f"outcome comment {field}")
+                except ValueError as error:
+                    raise ValidationError(str(error)) from error
+            _validate_outcome_body(comment["body"], 2000)
+    reported = any(
+        source["body"] and source["body"]["preview"].strip()
+        or any(comment["body"]["preview"].strip() for comment in source["comments"])
+        for source in sources
+    )
+    if (outcome["availability"] == "reported") != bool(reported):
+        raise ValidationError("outcome evidence availability does not match observed text.")
+
+
+def _validate_outcome_body(value: object, limit: int) -> None:
+    from .investigations import _fingerprint
+
+    body = _require_mapping(value, "outcome body")
+    if set(body) != {"preview", "length", "fingerprint", "truncated"}:
+        raise ValidationError("outcome body has invalid fields.")
+    length = body["length"]
+    if type(length) is not int or length < 0 or not isinstance(body["preview"], str):
+        raise ValidationError("outcome body requires a preview and nonnegative full length.")
+    if len(body["preview"]) != min(length, limit) or type(body["truncated"]) is not bool or body["truncated"] != (length > limit):
+        raise ValidationError("outcome body truncation does not match its full length.")
+    if not isinstance(body["fingerprint"], str) or re.fullmatch(r"fnv1a64:[0-9a-f]{16}", body["fingerprint"]) is None:
+        raise ValidationError("outcome body requires a full-content fingerprint.")
+    if not body["truncated"] and body["fingerprint"] != _fingerprint(body["preview"]):
+        raise ValidationError("outcome body fingerprint does not match its complete content.")
+
+
 def _validate_delegation_status(value: object) -> None:
     if value is None:
         return
@@ -561,6 +665,7 @@ def _validate_delegation_status(value: object) -> None:
                 "nextWakeup",
                 "pullRequests",
                 "meaningfulProgress",
+                "outcomeEvidence",
             },
             field,
         )
@@ -585,6 +690,8 @@ def _validate_delegation_status(value: object) -> None:
         ):
             raise ValidationError(f"{field}.taskState must be null or nonempty.")
         _require_nonempty_string(record, "lifecycle")
+        if "outcomeEvidence" in record:
+            _validate_cloud_outcome(record)
         if "attemptOutcome" in record and record["attemptOutcome"] not in {
             "pending", "merged", "closed-unmerged", "unresolved", "legacy-unknown",
         }:

@@ -11,6 +11,7 @@ from urllib.parse import quote
 from ci_shepherd.models import validate_report, validate_snapshot
 from ci_shepherd.poc import validate_poc_judgments
 from ci_shepherd.run_report import render_run_markdown
+from ci_shepherd.investigation_worktrees import investigation_capacity_inventory
 from ci_shepherd.jsonl import read_jsonl_rows
 from ci_shepherd.assessment_batches import verify_assessment_completion
 
@@ -516,6 +517,7 @@ def main() -> int:
     parser.add_argument("--action-events", type=Path)
     parser.add_argument("--investigation-results", type=Path)
     parser.add_argument("--investigation-sessions", type=Path)
+    parser.add_argument("--state-dir", type=Path, help="Read current local reservation capacity for the run report.")
     parser.add_argument("--usage", type=Path)
     parser.add_argument("--as-of")
     parser.add_argument("--run-id")
@@ -575,6 +577,10 @@ def main() -> int:
             investigation_plan=companion("investigation-plan.json"),
             action_events=events(args.action_events),
             investigation_results=events(args.investigation_results),
+            investigation_capacity=(
+                investigation_capacity_inventory(args.state_dir, str(snapshot["repository"]))
+                if args.state_dir is not None else None
+            ),
             investigation_sessions=events(args.investigation_sessions),
             usage=json.loads(args.usage.read_text(encoding="utf-8")) if args.usage else None,
             as_of=args.as_of,
@@ -586,6 +592,8 @@ def main() -> int:
             pre_expansion_pull_request_review=companion("pull-request-review.pre-expansion.json"),
             assessment_coverage=completed_assessment(),
             pre_expansion_assessment_coverage=completed_assessment(pre_expansion=True),
+            assessment_manifest=companion("assessment-batches.json"),
+            pre_expansion_assessment_manifest=companion("assessment-batches.pre-expansion.json"),
         )
     else:
         markdown = render_poc_markdown(

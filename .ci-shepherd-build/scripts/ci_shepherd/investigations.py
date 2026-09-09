@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .eligibility import repair_priority_key
+
 import copy
 from datetime import timedelta
 import json
@@ -11,9 +13,11 @@ from typing import Any, Mapping
 from .jsonl import append_jsonl_rows, exclusive_jsonl_lock, read_jsonl_rows
 from .investigation_scope import validate_reproduction_commands, validate_scoped_result, validate_work_log
 from .investigation_worktrees import (
+    MAX_CONCURRENT_INVESTIGATIONS,
     bind_investigation_worktree,
     finish_investigation_worktree,
     get_investigation_worktree,
+    investigation_capacity_inventory,
     list_investigation_worktrees,
     reserve_one_shot_worktree,
     validate_one_shot_result_path,
@@ -46,6 +50,7 @@ _MAX_INVESTIGATION_ATTEMPTS = 2
 _MAX_INVESTIGATION_SESSION_AGE = timedelta(hours=1)
 _MAX_SOURCE_FILES = 40
 _MAX_READ_ONLY_REQUESTS = 12
+_CLASSIFICATION_WORK_SECONDS = 180
 
 
 def _fingerprint(value: object) -> str:
@@ -211,6 +216,12 @@ def _worker_prompt(request: Mapping[str, Any]) -> str:
     )
     return (
         f"Investigate {request['issueUrl']} for the CI shepherd.\n\n"
+        f"WORK_BUDGET_SECONDS: {_CLASSIFICATION_WORK_SECONDS}. This is a cooperative "
+        "classification deadline measured from beginning the investigation. Answer "
+        "the exact question below, not a complete root-cause or reproduction study. "
+        "At the deadline, return the decision-changing finding or precise missing "
+        "evidence. Do not start a build or restore; reproduction remains off unless "
+        "explicitly authorized. A deadline does not prove that a worker stopped.\n\n"
         + permissions +
         "bodyTruncated, excerptTruncated, errorMessageTruncated, and factsTruncated identify "
         "partial diagnostic previews; truncated identifies incomplete collection. "
@@ -504,6 +515,13 @@ def build_investigation_plan(
                 "attempt": attempt,
                 "maxAttempts": _MAX_INVESTIGATION_ATTEMPTS,
             }
+            missing_facts = prepared_issue.get("repairEvidence", {}).get("missingFacts", [])
+            if missing_facts and prepared_issue.get("testMaintenance", {}).get("state") != "quarantined":
+                request.update(
+                    question=missing_facts[0],
+                    missingEvidence=list(dict.fromkeys([*missing_evidence, *missing_facts])),
+                    stopCondition="Stop after establishing this decision-changing fact or the exact missing evidence; do not require a full local diagnosis.",
+                )
             if source_revision is not None:
                 request["sourceRevision"] = source_revision
                 request["investigationScope"] = {
@@ -517,8 +535,7 @@ def build_investigation_plan(
 
     requests.sort(
         key=lambda item: (
-            prepared_issues[int(item["issueNumber"])].get("workflowHealth", {}).get("current") is not True,
-            int(item["issueNumber"]),
+            *repair_priority_key(prepared_issues[int(item["issueNumber"])]),
             str(item["target"].get("kind")),
             json.dumps(item["target"].get("value"), sort_keys=True),
         )
@@ -804,6 +821,8 @@ def record_investigation_session_event(
 ) -> dict[str, object]:
     if launch_mode not in {"resumable", "one-shot"}:
         raise ValueError("Unsupported investigation launch mode.")
+    if type(confirm_worker_stopped) is not bool:
+        raise ValueError("Stopped-worker confirmation must be an explicit boolean.")
     if launch_mode == "one-shot" or attempt_id is not None:
         if session_id is not None:
             raise ValueError("One-shot attempts cannot claim an unverified runtime sessionId.")
@@ -850,19 +869,43 @@ def record_investigation_session_event(
             repository=repository,
             investigation_id=investigation_id,
         )
+        if status == "failed" and confirm_worker_stopped is True:
+            owned_previous = _latest_session_event(
+                [row for row in history if row.get("sessionId") == session_id],
+                repository=repository, investigation_id=investigation_id,
+            )
+            if owned_previous is not None and owned_previous.get("status") == "failed":
+                # A stopped older worker must remain addressable even if its
+                # replacement has since registered under the same investigation.
+                if not _same_record(
+                    {key: value for key, value in owned_previous.items() if key != "workerStopped"},
+                    event,
+                ):
+                    raise ValueError("Stopped-worker reconciliation changed the recorded failure.")
+                if owned_previous.get("workerStopped") is True:
+                    return dict(owned_previous)
+                event["workerStopped"] = True
+                append_jsonl_rows(path, [event])
+                return event
         if status == "abandoned":
             if not confirm_worker_stopped:
                 raise ValueError(
                     "Abandonment requires confirmation that the worker stopped."
                 )
             _validate_abandonment(previous, event, checkout)
+            event["workerStopped"] = True
+        elif status == "failed" and confirm_worker_stopped is True:
+            event["workerStopped"] = True
         elif confirm_worker_stopped:
             raise ValueError(
-                "confirm_worker_stopped is valid only for abandoned sessions."
+                "confirm_worker_stopped is valid only for failed or abandoned sessions."
             )
         _validate_session_transition(previous, event)
         if status == "started":
-            _validate_investigation_limits(history, request, worktree_attempt=None)
+            _validate_investigation_limits(
+                history, request, state_directory=state_directory,
+                worktree_attempt=None, ownership_id=None,
+            )
         append_jsonl_rows(path, [event])
     return event
 
@@ -1027,7 +1070,8 @@ def _binding_fields(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _validate_investigation_limits(
-    history: list[Mapping[str, Any]], request: Mapping[str, Any], *, worktree_attempt: int | None,
+    history: list[Mapping[str, Any]], request: Mapping[str, Any], *,
+    state_directory: Path, worktree_attempt: int | None, ownership_id: str | None,
 ) -> None:
     """Check new admissions under the session-ledger lock; exact replay is not new work."""
     investigation_id, repository = _investigation_identity(request)
@@ -1038,8 +1082,12 @@ def _validate_investigation_limits(
     registrations = [row for row in scoped if row.get("status") in {"started", "prepared"}]
     if sum(row.get("investigationId") == investigation_id for row in registrations) >= _MAX_INVESTIGATION_ATTEMPTS:
         raise ValueError("Investigation attempt limit reached.")
-    latest = {row["investigationId"]: row for row in scoped}
-    if sum(row.get("status") in {"started", "prepared", "dispatching"} for row in latest.values()) >= 3:
+    capacity = investigation_capacity_inventory(state_directory, repository)
+    other_reservations = [
+        row for row in capacity["reservations"]
+        if ownership_id is None or row["ownershipId"] != ownership_id
+    ]
+    if len(other_reservations) >= MAX_CONCURRENT_INVESTIGATIONS:
         raise ValueError("Three investigation slots are already reserved or active.")
     if sum(row.get("request", {}).get("snapshotId") == request.get("snapshotId") for row in registrations) >= 5:
         raise ValueError("Five investigation attempts are already reserved in this cycle.")
@@ -1047,6 +1095,17 @@ def _validate_investigation_limits(
         worktree_attempt > _MAX_INVESTIGATION_ATTEMPTS or worktree_attempt != request.get("attempt")
     ):
         raise ValueError("Owned worktree attempt does not match the bounded request attempt.")
+
+
+def validate_investigation_admission(state_directory: Path, request: Mapping[str, Any], *, attempt: int) -> None:
+    """Preflight before allocation; registration repeats this check under the same lock."""
+    list_investigation_worktrees(state_directory)
+    path = _sessions_path(state_directory)
+    with exclusive_jsonl_lock(path):
+        _validate_investigation_limits(
+            read_jsonl_rows(path), {**request, "attempt": request.get("attempt", attempt)},
+            state_directory=state_directory, worktree_attempt=attempt, ownership_id=None,
+        )
 
 
 def _require_one_shot_ended(evidence: str | None, stopped: bool) -> None:
@@ -1067,6 +1126,7 @@ def _one_shot_envelope(event: Mapping[str, Any]) -> str:
         "there is no idle-worker or follow-up handshake.\n"
         f"WORKTREE_PATH: {event['checkoutPath']}\nRESULT_PATH: {event['resultPath']}\n"
         f"SOURCE_REVISION: {event['checkoutHead']}\n"
+        f"WORK_BUDGET_SECONDS: {_CLASSIFICATION_WORK_SECONDS} (cooperative, from investigation start)\n"
         f"LOGICAL_ATTEMPT_ID: {event['attemptId']} (not a runtime session ID)\n"
         "Do NOT switch branches; operate explicitly within WORKTREE_PATH, never the "
         "launcher's inherited checkout. Do not edit source, Git metadata, coordinator "
@@ -1116,7 +1176,10 @@ def _record_one_shot_session(
                     raise ValueError("Investigation already has a pending/active or completed attempt.")
             allocation = get_investigation_worktree(state_directory, request, checkout=checkout)
             if not replay:
-                _validate_investigation_limits(history, request, worktree_attempt=allocation["attempt"])
+                _validate_investigation_limits(
+                    history, request, state_directory=state_directory,
+                    worktree_attempt=allocation["attempt"], ownership_id=allocation["ownershipId"],
+                )
             output = validate_one_shot_result_path(state_directory, allocation, result_path)
             if output.exists():
                 raise ValueError("One-shot result path already exists before dispatch.")
@@ -1131,7 +1194,15 @@ def _record_one_shot_session(
                 "runtimeSessionId": None, "workerIdentityKind": "unknown", "executionState": "not-dispatched",
                 "reproductionCommands": commands, "resultPath": str(output),
             }
-            event["launchEnvelope"] = _one_shot_envelope(event)
+            if replay:
+                # A prepared attempt already froze its launch text. A newer
+                # prompt formatter must not rewrite or invalidate that contract.
+                envelope = previous.get("launchEnvelope")
+                if not isinstance(envelope, str) or not envelope:
+                    raise ValueError("Prepared attempt has no frozen launch envelope.")
+                event["launchEnvelope"] = envelope
+            else:
+                event["launchEnvelope"] = _one_shot_envelope(event)
             if replay:
                 if not _same_record(previous, event):
                     raise ValueError("Prepared attempt replay changed its trusted envelope.")
@@ -1304,7 +1375,10 @@ def _record_scoped_session_event(
                 allocation = get_investigation_worktree(
                     state_directory, request, checkout=Path(str(event["checkoutPath"])),
                 )
-                _validate_investigation_limits(history, request, worktree_attempt=allocation["attempt"])
+                _validate_investigation_limits(
+                    history, request, state_directory=state_directory,
+                    worktree_attempt=allocation["attempt"], ownership_id=allocation["ownershipId"],
+                )
             allocation = bind_investigation_worktree(
                 state_directory, request, checkout=Path(str(event["checkoutPath"])),
                 session_id=session_id, recorded_at=recorded_at,

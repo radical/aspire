@@ -3,9 +3,12 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 import re
 from typing import Any
 from urllib.parse import unquote
+
+from .timeutils import parse_aware_iso8601
 
 
 COLLECTION_VERSION = 3
@@ -61,9 +64,13 @@ def plan_refresh(
     current_history: dict[str, Any],
     *,
     full_refresh: bool = False,
+    now: datetime | None = None,
 ) -> RefreshPlan:
     _validate_repository(repository, previous_snapshot, "snapshot")
     _validate_repository(repository, current_history, "history")
+    observed_at = now if now is not None else datetime.now(UTC)
+    if observed_at.tzinfo is None:
+        raise ValueError("Refresh time must be timezone-aware.")
 
     previous_evidence = _mapping(previous_snapshot.get("evidence"))
     history_evidence = _mapping(current_history.get("evidence"))
@@ -134,6 +141,16 @@ def plan_refresh(
             continue
 
         history_record = history_evidence.get(evidence_id)
+        retry_at = historical_run_retry_at(record)
+        if (
+            retry_at is not None and isinstance(history_record, Mapping)
+            and retry_at == historical_run_retry_at(history_record)
+            and retry_at - timedelta(hours=24) <= observed_at < retry_at
+            and not associated_issues.intersection(changed_issues | retry_issue_numbers)
+            and _same_record_identity(evidence_id, record, history_record, repository)
+        ):
+            reuse.add(evidence_id)
+            continue
         if (
             not _record_is_complete(record)
             or not _record_is_complete(history_record)
@@ -284,16 +301,22 @@ def complete_refresh_plan(
         if isinstance(evidence_id, str) and not _record_is_complete(record)
     }
     planned_reuse = set(plan.reuse)
+    # Reusing the observation of a missing historical run does not turn it into
+    # available evidence. Preserve that retry decision and its original clock.
+    reused_unavailable = {
+        evidence_id for evidence_id in planned_reuse
+        if historical_run_retry_at(records.get(evidence_id)) is not None
+    }
     planned_refresh = set(plan.refresh)
     classified = planned_reuse | planned_refresh | set(plan.retry) | set(plan.retire)
     complete_ids = current_ids - failed_ids
     retire = set(plan.retire)
     retry = (
         set(plan.retry)
-        | failed_ids
-        | ((planned_reuse | planned_refresh) - complete_ids)
+        | (failed_ids - reused_unavailable)
+        | ((planned_reuse | planned_refresh) - complete_ids - reused_unavailable)
     ) - retire
-    reuse = (planned_reuse & complete_ids) - retry - retire
+    reuse = (planned_reuse & (complete_ids | reused_unavailable)) - retry - retire
     refresh = (
         (planned_refresh | (current_ids - classified)) & complete_ids
     ) - reuse - retry - retire
@@ -305,6 +328,25 @@ def complete_refresh_plan(
         new_issues=plan.new_issues,
         changed_issues=plan.changed_issues,
     )
+
+
+def historical_run_retry_at(record: object) -> datetime | None:
+    """Retry an observed missing linked run after one day; never cache live discovery."""
+    if not isinstance(record, Mapping):
+        return None
+    payload = record.get("payload")
+    if (
+        record.get("kind") != "workflow-run"
+        or record.get("availability") not in {"partial", "not-enriched"}
+        or record.get("discoveredBy") == "workflow-discovery"
+        or not isinstance(payload, Mapping)
+        or payload.get("errorCategory") not in {"not-found", "expired"}
+        or not isinstance(payload.get("referencedBy"), list)
+        or not payload["referencedBy"]
+        or not isinstance(record.get("collectedAt"), str)
+    ):
+        return None
+    return parse_aware_iso8601(record["collectedAt"], "unavailable run collectedAt") + timedelta(hours=24)
 
 
 def _validate_repository(

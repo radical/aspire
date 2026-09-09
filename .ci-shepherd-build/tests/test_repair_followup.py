@@ -181,8 +181,8 @@ class RepairFollowupTests(unittest.TestCase):
                 item["defaultJudgment"]["recommendations"][0].update(
                     disposition="delegate-copilot", confidence="medium", missingEvidence=[],
                 )
-                result = build_action_proposals(self.snapshot, prepared, judgments, "radical", agent_input=compact)
-                self.assertEqual([], [row for row in result["proposals"] if row["operation"] == "assign-copilot"])
+                with self.assertRaises(ValueError):
+                    build_action_proposals(self.snapshot, prepared, judgments, "radical", agent_input=compact)
 
     def test_ended_related_repair_needs_fresh_nomination_and_passes_frozen_prior_links(self) -> None:
         self.add_new_issue_failure(old_closed=False)

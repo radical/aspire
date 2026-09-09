@@ -41,6 +41,47 @@ def worker_response(manifest, packets, group):
 
 
 class AssessmentBatchTests(unittest.TestCase):
+    def test_large_case_fills_packets_instead_of_repeating_small_fragments(self) -> None:
+        case = issue_case(1)
+        case["input"]["evidenceBundle"][0]["payload"]["body"] = "x" * 180_000
+        manifest, packets = build_assessment_batches(
+            [case], snapshot_id="snapshot:owner/repo:now", source_fingerprints={},
+        )
+        parts = [part for packet in packets.values() for part in packet["cases"]]
+
+        self.assertLessEqual(len(parts), 16)
+        self.assertEqual(case, json.loads("".join(part["input"]["content"] for part in parts)))
+        for packet in list(packets.values())[:-1]:
+            self.assertGreater(len(stable_json(packet).encode("utf-8")), 15_000)
+        self.assertTrue(all(
+            len(stable_json(packet).encode("utf-8")) <= manifest["maxPacketBytes"]
+            for packet in packets.values()
+        ))
+
+    def test_fragments_preserve_escaped_unicode_and_large_evidence_lists(self) -> None:
+        case = issue_case(1)
+        case["evidenceIds"] = [f"evidence:{index}" for index in range(100)]
+        case["input"]["evidenceBundle"][0]["payload"]["body"] = (
+            '\\path\\"quoted"\n\u00e9\U0001f331' * 2_000
+        )
+        manifest, packets = build_assessment_batches(
+            [case], snapshot_id="snapshot:owner/repo:now", source_fingerprints={},
+        )
+        parts = [part for packet in packets.values() for part in packet["cases"]]
+
+        self.assertGreater(len(parts), 1)
+        self.assertEqual(case, json.loads("".join(part["input"]["content"] for part in parts)))
+        self.assertEqual(list(range(1, len(parts) + 1)), [part["input"]["partIndex"] for part in parts])
+        self.assertTrue(all(part["input"]["partCount"] == len(parts) for part in parts))
+        self.assertTrue(all(part["evidenceIds"] == case["evidenceIds"] for part in parts))
+        self.assertTrue(all(
+            len(stable_json(packet).encode("utf-8")) <= manifest["maxPacketBytes"]
+            for packet in packets.values()
+        ))
+        response = worker_response(manifest, packets, manifest["workerGroups"][0])
+        _, receipts, _ = merge_worker_responses(manifest, packets, [response])
+        self.assertEqual([1], validate_assessment_receipts(manifest, packets, receipts)["completedIssueNumbers"])
+
     def test_large_realistic_case_fits_the_bounded_worker_budget_without_splitting_workers(self) -> None:
         case = issue_case(1)
         case["input"]["evidenceBundle"][0]["payload"]["body"] = "x" * 180_000

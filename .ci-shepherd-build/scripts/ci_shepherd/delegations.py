@@ -946,7 +946,7 @@ def derive_capacity_usage(
             owned_task_ids.add(start.task_id)
             if started_at > cutoff:
                 recent_owned_task_ids.add(start.task_id)
-        elif start.task_id is None and started_at > cutoff:
+        elif start.task_id is None:
             if start.outcome is StartOutcome.STARTED:
                 problems.append("started_task_association_pending")
             else:
@@ -972,9 +972,9 @@ def derive_capacity_usage(
     ]
 
     lifecycles: list[TaskLifecycleResult] = []
-    for task_id in sorted(recent_owned_task_ids):
+    for task_id in sorted(owned_task_ids):
         task = tasks_by_id.get(task_id)
-        if task is None and not bound_pulls.get(task_id):
+        if task is None:
             problems.append(f"owned_task_missing:{task_id}")
 
     open_pull_requests: set[tuple[int, str]] = set()

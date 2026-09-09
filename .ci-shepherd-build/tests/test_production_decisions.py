@@ -94,6 +94,11 @@ def completed_investigation(
     evidence_ids: list[str] | None = None,
     fix_handoff: dict | None = None,
 ) -> dict:
+    judgments = copy.deepcopy(judgments)
+    for judgment in judgments["issues"]:
+        for recommendation in judgment["recommendations"]:
+            if recommendation["disposition"] == "delegate-copilot":
+                recommendation["disposition"] = "investigate"
     validate_poc_judgments(prepared, judgments)
     request = build_investigation_plan(prepared, judgments, [])["requests"][0]
     checkout = _clean_checkout(root)
@@ -124,6 +129,8 @@ def quarantined_snapshot() -> dict:
         body="Demo.Tests.Flaky intermittently times out while waiting for readiness.",
     )
     value = snapshot(issue)
+    policy = load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH)
+    value["repositoryPolicy"] = {**policy.as_public_dict(), "digest": policy.digest}
     source_state = {
         "schemaVersion": 1, "sourceRevision": "a" * 40,
         "sourceTreeDigest": "sha256:" + "b" * 64,
@@ -148,12 +155,18 @@ class QuarantinedRemediationPipelineTests(unittest.TestCase):
         value["evidence"]["issue:20"] = other
         value["openIssues"].append(20)
         value["issues"].append(other["payload"])
-        _, compact, judgments, proposals = assess(value)
+        prepared, compact, judgments, proposals = assess(value)
         tracked = next(issue for issue in compact["issues"] if issue["issueNumber"] == 21)
         self.assertEqual("superseded", tracked["actionCluster"]["role"])
         decision = next(issue for issue in judgments["issues"] if issue["issueNumber"] == 21)
         self.assertEqual("investigate", decision["recommendations"][0]["disposition"])
+        self.assertEqual([], [action for action in proposals["proposals"] if action["operation"] == "assign-copilot" and action["issueNumber"] == 21])
         self.assertEqual([], [action for action in proposals["proposals"] if action["operation"] == "close-issue"])
+        request = next(
+            request for request in build_investigation_plan(prepared, judgments, [])["requests"]
+            if request["issueNumber"] == 21
+        )
+        self.assertEqual("Determine whether canonical issue #20 already owns this repair.", request["question"])
 
     def test_existing_quarantine_delegation_is_tracked_without_new_investigation(self) -> None:
         value = quarantined_snapshot()
@@ -207,7 +220,7 @@ class QuarantinedRemediationPipelineTests(unittest.TestCase):
             prepared = json.loads((work / "assessment-input.json").read_text())
             self.assertEqual("quarantined", prepared["issues"][0]["testMaintenance"]["state"])
             plan = json.loads((work / "investigation-plan.json").read_text())
-            self.assertEqual([21], [request["issueNumber"] for request in plan["requests"]])
+            self.assertEqual([], plan["requests"])
             report = (work / "report.md").read_text()
             self.assertTrue(report.startswith("# CI Shepherd run report\n"))
             self.assertIn("0 executed effects", report)
@@ -324,14 +337,17 @@ class QuarantinedRemediationPipelineTests(unittest.TestCase):
             self.assertIn("Keep the tracking issue open", action["customInstructions"])
             self.assertIn("Do not modify or remove the `[QuarantinedTest]` attribute", action["customInstructions"])
 
-    def test_source_confirmed_quarantine_starts_fix_investigation_without_recurrence(self) -> None:
+    def test_source_confirmed_quarantine_defaults_to_cloud_repair_without_recurrence(self) -> None:
         value = quarantined_snapshot()
         prepared, compact, judgments, proposals = assess(value)
         recommendation = judgments["issues"][0]["recommendations"][0]
-        self.assertEqual("investigate", recommendation["disposition"])
+        self.assertEqual("delegate-copilot", recommendation["disposition"])
         self.assertEqual({"kind": "issue", "value": 21}, recommendation["target"])
         self.assertEqual("quarantined", compact["issues"][0]["testMaintenance"]["state"])
-        self.assertEqual([], proposals["proposals"])
+        self.assertEqual(["assign-copilot"], [action["operation"] for action in proposals["proposals"]])
+        plan = build_investigation_plan(prepared, judgments, [])
+        self.assertEqual([], plan["requests"])
+        recommendation["disposition"] = "investigate"
         plan = build_investigation_plan(prepared, judgments, [])
         self.assertEqual(1, len(plan["requests"]))
         self.assertIn("source:tests/Demo.Tests/Tests.cs", plan["requests"][0]["evidenceIds"])
@@ -656,12 +672,14 @@ class InvestigationCoveragePipelineTests(unittest.TestCase):
                 self.assertNotEqual("delegate-copilot", compact["issues"][0]["defaultJudgment"]["recommendations"][0]["disposition"])
 
     def test_delegation_projectability_accepts_ci_investigation_without_claiming_actionability(self) -> None:
-        _, compact, judgments, _ = assess(recovery_snapshot(success="skipped"))
+        from test_repair_routing import override_category, repair_snapshot
+        _, compact, judgments, _ = override_category(repair_snapshot(category="build", runs=(100,)), "blocking-build")
         recommendation = judgments["issues"][0]["recommendations"][0]
         recommendation.update(disposition="delegate-copilot", target={"kind": "issue", "value": 21})
         validate_poc_projectability(compact, judgments)
         self.assertIsNone(compact["issues"][0].get("machineActionability"))
-        self.assertEqual("investigate-and-fix", compact["issues"][0]["delegationReadiness"]["intent"])
+        from ci_shepherd.eligibility import delegation_readiness
+        self.assertEqual("investigate-and-fix", delegation_readiness(compact["issues"][0], "blocking-build")["intent"])
 
     def test_current_fixable_investigation_derives_one_structured_assignment(self) -> None:
         value = recovery_snapshot(success="skipped")

@@ -182,10 +182,11 @@ class RetrospectiveContextTests(unittest.TestCase):
 
     def add_assessment(self) -> dict[str, object]:
         issue = {"issueNumber": 1, "evidenceBundle": [{"id": "issue:1", "payload": {"body": "Evidence"}}]}
+        judgment = {"issueNumber": 1, "recommendations": []}
         for name, document in {
             "input.json": self.snapshot,
             "assessment-input.json": {**self.identity, "issues": [issue]},
-            "assessment-defaults.json": {"issues": [{"issueNumber": 1, "recommendations": []}]},
+            "assessment-defaults.json": {"issues": [{"issueNumber": 1, "defaultJudgment": judgment}]},
             "agent-input.json": {},
             "review-selection.json": {"selected": [{"issueNumber": 1}]},
             "pull-request-review.json": {"tasks": []},

@@ -13,10 +13,11 @@ from ci_shepherd.models import (
     WORKFLOW_LOG_FACT_FIELDS, WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT,
     stable_json, validate_issue_body_payload, validate_workflow_log_payload,
 )
-from ci_shepherd.observations import build_observations, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue
+from ci_shepherd.observations import build_observations, build_repair_evidence, issue_recovery, is_annotation_evidence_id, is_scoped_to_issue
+from ci_shepherd.eligibility import workflow_producer_admission
 from ci_shepherd.policy import load_policy
 from ci_shepherd.quarantine_reconciliation import add_test_maintenance_context
-from ci_shepherd.repair_followup import build_related_workflow_repairs, build_repair_followup
+from ci_shepherd.repair_followup import build_related_workflow_repairs, build_repair_followup, build_upstream_repairs
 from ci_shepherd.run_scope import verified_run_scope
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 from ci_shepherd.workflow_health import build_workflow_health
@@ -55,6 +56,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "labels",
         "assignees",
         "author",
+        "authorType",
         "producer",
         "autoclose",
         "markers",
@@ -103,6 +105,7 @@ _PAYLOAD_FIELDS_BY_KIND = {
         "workflow",
         "workflowName",
         "workflowId",
+        "workflowPath",
         "event",
         "status",
         "conclusion",
@@ -235,6 +238,7 @@ def prepare_assessment(
     snapshot: Mapping[str, Any],
     *,
     max_bundle_records: int = DEFAULT_MAX_BUNDLE_RECORDS,
+    issue_update_times: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
     if max_bundle_records < 1:
         raise ValueError("max_bundle_records must be positive.")
@@ -261,6 +265,7 @@ def prepare_assessment(
             issue_number,
             max_bundle_records=max_bundle_records,
             recovery=issue_recovery(snapshot, observations, issue_number),
+            lifecycle_updated_at=(issue_update_times or {}).get(issue_number),
         )
         for issue_number in sorted(issue_numbers)
     ]
@@ -294,10 +299,9 @@ def prepare_assessment(
         prepared["repositoryPolicy"] = dict(repository_policy)
         prepared["repositoryPolicyDigest"] = repository_policy.get("digest")
     add_test_maintenance_context(prepared, snapshot)
-    repair_observations = observations
+    repair_observations = _build_repair_observations(snapshot, observations)
     if isinstance(snapshot.get("workflowDiscovery"), Mapping):
         prepared["defaultBranch"] = snapshot["workflowDiscovery"].get("defaultBranch")
-        repair_observations = _build_repair_observations(snapshot, observations)
     for candidate in candidates:
         _add_workflow_context(snapshot, observations, candidate, repair_observations)
     if isinstance(snapshot.get("workflowDiscovery"), Mapping):
@@ -354,8 +358,30 @@ def _add_workflow_context(
     snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue: dict[str, Any],
     repair_observations: Mapping[str, Any],
 ) -> None:
+    issue["repairEvidence"] = build_repair_evidence(snapshot, observations, issue["issueNumber"])
     health = build_workflow_health(snapshot, observations, issue)
     payload = snapshot["evidence"].get(f"issue:{issue['issueNumber']}", {}).get("payload", {})
+    producer = workflow_producer_admission(
+        payload, list(snapshot["evidence"].values()),
+        repository=snapshot["repository"], collected_at=snapshot["collectedAt"],
+    )
+    if producer is not None:
+        issue["producerAdmission"] = producer
+        # analyze-ci-failure.md defines the repository's CI-failure reporter;
+        # losing that workflow hides failure analysis, not just its own coverage.
+        issue["repairEvidence"]["reportingOutage"] = (
+            producer["workflowSlug"] == "analyze-ci-failure"
+            and snapshot["repository"] == "microsoft/aspire"
+        )
+        if not issue["repairEvidence"]["ready"]:
+            run = producer["run"]
+            issue["repairEvidence"].update(
+                current=True, ready=True, category="product-or-tooling",
+                allowedCategories=["product-or-tooling", "automation-tracker"],
+                lastFailureAt=run["payload"]["createdAt"], runIds=[run["payload"]["runId"]],
+                independentRunCount=1, evidenceIds=[f"issue:{issue['issueNumber']}", run["id"]],
+                missingFacts=[],
+            )
     if (
         isinstance(snapshot.get("workflowDiscovery"), Mapping)
         and "testMaintenance" not in issue
@@ -373,6 +399,17 @@ def _add_workflow_context(
                 issue["relatedWorkflowRepairs"] = related
     if health is not None:
         issue["workflowHealth"] = health
+    else:
+        related = build_related_workflow_repairs(snapshot, repair_observations, issue, None)
+        if related:
+            issue["relatedWorkflowRepairs"] = related
+    upstream, questions = build_upstream_repairs(snapshot, repair_observations, issue)
+    if upstream:
+        issue.setdefault("relatedWorkflowRepairs", []).extend(upstream)
+    elif questions:
+        issue["repairEvidence"].update(ready=False, missingFacts=questions)
+        if health is not None:
+            health["route"] = "investigate"
 
 
 def _build_repair_observations(
@@ -440,6 +477,116 @@ def _closed_issue_followups(
     return followups
 
 
+def cloud_outcome_issue_numbers(snapshot: Mapping[str, Any]) -> set[int]:
+    """Retain assessed attempts in normal review history, not a separate ledger."""
+    return {
+        record["issueNumber"]
+        for record in snapshot.get("delegationStatus", {}).get("records", [])
+        if record.get("repository") == snapshot.get("repository")
+        and record.get("outcomeEvidence", {}).get("assessmentRequired") is True
+    }
+
+
+def _issue_source_fingerprints(
+    value: Mapping[str, Any], number: int, *, include_related: bool,
+) -> tuple[str, str]:
+    scoped = {
+        identity: record for identity, record in value["evidence"].items()
+        if is_scoped_to_issue(identity, record, number)
+        and (include_related or identity == f"issue:{number}" or identity.startswith(f"issue:{number}:"))
+    }
+    owned = {
+        identity: record for identity, record in scoped.items()
+        if record.get("kind") == "issue-comment" and record.get("availability") == "available"
+        and record.get("payload", {}).get("shepherdStatus", {}).get("owned") is True
+        and type(record.get("payload", {}).get("id")) is int
+        and identity == f"issue:{number}:comment:{record['payload']['id']}"
+    }
+    owned_ids = {record["payload"].get("id") for record in owned.values()}
+    independent = {}
+    for identity, record in scoped.items():
+        if identity in owned:
+            continue
+        projected = {key: copy.deepcopy(item) for key, item in record.items() if key != "collectedAt"}
+        if identity == f"issue:{number}":
+            payload = projected["payload"]
+            # Root timestamps can advance with discussion changes. Compare full
+            # independent content, not previews, before attributing that update.
+            payload.pop("updatedAt", None)
+            if isinstance(payload.get("comments"), list):
+                payload["comments"] = [
+                    comment for comment in payload["comments"]
+                    if not isinstance(comment, Mapping) or comment.get("id") not in owned_ids
+                ]
+        independent[identity] = projected
+    return _fingerprint({
+        "evidence": independent, "collectionErrors": value.get("collectionErrors", []),
+    }), _fingerprint({
+        identity: {key: item for key, item in record.items() if key != "collectedAt"}
+        for identity, record in owned.items()
+    })
+
+
+def control_comment_only_issue_numbers(
+    snapshot: Mapping[str, Any], previous_snapshot: Mapping[str, Any] | None,
+) -> set[int]:
+    """Recognize observed control-only changes without weakening source bindings."""
+    if previous_snapshot is None or previous_snapshot.get("repository") != snapshot.get("repository"):
+        return set()
+
+    unchanged = set()
+    for identity, record in snapshot["evidence"].items():
+        payload = record.get("payload", {})
+        number = payload.get("number")
+        if type(number) is not int or identity != f"issue:{number}" or record.get("availability") != "available":
+            continue
+        prior = previous_snapshot["evidence"].get(identity, {})
+        if prior.get("availability") != "available":
+            continue
+        current_sources, current_control = _issue_source_fingerprints(snapshot, number, include_related=True)
+        previous_sources, previous_control = _issue_source_fingerprints(previous_snapshot, number, include_related=True)
+        if current_sources == previous_sources and current_control != previous_control:
+            unchanged.add(number)
+    return unchanged
+
+
+def assessment_issue_update_times(
+    snapshot: Mapping[str, Any],
+    previous_snapshot: Mapping[str, Any] | None,
+    previous_prepared: Mapping[str, Any] | None,
+) -> dict[int, str]:
+    """Keep proven control-induced timestamps out of lifecycle interpretation."""
+    if previous_snapshot is None or previous_snapshot.get("repository") != snapshot.get("repository"):
+        return {}
+    previous_issues = {
+        issue["issueNumber"]: issue for issue in (previous_prepared or {}).get("issues", [])
+    }
+    times = {}
+    for number in snapshot["openIssues"]:
+        identity = f"issue:{number}"
+        current = snapshot["evidence"].get(identity, {})
+        previous = previous_snapshot["evidence"].get(identity, {})
+        if current.get("availability") != "available" or previous.get("availability") != "available":
+            continue
+        updated_at = current["payload"].get("updatedAt")
+        previous_updated_at = previous["payload"].get("updatedAt")
+        baseline = previous_issues.get(number, {}).get("lifecycleIssueUpdatedAt", previous_updated_at)
+        if not isinstance(updated_at, str) or not isinstance(baseline, str) or baseline == updated_at:
+            continue
+        independent, control = _issue_source_fingerprints(snapshot, number, include_related=False)
+        previous_independent, previous_control = _issue_source_fingerprints(previous_snapshot, number, include_related=False)
+        if independent != previous_independent or (updated_at != previous_updated_at and control == previous_control):
+            continue
+        if parse_aware_iso8601(baseline, "lifecycle issue update") > parse_aware_iso8601(updated_at, "issue update"):
+            continue
+        # Retain the semantic baseline in existing assessment history so a later
+        # unchanged cycle does not reinterpret the same control timestamp. New
+        # independent issue content invalidates it; task/PR evidence is still
+        # freshly derived and compared, not carried from an older assessment.
+        times[number] = baseline
+    return times
+
+
 def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[str, Any] | None:
     status = snapshot.get("delegationStatus")
     if not isinstance(status, Mapping):
@@ -484,7 +631,7 @@ def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[s
                     for pr in record.get("pullRequests", [])
                 ) else "delegation-needs-human-decision"
             )
-    return {
+    context = {
         "status": status.get("status"), "records": records,
         "decisionRequired": decision, "decisionReason": reason,
         # Activity is contextual, not verified ownership. In particular, a
@@ -504,6 +651,11 @@ def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[s
             ],
         },
     }
+    if any(record.get("outcomeEvidence", {}).get("assessmentRequired") for record in records):
+        # Assessment admission is independent of public handoff cadence. The
+        # task state and reported conclusion authorize neither a retry nor a fix.
+        context["outcomeAssessmentRequired"] = True
+    return context
 
 
 def _build_candidate(
@@ -513,6 +665,7 @@ def _build_candidate(
     *,
     max_bundle_records: int,
     recovery: Mapping[str, Any],
+    lifecycle_updated_at: str | None,
 ) -> dict[str, Any]:
     issue_record = evidence.get(f"issue:{issue_number}")
     if not isinstance(issue_record, dict):
@@ -560,7 +713,7 @@ def _build_candidate(
         autoclose=autoclose if isinstance(autoclose, bool) else None,
         ledger=ledger,
         episodes_complete=payload.get("episodesComplete") is True,
-        updated_at=payload.get("updatedAt"),
+        updated_at=lifecycle_updated_at if lifecycle_updated_at is not None else payload.get("updatedAt"),
         scoped=scoped,
         recovery_verified=recovery["status"] == "verified",
     )
@@ -578,6 +731,7 @@ def _build_candidate(
         "episodesComplete": payload.get("episodesComplete") is True,
         "identity": identity,
         "recovery": dict(recovery),
+        **({"lifecycleIssueUpdatedAt": lifecycle_updated_at} if lifecycle_updated_at is not None else {}),
         **decision,
         "evidenceBundle": [
             {

@@ -13,7 +13,7 @@ from urllib.parse import quote
 from pathlib import Path
 
 from . import ownership
-from .eligibility import MAX_DELEGATION_REQUESTS, executable_ci_labels
+from .eligibility import MAX_DELEGATION_REQUESTS
 from .github import GitHubApiError
 from .pull_requests import build_pull_request_current_state
 from .signals import Occurrence, extract_issue_signals, select_references
@@ -740,6 +740,7 @@ class Collector:
             previous_snapshot,
             current_history,
             full_refresh=full_refresh,
+            now=self._now,
         )
         # A direct read may expose changes within GitHub's timestamp granularity,
         # or fields absent from older snapshots. Never overwrite those facts with
@@ -1670,17 +1671,7 @@ class Collector:
                 ) from exc
             self._merge_issue_inventory(
                 open_seed,
-                [
-                    item
-                    for item in items
-                    if isinstance(item, dict)
-                    and (
-                        "pull_request" in item
-                        or executable_ci_labels(item.get("labels"))
-                    )
-                ]
-                if isinstance(items, list)
-                else items,
+                items,
                 None,
             )
         self._merge_bot_authored_open_inventory(open_seed)
@@ -1790,10 +1781,6 @@ class Collector:
                 for raw_issue in payload
                 if isinstance(raw_issue, dict)
                 and _is_bot_authored(raw_issue)
-                and (
-                    "pull_request" in raw_issue
-                    or executable_ci_labels(raw_issue.get("labels"))
-                )
             )
             if len(payload) < OPEN_SCAN_PAGE_SIZE:
                 reached_end = True
@@ -3060,6 +3047,7 @@ class Collector:
             "closedAt": raw_issue.get("closed_at"),
             "labels": labels,
             "author": _nested_text(raw_issue, ("user", "login")),
+            "authorType": _nested_text(raw_issue, ("user", "type")),
             "assignees": sorted(
                 {
                     assignee["login"]
@@ -4297,6 +4285,7 @@ class Collector:
                 "runId": run_id,
                 "targetRepository": target_repository,
                 "workflowId": workflow_id_value,
+                "workflowPath": _text(raw_run, "path"),
                 "workflow": _text(raw_run, "name"),
                 "event": _text(raw_run, "event"),
                 "branch": branch,

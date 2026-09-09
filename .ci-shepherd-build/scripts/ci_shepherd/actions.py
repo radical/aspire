@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from ci_shepherd.comment_body import comment_bodies_materially_equal
 from ci_shepherd.eligibility import (
-    delegation_readiness, diagnostic_collection_error, executable_ci_labels,
+    delegation_readiness, diagnostic_collection_error, executable_ci_labels, repair_priority,
     human_decision_blocks_delegation, related_repairs_block_delegation,
 )
 from ci_shepherd.handoff_reminders import reminder_action_identity
@@ -125,14 +125,12 @@ def _render_retired_status_body(
                 "input through this status comment."
             ),
             "",
-            f"**Current assessment:** {recommendation['summary']}",
-            "",
             "**Evidence reviewed:**",
-            *_evidence_lines(snapshot, evidence_ids),
+            *_evidence_lines(snapshot, sorted(set(evidence_ids))),
             "",
             (
                 "**Status:** This case moved to report-only investigation. "
-                "No GitHub action has been started."
+                "Current analysis and pending work are recorded in the operator report."
             ),
             "",
             _status_markers(issue_number),
@@ -548,6 +546,7 @@ def _execution_eligibility(
         "delegation-state",
         "operator-request",
         "investigation-request",
+        "workflow-producer",
     }:
         raise ValueError(f"Unsupported action evidence basis: {evidence_basis}.")
     evidence = snapshot.get("evidence")
@@ -577,7 +576,7 @@ def _execution_eligibility(
         or error["scope"].get("kind") != "issue"
         or issue_number in error["scope"].get("issueNumbers", [])
     ]
-    if evidence_basis in {"operator-request", "investigation-request"} or (
+    if evidence_basis in {"operator-request", "investigation-request", "workflow-producer"} or (
         evidence_basis == "source-reconciliation" and operation == "assign-copilot"
     ):
         relevant_collection_errors = [
@@ -1764,7 +1763,11 @@ def _delegation_instructions(
         f"{tracking_instructions}"
         "If the issue cannot be fixed from the available evidence, keep the pull "
         "request in draft and clearly record the missing evidence or human "
-        "decision needed."
+        "decision needed. Do not manufacture a code change merely to produce a diff. "
+        "Conclude with a concise outcome, the evidence actually inspected, changes "
+        "made, missing evidence or human decision, and the suggested next step. "
+        "Record that conclusion in the pull request body or a same-PR comment "
+        "when a pull request exists."
     )
 
 
@@ -1803,7 +1806,7 @@ def build_action_proposals(
         judgments,
         shepherd_author,
         excluded_issue_numbers=(
-            reconciliation_issue_numbers | frozenset(delegation_handoffs)
+            reconciliation_issue_numbers | frozenset(delegation_handoffs) | delegated_issue_numbers
         ),
     )
     if not isinstance(prepared, dict) or not isinstance(judgments, dict):
@@ -1976,6 +1979,8 @@ def build_action_proposals(
                     if assignment_context.get("readiness", {}).get("origin") == "operator"
                     else "source-reconciliation"
                     if verified_quarantine is not None
+                    else "workflow-producer"
+                    if frozen_issue.get("producerAdmission") is not None
                     else "investigation-request"
                     if "readiness" in assignment_context
                     else "ci-occurrence"
@@ -2002,6 +2007,8 @@ def build_action_proposals(
                 ),
                 "model": "",
             }
+            if proposal["evidenceBasis"] == "workflow-producer":
+                proposal["producerAdmission"] = frozen_issue["producerAdmission"]
             if verified_quarantine is not None and proposal["evidenceBasis"] == "source-reconciliation":
                 if not isinstance(quarantine_reconciliation, dict):
                     raise TypeError("Quarantine reconciliation must be an object.")
@@ -2088,7 +2095,7 @@ def build_action_proposals(
                     proposals.append(proposal)
                 continue
             investigation = _selected_investigation_recommendation(issue)
-            if investigation is not None:
+            if investigation is not None and issue_number not in delegated_issue_numbers:
                 key = f"issue:{issue_number}:status"
                 existing = _owned_status_comments(snapshot, issue_number, key)
                 if len(existing) > 1:
@@ -2102,7 +2109,9 @@ def build_action_proposals(
                         snapshot,
                     )
                     existing_body = str(existing[0].get("body") or "").strip()
-                    if comment_bodies_materially_equal(existing_body, body):
+                    # This body contains fixed state text and sorted factual
+                    # citations, so a changed citation is material, not prose churn.
+                    if existing_body == body:
                         unchanged = result["unchangedIssueNumbers"]
                         if (
                             isinstance(unchanged, list)
@@ -2441,8 +2450,16 @@ def build_action_proposals(
         "close-issue": 1,
     }
     for proposal in proposals:
-        if frozen_issues.get(proposal["issueNumber"], {}).get("workflowHealth", {}).get("current") is True:
-            proposal["workflowPriority"] = True
+        frozen = frozen_issues.get(proposal["issueNumber"])
+        if frozen is not None:
+            facts = {
+                key: frozen[key] for key in ("producer", "repairEvidence", "workflowHealth", "testMaintenance")
+                if key in frozen
+            }
+            proposal["repairPriorityFacts"] = facts
+            proposal["repairPriority"] = repair_priority(facts)
+            if frozen.get("workflowHealth", {}).get("current") is True:
+                proposal["workflowPriority"] = True
     proposals.sort(
         key=lambda item: (
             int(item["issueNumber"]),

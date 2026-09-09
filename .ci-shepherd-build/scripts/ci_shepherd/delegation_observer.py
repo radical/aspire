@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import copy
 import re
 from typing import Mapping, Protocol, Sequence
 from urllib.parse import urlencode
@@ -37,6 +38,186 @@ class DelegationObservation:
     task_pull_request_ids: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
     unavailable_task_ids: frozenset[str] = frozenset()
     unavailable_issue_numbers: frozenset[int] = frozenset()
+    pull_request_outcome_sources: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
+
+
+def _outcome_body(body: object, limit: int) -> dict[str, object] | None:
+    from .investigations import _fingerprint
+
+    if not isinstance(body, str):
+        return None
+    return {
+        "preview": body[:limit], "length": len(body),
+        "fingerprint": _fingerprint(body), "truncated": len(body) > limit,
+    }
+
+
+def _outcome_pull_source(repository: str, pull: Mapping[str, object], detail: Mapping[str, object]) -> dict[str, object]:
+    head = detail.get("head")
+    user = detail.get("user")
+    number = pull.get("number")
+    url = f"https://github.com/{repository}/pull/{number}" if number else None
+    # REST pull details contain raw body/user/head/comments. The inventory's
+    # delegatedPullRequestDetails uses body/author/url/updatedAt instead.
+    observed_url = detail.get("url") if "updatedAt" in detail else detail.get("html_url")
+    available = observed_url == url and url is not None
+    return {
+        "databaseId": pull["databaseId"], "globalId": pull.get("globalId"), "number": number,
+        "state": pull["state"], "isDraft": pull["isDraft"], "changedFiles": pull.get("changedFiles"),
+        "url": url,
+        "author": (detail.get("author") if "updatedAt" in detail else user.get("login") if isinstance(user, Mapping) else None) if available else None,
+        "headSha": (head.get("sha") if isinstance(head, Mapping) else pull.get("progressSource", {}).get("headSha")),
+        "updatedAt": (detail.get("updatedAt", detail.get("updated_at"))) if available else None,
+        "body": _outcome_body(detail.get("body"), 4000) if available else None,
+        "commentCount": detail.get("comments") if type(detail.get("comments")) is int and detail["comments"] >= 0 else None,
+        "commentsAvailability": "not-requested", "comments": [], "commentWindowTruncated": False,
+    }
+
+
+def _cloud_outcome(record: Mapping[str, object], sources: list[dict[str, object]], *, previous: Mapping[str, object] | None = None) -> dict[str, object]:
+    from .investigations import _fingerprint
+
+    reported = any(
+        source.get("body", {}) and source["body"]["preview"].strip()
+        or any(comment["body"]["preview"].strip() for comment in source["comments"])
+        for source in sources
+    )
+    value = {
+        "taskId": record.get("taskId"), "taskState": record.get("taskState"),
+        "taskObservation": record.get("taskObservation", "available"),
+        "assessmentRequired": (
+            record.get("taskState") not in {"queued", "in_progress"}
+            or record.get("taskObservation") == "unavailable"
+            or record.get("lifecycle") in {"closed_unmerged"}
+            or bool(previous and previous.get("assessmentRequired"))
+        ),
+        "availability": "reported" if reported else "unavailable",
+        "detail": "Untrusted reported outcome; not verified repair or execution authority."
+        if reported else "outcome evidence unavailable",
+        "pullRequests": sources,
+    }
+    value["fingerprint"] = _fingerprint(value)
+    return value
+
+
+def initialize_cloud_outcome(record: dict[str, object], sources: Mapping[int, Mapping[str, object]]) -> None:
+    record["outcomeEvidence"] = _cloud_outcome(record, [
+        copy.deepcopy(dict(sources.get(pull["databaseId"]) or _outcome_pull_source(record["repository"], pull, {})))
+        for pull in record["pullRequests"]
+    ])
+
+
+def attach_cloud_outcomes(
+    snapshot: dict[str, object], previous_snapshot: Mapping[str, object] | None,
+    client: DelegationReadClient,
+) -> None:
+    """Freeze bound reported conclusions without assigning them repair authority."""
+    from .investigations import _fingerprint
+
+    previous = previous_snapshot or {}
+    if previous and previous.get("repository") != snapshot["repository"]:
+        raise ValueError("Cloud outcomes require the same repository.")
+    previous_records = {
+        record["actionId"]: record
+        for record in previous.get("delegationStatus", {}).get("records", [])
+    }
+    details = {detail["number"]: detail for detail in snapshot.get("delegatedPullRequestDetails", [])}
+    comment_windows: dict[int, list[dict[str, object]] | None] = {}
+    for record in snapshot.get("delegationStatus", {}).get("records", []):
+        old_record = previous_records.get(record["actionId"], {})
+        old = old_record.get("outcomeEvidence", {})
+        if old.get("taskId") != record.get("taskId"):
+            old = {}
+        existing = {
+            source["databaseId"]: source
+            for source in record.get("outcomeEvidence", {}).get("pullRequests", [])
+        }
+        old_sources = {source["databaseId"]: source for source in old.get("pullRequests", [])}
+        sources = []
+        for pull in record["pullRequests"]:
+            source = copy.deepcopy(existing.get(pull["databaseId"]) or _outcome_pull_source(snapshot["repository"], pull, {}))
+            for key in ("databaseId", "globalId", "number", "state", "isDraft", "changedFiles"):
+                source[key] = pull.get(key)
+            source["headSha"] = pull.get("progressSource", {}).get("headSha")
+            detail = details.get(pull.get("number"))
+            if detail is not None and snapshot["delegationStatus"]["status"] == "complete":
+                observed = _outcome_pull_source(snapshot["repository"], pull, detail)
+                # Reuse the already-collected full inventory body, but retain the
+                # exact task-linked pull detail's head and discussion count.
+                for key in ("body", "author", "url", "updatedAt"):
+                    source[key] = observed[key]
+            if snapshot["delegationStatus"]["status"] != "complete":
+                source.update(body=None, comments=[], commentsAvailability="unavailable", commentWindowTruncated=False)
+                sources.append(source)
+                continue
+            prior = old_sources.get(pull["databaseId"], {})
+            identity_fields = set(source) - {"comments", "commentsAvailability", "commentWindowTruncated"}
+            changed = any(source.get(key) != prior.get(key) for key in identity_fields)
+            ended = record.get("taskState") not in {"queued", "in_progress"}
+            transitioned = record.get("taskState") != old.get("taskState") or record.get("taskObservation", "available") != old.get("taskObservation")
+            if not ended and not old.get("assessmentRequired") and not changed and not transitioned and prior:
+                for key in ("comments", "commentsAvailability", "commentWindowTruncated"):
+                    source[key] = copy.deepcopy(prior[key])
+            elif ended or old.get("assessmentRequired") or old and changed:
+                source.update(comments=[], commentsAvailability="unavailable", commentWindowTruncated=False)
+                count = source["commentCount"]
+                if count == 0:
+                    source["commentsAvailability"] = "available"
+                elif type(count) is int and pull.get("number") is not None:
+                    # Issue comments are ID-ascending, without a descending sort.
+                    # Reobserve the bounded outcome window while an attempt has
+                    # ended/blocked instead of relying on pull.updated_at to also
+                    # advance with a comment edit.
+                    # Fingerprints, not fetch activity, decide reassessment.
+                    # Read only the last page (at most five), never get_pages().
+                    # https://docs.github.com/en/rest/issues/comments#list-issue-comments
+                    endpoint = f"/repos/{snapshot['repository']}/issues/{pull['number']}/comments?per_page=5&page={(count + 4) // 5}"
+                    if pull["number"] not in comment_windows:
+                        comment_windows[pull["number"]] = None
+                        try:
+                            comments = client.get(endpoint)
+                            if not isinstance(comments, list) or len(comments) > 5:
+                                raise ValueError("Invalid bounded comment response.")
+                            normalized = [_outcome_comment(item, snapshot["repository"], pull["number"]) for item in comments]
+                            if len({item["id"] for item in normalized}) != len(normalized):
+                                raise ValueError("Duplicate outcome comment identity.")
+                        except (GitHubApiError, ValueError):
+                            # An inaccessible conclusion is unknown, not proof
+                            # the completed task repaired the incident.
+                            pass
+                        else:
+                            comment_windows[pull["number"]] = normalized
+                    normalized = comment_windows[pull["number"]]
+                    if normalized is not None:
+                        source.update(comments=normalized, commentsAvailability="available",
+                                      commentWindowTruncated=count > len(normalized))
+            sources.append(source)
+        outcome = _cloud_outcome(record, sources, previous=old)
+        if old and old.get("fingerprint") != outcome["fingerprint"]:
+            outcome["assessmentRequired"] = True
+            outcome["fingerprint"] = _fingerprint({key: value for key, value in outcome.items() if key != "fingerprint"})
+        record["outcomeEvidence"] = outcome
+
+
+def _outcome_comment(value: object, repository: str, number: int) -> dict[str, object]:
+    item = _mapping(value, "outcome comment")
+    identity = item.get("id")
+    url = f"https://github.com/{repository}/pull/{number}#issuecomment-{identity}"
+    if (
+        type(identity) is not int or identity <= 0 or item.get("html_url") != url
+        or item.get("issue_url") != f"https://api.github.com/repos/{repository}/issues/{number}"
+        or not isinstance(item.get("body"), str)
+    ):
+        raise ValueError("Outcome comment does not belong to the exact pull request.")
+    for key in ("created_at", "updated_at"):
+        parse_aware_iso8601(item.get(key), key)
+    user = item.get("user")
+    return {
+        "id": identity, "url": url,
+        "author": user.get("login") if isinstance(user, Mapping) else None,
+        "createdAt": item["created_at"], "updatedAt": item["updated_at"],
+        "body": _outcome_body(item["body"], 2000),
+    }
 
 
 def observe_commit_comparison(
@@ -100,6 +281,7 @@ def observe_delegations(
     )
     pull_requests: dict[int, DelegatedPullRequest] = {}
     pull_request_sources: dict[int, Mapping[str, object]] = {}
+    pull_request_outcome_sources: dict[int, Mapping[str, object]] = {}
     task_pull_request_ids: dict[str, set[int]] = {}
     for record in known_records:
         task_id = record.get("taskId")
@@ -140,6 +322,10 @@ def observe_delegations(
             head = detail.get("head")
             sha = head.get("sha") if isinstance(head, Mapping) else None
             pull_request_sources[key] = {"headSha": sha if isinstance(sha, str) and sha.strip() else None}
+            pull_request_outcome_sources[key] = _outcome_pull_source(repository, {
+                "databaseId": key, "globalId": pull.global_id, "number": pull.number,
+                "state": pull.state.value, "isDraft": pull.is_draft, "changedFiles": pull.changed_files,
+            }, detail)
     observed_owned_ids = (
         {task.task_id for task in tasks}
         if owned_task_ids is None
@@ -212,6 +398,11 @@ def observe_delegations(
                         "across branch observations."
                     )
                 pull_request_sources[pull_request.database_id] = source
+                pull_request_outcome_sources[pull_request.database_id] = _outcome_pull_source(repository, {
+                    "databaseId": pull_request.database_id, "globalId": pull_request.global_id,
+                    "number": pull_request.number, "state": pull_request.state.value,
+                    "isDraft": pull_request.is_draft, "changedFiles": pull_request.changed_files,
+                }, detail)
         for artifact in task.pull_artifacts:
             assert artifact.database_id is not None
             key = artifact.database_id
@@ -252,6 +443,7 @@ def observe_delegations(
         task_pull_request_ids={key: tuple(sorted(value)) for key, value in task_pull_request_ids.items()},
         unavailable_task_ids=frozenset(unavailable_tasks),
         unavailable_issue_numbers=frozenset(unavailable_issues),
+        pull_request_outcome_sources=pull_request_outcome_sources,
     )
 
 

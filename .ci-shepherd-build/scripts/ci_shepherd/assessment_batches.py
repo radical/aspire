@@ -296,7 +296,8 @@ def _split_case(
     def fits(part: Mapping[str, Any]) -> bool:
         packet = {
             "schemaVersion": 1, "assessmentId": assessment_id,
-            "snapshotId": snapshot_id, "batchId": "batch:pending", "cases": [part],
+            "snapshotId": snapshot_id, "batchId": "batch:pending",
+            "groupId": "group:pending", "cases": [part],
         }
         # Leave room for final sequence numbers; count the serialized outer
         # document too, since embedded JSON fragments need additional escaping.
@@ -308,7 +309,6 @@ def _split_case(
     parts = []
     offset = 0
     while offset < len(content):
-        length = min(4096, len(content) - offset)
         part = {
             "caseId": f"{case['caseId']}/part/{len(parts) + 1}",
             "parentCaseId": case["caseId"],
@@ -318,19 +318,27 @@ def _split_case(
                 "instruction": "Read every part in order; join content to reconstruct the complete case JSON.",
                 "partIndex": len(parts) + 1,
                 "partCount": len(content),
-                "content": content[offset:offset + length],
+                "content": "",
             },
         }
-        while not fits(part) and length > 1:
-            length //= 2
-            part["input"]["content"] = content[offset:offset + length]
-        if not fits(part):
+        # Size the embedded JSON text after outer JSON escaping. For example,
+        # a source newline becomes "\\n" inside content and needs extra bytes.
+        low, high = 0, min(MAX_ASSESSMENT_PACKET_BYTES, len(content) - offset)
+        while low < high:
+            middle = (low + high + 1) // 2
+            part["input"]["content"] = content[offset:offset + middle]
+            if fits(part):
+                low = middle
+            else:
+                high = middle - 1
+        if low == 0:
             raise ValueError(
                 f"Assessment case {case['caseId']} metadata exceeds the "
                 f"{MAX_ASSESSMENT_PACKET_BYTES}-byte packet limit; evidence was not truncated."
             )
+        part["input"]["content"] = content[offset:offset + low]
         parts.append(part)
-        offset += length
+        offset += low
     for part in parts:
         part["input"]["partCount"] = len(parts)
     return parts
@@ -374,11 +382,16 @@ def materialize_assessment(work_dir: Path) -> dict[str, Any]:
     for selected in documents["review-selection.json"]["selected"]:
         number = selected["issueNumber"]
         issue = issues[number]
+        compact = defaults[number]
         cases.append({
             "caseId": f"issue:{number}",
             "evidenceIds": [record["id"] for record in issue["evidenceBundle"]],
             "input": issue,
-            "defaultJudgment": defaults[number],
+            "defaultJudgment": compact["defaultJudgment"],
+            "decisionContext": {
+                key: value for key, value in compact.items()
+                if key not in {"allowedEvidence", "defaultJudgment"}
+            },
             "selection": selected,
         })
     snapshot_evidence = documents["input.json"]["evidence"]

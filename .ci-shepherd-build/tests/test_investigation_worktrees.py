@@ -95,6 +95,112 @@ class InvestigationWorktreeTests(unittest.TestCase):
             self.provision(changed)
         self.assertEqual([first], worktrees.list_investigation_worktrees(self.state))
 
+    def test_occupied_old_source_reservations_block_provision_before_git(self) -> None:
+        requests = [{**self.request, "investigationId": f"investigation:old:{index}"} for index in range(3)]
+        for index, request in enumerate(requests):
+            self.bind(self.provision(request), f"worker-{index}", request)
+        inventory = worktrees.investigation_capacity_inventory(self.state, "owner/repo")
+        self.assertEqual(3, inventory["occupiedSlots"])
+        self.assertEqual(0, inventory["availableSlots"])
+        self.assertEqual(
+            {f"worker-{index}" for index in range(3)},
+            {row["sessionId"] for row in inventory["reservations"]},
+        )
+        before = (self.state / "ledgers/investigation-worktrees.jsonl").read_bytes()
+        with patch.object(worktrees, "_git", side_effect=AssertionError("Provisioning must not run Git")):
+            with self.assertRaisesRegex(ValueError, "Three investigation slots"):
+                self.provision({**self.request, "investigationId": "investigation:new-source"})
+        self.assertEqual(before, (self.state / "ledgers/investigation-worktrees.jsonl").read_bytes())
+
+    def test_unconfirmed_terminal_worker_keeps_capacity_until_observed_stopped(self) -> None:
+        record = self.bind(self.provision())
+        self.finish(record, status="failed")
+        inventory = worktrees.investigation_capacity_inventory(self.state, "owner/repo")
+        self.assertEqual(1, inventory["occupiedSlots"])
+        self.assertEqual("termination-unconfirmed", inventory["reservations"][0]["launchState"])
+        self.finish(record, status="failed", confirm_worker_stopped=True)
+        self.assertEqual(0, worktrees.investigation_capacity_inventory(self.state, "owner/repo")["occupiedSlots"])
+
+    def test_rejected_unlaunched_allocation_records_observation_then_cleans(self) -> None:
+        record = self.provision()
+        kwargs = {
+            "checkout": Path(record["checkoutPath"]), "session_id": None,
+            "status": "failed", "recorded_at": NOW,
+            "launch_outcome": "registration-rejected",
+            "execution_evidence": "Registration rejected: all three slots occupied; launcher was not invoked.",
+        }
+        terminal = worktrees.finish_investigation_worktree(self.state, self.request, **kwargs)
+        self.assertTrue(terminal["workerStopped"])
+        self.assertEqual("failed", terminal["terminalStatus"])
+        self.assertIn(kwargs["execution_evidence"], terminal["error"])
+        self.assertEqual(terminal, worktrees.finish_investigation_worktree(self.state, self.request, **kwargs))
+        cleaned = worktrees.cleanup_investigation_worktree(
+            self.state, self.request, checkout=Path(record["checkoutPath"]),
+            recorded_at=NOW, confirm_worker_stopped=True,
+        )
+        self.assertEqual("cleaned", cleaned["state"])
+        self.assertEqual("registration-rejected", cleaned["launchOutcome"])
+        self.assertEqual(kwargs["execution_evidence"], cleaned["executionEvidence"])
+        self.assertFalse(Path(record["checkoutPath"]).exists())
+        self.assertFalse((self.state / "ledgers/investigation-results.jsonl").exists())
+        self.assertFalse((self.state / "ledgers/investigation-sessions.jsonl").exists())
+        before = (self.state / "ledgers/investigation-worktrees.jsonl").read_bytes()
+        self.assertEqual(cleaned, worktrees.finish_investigation_worktree(self.state, self.request, **kwargs))
+        self.assertEqual(before, (self.state / "ledgers/investigation-worktrees.jsonl").read_bytes())
+
+    def test_cli_records_observed_prelaunch_rejection_without_claiming_execution(self) -> None:
+        record = self.provision()
+        result = subprocess.run(
+            [
+                sys.executable, "scripts/investigation_worktree.py", "finish",
+                "--state-dir", str(self.state), "--ownership-id", record["ownershipId"],
+                "--recorded-at", NOW, "--status", "failed",
+                "--launch-outcome", "registration-rejected",
+                "--execution-evidence", "Registration rejected before the launcher was invoked.",
+            ],
+            check=True, capture_output=True, text=True,
+        )
+        terminal = json.loads(result.stdout)
+        self.assertEqual("failed", terminal["terminalStatus"])
+        self.assertTrue(terminal["workerStopped"])
+        self.assertIsNone(terminal["sessionId"])
+        self.assertFalse((self.state / "ledgers/investigation-results.jsonl").exists())
+
+    def test_unlaunched_terminal_path_rejects_missing_proof_binding_and_dirty_source(self) -> None:
+        for condition in ("missing-proof", "unknown", "bound", "reserved", "dirty", "changed-head", "dispatch-event"):
+            with self.subTest(condition=condition):
+                request = {**self.request, "investigationId": f"investigation:{condition}"}
+                record = self.provision(request)
+                checkout = Path(record["checkoutPath"])
+                evidence = "The coordinator observed rejection before invoking the launcher."
+                outcome = "registration-rejected"
+                if condition == "missing-proof":
+                    evidence = ""
+                elif condition == "unknown":
+                    outcome = "unknown"
+                elif condition == "bound":
+                    self.bind(record, "unlaunched-path-worker", request)
+                elif condition == "reserved":
+                    worktrees.reserve_one_shot_worktree(self.state, request, checkout=checkout, recorded_at=NOW)
+                elif condition == "dirty":
+                    (checkout / "source.txt").write_text("Preserve this edit.\n", encoding="utf-8")
+                elif condition == "changed-head":
+                    (checkout / "source.txt").write_text("New revision.\n", encoding="utf-8")
+                    git(checkout, "commit", "-qam", "Different test revision")
+                else:
+                    worktrees.append_jsonl_rows(self.state / "ledgers/investigation-sessions.jsonl", [{
+                        "repository": "owner/repo", "investigationId": request["investigationId"],
+                        "worktreeOwnershipId": record["ownershipId"], "status": "dispatching",
+                    }])
+                before = (self.state / "ledgers/investigation-worktrees.jsonl").read_bytes()
+                with self.assertRaises(ValueError):
+                    worktrees.finish_investigation_worktree(
+                        self.state, request, checkout=checkout, session_id=None,
+                        status="failed", recorded_at=NOW, launch_outcome=outcome, execution_evidence=evidence,
+                    )
+                self.assertEqual(before, (self.state / "ledgers/investigation-worktrees.jsonl").read_bytes())
+                self.assertTrue(checkout.exists())
+
     def test_pin_may_precede_coordinator_head_but_must_be_exact_commit(self) -> None:
         (self.source / "source.txt").write_text("new committed source\n", encoding="utf-8")
         git(self.source, "commit", "-qam", "Second test source")

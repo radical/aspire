@@ -457,17 +457,8 @@ class WatchActionTests(unittest.TestCase):
         )
 
     def test_ci_delegation_can_request_investigation_without_a_local_handoff(self) -> None:
-        prepared = _prepared()
-        prepared["repositoryPolicy"] = {
-            "quarantinePullRequest": {"baseRef": "main"},
-        }
-
-        proposals = build_action_proposals(
-            _snapshot(),
-            prepared,
-            _delegate_judgments(),
-            "ankj",
-        )
+        from test_repair_routing import override_category, repair_snapshot
+        _, _, _, proposals = override_category(repair_snapshot(category="build", runs=(100,)), "blocking-build")
 
         proposal, = proposals["proposals"]
         self.assertEqual("investigation-request", proposal["evidenceBasis"])
@@ -643,7 +634,7 @@ class WatchActionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "Flaky-test delegation requires source-confirmed quarantine or an operator request",
+            "Flaky-test delegation requires verified repair evidence, source-confirmed quarantine or an operator request",
         ):
             build_action_proposals(
                 _snapshot(),
@@ -1237,6 +1228,12 @@ class WatchActionTests(unittest.TestCase):
 
     def test_superseded_duplicate_close_suppresses_model_delegation(self) -> None:
         prepared = _prepared()
+        prepared["issues"][0]["delegationRequest"] = {"origin": "operator"}
+        value = _snapshot()
+        value["delegationRequests"] = [21]
+        prepared["issues"][0]["evidenceBundle"] = [
+            {"id": evidence_id, **record} for evidence_id, record in value["evidence"].items()
+        ]
         prepared["repositoryPolicy"] = {
             "quarantinePullRequest": {"baseRef": "main"},
         }
@@ -1262,7 +1259,7 @@ class WatchActionTests(unittest.TestCase):
         )
 
         result = build_action_proposals(
-            _snapshot(),
+            value,
             prepared,
             judgments,
             "ankj",
@@ -1378,6 +1375,24 @@ class WatchActionTests(unittest.TestCase):
 
         self.assertEqual([], result["proposals"])
         self.assertEqual([21], result["unchangedIssueNumbers"])
+
+    def test_retirement_ignores_rephrased_analysis_but_updates_changed_citations(self) -> None:
+        first = build_action_proposals(
+            _with_owned_comment(_snapshot(), "[automated] The CI shepherd is watching this failure."),
+            _prepared(), _investigate_judgments(), "ankj",
+        )
+        snapshot = _with_owned_comment(_snapshot(), first["proposals"][0]["body"])
+        judgments = _investigate_judgments()
+        recommendation = judgments["issues"][0]["recommendations"][0]
+        recommendation["summary"] = "The same evidence still needs a short local classification."
+        recommendation["evidenceIds"].reverse()
+        unchanged = build_action_proposals(snapshot, _prepared(), judgments, "ankj")
+        self.assertEqual([], unchanged["proposals"])
+        self.assertEqual([21], unchanged["unchangedIssueNumbers"])
+        recommendation["evidenceIds"].append("pr:22")
+        changed = build_action_proposals(snapshot, _prepared(), judgments, "ankj")
+        self.assertEqual(1, len(changed["proposals"]))
+        self.assertIn("https://github.com/owner/repo/pull/22", changed["proposals"][0]["body"])
 
     def test_multiple_report_only_investigations_share_one_retirement_edit(self) -> None:
         judgments = _investigate_judgments()

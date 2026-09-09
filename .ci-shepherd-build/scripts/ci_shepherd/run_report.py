@@ -7,7 +7,7 @@ from html import escape
 import math
 from typing import Any
 
-from ci_shepherd.eligibility import related_repairs_block_delegation
+from ci_shepherd.eligibility import related_repairs_block_delegation, repair_priority
 from ci_shepherd.lifecycle import latest_occurrence_timestamp
 
 
@@ -154,11 +154,43 @@ def _tracking_summary(records: list[Mapping[str, Any]]) -> str:
         + ("human-owned; " if record.get("humanAssigned") is True else "")
         + "PRs: " + _text([
             f"#{pull['number']} ({pull.get('state', 'unknown')})"
+            + f"; draft: {_text(pull.get('isDraft'))}; changed files: {_text(pull.get('changedFiles'))}"
             + (f" [last verified: {pull['lastKnownState']}]" if pull.get("lastKnownState") else "")
             for pull in _rows(record.get("pullRequests")) if pull.get("number")
         ])
         for record in records
     )
+
+
+def _reported_cloud_outcomes(records: list[Mapping[str, Any]]) -> str:
+    parts = []
+    for record in records:
+        outcome = record.get("outcomeEvidence") or {}
+        parts.append(
+            f"attempt {_text(record.get('actionId'))}, task {_text(record.get('taskId'))}: "
+            + _text(outcome.get("detail", "outcome evidence unavailable"))
+        )
+        for pull in _rows(outcome.get("pullRequests")):
+            parts.append(f"PR source {_text(pull.get('url'))}; observed head: {_text(pull.get('headSha'))}")
+            sources = [
+                ("PR body", pull.get("body"), pull.get("url"), pull.get("author")),
+                *[
+                    ("PR comment", comment.get("body"), comment.get("url"), comment.get("author"))
+                    for comment in _rows(pull.get("comments"))
+                ],
+            ]
+            for kind, body, url, author in sources:
+                if not isinstance(body, Mapping):
+                    continue
+                parts.append(
+                    f"{kind} reported at {_text(url)} by {_text(author)}: {_text(body.get('preview'))}"
+                    + (" (source preview truncated)" if body.get("truncated") else "")
+                )
+            parts.append(
+                f"Comments: {_text(pull.get('commentsAvailability'))}"
+                + (" (recent comment window truncated)" if pull.get("commentWindowTruncated") else "")
+            )
+    return "; ".join(parts)
 
 
 def _readiness(task: Mapping[str, Any]) -> str:
@@ -560,6 +592,7 @@ def render_run_markdown(
     investigation_plan: Mapping[str, Any] | None = None,
     investigation_results: Iterable[Mapping[str, Any]] = (),
     investigation_sessions: Iterable[Mapping[str, Any]] = (),
+    investigation_capacity: Mapping[str, Any] | None = None,
     action_events: Iterable[Mapping[str, Any]] = (),
     prior_snapshot: Mapping[str, Any] | None = None,
     usage: Mapping[str, Any] | None = None,
@@ -572,6 +605,8 @@ def render_run_markdown(
     pre_expansion_pull_request_review: Mapping[str, Any] | None = None,
     assessment_coverage: Mapping[str, Any] | None = None,
     pre_expansion_assessment_coverage: Mapping[str, Any] | None = None,
+    assessment_manifest: Mapping[str, Any] | None = None,
+    pre_expansion_assessment_manifest: Mapping[str, Any] | None = None,
 ) -> str:
     """Render projections only; callers supply canonical records and refresh time.
 
@@ -733,6 +768,19 @@ def render_run_markdown(
             for row in recommendations if isinstance(row.get("humanEscalation"), Mapping)
         ]
         state = _text(assessment.get("issueState", item.get("state")))
+        routes = {
+            "delegate-copilot": "cloud investigate-and-fix",
+            "investigate": "local classification",
+        }
+        planned_routes = list(dict.fromkeys(
+            routes[row["disposition"]] for row in recommendations if row.get("disposition") in routes
+        ))
+        if planned_routes:
+            priority = repair_priority(assessment)
+            state += (
+                f"; route: {_text(planned_routes)}; scheduling priority: {_text(priority['kind'])}"
+                f"; matching recurrence: {_text(priority['recurrent'])}"
+            )
         workflow_health = assessment.get("workflowHealth") or {}
         if workflow_health:
             state += (
@@ -758,6 +806,8 @@ def render_run_markdown(
             state += f"; fix handoff: {_text(actionability.get('status'))} (not an executed fix)"
         if tracking:
             state += "; Copilot tracking: " + _tracking_summary(tracking)
+            state += "; Reported cloud outcome (untrusted): " + _reported_cloud_outcomes(tracking)
+            state += "; Task completion and draft contents are not verified repair."
             if "quarantined-test" in labels and any(
                 record.get("attemptOutcome") == "merged" and record.get("issueOpen") is True
                 for record in tracking
@@ -807,7 +857,9 @@ def render_run_markdown(
                 *verification.get("evidenceIds", []),
             ]))),
             investigation,
-            "; ".join(f"{_status(row.get('disposition'))}: {_text(row.get('summary'))}" for row in recommendations) or "No decision recorded",
+            ("Assessed repair outcome: " if tracking else "")
+            + ("; ".join(f"{_status(row.get('disposition'))}: {_text(row.get('summary'))}" for row in recommendations)
+               or "No decision recorded"),
             executed("issue", number),
             ("⛔ " + _text(blockers)) if blockers else "None recorded",
             f"Owner: {_owner(item)}; suggested next actor: {_text(suggested) if suggested else 'unknown'}"
@@ -922,6 +974,12 @@ def render_run_markdown(
         "Recording windows may overlap; collection/cycle windows are not a substitute for whole-invocation timing.",
         "Inferred intervals are not measured model compute. These windows do not establish request-level latency or billable usage.", "",
     ])
+    _append_assessment_workload(lines, [
+        ("Before expansion", pre_expansion_assessment_manifest,
+         (pre_expansion_review_selection or {}).get("snapshotId", snapshot_id)),
+        ("Current", assessment_manifest, snapshot_id),
+    ])
+    _append_local_capacity(lines, investigation_capacity, repository)
     _append_workflow_discovery(lines, snapshot)
     _append_investigation_overview(
         lines, [row for rows in groups.values() for row in rows], identities, next_evidence, operational_states,
@@ -957,6 +1015,97 @@ def render_run_markdown(
                   f"[Full collection audit]({_text(audit_details_url)})" if audit_details_url else "No separate collection audit supplied.",
                   "Ages use recorded matching failures or meaningful changes only; updatedAt is not an age signal.", ""])
     return "\n".join(lines)
+
+
+def _append_assessment_workload(
+    lines: list[str], rounds: Iterable[tuple[str, Mapping[str, Any] | None, str]],
+) -> None:
+    rows = []
+    for label, manifest, snapshot_id in rounds:
+        if manifest is None:
+            continue
+        if not isinstance(manifest, Mapping) or manifest.get("snapshotId") != snapshot_id:
+            raise ValueError("Assessment workload must match its handoff snapshot.")
+        batches, groups = manifest.get("batches"), manifest.get("workerGroups")
+        count = manifest.get("caseCount")
+        if (
+            not isinstance(batches, list) or not isinstance(groups, list)
+            or type(count) is not int or count < 0
+            or any(not isinstance(row, Mapping) for row in [*batches, *groups])
+            or any(type(row.get("byteCount")) is not int or row["byteCount"] < 0 for row in [*batches, *groups])
+        ):
+            raise ValueError("Assessment workload requires case, packet, group, and byte counts.")
+        if (
+            any(not isinstance(batch.get(key), str) or not batch[key] for batch in batches for key in ("batchId", "file"))
+            or any(
+                not isinstance(group.get(key), list)
+                or any(not isinstance(value, str) or not value for value in group[key])
+                for group in groups for key in ("caseIds", "batchIds", "packetFiles")
+            )
+        ):
+            raise ValueError("Assessment workload requires packet and logical case identities.")
+        case_ids = [case_id for group in groups for case_id in group["caseIds"]]
+        grouped_batches = [batch_id for group in groups for batch_id in group["batchIds"]]
+        batches_by_id = {batch["batchId"]: batch for batch in batches}
+        if (
+            len(case_ids) != count or len(set(case_ids)) != count
+            or len(batches_by_id) != len(batches)
+            or len(grouped_batches) != len(batches)
+            or set(grouped_batches) != set(batches_by_id)
+            or len({batch["file"] for batch in batches}) != len(batches)
+        ):
+            raise ValueError("Assessment workload logical case or packet membership disagrees.")
+        for group in groups:
+            member_batches = [batches_by_id[batch_id] for batch_id in group["batchIds"]]
+            if (
+                group["packetFiles"] != [batch["file"] for batch in member_batches]
+                or group["byteCount"] != sum(batch["byteCount"] for batch in member_batches)
+            ):
+                raise ValueError("Assessment workload packet and worker membership or byte counts disagree.")
+        byte_count = sum(group["byteCount"] for group in groups)
+        rows.append(f"| {label} | {count} | {len(batches)} | {len(groups)} | {byte_count} |")
+    lines.extend(["## Assessment workload", ""])
+    if rows:
+        lines.extend([
+            "These are assessment packets, not package restore. Counts describe materialized input, not completed assessment.",
+            "Serialized bytes are not token counts or billed usage.", "",
+            "| Round | Logical cases | Packets | Worker groups | Serialized input bytes |",
+            "|---|---:|---:|---:|---:|", *rows, "",
+        ])
+    else:
+        lines.extend(["Unknown: no assessment packet manifest supplied.", ""])
+
+
+def _append_local_capacity(lines: list[str], capacity: Mapping[str, Any] | None, repository: str) -> None:
+    lines.extend(["## Local investigation reservations", ""])
+    if capacity is None:
+        lines.extend(["Unknown: current worktree and lifecycle capacity inventory was not supplied.", ""])
+        return
+    reservations = capacity.get("reservations")
+    occupied, available, limit = (capacity.get(key) for key in ("occupiedSlots", "availableSlots", "maxConcurrent"))
+    if (
+        capacity.get("repository") != repository or not isinstance(reservations, list)
+        or any(type(value) is not int or value < 0 for value in (occupied, available, limit))
+        or occupied != len(reservations) or available != max(0, limit - occupied)
+        or any(not isinstance(row, Mapping) for row in reservations)
+    ):
+        raise ValueError("Investigation capacity must match the repository and its reservation counts.")
+    lines.extend([
+        f"{occupied} occupied of {limit} slots; {available} available. Older source pins remain included.",
+        "A deadline or missing worker response is not proof that a reservation can be released.", "",
+    ])
+    if reservations:
+        lines.extend([
+            "| Issue | Actual session / logical attempt | Launch state | Source pin | Next event |",
+            "|---|---|---|---|---|",
+        ])
+        for row in reservations:
+            owner = row.get("sessionId") or row.get("attemptId") or row.get("ownershipId")
+            lines.append("| " + " | ".join([
+                _text(row.get("issueNumber")), _text(owner), _text(row.get("launchState")),
+                _text(row.get("sourceRevision")), "Observe invocation completion or reconcile the exact owner.",
+            ]) + " |")
+        lines.append("")
 
 
 def _append_workflow_discovery(lines: list[str], snapshot: Mapping[str, Any]) -> None:

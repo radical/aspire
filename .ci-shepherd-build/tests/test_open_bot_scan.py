@@ -99,6 +99,15 @@ def collect(
 
 
 class OpenBotScanTests(unittest.TestCase):
+    def test_unknown_bot_without_executable_labels_is_discovered_with_its_author_type(self) -> None:
+        result, _ = collect({scan_page(1): [
+            bot(11, labels=["agentic-workflows"]), bot(12, labels=[]),
+            bot(13, labels=[], is_pull_request=True), item(14, labels=[]),
+        ]})
+        self.assertEqual([11, 12], [issue["number"] for issue in result.open_issues])
+        self.assertEqual(["Bot", "Bot"], [issue["authorType"] for issue in result.open_issues])
+        self.assertEqual([13], [pull["number"] for pull in result.open_pull_requests])
+
     def test_scan_adopts_bot_author_not_covered_by_configured_creator_queries(
         self,
     ) -> None:

@@ -814,7 +814,7 @@ class CollectorTests(unittest.TestCase):
         prepared = prepare_assessment(snapshot_from_result(result))
         self.assertEqual([24], [issue["issueNumber"] for issue in prepared["issues"]])
 
-    def test_collect_excludes_open_github_actions_issues_without_target_labels(self) -> None:
+    def test_collect_keeps_open_github_actions_issues_without_target_labels(self) -> None:
         bot_issue = make_issue(22, labels=["agentic-workflows"])
         bot_issue["user"] = {"login": "github-actions[bot]"}
         pages = {
@@ -838,7 +838,7 @@ class CollectorTests(unittest.TestCase):
             include_timeline=False,
         )
 
-        self.assertEqual([21], [issue["number"] for issue in result.open_issues])
+        self.assertEqual([21, 22], [issue["number"] for issue in result.open_issues])
 
     def test_collect_recognizes_gh_aw_failure_issue_producer(self) -> None:
         body = """\
@@ -1609,6 +1609,7 @@ Deployment tests are failing.
         run_v1 = {
             "id": run_id,
             "workflow_id": 7,
+            "path": ".github/workflows/ci.yml",
             "run_attempt": 1,
             "name": "CI",
             "event": "push",
@@ -1636,6 +1637,7 @@ Deployment tests are failing.
             minimal_run_evidence=True,
             include_run_history=True,
         )
+        self.assertEqual(".github/workflows/ci.yml", first.evidence[f"run:{run_id}"]["payload"]["workflowPath"])
         snapshot = {
             "schemaVersion": 1,
             "collectionVersion": COLLECTION_VERSION,

@@ -23,6 +23,7 @@ from ci_shepherd.investigation_worktrees import (
     bind_investigation_worktree,
     cleanup_investigation_worktree,
     finish_investigation_worktree,
+    investigation_capacity_inventory,
     list_investigation_worktrees,
     provision_investigation_worktree,
 )
@@ -99,6 +100,9 @@ class OneShotInvestigationTests(unittest.TestCase):
         self.assertIn(self.request["sourceRevision"], prepared["launchEnvelope"])
         self.assertIn("Do NOT switch branches", prepared["launchEnvelope"])
         self.assertIn("Do not launch subagents or background processes", prepared["launchEnvelope"])
+        self.assertIn("WORK_BUDGET_SECONDS: 180", prepared["launchEnvelope"])
+        self.assertIn("cooperative", prepared["launchEnvelope"])
+        self.assertIn(self.request["question"], prepared["launchEnvelope"])
         self.assertEqual([], prepared["reproductionCommands"])
         self.assertFalse(self.output.exists())
         self.assertEqual(prepared, self.prepare())
@@ -112,6 +116,88 @@ class OneShotInvestigationTests(unittest.TestCase):
                 self.state, self.request, checkout=self.checkout,
                 session_id="unrelated-worker", recorded_at="2026-09-08T23:01:00Z",
             )
+
+    def test_registration_counts_bound_allocations_missing_lifecycle_events(self) -> None:
+        allocations = [
+            self._allocate_attempt({**self.request, "investigationId": f"investigation:unrecorded-{index}"})
+            for index in range(3)
+        ]
+        self.prepare()
+        for index, allocation in enumerate(allocations[:2]):
+            bind_investigation_worktree(
+                self.state, allocation["request"], checkout=Path(allocation["checkoutPath"]),
+                session_id=f"unrecorded-worker-{index}", recorded_at="2026-09-08T23:01:00Z",
+            )
+        before = read_investigation_session_events(self.state)
+        with self.assertRaisesRegex(ValueError, "Three investigation slots"):
+            self._register_attempt(allocations[2], "one-shot")
+        self.assertEqual(before, read_investigation_session_events(self.state))
+
+    def test_unknown_legacy_worker_remains_reserved_after_replacement_starts(self) -> None:
+        request = {
+            key: value for key, value in self.request.items()
+            if key not in {"sourceRevision", "investigationScope"}
+        }
+        for status, session in (("started", "old-worker"), ("failed", "old-worker"), ("started", "replacement-worker")):
+            record_investigation_session_event(
+                self.state, request, status=status, session_id=session,
+                checkout=self.checkout if status == "started" else None,
+                recorded_at="2026-09-08T23:01:00Z",
+                **({"failure_reason": "The worker did not return; termination is unknown."} if status == "failed" else {}),
+            )
+        inventory = investigation_capacity_inventory(self.state, request["repository"])
+        self.assertEqual(2, inventory["occupiedSlots"])
+        self.assertEqual({"old-worker", "replacement-worker"}, {row["sessionId"] for row in inventory["reservations"]})
+        stopped = record_investigation_session_event(
+            self.state, request, status="failed", session_id="old-worker",
+            recorded_at="2026-09-08T23:03:00Z", confirm_worker_stopped=True,
+            failure_reason="The worker did not return; termination is unknown.",
+        )
+        self.assertTrue(stopped["workerStopped"])
+        inventory = investigation_capacity_inventory(self.state, request["repository"])
+        self.assertEqual(1, inventory["occupiedSlots"])
+        self.assertEqual(["replacement-worker"], [row["sessionId"] for row in inventory["reservations"]])
+
+    def test_matching_manual_stop_releases_slot_despite_older_failure_event(self) -> None:
+        allocation = list_investigation_worktrees(self.state)[0]
+        registration = self._register_attempt(allocation, "resumable")
+        record_investigation_session_event(
+            self.state, self.request, status="failed", session_id=registration["sessionId"],
+            recorded_at="2026-09-08T23:02:00Z", failure_reason="The worker is unavailable.",
+        )
+        self.assertEqual(1, investigation_capacity_inventory(self.state, self.request["repository"])["occupiedSlots"])
+        finish_investigation_worktree(
+            self.state, self.request, checkout=self.checkout, session_id=registration["sessionId"],
+            status="failed", recorded_at="2026-09-08T23:03:00Z", confirm_worker_stopped=True,
+        )
+        cleanup_investigation_worktree(
+            self.state, self.request, checkout=self.checkout, session_id=registration["sessionId"],
+            recorded_at="2026-09-08T23:04:00Z", confirm_worker_stopped=True,
+        )
+        self.assertEqual(0, investigation_capacity_inventory(self.state, self.request["repository"])["occupiedSlots"])
+
+    def test_exact_preparation_replay_preserves_legacy_frozen_envelope(self) -> None:
+        envelope = investigations._one_shot_envelope
+        budget_line = "WORK_BUDGET_SECONDS: 180 (cooperative, from investigation start)\n"
+        with patch.object(investigations, "_one_shot_envelope", side_effect=lambda event: envelope(event).replace(budget_line, "")):
+            prepared = self.prepare()
+        self.assertEqual(prepared, self.prepare())
+        self.assertEqual(prepared["launchEnvelope"], self.dispatch()["launchEnvelope"])
+
+    def test_never_launched_failures_still_bound_owned_attempts_before_provisioning(self) -> None:
+        for attempt in (1, 2):
+            allocation = list_investigation_worktrees(self.state)[0] if attempt == 1 else self._allocate_attempt({
+                **self.request, "attempt": 2,
+            })
+            finish_investigation_worktree(
+                self.state, allocation["request"], checkout=Path(allocation["checkoutPath"]),
+                session_id=None, status="failed", recorded_at="2026-09-08T23:02:00Z",
+                launch_outcome="not-invoked", execution_evidence="The coordinator never invoked a launcher.",
+            )
+        before = list_investigation_worktrees(self.state)
+        with self.assertRaisesRegex(ValueError, "attempt"):
+            self._allocate_attempt({**self.request, "attempt": 3})
+        self.assertEqual(before, list_investigation_worktrees(self.state))
 
     def test_dispatch_is_single_use_and_replay_does_not_authorize_another_launch(self) -> None:
         self.prepare()
@@ -342,6 +428,10 @@ class OneShotInvestigationTests(unittest.TestCase):
         self.record_failure()
         for attempt in (2, 3):
             self.request = {**self.request, "attempt": attempt}
+            if attempt == 3:
+                with self.assertRaisesRegex(ValueError, "attempt limit"):
+                    self._allocate_attempt(self.request)
+                continue
             allocation = provision_investigation_worktree(
                 self.state, self.request, source_checkout=self.source, attempt=attempt,
                 recorded_at="2026-09-09T00:04:00Z", managed_root=self.root / "workers",
@@ -349,10 +439,6 @@ class OneShotInvestigationTests(unittest.TestCase):
             self.checkout = Path(allocation["checkoutPath"])
             self.owner = allocation["ownershipId"]
             self.output = self.root / "results" / f"{self.owner}.json"
-            if attempt == 3:
-                with self.assertRaisesRegex(ValueError, "limit"):
-                    self.prepare()
-                continue
             self.prepare()
             self.dispatch()
             with self.assertRaisesRegex(ValueError, "attempt"):
@@ -464,6 +550,7 @@ class OneShotInvestigationTests(unittest.TestCase):
         self.assertEqual(6, len(read_investigation_session_events(self.state)))
 
     def test_mixed_mode_cycle_limit_counts_dispatch_only_once(self) -> None:
+        extra = self._allocate_attempt({**self.request, "investigationId": "investigation:mixed-cycle-extra"})
         for index in range(5):
             allocation = self._allocate_attempt({
                 **self.request, "investigationId": f"investigation:mixed-cycle-{index}",
@@ -476,9 +563,10 @@ class OneShotInvestigationTests(unittest.TestCase):
                 )
             terminal = self._stop_attempt(allocation, registration)
             self.assertEqual(terminal, self._stop_attempt(allocation, registration))
-        extra = self._allocate_attempt({**self.request, "investigationId": "investigation:mixed-cycle-extra"})
         history = read_investigation_session_events(self.state)
         inventory = list_investigation_worktrees(self.state)
+        with self.assertRaisesRegex(ValueError, "Five|cycle"):
+            self._allocate_attempt({**self.request, "investigationId": "investigation:cycle-preflight"})
         for mode in ("one-shot", "resumable"):
             with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "Five|cycle"):
                 self._register_attempt(extra, mode)
@@ -493,14 +581,12 @@ class OneShotInvestigationTests(unittest.TestCase):
                 registration = self._register_attempt(allocation, mode)
                 self.assertEqual(registration, self._register_attempt(allocation, mode))
                 self._stop_attempt(allocation, registration)
-            extra = self._allocate_attempt({**request, "attempt": 3})
             history = read_investigation_session_events(self.state)
             inventory = list_investigation_worktrees(self.state)
-            for mode in ("one-shot", "resumable"):
-                with self.subTest(first=first, mode=mode), self.assertRaisesRegex(ValueError, "attempt limit"):
-                    self._register_attempt(extra, mode)
-                self.assertEqual(history, read_investigation_session_events(self.state))
-                self.assertEqual(inventory, list_investigation_worktrees(self.state))
+            with self.subTest(first=first), self.assertRaisesRegex(ValueError, "attempt limit"):
+                self._allocate_attempt({**request, "attempt": 3})
+            self.assertEqual(history, read_investigation_session_events(self.state))
+            self.assertEqual(inventory, list_investigation_worktrees(self.state))
 
     def test_cross_mode_duplicate_active_registration_is_rejected_without_mutation(self) -> None:
         for mode, dispatch in (("one-shot", False), ("one-shot", True), ("resumable", False)):
@@ -531,11 +617,17 @@ class OneShotInvestigationTests(unittest.TestCase):
                     session_id=None, status="failed", recorded_at="2026-09-08T23:01:00Z",
                     confirm_worker_stopped=True,
                 )
-            extra = provision_investigation_worktree(
-                self.state, {**request, "attempt": 1 if stale_request else 3}, source_checkout=self.source,
-                attempt=2 if stale_request else 3, managed_root=self.root / "workers",
-                recorded_at="2026-09-08T23:02:00Z",
-            )
+            allocation_request = {**request, "attempt": 1 if stale_request else 3}
+            allocation_options = {
+                "source_checkout": self.source, "attempt": 2 if stale_request else 3,
+                "managed_root": self.root / "workers", "recorded_at": "2026-09-08T23:02:00Z",
+            }
+            with self.assertRaisesRegex(ValueError, "bounded request attempt"):
+                provision_investigation_worktree(self.state, allocation_request, **allocation_options)
+            # Registration must independently protect an already allocated
+            # checkout even when the earlier preflight cannot be relied on.
+            with patch.object(investigations, "validate_investigation_admission"):
+                extra = provision_investigation_worktree(self.state, allocation_request, **allocation_options)
             inventory = list_investigation_worktrees(self.state)
             with self.subTest(stale_request=stale_request), self.assertRaisesRegex(ValueError, "bounded request attempt"):
                 self._register_attempt(extra, "resumable")

@@ -160,11 +160,13 @@ def _build_subject_health(
         "blocking-build" if "toolchain-build-break" in latest["allowedCauses"]
         else "transient-infrastructure" if "infra-transient" in latest["allowedCauses"]
         else "flaky-test" if latest.get("testName")
+        else "product-or-tooling" if latest["fingerprintId"].startswith("diagnostic:")
         else "unknown"
     )
     route = (
         "delegate-copilot"
-        if current and (category != "transient-infrastructure" or recurrent)
+        if current and (category == "blocking-build" or recurrent and category != "unknown")
+        else "investigate" if current and category == "unknown"
         else "watch"
     )
     closure_allowed = (

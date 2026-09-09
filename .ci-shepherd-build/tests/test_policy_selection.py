@@ -1531,12 +1531,12 @@ class SuppressionAndSurfaceTests(unittest.TestCase):
         # -- proving suppression never sweeps up a non-comment operation.
         now = datetime(2026, 9, 3, 18, 0, tzinfo=UTC)
         high = _comment_proposal(
-            action_id="snapshot:test:1:issue:900:watch-comment",
+            action_id="snapshot:test:1:issue:900:review-close-comment",
             issue_number=900,
             operation="create-comment",
         )
         low = _comment_proposal(
-            action_id="snapshot:test:1:issue:900:review-close-comment",
+            action_id="snapshot:test:1:issue:900:watch-comment",
             issue_number=900,
             operation="create-comment",
         )

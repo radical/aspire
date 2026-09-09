@@ -6,8 +6,8 @@ import re
 from typing import Callable, Protocol
 
 from .collector import COPILOT_ASSIGNEES
-from .eligibility import EXECUTABLE_CI_LABELS, label_names
-from .managed_coverage import validate_coverage_capability
+from .eligibility import EXECUTABLE_CI_LABELS, label_names, repair_priority, workflow_producer_admission
+from .managed_coverage import coverage_exclusions, validate_coverage_capability
 
 
 KNOWN_OPERATIONS = frozenset(
@@ -54,6 +54,9 @@ EXECUTABLE_COMMON_PROPOSAL_FIELDS = (
         "sourceCommentFingerprint",
         "sourceEvidenceFingerprint",
         "workflowPriority",
+        "repairPriorityFacts",
+        "repairPriority",
+        "producerAdmission",
     }
 )
 EXECUTION_ELIGIBILITY_FIELDS = frozenset(
@@ -232,6 +235,14 @@ def _validate_proposal(
         )
     if "workflowPriority" in proposal and proposal["workflowPriority"] is not True:
         raise ValueError(f"{action_id}.workflowPriority must be true when present.")
+    if "repairPriority" in proposal or "repairPriorityFacts" in proposal:
+        facts = proposal.get("repairPriorityFacts")
+        if not isinstance(facts, dict) or set(facts) - {"producer", "repairEvidence", "workflowHealth", "testMaintenance"}:
+            raise ValueError(f"{action_id}.repairPriorityFacts is invalid.")
+        if any(key in facts and not isinstance(facts[key], dict) for key in ("repairEvidence", "workflowHealth", "testMaintenance")):
+            raise ValueError(f"{action_id}.repairPriorityFacts must contain factual objects.")
+        if proposal.get("repairPriority") != repair_priority(facts):
+            raise ValueError(f"{action_id}.repairPriority must match frozen routing facts.")
 
     target_kind, target_number, target_url, expected_state = _proposal_target(
         proposal,
@@ -271,8 +282,23 @@ def _validate_proposal(
             evidence_basis=evidence_basis,
             body=proposal.get("body"),
         )
-        if evidence_basis in {"operator-request", "investigation-request"} and operation != "assign-copilot":
+        if evidence_basis in {"operator-request", "investigation-request", "workflow-producer"} and operation != "assign-copilot":
             raise ValueError(f"{action_id}: investigation request only licenses assignment.")
+        if evidence_basis == "workflow-producer":
+            admission = proposal.get("producerAdmission")
+            if (
+                not isinstance(admission, dict) or admission.get("repository") != repository
+                or not isinstance(admission.get("issue"), dict) or not isinstance(admission.get("run"), dict)
+                or admission["issue"].get("number") != target_number
+                or workflow_producer_admission(
+                    admission["issue"], [admission["run"]],
+                    repository=repository, collected_at=admission["run"].get("payload", {}).get("createdAt"),
+                ) != admission
+                or not {f"issue:{target_number}", admission["run"].get("id")}.issubset(evidence_ids)
+            ):
+                raise ValueError(f"{action_id}: invalid workflow producer admission.")
+        elif "producerAdmission" in proposal:
+            raise ValueError(f"{action_id}: workflow producer admission only licenses its assignment.")
         if (
             "source-comment-unavailable" in eligibility["blockingReasons"]
             and operation != "edit-comment"
@@ -556,6 +582,7 @@ def _validate_execution_eligibility(
             "delegation-state",
             "operator-request",
             "investigation-request",
+            "workflow-producer",
         }
         or recorded_evidence_basis != evidence_basis
     ):
@@ -958,6 +985,7 @@ def _dry_run_action(
     repository: str,
     document_eligible: bool,
     legacy_schema: bool,
+    coverage_blocked: bool,
 ) -> dict[str, object]:
     action_id = str(proposal["actionId"])
     target_kind, target_number, target_url, expected_state = _proposal_target(
@@ -980,6 +1008,8 @@ def _dry_run_action(
             and isinstance(eligibility.get("blockingReasons"), list)
             else []
         )
+    if coverage_blocked:
+        blocking_reasons.append("managed-item-coverage-invalid")
     return {
         "actionId": action_id,
         "targetKind": target_kind,
@@ -991,7 +1021,7 @@ def _dry_run_action(
         "evidenceIds": list(proposal["evidenceIds"]),
         "dependsOn": proposal.get("dependsOn"),
         "expectedTargetState": expected_state,
-        "wouldExecute": document_eligible and proposal_eligible,
+        "wouldExecute": document_eligible and proposal_eligible and not coverage_blocked,
         "blockingReasons": blocking_reasons,
     }
 
@@ -1004,6 +1034,8 @@ def build_dry_run(
     validated = validate_action_proposals(document)
     proposals = validated["proposals"]
     assert isinstance(proposals, list)
+    capability = validated.get("productionPilotCapability", {})
+    _, excluded_action_ids = coverage_exclusions(capability.get("managedItemCoverage"), proposals)
     selected = (
         [select_action(validated, action_id)]
         if action_id is not None
@@ -1040,6 +1072,7 @@ def build_dry_run(
                 repository=str(validated["repository"]),
                 document_eligible=document_eligible,
                 legacy_schema=legacy_schema,
+                coverage_blocked=proposal["actionId"] in excluded_action_ids,
             )
             for proposal in selected
             if isinstance(proposal, dict)
@@ -1252,6 +1285,22 @@ def execute_action(
                 outcome="stale",
                 reason="target-assigned-to-copilot",
                 preflight=preflight,
+            )
+        if (
+            proposal.get("evidenceBasis") == "workflow-producer"
+            and workflow_producer_admission(
+                {
+                    "number": issue.get("number"), "url": issue.get("html_url"),
+                    "author": issue.get("user", {}).get("login"),
+                    "authorType": issue.get("user", {}).get("type"), "body": issue.get("body"),
+                },
+                [proposal["producerAdmission"]["run"]],
+                repository=repository, collected_at=attempted_at,
+            ) is None
+        ):
+            return _terminal_result(
+                action_id=action_id, attempted_at=attempted_at, outcome="stale",
+                reason="workflow-producer-no-longer-recognized", preflight=preflight,
             )
         if (
             validated["schemaVersion"] == 2

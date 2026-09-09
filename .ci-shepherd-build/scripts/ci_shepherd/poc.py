@@ -123,13 +123,13 @@ def validate_poc_judgments(prepared: object, judgments: object) -> None:
                 and derive_machine_actionability(prepared_issue, category) is None
                 and delegation_readiness(prepared_issue, category) is None
             ):
-                raise ValidationError("Flaky-test delegation requires source-confirmed quarantine or an operator request.")
+                raise ValidationError("Flaky-test delegation requires verified repair evidence, source-confirmed quarantine or an operator request.")
             if (
                 recommendation.get("disposition") == "delegate-copilot"
-                and category not in {"blocking-build", "product-or-tooling", "flaky-test"}
+                and derive_machine_actionability(prepared_issue, category) is None
                 and delegation_readiness(prepared_issue, category) is None
             ):
-                raise ValidationError("This delegation category requires an explicit operator request.")
+                raise ValidationError("This delegation category requires verified repair evidence or an explicit operator request.")
             if target in recommendation_targets:
                 raise ValidationError(
                     f"Duplicate recommendation target for issue {issue_number}: {target[0]}:{target[1]}."
@@ -182,13 +182,13 @@ def validate_poc_projectability(compact_input: object, judgments: object) -> Non
             disposition = recommendation.get("disposition")
             if disposition == "delegate-copilot":
                 readiness = (
-                    compact_issue.get("delegationReadiness")
+                    delegation_readiness(compact_issue, issue["category"])
                     if "machineActionability" not in compact_issue else None
                 )
                 actionability = compact_issue.get("machineActionability", {})
                 evidence_ids = (readiness or actionability).get("evidenceIds", [])
                 if (
-                    not delegation_is_projectable(compact_issue)
+                    not delegation_is_projectable(compact_issue, category=issue["category"])
                     or not set(evidence_ids).issubset(recommendation.get("evidenceIds", []))
                 ):
                     raise ValidationError(f"Issue {issue_number} requires current cited delegation readiness or a code handoff.")
@@ -213,34 +213,12 @@ def validate_poc_projectability(compact_input: object, judgments: object) -> Non
                 _validate_human_escalation(recommendation.get("humanEscalation"))
 
 
-def delegation_is_projectable(compact_issue: Mapping[str, Any]) -> bool:
-    readiness = compact_issue.get("delegationReadiness")
-    if isinstance(readiness, Mapping) and "machineActionability" not in compact_issue:
-        maintenance = compact_issue.get("testMaintenance", {})
-        operator = compact_issue.get("delegationRequest") == {"origin": "operator"}
-        health = compact_issue.get("workflowHealth")
-        workflow = (
-            isinstance(health, Mapping) and health.get("current") is True
-            and health.get("route") == "delegate-copilot" and not operator
-        )
-        expected_ids = (
-            health.get("evidenceIds", []) if workflow
-            else maintenance.get("evidenceIds", [])
-            if maintenance.get("state") == "quarantined" and not operator
-            else [f"issue:{compact_issue['issueNumber']}"]
-        )
-        return (
-            set(readiness) == {"origin", "intent", "evidenceIds", "quarantine"}
-            and readiness["origin"] == ("operator" if operator else "workflow-health" if workflow else "assessment")
-            and readiness["intent"] == "investigate-and-fix"
-            and type(readiness["quarantine"]) is bool
-            and bool(expected_ids)
-            and readiness["evidenceIds"] == expected_ids
-            and set(expected_ids).issubset(
-                record["id"] for record in compact_issue.get("allowedEvidence", [])
-                if record.get("availability") == "available"
-            )
-        )
+def delegation_is_projectable(compact_issue: Mapping[str, Any], *, category: str | None = None) -> bool:
+    if compact_issue.get("actionCluster", {}).get("role") == "superseded":
+        return False
+    categories = (category,) if category is not None else sorted(CATEGORIES - {"unknown"})
+    if "machineActionability" not in compact_issue:
+        return any(delegation_readiness(compact_issue, candidate) is not None for candidate in categories)
     actionability = compact_issue.get("machineActionability", {})
     handoff = actionability.get("fixHandoff")
     return (
@@ -795,9 +773,12 @@ def _build_compact_issue(
     proof_ids = recovery["evidenceIds"] if recovery.get("status") == "verified" else []
     workflow_health = issue.get("workflowHealth")
     workflow_evidence_ids = workflow_health["evidenceIds"] if isinstance(workflow_health, Mapping) else []
+    repair_evidence_ids = issue.get("repairEvidence", {}).get("evidenceIds", [])
+    maintenance_evidence_ids = issue.get("testMaintenance", {}).get("evidenceIds", [])
     allowed_evidence, allowed_evidence_ids = _select_allowed_evidence(
-        evidence_bundle, [*proof_ids, *workflow_evidence_ids, *(actionability["evidenceIds"] if actionability else [])],
-        max_records=_MAX_WORKFLOW_ALLOWED_EVIDENCE if workflow_evidence_ids else _MAX_ALLOWED_EVIDENCE,
+        evidence_bundle, [*proof_ids, *workflow_evidence_ids, *repair_evidence_ids, *maintenance_evidence_ids,
+                          *(actionability["evidenceIds"] if actionability else [])],
+        max_records=_MAX_WORKFLOW_ALLOWED_EVIDENCE if workflow_evidence_ids or repair_evidence_ids else _MAX_ALLOWED_EVIDENCE,
     )
     if actionability and not set(actionability["evidenceIds"]).issubset(allowed_evidence_ids):
         actionability = None
@@ -835,8 +816,20 @@ def _build_compact_issue(
         and recovered_run_evidence_id not in allowed_evidence_ids
     ):
         recovered_run_evidence_id = None
+    category = _default_category(title, producer, identity)
+    repair = issue.get("repairEvidence", {})
+    if (
+        issue.get("producerAdmission") is not None
+        and repair.get("current") is True and repair.get("ready") is True
+        and isinstance(repair.get("category"), str)
+        and delegation_readiness(issue, repair["category"]) is not None
+    ):
+        # Producer identity describes the reporter, not the failure category.
+        # Use the admitted repair category before choosing the default lane.
+        category = repair["category"]
     default_judgment = _build_default_judgment(
         issue_number=issue_number,
+        category=category,
         title=title,
         producer=producer,
         autoclose=autoclose,
@@ -939,16 +932,17 @@ def _build_compact_issue(
                     else "Verify the quarantine label against current test source."
                 ),
                 missingEvidence=(
-                    ["evidence-backed fix handoff"]
+                    []
                     if maintenance.get("evidenceComplete") is True
                     else ["complete source inspection for the labelled test"]
                 ),
-                reassessWhen="After source and failure evidence support a concrete fix handoff.",
+                reassessWhen="After the repair changes state or missing source identity is established.",
             )
     if not isinstance(maintenance, Mapping) or maintenance.get("state") != "quarantined":
         _apply_superseded_default(default_judgment, issue_number, action_context)
     if (
         actionability is not None and delegation is None and not related_repair_blocks
+        and (action_context is None or action_context.get("role") != "superseded")
         and default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human"}
     ):
         default_judgment["recommendations"] = [{
@@ -961,16 +955,21 @@ def _build_compact_issue(
     readiness = delegation_readiness(issue, default_judgment["category"])
     if (
         action_context is not None and action_context.get("role") == "superseded"
-        and not (isinstance(maintenance, Mapping) and maintenance.get("state") == "quarantined")
     ):
         readiness = None
+        recommendation = default_judgment["recommendations"][0]
+        if recommendation["disposition"] == "investigate":
+            recommendation.update(
+                summary=f"Determine whether canonical issue #{action_context['canonicalIssueNumber']} already owns this repair.",
+                missingEvidence=["verified repair ownership for the duplicate failure"],
+                reassessWhen="After canonical repair ownership is established.",
+            )
     if (
         readiness is not None
         and set(readiness["evidenceIds"]).issubset(allowed_evidence_ids)
         and (
             readiness["origin"] == "operator"
-            or readiness["origin"] == "workflow-health"
-            and default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human"}
+            or default_judgment["recommendations"][0]["disposition"] not in {"review-close", "ping-human", "no-action"}
         )
     ):
         actionability = None
@@ -981,7 +980,7 @@ def _build_compact_issue(
             "summary": (
                 "Investigate and fix the current default-branch workflow failure."
                 if readiness["origin"] == "workflow-health"
-                else "Investigate and fix the explicitly selected issue."
+                else "Investigate and fix the reported failure; no preliminary local diagnosis is required."
             ),
             "evidenceIds": readiness["evidenceIds"],
             "missingEvidence": [],
@@ -1037,6 +1036,9 @@ def _build_compact_issue(
         compact_issue["testMaintenance"] = copy.deepcopy(maintenance)
     if isinstance(workflow_health, Mapping):
         compact_issue["workflowHealth"] = copy.deepcopy(workflow_health)
+    for key in ("repairEvidence", "producerAdmission"):
+        if key in issue:
+            compact_issue[key] = copy.deepcopy(issue[key])
     if isinstance(issue.get("repairFollowup"), Mapping):
         # The task/PR history is already carried by delegationContext.
         compact_issue["repairFollowup"] = copy.deepcopy({
@@ -2224,6 +2226,7 @@ def _apply_watch_explanation(
 def _build_default_judgment(
     *,
     issue_number: int,
+    category: str,
     title: str,
     producer: str,
     autoclose: bool | None,
@@ -2240,7 +2243,6 @@ def _build_default_judgment(
     verification_context: Mapping[str, Any] | None = None,
     diagnostics_unavailable: bool = False,
 ) -> dict[str, Any]:
-    category = _default_category(title, producer, identity)
     # A recovered run only counts as recovery evidence for the default
     # judgment when it is actually citable -- i.e. present in the capped
     # allowedEvidence the agent (and any downstream reviewer) can see.
@@ -2704,6 +2706,17 @@ def _select_allowed_evidence(
         projected = _project_allowed_evidence(record)
         allowed_evidence.append(projected)
         allowed_evidence_ids.append(_require_nonempty_string(projected, "id"))
+    # Carry source-PR proof only where an open PR needs that distinction;
+    # unrelated recovery packets do not need the larger execution scope.
+    if any(record["kind"] == "pull-request" and record.get("referencedBy") for record in allowed_evidence):
+        for record, projected in zip(records, allowed_evidence):
+            payload = record.get("payload", {})
+            if record["kind"] == "workflow-run" and payload.get("event") == "pull_request":
+                projected.update({
+                    field: payload[field]
+                    for field in ("branch", "targetRepository", "subjectPullRequests")
+                    if field in payload
+                })
     return allowed_evidence, allowed_evidence_ids
 
 
@@ -2798,7 +2811,8 @@ def _evidence_payload_summary(kind: str, payload: Mapping[str, Any]) -> dict[str
         validate_issue_body_payload(payload, limit=4_000 if kind == "issue-event" else 2_000)
         return {
             field: payload[field]
-            for field in ("body", "bodyTruncated", "bodyFingerprint")
+            for field in ("body", "bodyTruncated", "bodyFingerprint", "number", "state", "labels",
+                          "assignees", "author", "authorType", "dashboardContext")
             if field in payload
         }
     if kind == "source-path" and "quarantinedTests" in payload:
@@ -2809,6 +2823,15 @@ def _evidence_payload_summary(kind: str, payload: Mapping[str, Any]) -> dict[str
         }
     if kind == "pull-request":
         summary = {field: payload[field] for field in _PULL_REQUEST_SUMMARY_FIELDS if field in payload}
+        if payload.get("state") not in {"closed", "merged"} and any(
+            ref.get("extractionMethod") in {"occurrence-pull-request", "triggering-pull-request"}
+            for ref in payload.get("referencedBy", [])
+        ):
+            summary.update({
+                field: payload[field]
+                for field in ("number", "targetRepository", "referencedBy", "linkedIssues")
+                if field in payload
+            })
         base = payload.get("base")
         if isinstance(base, Mapping):
             base_branch = base.get("ref")

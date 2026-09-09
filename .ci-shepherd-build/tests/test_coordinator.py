@@ -560,8 +560,8 @@ class PolicyActivateCommandTests(CoordinatorCliTestCase):
                 },
                 "delegate-copilot": {
                     "enabled": True,
-                    "maxPerRun": 2,
-                    "maxRolling24h": 4,
+                    "maxPerRun": 3,
+                    "maxRolling24h": 10,
                 },
                 "rerun-or-retry": {
                     "enabled": False,

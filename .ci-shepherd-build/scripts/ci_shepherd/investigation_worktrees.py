@@ -31,6 +31,8 @@ _FIELDS = frozenset((*_IMMUTABLE,
     "gitDirectory", "gitDirectoryIdentity", "checkoutIdentity",
 ))
 _ONE_SHOT_FIELDS = frozenset({"launchMode", "attemptId"})
+_UNLAUNCHED_FIELDS = frozenset({"launchOutcome", "executionEvidence"})
+MAX_CONCURRENT_INVESTIGATIONS = 3
 
 
 def default_worktree_root() -> Path:
@@ -188,7 +190,7 @@ def _read_registry(path: Path) -> list[dict[str, Any]]:
     paths: dict[str, str] = {}
     for row in read_jsonl_rows(path):
         if (
-            set(row) not in (_FIELDS, _FIELDS | _ONE_SHOT_FIELDS)
+            set(row) not in (_FIELDS, _FIELDS | _ONE_SHOT_FIELDS, _FIELDS | _UNLAUNCHED_FIELDS)
             or type(row["schemaVersion"]) is not int or row["schemaVersion"] != 1
             or not isinstance(row["state"], str) or row["state"] not in _STATES
             or not isinstance(row["ownershipId"], str)
@@ -206,6 +208,13 @@ def _read_registry(path: Path) -> list[dict[str, Any]]:
             or row["sessionId"] is not None
         ):
             raise ValueError("Malformed one-shot investigation worktree registry binding.")
+        if _UNLAUNCHED_FIELDS.intersection(row) and (
+            row.get("launchOutcome") not in {"registration-rejected", "not-invoked"}
+            or not isinstance(row.get("executionEvidence"), str)
+            or not row["executionEvidence"].strip() or len(row["executionEvidence"]) > 4000
+            or row["sessionId"] is not None or row["terminalStatus"] != "failed" or row["workerStopped"] is not True
+        ):
+            raise ValueError("Malformed unlaunched investigation worktree observation.")
         _validate_lifecycle_metadata(row)
         if row["stateDirectory"] != str(path.parent.parent):
             raise ValueError("Investigation worktree belongs to another state directory.")
@@ -230,6 +239,9 @@ def _read_registry(path: Path) -> list[dict[str, Any]]:
             or (previous["state"] == "cleaned" and row["state"] != "cleaned")
             or (previous.get("launchMode") is not None and any(
                 previous.get(key) != row.get(key) for key in _ONE_SHOT_FIELDS
+            ))
+            or (previous.get("launchOutcome") is not None and any(
+                previous.get(key) != row.get(key) for key in _UNLAUNCHED_FIELDS
             ))
             or (previous["gitDirectory"] is not None and any(
                 previous[key] != row[key]
@@ -282,6 +294,68 @@ def _validate_lifecycle_metadata(row: Mapping[str, Any]) -> None:
 def list_investigation_worktrees(state_directory: Path) -> list[dict[str, Any]]:
     """Read durable inventory, including failed, terminal and removed attempts."""
     return copy.deepcopy(_read_registry(_ledger(state_directory)))
+
+
+def investigation_capacity_inventory(state_directory: Path, repository: str) -> dict[str, Any]:
+    """Include reservations from older source pins and interrupted registration."""
+    allocations = {
+        row["ownershipId"]: row for row in list_investigation_worktrees(state_directory)
+        if row["repository"].casefold() == repository.casefold()
+    }
+    sessions = read_jsonl_rows(_ledger(state_directory).with_name("investigation-sessions.jsonl"))
+    latest = {
+        (row["investigationId"], row.get("worktreeOwnershipId"), row.get("attemptId"), row.get("sessionId")): row
+        for row in sessions
+        if str(row.get("repository", "")).casefold() == repository.casefold()
+    }
+    reservations = {}
+    for owner, allocation in allocations.items():
+        if allocation["state"] in {"bound", "reserved", "blocked"} or (
+            allocation["terminalStatus"] is not None and not allocation["workerStopped"]
+        ):
+            reservations[owner] = {
+                "investigationId": allocation["investigationId"], "ownershipId": owner,
+                "issueNumber": allocation["request"].get("issueNumber"),
+                "attemptId": allocation.get("attemptId"), "sessionId": allocation["sessionId"],
+                "sourceRevision": allocation["sourceRevision"], "checkoutPath": allocation["checkoutPath"],
+                "launchState": "termination-unconfirmed" if allocation["terminalStatus"] else allocation["state"],
+                "executionState": "unknown",
+            }
+    for event in latest.values():
+        investigation_id = event["investigationId"]
+        owner = event.get("worktreeOwnershipId")
+        allocation = allocations.get(owner)
+        if allocation is not None and allocation["terminalStatus"] is not None and allocation["workerStopped"]:
+            # The worktree terminal record can reconcile a prior unknown failure.
+            # It must match this exact owner, never a replacement's stop proof.
+            continue
+        key = owner or ("session", investigation_id, event.get("attemptId"), event.get("sessionId"))
+        active = event.get("status") in {"started", "prepared", "dispatching"} or (
+            event.get("status") in {"failed", "abandoned"} and event.get("workerStopped") is not True
+        )
+        if not active and key not in reservations:
+            continue
+        if key not in reservations:
+            reservations[key] = {
+                "investigationId": investigation_id, "ownershipId": owner,
+                "issueNumber": event.get("issueNumber"),
+                "attemptId": event.get("attemptId"), "sessionId": event.get("sessionId"),
+                "sourceRevision": event.get("request", {}).get("sourceRevision"),
+                "checkoutPath": event.get("checkoutPath"),
+                "launchState": event.get("status"), "executionState": event.get("executionState", "unknown"),
+            }
+        elif active:
+            reservations[key]["executionState"] = event.get("executionState", "unknown")
+            reservations[key]["launchState"] = event["status"]
+        if active and event.get("status") in {"failed", "abandoned"}:
+            reservations[key]["launchState"] = "termination-unconfirmed"
+    return {
+        "schemaVersion": 1, "repository": repository,
+        "maxConcurrent": MAX_CONCURRENT_INVESTIGATIONS,
+        "occupiedSlots": len(reservations),
+        "availableSlots": max(0, MAX_CONCURRENT_INVESTIGATIONS - len(reservations)),
+        "reservations": list(reservations.values()),
+    }
 
 
 def _append(path: Path, record: dict[str, Any], **updates: Any) -> dict[str, Any]:
@@ -369,13 +443,24 @@ def provision_investigation_worktree(
     if type(attempt) is not int or attempt < 1:
         raise ValueError("Investigation attempt must be a positive integer.")
     parse_aware_iso8601(recorded_at, "recordedAt")
+    state = _safe_path(state_directory)
+    existing = any(
+        row["repository"].casefold() == frozen["repository"].casefold()
+        and row["investigationId"] == frozen["investigationId"] and row["attempt"] == attempt
+        for row in list_investigation_worktrees(state)
+    )
+    # This is an inexpensive preflight, not a reservation. Registration still
+    # checks admission under its lifecycle lock after the checkout is allocated.
+    if not existing:
+        from .investigations import validate_investigation_admission
+
+        validate_investigation_admission(state, frozen, attempt=attempt)
     source = _safe_path(source_checkout, exists=True)
     common = _repository(source, frozen["repository"])
     revision = _git(common, "rev-parse", "--verify", f"{frozen['sourceRevision']}^{{commit}}", common=True).strip()
     if revision != frozen["sourceRevision"]:
         raise ValueError("Requested source revision is not an exact commit.")
     root = _safe_path(managed_root if managed_root is not None else default_worktree_root())
-    state = _safe_path(state_directory)
     for registration in _registered(common):
         existing = Path(registration["worktree"])
         if root.is_relative_to(existing) or existing.is_relative_to(root) or state.is_relative_to(existing):
@@ -591,6 +676,8 @@ def finish_investigation_worktree(
     recorded_at: str,
     confirm_worker_stopped: bool = False,
     attempt_id: str | None = None,
+    launch_outcome: str | None = None,
+    execution_evidence: str | None = None,
 ) -> dict[str, Any]:
     """Mirror a durable terminal lifecycle event; this never removes source."""
     if status not in _TERMINAL:
@@ -603,6 +690,50 @@ def finish_investigation_worktree(
     with exclusive_jsonl_lock(path):
         record = _find(state_directory, request, checkout)
         _session(record, session_id, attempt_id)
+        if launch_outcome is not None or execution_evidence is not None:
+            if (
+                status != "failed" or launch_outcome not in {"registration-rejected", "not-invoked"}
+                or not isinstance(execution_evidence, str) or not execution_evidence.strip()
+                or len(execution_evidence) > 4000
+            ):
+                raise ValueError("Unlaunched failure requires an observed pre-launch outcome and bounded evidence.")
+            explanation = f"Not launched ({launch_outcome}): {execution_evidence}"
+            replay = (
+                record["terminalStatus"] == "failed" and record["workerStopped"]
+                and record.get("launchOutcome") == launch_outcome
+                and record.get("executionEvidence") == execution_evidence
+            )
+            if (
+                record["sessionId"] is not None or record.get("launchMode") is not None
+                or (record["state"] != "ready" and not replay)
+            ):
+                raise ValueError("Unlaunched failure requires an unbound, unprepared ready allocation.")
+            sessions = read_jsonl_rows(path.with_name("investigation-sessions.jsonl"))
+            if any(
+                row.get("worktreeOwnershipId") == record["ownershipId"]
+                or row.get("checkoutPath") == record["checkoutPath"]
+                or (
+                    row.get("investigationId") == record["investigationId"]
+                    and not row.get("worktreeOwnershipId") and not row.get("checkoutPath")
+                )
+                for row in sessions
+            ):
+                raise ValueError("Unlaunched failure conflicts with a recorded investigation lifecycle.")
+            # No event alone is not proof of no worker: the caller must also
+            # supply the observed rejection/non-invocation above. Holding the
+            # worktree lock prevents registration from binding this allocation.
+            if replay and record["state"] == "cleaned":
+                if not _is_removed(record, state_directory):
+                    raise ValueError("A cleaned allocation has reappeared; refusing terminal replay.")
+                return record
+            _verify(record, state_directory)
+            if replay:
+                return record
+            return _append(
+                path, record, state="terminal", terminalStatus="failed", workerStopped=True,
+                error=explanation, recordedAt=recorded_at,
+                launchOutcome=launch_outcome, executionEvidence=execution_evidence,
+            )
         if record["terminalStatus"] is not None:
             if record["terminalStatus"] != status:
                 raise ValueError("Worktree already has another terminal outcome.")

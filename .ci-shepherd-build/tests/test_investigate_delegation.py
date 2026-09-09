@@ -167,11 +167,8 @@ class InvestigateDelegationTests(unittest.TestCase):
         prepared = prepare_assessment(value)
         compact = build_compact_poc_input(prepared)
         judgment = copy.deepcopy(compact["issues"][0]["defaultJudgment"])
-        judgment["recommendations"][0].update(
-            disposition="delegate-copilot", target={"kind": "issue", "value": 21},
-            confidence="medium", evidenceIds=compact["issues"][0]["delegationReadiness"]["evidenceIds"],
-            missingEvidence=[],
-        )
+        self.assertEqual("delegate-copilot", judgment["recommendations"][0]["disposition"])
+        self.assertEqual([], judgment["recommendations"][0]["missingEvidence"])
         judgments = {"schemaVersion": 1, "snapshotId": prepared["snapshotId"], "issues": [judgment]}
         validate_poc_projectability(compact, judgments)
         proposals = build_action_proposals(value, prepared, judgments, "operator", agent_input=compact)

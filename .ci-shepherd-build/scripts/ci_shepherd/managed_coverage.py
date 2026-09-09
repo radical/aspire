@@ -61,7 +61,7 @@ def build_managed_item_coverage(
         proposal["actionId"]
         for proposal in proposals.get("proposals", [])
         if proposal.get("operation") == "assign-copilot"
-        and proposal.get("evidenceBasis") in {"operator-request", "investigation-request", "source-reconciliation"}
+        and proposal.get("evidenceBasis") in {"operator-request", "investigation-request", "workflow-producer", "source-reconciliation"}
         and proposal.get("executionEligibility", {}).get("eligible") is True
     }
     assignment_issues = {

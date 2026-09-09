@@ -22,7 +22,10 @@ from ci_shepherd.collector import (
     mark_workflow_issues_changed,
     validate_delegation_requests,
 )
-from ci_shepherd.delegation_observer import DelegationReadClient, observe_commit_comparison, observe_delegations
+from ci_shepherd.delegation_observer import (
+    DelegationReadClient, attach_cloud_outcomes, initialize_cloud_outcome,
+    observe_commit_comparison, observe_delegations,
+)
 from ci_shepherd.delegations import (
     active_owned_task_ids_from_events,
     delegation_starts_from_events,
@@ -259,6 +262,7 @@ def observe_delegation_status(
             source = getattr(observation, "pull_request_sources", {}).get(pull["databaseId"])
             if source is not None:
                 pull["progressSource"] = dict(source)
+        initialize_cloud_outcome(record, getattr(observation, "pull_request_outcome_sources", {}))
     episode_ordinals: dict[str, int] = {}
     episode_counts: dict[str, int] = {}
     historical_retirements = {
@@ -653,6 +657,7 @@ def collect(
                 # to ask cloud Copilot to investigate without a local diagnosis.
                 snapshot["warnings"].append(f"Local investigation source unavailable: {error}")
         attach_meaningful_progress(snapshot, previous_snapshot, shepherd_author=shepherd_author)
+        attach_cloud_outcomes(snapshot, previous_snapshot, client)
         if previous_snapshot is not None:
             repair_shas = {
                 pull["mergeCommitSha"]

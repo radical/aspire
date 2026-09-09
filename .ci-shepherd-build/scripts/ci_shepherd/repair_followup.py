@@ -7,6 +7,8 @@ import re
 from typing import Any, Mapping
 
 from .eligibility import delegation_replacement_ready
+from .observations import build_repair_evidence
+from .signals import extract_issue_signals
 from .timeutils import parse_aware_iso8601
 
 
@@ -185,8 +187,10 @@ def _occurrence_subject(
 
 def build_related_workflow_repairs(
     snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue: Mapping[str, Any],
-    health: Mapping[str, Any],
+    health: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
+    if health is None:
+        return _related_observed_repairs(snapshot, observations, issue)
     signatures: dict[tuple[Any, ...], set[str]] = {}
 
     def signature(subject: Mapping[str, Any], occurrence: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -240,6 +244,113 @@ def build_related_workflow_repairs(
                 "evidenceIds": sorted(proof),
             })
     return related
+
+
+def _related_observed_repairs(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    repair = issue.get("repairEvidence", {})
+    if not repair.get("subjectKey"):
+        return []
+    by_issue: dict[int, list[Mapping[str, Any]]] = {}
+    for record in snapshot.get("delegationStatus", {}).get("records", []):
+        if record.get("repository") == snapshot["repository"] and record["issueNumber"] != issue["issueNumber"]:
+            by_issue.setdefault(record["issueNumber"], []).append(record)
+    related = []
+    for number, records in sorted(by_issue.items()):
+        owned = build_repair_evidence(snapshot, observations, number)
+        if (
+            owned.get("subjectKey") != repair["subjectKey"] or not owned.get("lastFailureAt")
+            or not any(
+                parse_aware_iso8601(owned["lastFailureAt"], "lastFailureAt")
+                <= parse_aware_iso8601(record["startedAt"], "startedAt") for record in records
+            )
+        ):
+            continue
+        related.append({
+            "issueNumber": number, "issueUrl": f"https://github.com/{snapshot['repository']}/issues/{number}",
+            "replacementReady": delegation_replacement_ready(records), "sameRootCause": "unknown",
+            "records": copy.deepcopy(records),
+            "evidenceIds": sorted(set(repair["evidenceIds"]) | set(owned["evidenceIds"])),
+        })
+    return related
+
+
+def build_upstream_repairs(
+    snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """An explicit artifact-source execution can identify an existing cause owner."""
+    repository = snapshot["repository"]
+    evidence = snapshot["evidence"]
+    related: dict[int, dict[str, Any]] = {}
+    questions: set[str] = set()
+    for occurrence in observations.get("occurrences", []):
+        if occurrence["issueNumber"] != issue["issueNumber"]:
+            continue
+        for evidence_id in occurrence["evidenceIds"]:
+            record = evidence.get(evidence_id, {})
+            payload = record.get("payload", {})
+            text = payload.get("excerpt", "")
+            if (
+                record.get("kind") != "workflow-log" or record.get("availability") != "available"
+                or payload.get("truncated") is True or not isinstance(text, str)
+                or re.search(r"(?i)\b(?:failed|unable)\b[^\n]{0,120}\bdownload\b[^\n]{0,120}\bartifact", text) is None
+            ):
+                continue
+            # Bind URLs on the failure line itself, for example:
+            # "Unable to download artifact packages from https://github.com/o/r/actions/runs/80".
+            # A diagnostic elsewhere mentioning an unrelated run is not a source.
+            producer_text = "\n".join(
+                match["url"] for line in text.splitlines()
+                for match in re.finditer(
+                    r"(?i)\b(?:failed|unable)\b.{0,120}\bdownload\b.{0,120}\bartifact\b"
+                    r".{0,120}\bfrom\s+(?P<url>https://github\.com/[^/\s]+/[^/\s]+/actions/runs/[1-9][0-9]*)",
+                    line,
+                )
+            )
+            if not producer_text:
+                continue
+            signals = extract_issue_signals(
+                issue["issueNumber"], evidence_id, str(record.get("url", "")), producer_text, repository,
+            )
+            for reference in signals.references:
+                if (
+                    reference.get("targetType") != "workflow-run"
+                    or reference.get("targetRepository") != repository
+                    or reference["runId"] == occurrence["runId"]
+                ):
+                    continue
+                producer_id = f"run:{reference['runId']}"
+                producer = evidence.get(producer_id, {})
+                run = producer.get("payload", {})
+                owners = [
+                    owner for owner in snapshot.get("delegationStatus", {}).get("records", [])
+                    if owner.get("repository") == repository and owner.get("issueNumber") != issue["issueNumber"]
+                    and any(ref.get("sourceIssueNumber") == owner["issueNumber"] for ref in run.get("referencedBy", []))
+                    and (
+                        owner.get("taskObservation") == "available" and owner.get("taskState") in {"queued", "in_progress"}
+                        or any(pull.get("state") in {"open", "unknown"} for pull in owner.get("pullRequests", []))
+                    )
+                ]
+                if (
+                    producer.get("availability") != "available"
+                    or run.get("targetRepository") != repository or run.get("status") != "completed"
+                    or run.get("conclusion") != "failure" or type(run.get("workflowId")) is not int
+                    or not run.get("headSha") or not run.get("workflowPath") or not owners
+                ):
+                    questions.add("Verify whether the explicitly linked artifact producer failed and already has a repair owner.")
+                    continue
+                for owner in owners:
+                    number = owner["issueNumber"]
+                    if not run.get("updatedAt") or parse_aware_iso8601(run["updatedAt"], "producer.updatedAt") > parse_aware_iso8601(owner["startedAt"], "startedAt"):
+                        questions.add("Verify that the producer failure predates the linked repair attempt.")
+                        continue
+                    related[number] = {
+                        "issueNumber": number, "issueUrl": f"https://github.com/{repository}/issues/{number}",
+                        "replacementReady": False, "sameRootCause": "upstream-artifact-producer",
+                        "records": [copy.deepcopy(owner)], "evidenceIds": sorted({evidence_id, producer_id}),
+                    }
+    return list(related.values()), sorted(questions)
 
 
 def _repair_subject(

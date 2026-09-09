@@ -17,6 +17,7 @@ from tests.test_policy_selection import (
     _exact_decision, _policy_document, _projection,
 )
 from ci_shepherd.policy_selection import build_policy_selection
+from ci_shepherd.actor import build_dry_run
 
 
 class ManagedCoverageTests(unittest.TestCase):
@@ -150,6 +151,13 @@ class ManagedCoverageTests(unittest.TestCase):
         )
         self.assertFalse(coverage["valid"])
         self.assertEqual(["b:watch-comment"], selection["selectedActionIds"])
+        preview = build_dry_run(document, action_id=None)
+        self.assertEqual([False, False, True], [row["wouldExecute"] for row in preview["actions"]])
+        self.assertEqual(["managed-item-coverage-invalid"], preview["actions"][0]["blockingReasons"])
+        self.assertEqual(
+            [False],
+            [row["wouldExecute"] for row in build_dry_run(document, action_id="a:close")["actions"]],
+        )
         projection = _projection(policy_doc=policy_doc, exact_decisions=[
             _exact_decision(action_id="a:ping-human-comment", proposal_digest=_digest_of(document),
                             decision="approve-once", now=now),
@@ -178,6 +186,10 @@ class ManagedCoverageTests(unittest.TestCase):
             selected = build_policy_selection(changed, run_id="test", policy_projection=projection, action_events=[], now=now)
             self.assertEqual([], selected["selectedActionIds"])
             self.assertEqual({"thisRun": 0, "rolling24h": 0}, selected["maximumWriteExposure"])
+            self.assertEqual(
+                [False, False, False],
+                [row["wouldExecute"] for row in build_dry_run(changed, action_id=None)["actions"]],
+            )
 
     def test_observation_collection_failure_blocks_mutation(self) -> None:
         policy = replace(

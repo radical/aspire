@@ -62,6 +62,14 @@ _BLOCKQUOTE_LINE_RE = re.compile(r"(?m)^[ \t]*>.*$")
 _TRIGGERING_PULL_RE = re.compile(
     rf"(?im)^pull request\s*:\s*#(?P<number>{_GITHUB_ID_PATTERN})\s*$"
 )
+# gh-aw emits "**Pull Request:** [#50](https://github.com/owner/repo/pull/50)".
+# Require the label and URL to agree; ordinary PR links remain unclassified.
+# https://github.com/github/gh-aw/blob/v0.86.2/actions/setup/js/handle_agent_failure.cjs#L4096
+_MARKDOWN_TRIGGERING_PULL_RE = re.compile(
+    rf"(?im)^\*\*pull request:\*\*[ \t]+\[#(?P<number>{_GITHUB_ID_PATTERN})\]"
+    r"\((?P<url>https://github\.com/(?P<owner>[^/\s<>()]+)/(?P<repo>[^/\s<>()]+)/"
+    r"pull/(?P=number))\)[ \t]*\r?$"
+)
 _BUILD_RE = re.compile(
     rf"(?im)^build\s*:\s*(?P<url>https?://github\.com/[^/\s]+/[^/\s]+/actions/runs/{_GITHUB_ID_PATTERN})\s*$"
 )
@@ -709,6 +717,26 @@ def _extract_references(
     masked_spans.extend(_markdown_link_spans(text))
     masked_spans.extend(match.span() for match in _URL_RE.finditer(reference_text))
     masked_spans.extend(untrusted_context_spans)
+
+    for match in _MARKDOWN_TRIGGERING_PULL_RE.finditer(reference_text):
+        number = _parse_github_id(match.group("number"))
+        if number is None or _decision_metadata(
+            reference_text, match.start("url"), resolution_spans,
+        ).get("decisionValue") == "explicit-resolution":
+            continue
+        references.append(
+            _numbered_reference(
+                issue_number,
+                source_evidence_id,
+                source_url,
+                "pull-request",
+                f"{match.group('owner')}/{match.group('repo')}",
+                number,
+                match.group("url"),
+                "triggering-pull-request",
+            )
+        )
+        masked_spans.append(match.span())
 
     for match in _TRIGGERING_PULL_RE.finditer(text):
         number = _parse_github_id(match.group("number"))

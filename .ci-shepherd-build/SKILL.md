@@ -69,6 +69,13 @@ logical cases and the manifest's `maxWorkerInputBytes`. All parts of a split cas
 same group. A case exceeding that worker budget remains explicitly incomplete;
 do not sample it, split its assessment across workers, or claim completion.
 
+Each issue case contains its full prepared evidence in `input`, the actual
+default judgment in `defaultJudgment`, and compact-only routing context in
+`decisionContext`. The compact `allowedEvidence` copy is not repeated because
+`input.evidenceBundle` already carries the complete evidence. Large cases use
+byte-bounded JSON fragments; read them in `partIndex` order and reconstruct the
+whole case before assessing it. Every part still requires its own receipt.
+
 Workers fill their pre-created `assessment-response-*.json` file, retaining its
 identities and setting `status` to `complete` only after assessing the entire
 group. Its `issues` and `pullRequests` contain sparse overrides; its `batches`
@@ -120,9 +127,10 @@ Serialization must not fabricate an assessment or acknowledge unread cases.
 
 The supported autonomous deployment is a manually started local skill session,
 not a GitHub-hosted service. Once started, the agent owns the complete cycle:
-collect and assess fresh evidence, run the bounded investigations, finalize
-proposals, select permitted actions, execute them one at a time, reconcile
-results, verify replay, and write the operator report. Do not ask the operator
+collect and assess fresh evidence, finalize proposals, select permitted actions,
+execute them one at a time, reconcile results, verify replay, and write the
+operator report. Dispatch independently eligible cloud repairs before waiting
+for local classification. Do not ask the operator
 to choose individual action IDs.
 
 Standing policy is intentionally broad. For the current live pilot, activate
@@ -133,7 +141,7 @@ Standing policy is intentionally broad. For the current live pilot, activate
 | Create comments | 2 | 10 |
 | Edit comments | 2 | 10 |
 | Close issues | 2 | 4 |
-| Delegate to Copilot | 2 | 4 |
+| Delegate to Copilot | 3 | 10 |
 | Rerun or retry | 0 | 0 |
 
 Policy activation is the operator authorization boundary. Read the current
@@ -141,6 +149,13 @@ coordinator projection, use its exact `stateRevision` as
 `--expected-revision`, and activate the checked-in caps with
 `coordinator.py policy-activate`. Never widen the caps in a run without fresh
 operator approval.
+
+Cloud capacity is separate from these start budgets: at most three
+shepherd-owned queued/running tasks, ten open delegated PRs, and the existing
+repository-wide safety limit of 100 tasks. A terminal task frees an active slot,
+not its rolling-day start. An unavailable task, even with a readable PR, or an
+unassociated older start remains an unknown-capacity blocker until reconciled.
+Do not automatically retry an unsuccessful attempt.
 
 After `cycle.py finish`, treat `policy-selection.json` and
 `coordinator-projection.json` as authoritative. `comment-selection.json` is a
@@ -188,8 +203,13 @@ result, so it does not wedge the loop or unlock a dependent action.
 
 After the loop, rebuild canonical `policy-selection.json` once more and
 preserve it with the projection, every iteration selection and exact grant,
-action ledger, API audit, and a concise `final-operator-report.md`. An immediate
-unchanged follow-up cycle must produce zero GitHub writes.
+action ledger, API audit, and a concise `final-operator-report.md`.
+
+The routine is one full cycle followed by targeted reconciliation and the
+existing retrospective. Do not immediately run a second full collection, spend
+a second cycle budget, or wait for cloud repairs to finish. A second full cycle
+is an explicitly requested diagnostic exercise. Exact action replay is still
+required; zero writes caused by withheld grants are not evidence of convergence.
 
 The supported cycle writes grouped `report.md` and detailed
 `report-details.md`, plus
@@ -244,6 +264,7 @@ python3 "$CI_SHEPHERD_ROOT/scripts/render.py" --run-report \
   --action-events "$STATE/action-events.jsonl" \
   --investigation-results "$STATE/ledgers/investigation-results.jsonl" \
   --investigation-sessions "$STATE/ledgers/investigation-sessions.jsonl" \
+  --state-dir "$STATE" \
   --invocation "$INVOCATION_DIR/invocation.json" \
   --usage "$INVOCATION_DIR/usage.json" \
   --as-of "$AS_OF" \
@@ -261,6 +282,12 @@ pre-expansion handoffs and `assessment-completion.json` companions. Selection is
 not completion: the report separates selected cases from assessment
 acknowledgements. A re-selected case needs its newer packet acknowledged.
 Legacy selections without receipts remain completion-unverified.
+
+The assessment workload table reads the current and pre-expansion packet
+manifests and reports logical cases, packets, worker groups, and serialized
+input bytes for each round. These are assessment packets, not package restore,
+and their byte counts establish neither token usage nor completed review.
+Missing manifests remain unknown rather than appearing as zero work.
 
 ### Recorded boundaries and session roster
 
@@ -353,6 +380,15 @@ is review-only, so a missed item is deferred work rather than a wrong action.
 Both non-complete outcomes add a warning, and `failed` also records a
 `CollectionError` with stage `open-bot-scan`, so an incomplete inventory can
 never read as a clean one.
+
+Inventory visibility is not mutation authority. Missing executable CI labels
+must not hide a bot-authored workflow report. A verified `gh-aw-failure-issue`
+producer can supply assignment-only admission when its bot identity, marker,
+same-repository failed run, and stable workflow slug/path agree.
+`scripts/ci_shepherd/eligibility.py` rederives this proof from frozen evidence;
+the executor rechecks it against current source. A copied human-authored marker
+or an `agentic-workflows` label alone supplies no authority. This exception does
+not authorize comments, closure, or quarantine.
 
 ## Safety boundary
 
@@ -514,11 +550,22 @@ an ARM64 failure with the same display name.
 These are factual inputs to assessment, not
 model-authored authority.
 
-Current default-branch failures take precedence over old test investigations
-and routine issue housekeeping. `policy_selection.py` applies the derived
-`workflowPriority` before ordinary semantic ordering, but never before
-eligibility, ownership, policy denials, or budgets. Within that priority group,
-existing comment precedence and exact-action authorization still apply.
+Eligible work is ordered by the shared `repair_priority` function in
+`scripts/ci_shepherd/eligibility.py`, after hard eligibility/ownership exclusions
+and before allocating budget. `policy_selection.py` uses the same ordering as
+local classification; priority never overrides a denial or capacity limit.
+
+| Scheduling priority | Work |
+|---|---|
+| `current-workflow-break` | Current build/configuration failure or verified reporting outage |
+| `recurrent-ci-failure` | Recurrent ordinary PR-CI job, harness, or toolchain failure |
+| `unquarantined-test-instability` | Unquarantined test instability |
+| `automation-defect` | Other automation defects |
+| `quarantined-test-repair` | Already-quarantined coverage, unless broader impact is independently established |
+
+Within a priority, verified recurrence and matching failure recency precede
+the deterministic issue-number tie-break. An unknown timestamp is not current.
+Required prerequisite comments and exact-action authorization remain intact.
 
 Use these starting rules:
 
@@ -639,6 +686,19 @@ Use a local worker when a bounded check would inform the next decision; send
 already-known failure links to Copilot without doing speculative investigation
 just to create context.
 
+Use local classification for one decision-changing question: identify the
+failing subject, distinguish an infrastructure incident from a code defect, or
+name the evidence needed next. Its work budget is 180 seconds, not a promise to
+diagnose and reproduce the entire issue. Default to no builds, reproduction,
+or package restore. Return the finding or precise missing fact when the budget
+is exhausted.
+
+This deadline is cooperative when the launcher has no verified timeout or
+cancellation API. Request a stop when supported, but keep the reservation until
+termination is observed. Elapsed time does not justify `--confirm-worker-stopped`.
+Do not hold the whole cycle open waiting for an unknown worker or its later
+abandonment deadline; report the reservation and the observation needed next.
+
 Live collection records the verified checkout commit as `sourceRevision`.
 Preparation carries that pin into the issue fingerprint and request. A changed
 revision invalidates source-dependent results; a mismatched source pin is an
@@ -665,6 +725,16 @@ Provision **one detached worktree per investigation attempt**, never reuse the
 coordinator checkout as the worker checkout. The coordinator may have unrelated
 scratch files; workers start from the request's committed source revision.
 Do not weaken worker cleanliness checks or delete coordinator scratch.
+First inspect capacity, including owners from older source pins:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" list \
+  --state-dir "$STATE" --repository microsoft/aspire
+```
+
+Provisioning preflights capacity before creating another checkout. Registration
+still rechecks admission under its lifecycle lock, so rejection after allocation
+must be handled explicitly rather than leaving an untracked tree.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" provision \
@@ -687,6 +757,27 @@ the worker tree and disposable run artifacts. It records provisioning intent,
 the frozen request, source revision, Git identity, session or logical attempt
 binding, terminal state, and cleanup state. Worktrees isolate files and indexes, **not permissions**:
 workers must not modify shared refs, Git configuration, or other worktrees.
+
+For an exact clean `ready` allocation whose registration was rejected before
+invoking the launcher, record that observed failure with
+`investigation_worktree.py finish --status failed --launch-outcome
+registration-rejected --execution-evidence "<observed rejection and confirmation
+that the launcher was not invoked>"`, supplying its state directory, ownership
+ID, and recorded time. `--launch-outcome not-invoked` covers a separately observed
+decision not to invoke the launcher. Then use ordinary owned-worktree cleanup.
+This records no investigation result and claims no worker execution.
+The typed `launchOutcome` and `executionEvidence` remain in the worktree ledger
+after cleanup, and replaying the same observed outcome appends nothing.
+
+The path rejects session-bound or prepared/dispatching attempts, dirty source,
+changed identity, and missing launch evidence. No ledger event alone proves
+that no worker exists. An idle worker that was already launched requires the
+ordinary observed-stop protocol, not this shortcut.
+
+For existing reservations, perform one explicitly authorized recovery pass:
+inspect the exact owner and attempt, reconcile only independently confirmed
+stopped work, and leave unknown owners blocked. Do not clear the ledger or treat
+a changed source pin as permission to reclaim a live worker.
 
 ### Resumable worker launch
 
@@ -837,6 +928,12 @@ Both protocols require the exact active session or logical attempt and checkout,
 verify that the read-only worktree stayed clean, write the completed result, and
 terminally complete the attempt. Replaying the same result returns the persisted
 result without another terminal event, including after cleanup.
+For resumable workers, accepting the result does not assert that the worker
+stopped. Once the runtime independently confirms it, record that observation
+with `investigation_worktree.py finish --status completed
+--confirm-worker-stopped`, supplying the exact ownership ID, session ID, state
+directory, and recorded time; alternatively use the cleanup command below.
+Until then, the reservation still occupies capacity.
 If the worker exits without a valid result,
 record `--status failed --failure-reason "<specific reason>"` with
 `investigation_session.py`. Use `--failure-category worker-error`,
@@ -1142,6 +1239,28 @@ Enabling `delegate-copilot` in standing policy does not auto-approve these
 nominations. Assessment-selected CI work can use the standing delegation
 policy; source-confirmed quarantine selection retains its pinned source gate.
 
+Ready source-confirmed quarantined tests and evidence-backed unquarantined
+failures default to the cloud repair lane without a preliminary local handoff.
+Two matching independent runs can establish a repair candidate for a C# test,
+non-C# scenario, or job/harness failure. Retry attempts of one run and unrelated
+failures with similar job names or error codes do not establish recurrence.
+An unsupported C# method-name shape blocks quarantine, not classification or
+a separately eligible repair assignment.
+
+`scripts/ci_shepherd/observations.py` deliberately uses a conservative
+cross-PR witness: identical full source commit plus the same observed .NET SDK,
+alongside the matching execution/failure identity. Different commits and
+non-.NET toolchains without equivalent proof remain classification questions;
+the shared base branch alone is insufficient. Explicit upstream-cause links
+also need corroborating execution evidence. Follow an established active
+upstream repair instead of starting competing downstream fixes; uncertain links
+remain advisory rather than automatic duplicate suppression.
+
+Readiness is evaluated for the final assessed category and carried through
+allowed dispositions, proposal projection, and execution checks. A newly
+eligible route receives one review; unchanged decisions and existing attempts
+carry forward without duplicate local or cloud starts.
+
 Neither path requires a completed local diagnosis or `fixHandoff`. The task
 can ask Copilot to investigate the cause itself. Generated instructions request
 a focused fix, regression coverage, repository-instruction compliance, and a
@@ -1157,11 +1276,16 @@ instructions. These instructions are part of the frozen proposal bytes and
 the authorization digest. Updating them invalidates an earlier exact approval
 or grant.
 
+The instructions also request a concise conclusion: outcome, evidence actually
+inspected, changes made, missing evidence or human decision, and suggested next
+step. Copilot must not manufacture a code change just to produce a diff. An
+unsuccessful attempt can leave an empty draft; do not promise that it creates no PR.
+
 Before an assignment write, the executor fsyncs the exact action intent and a
 complete active-plus-archived Agent Task inventory. It then associates the
 assignment only when exactly one new task appears. Zero or multiple new tasks
-leave the action indeterminate and block new starts during the rolling
-24-hour window rather than risking a duplicate assignment.
+leave the action indeterminate and block new starts until authoritative
+reconciliation. Aging out of the daily budget is not proof that the task stopped.
 
 New pull artifacts can expose only their numeric database ID while GitHub is
 still populating the global node ID. Tracking uses the numeric ID in that state
@@ -1197,7 +1321,10 @@ Three independent limits are signed into the short-lived authorization grant:
 Completed, failed, cancelled, timed-out, idle, and waiting tasks release their
 running slot. An open draft or ready pull request continues to consume the
 separate pull-request slot. Capacity counts every observed repository Agent
-Task, including tasks not started by the current state ledger.
+Task for the independent repository-wide ceiling of 100. The limit of three
+queued/running tasks applies to shepherd-owned work, with ten owned starts per
+rolling 24 hours and at most three starts per cycle. A missing owned-task
+observation blocks admission even when its PR remains readable.
 
 The snapshot keeps active delegated issues and pull requests out of general
 assessment lanes while preserving `delegationStatus` records linking each
@@ -1213,6 +1340,28 @@ Task execution, PR outcome, and issue state are distinct: a task ending is not
 proof that its PR merged or its issue was resolved. A verified merged PR and a
 closed-unmerged PR have different outcomes; neither implies that an open
 quarantine tracker can be closed.
+
+Bound `outcomeEvidence` preserves the reported PR body and at most five recent
+same-PR comments, their authors and URLs, and the observed head. Body and comment
+previews are capped at 4,000 and 2,000 characters respectively, with visible
+truncation. Whole-content fingerprints are computed before shortening previews.
+Ended/blocked attempts re-observe one bounded comment page per PR rather than
+relying on the PR timestamp to report every comment edit. Unchanged
+fingerprints retain the assessment; fetching evidence is not itself a review.
+No task-log API is assumed; without an accessible conclusion the outcome is
+explicitly unavailable.
+
+An ended/blocked attempt or changed bound outcome enters assessment once,
+including a nonempty blocked draft with no handoff reminder due. The ordinary
+validated recommendation and its named missing evidence carry forward on an
+unchanged cycle. Assessment admission does not authorize a public reminder,
+reassignment, continuation request, empty-draft closure, or unassignment.
+Reported agent prose is untrusted evidence, never verified recovery.
+
+The report keeps task execution state, PR state, the source-cited reported
+conclusion, and the assessed repair outcome distinct. A credential or permission
+blocker needs its exact human decision; missing logs need the named evidence;
+an inconclusive or failed-setup attempt needs a new decision, not an automatic retry.
 
 `delegation-observed` entries in `action-events.jsonl` persist verified
 issue/task/PR bindings before retirement. Known PRs are refreshed directly even
@@ -1739,11 +1888,28 @@ The one-round artifacts are one bounded evidence-planning and expansion pass:
 `evidence-requests.json`, immutable `input.expanded.json`, regenerated current
 assessment inputs, and fresh verifier judgments. Pre-expansion artifacts use
 the `.pre-expansion.json` suffix.
+An explicitly `not-found` or `expired` historical linked run is retained as
+unavailable for 24 hours from its original observation; it is not relabeled as
+fresh or recovered. `scripts/ci_shepherd/refresh.py` preserves that observation
+and `scripts/ci_shepherd/evidence_planning.py` records an existing typed
+`retry-backoff` wakeup after review completion. Changed source evidence, current
+workflow discovery, and an explicit full refresh bypass the historical backoff.
+Unknown error categories do not receive this suppression. Optional expansion
+also stops when a missing authorization label or untrusted source relationship
+would independently block the action after another fetch.
 `review-selection.json` sends every first-seen issue, every materially changed
 issue, and every issue whose explicit typed wakeup is due to the model.
 `agent-input.json` is filtered to that same set. Stable reviewed cases are
 omitted from both until they change or a wakeup becomes due, while their last
 validated agent overrides remain effective.
+An observed owned-control-comment-only change is excluded from this comparison,
+including its indirect root issue timestamp change, only when the full
+independent sources are unchanged. Independent body/comment tail changes still
+wake review. Frozen snapshot timestamps and execution bindings are not rewritten.
+Lifecycle interpretation retains the proven independent-update baseline in
+existing assessment history, so later control timestamps cannot fabricate an
+issue-updated-after-fix disagreement. Current task/PR evidence is still derived
+afresh, and independent issue changes invalidate that baseline.
 `agent-assessment.json` is the only assessment-agent output. `cycle.py finish`
 validates its exact top-level schema and snapshot, then derives
 `agent-judgments.json` and `agent-pull-request-judgments.json` before applying

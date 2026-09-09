@@ -957,9 +957,21 @@ class CycleTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                completed = finish_reviewed_cycle(
-                    work_dir=work,
-                    agent_assessment_path=work / "agent-assessment.json",
+                with patch.object(
+                    cycle_script, "render_run_markdown", wraps=cycle_script.render_run_markdown,
+                ) as render_report:
+                    completed = finish_reviewed_cycle(
+                        work_dir=work,
+                        agent_assessment_path=work / "agent-assessment.json",
+                    )
+                render_report.assert_called_once()
+                self.assertEqual(
+                    json.loads((work / "assessment-batches.json").read_text(encoding="utf-8")),
+                    render_report.call_args.kwargs["assessment_manifest"],
+                )
+                self.assertEqual(
+                    json.loads((work / "assessment-batches.pre-expansion.json").read_text(encoding="utf-8")),
+                    render_report.call_args.kwargs["pre_expansion_assessment_manifest"],
                 )
 
             self.assertEqual("completed", completed["stage"])
@@ -2111,10 +2123,19 @@ class CycleTests(unittest.TestCase):
             agent_judgments = first_work / "agent-judgments.json"
             self.assertTrue(agent_judgments.is_file())
 
-            completed = finish_reviewed_cycle(
-                work_dir=first_work,
-                agent_judgments_path=agent_judgments,
+            with patch.object(
+                cycle_script, "render_run_markdown", wraps=cycle_script.render_run_markdown,
+            ) as render_report:
+                completed = finish_reviewed_cycle(
+                    work_dir=first_work,
+                    agent_judgments_path=agent_judgments,
+                )
+            render_report.assert_called_once()
+            self.assertEqual(
+                json.loads((first_work / "assessment-batches.json").read_text(encoding="utf-8")),
+                render_report.call_args.kwargs["assessment_manifest"],
             )
+            self.assertIsNone(render_report.call_args.kwargs["pre_expansion_assessment_manifest"])
 
             self.assertEqual("completed", completed["stage"])
             self.assertTrue((first_work / "report.md").is_file())

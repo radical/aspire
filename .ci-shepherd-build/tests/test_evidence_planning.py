@@ -1,12 +1,69 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from ci_shepherd.evidence_planning import build_proposal_evidence_requests
+from ci_shepherd import evidence_planning
 from ci_shepherd.models import validate_evidence_requests
+from ci_shepherd.poc_state import load_review_schedule, record_review_events
+from test_refresh import prior_snapshot
 
 
 class ProposalEvidencePlanningTests(unittest.TestCase):
+    def test_historical_unavailable_expansion_waits_24_hours_and_records_one_typed_wakeup(self) -> None:
+        snapshot = prior_snapshot()
+        record = snapshot["evidence"]["run:99"]
+        record["availability"] = "partial"
+        record["payload"]["errorCategory"] = "not-found"
+        proposals = {"proposals": [{
+            "issueNumber": 1, "evidenceIds": ["issue:1", "run:99"],
+            "executionEligibility": {
+                "unavailableEvidenceIds": ["run:99"], "blockingReasons": ["unavailable-evidence"],
+            },
+        }]}
+        snapshot["collectedAt"] = "2026-08-18T01:00:00Z"
+        requests, deferred = build_proposal_evidence_requests(snapshot, proposals)
+        self.assertEqual([], requests["requests"])
+        self.assertEqual([], deferred)
+        with TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            evidence_planning.record_unavailable_evidence_wakeups(state, snapshot)
+            ledger = state / "ledgers/review-wakeups.jsonl"
+            before = ledger.read_bytes()
+            evidence_planning.record_unavailable_evidence_wakeups(state, snapshot)
+            self.assertEqual(before, ledger.read_bytes())
+            record_review_events(
+                state, "owner/repo", snapshot["collectedAt"], issue_numbers=[1], pull_request_numbers=[],
+            )
+            early = load_review_schedule(
+                state, "owner/repo", "2026-08-18T23:59:59Z", issue_numbers=[1], pull_request_numbers=[],
+            )
+            due = load_review_schedule(
+                state, "owner/repo", "2026-08-19T00:00:00Z", issue_numbers=[1], pull_request_numbers=[],
+            )
+            self.assertEqual([], early["dueIssueNumbers"])
+            self.assertEqual([1], due["dueIssueNumbers"])
+        snapshot["collectedAt"] = "2026-08-19T00:00:00Z"
+        requests, _ = build_proposal_evidence_requests(snapshot, proposals)
+        self.assertEqual(["run:99"], [row["evidenceId"] for row in requests["requests"]])
+
+    def test_independent_nonfetchable_blocker_does_not_request_optional_run_expansion(self) -> None:
+        snapshot = prior_snapshot()
+        snapshot["evidence"]["run:99"]["availability"] = "not-enriched"
+        for blocker in ("missing-ci-label", "untrusted-reference-provenance"):
+            with self.subTest(blocker=blocker):
+                requests, deferred = build_proposal_evidence_requests(snapshot, {"proposals": [{
+                    "issueNumber": 1, "evidenceIds": ["issue:1", "run:99"],
+                    "executionEligibility": {
+                        "unavailableEvidenceIds": ["run:99"],
+                        "blockingReasons": [blocker, "unavailable-evidence"],
+                    },
+                }]})
+                self.assertEqual([], requests["requests"])
+                self.assertEqual([], deferred)
+
     def test_requests_partial_workflow_run_that_blocks_a_proposal(self) -> None:
         snapshot = {
             "schemaVersion": 1,

@@ -168,12 +168,8 @@ class WorkflowHealthTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_poc_projectability(compact, judgments)
                 compact["issues"][0]["humanContext"]["decisionRequired"] = False
-                result = build_action_proposals(data, prepared, judgments, "radical", agent_input=compact)
-                self.assertEqual([], [row for row in result["proposals"] if row["operation"] == "assign-copilot"])
-                self.assertEqual(
-                    ["delegate-copilot"],
-                    [row["disposition"] for row in result["blockedRecommendations"]],
-                )
+                with self.assertRaises(ValueError):
+                    build_action_proposals(data, prepared, judgments, "radical", agent_input=compact)
 
     def test_explicit_nomination_remains_separate_from_automatic_human_decision_gate(self) -> None:
         data = workflow_snapshot()
@@ -351,8 +347,7 @@ class WorkflowHealthTests(unittest.TestCase):
 
     def test_workflow_priority_wins_budget_but_never_overrides_ineligibility(self) -> None:
         old = _comment_proposal(action_id="old:ping-human-comment", issue_number=1)
-        current = _comment_proposal(action_id="current:watch-comment", issue_number=300)
-        current["workflowPriority"] = True
+        current = _comment_proposal(action_id="current:ping-human-comment", issue_number=300)
         caps = copy.deepcopy(DEFAULT_CAPS)
         caps["create-comment"]["maxPerRun"] = 1
         policy = _projection(policy_doc=_policy_document(
@@ -363,7 +358,9 @@ class WorkflowHealthTests(unittest.TestCase):
                 candidate = _comment_proposal(
                     action_id=current["actionId"], issue_number=300, eligible=eligible,
                 )
-                candidate["workflowPriority"] = True
+                from ci_shepherd.eligibility import repair_priority
+                candidate["repairPriorityFacts"] = {"workflowHealth": {"current": True, "category": "blocking-build"}}
+                candidate["repairPriority"] = repair_priority(candidate["repairPriorityFacts"])
                 selected = build_policy_selection(
                     _document([old, candidate]), run_id="cycle:test",
                     policy_projection=policy, action_events=[],
@@ -424,10 +421,13 @@ class WorkflowHealthTests(unittest.TestCase):
             with self.subTest(outcomes=outcomes):
                 data = workflow_snapshot()
                 data["evidence"]["run:100:attempt:1:job:900:log"]["payload"]["excerpt"] = (
-                    "##[error]Download failed: HTTP 503"
+                    "##[error]runtime-archive download failed: HTTP 503"
                 )
                 for index, conclusion in enumerate(outcomes, start=1):
-                    add_execution(data, 100 + index, f"2026-08-19T15:{30 + index * 5}:00Z", conclusion=conclusion)
+                    add_execution(
+                        data, 100 + index, f"2026-08-19T15:{30 + index * 5}:00Z", conclusion=conclusion,
+                        excerpt="##[error]runtime-archive download failed: HTTP 503",
+                    )
                 issue = build_compact_poc_input(prepare_assessment(data))["issues"][0]
                 self.assertEqual([104, 103, 102, 101, 100], issue["workflowHealth"]["sampleRunIds"])
                 self.assertTrue(issue["workflowHealth"]["recurrent"])
@@ -495,9 +495,9 @@ class WorkflowHealthTests(unittest.TestCase):
     def test_two_independent_network_failures_escalate_on_the_same_day(self) -> None:
         data = workflow_snapshot()
         data["evidence"]["run:100:attempt:1:job:900:log"]["payload"]["excerpt"] = (
-            "##[error]Download failed: HTTP 503"
+            "##[error]runtime-archive download failed: HTTP 503"
         )
-        add_execution(data, 101, "2026-08-19T15:45:00Z")
+        add_execution(data, 101, "2026-08-19T15:45:00Z", excerpt="##[error]runtime-archive download failed: HTTP 503")
         prepared = prepare_assessment(data)
         compact = build_compact_poc_input(prepared)
         judgment = compact["issues"][0]["defaultJudgment"]
@@ -531,7 +531,7 @@ class WorkflowHealthTests(unittest.TestCase):
         current.update(
             issueNumber=300,
             issueUrl="https://github.com/owner/repo/issues/300",
-            workflowHealth={"current": True},
+            workflowHealth={"current": True, "category": "blocking-build"},
         )
         current["evidenceBundle"] = [
             {"id": "issue:300", "kind": "issue-event"},

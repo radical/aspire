@@ -641,9 +641,9 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             {
                 "maxMutationAttempts": 2,
                 "maxChains": 1,
-                "maxRunningCopilotTasks": 2,
-                "maxCopilotStartsPerRolling24h": 3,
-                "maxOpenDelegatedPullRequests": 5,
+                "maxRunningCopilotTasks": 3,
+                "maxCopilotStartsPerRolling24h": 10,
+                "maxOpenDelegatedPullRequests": 10,
                 "maxRepositoryRunningCopilotTasks": 100,
             },
             grant["budget"],
@@ -1030,9 +1030,9 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
             {
                 "maxMutationAttempts": 1,
                 "maxChains": 1,
-                "maxRunningCopilotTasks": 2,
-                "maxCopilotStartsPerRolling24h": 3,
-                "maxOpenDelegatedPullRequests": 5,
+                "maxRunningCopilotTasks": 3,
+                "maxCopilotStartsPerRolling24h": 10,
+                "maxOpenDelegatedPullRequests": 10,
                 "maxRepositoryRunningCopilotTasks": 100,
             },
             grant["budget"],
@@ -1161,8 +1161,8 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
 
         grant = self._generate(
             action_ids=[self.comment_action_id],
-            max_running_copilot_tasks=10,
-            max_copilot_starts_per_rolling_24h=5,
+            max_running_copilot_tasks=3,
+            max_copilot_starts_per_rolling_24h=10,
             max_open_delegated_prs=10,
             max_repository_running_copilot_tasks=100,
             allow_production_delegation_steady_state=True,
@@ -1180,9 +1180,9 @@ class GenerateAuthorizationGrantTests(unittest.TestCase):
         self.assertTrue(grant["productionDelegationSteadyState"])
         self.assertIsNotNone(grant["capacityPolicyDigest"])
         self.assertTrue(authorized.grant.production_delegation_steady_state)
-        self.assertEqual(10, authorized.grant.budget.max_running_copilot_tasks)
+        self.assertEqual(3, authorized.grant.budget.max_running_copilot_tasks)
         self.assertEqual(
-            5,
+            10,
             authorized.grant.budget.max_copilot_starts_per_rolling_24h,
         )
 
@@ -2682,7 +2682,8 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         self._build_and_write_selection()
 
         grant = self._mint(
-            delegate_action_id, production_delegation_policy_path=policy_path
+            delegate_action_id, production_delegation_policy_path=policy_path,
+            max_running_copilot_tasks=2, max_copilot_starts_per_rolling_24h=3, max_open_delegated_prs=5,
         )
 
         self.assertEqual(
@@ -3109,7 +3110,8 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         self._build_and_write_selection()
 
         grant = self._mint(
-            delegate_action_id, production_delegation_policy_path=policy_path
+            delegate_action_id, production_delegation_policy_path=policy_path,
+            max_running_copilot_tasks=2, max_copilot_starts_per_rolling_24h=3, max_open_delegated_prs=5,
         )
         self.assertEqual(
             "delegate-copilot",

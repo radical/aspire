@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+from datetime import timedelta
 from typing import Any, Mapping
+
+from .poc_state import record_review_wakeup
+from .refresh import historical_run_retry_at
+from .timeutils import format_utc_z, parse_aware_iso8601
 
 
 MAX_EVIDENCE_REQUESTS = 25
@@ -41,6 +47,9 @@ def build_proposal_evidence_requests(
         eligibility = proposal.get("executionEligibility")
         if not isinstance(eligibility, Mapping):
             raise ValueError("Proposal executionEligibility must be an object.")
+        blocking_reasons = eligibility.get("blockingReasons", [])
+        if not isinstance(blocking_reasons, list) or any(not isinstance(reason, str) for reason in blocking_reasons):
+            raise ValueError("Proposal blockingReasons must be a list of strings.")
         unavailable = eligibility.get("unavailableEvidenceIds")
         if not isinstance(unavailable, list):
             raise ValueError(
@@ -66,6 +75,16 @@ def build_proposal_evidence_requests(
             if (
                 record.get("kind") != "workflow-run"
                 or record.get("availability") not in {"partial", "not-enriched"}
+            ):
+                continue
+            if {"missing-ci-label", "untrusted-reference-provenance"}.intersection(blocking_reasons):
+                # Fetching a run cannot change label authority or prove the source
+                # of an unrelated issue/PR link. Keep the blocker, not another round.
+                continue
+            retry_at = historical_run_retry_at(record)
+            if retry_at is not None and (
+                retry_at - timedelta(hours=24)
+                <= parse_aware_iso8601(snapshot["collectedAt"], "snapshot collectedAt") < retry_at
             ):
                 continue
             seen.add(identity)
@@ -96,3 +115,20 @@ def build_proposal_evidence_requests(
         },
         deferred,
     )
+
+
+def record_unavailable_evidence_wakeups(state_directory: Path, snapshot: Mapping[str, Any]) -> None:
+    """Reuse the existing typed schedule; observation time survives later reuse."""
+    observed_at = parse_aware_iso8601(snapshot["collectedAt"], "snapshot collectedAt")
+    open_issues = set(snapshot["openIssues"])
+    for record in snapshot["evidence"].values():
+        retry_at = historical_run_retry_at(record)
+        if retry_at is None or retry_at <= observed_at:
+            continue
+        for reference in record["payload"]["referencedBy"]:
+            issue_number = reference.get("sourceIssueNumber")
+            if type(issue_number) is int and issue_number in open_issues:
+                record_review_wakeup(
+                    state_directory, snapshot["repository"], target_kind="issue",
+                    target_number=issue_number, evaluate_at=format_utc_z(retry_at), reason="retry-backoff",
+                )

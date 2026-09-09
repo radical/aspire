@@ -3,8 +3,8 @@
   "repository": "microsoft/aspire",
   "maxActionsPerGrant": 5,
   "capacity": {
-    "maxRunningCopilotTasks": 10,
-    "maxCopilotStartsPerRolling24h": 5,
+    "maxRunningCopilotTasks": 3,
+    "maxCopilotStartsPerRolling24h": 10,
     "maxOpenDelegatedPullRequests": 10,
     "maxRepositoryRunningCopilotTasks": 100
   }

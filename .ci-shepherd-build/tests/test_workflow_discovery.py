@@ -259,7 +259,7 @@ class WorkflowDiscoveryTests(unittest.TestCase):
         responses = responses_for(raw_runs)
         for number in (1, 2, 3):
             responses[f"/repos/{REPOSITORY}/actions/jobs/{number * 100}/logs"] = (
-                "##[error]Download failed: HTTP 503"
+                "##[error]Download failed: https://downloads.example.test/sdk.tar.gz returned HTTP 503"
             )
         inventory = enrich_workflow_discovery(
             issue_inventory(), DiscoveryClient(responses), REPOSITORY, NOW,
