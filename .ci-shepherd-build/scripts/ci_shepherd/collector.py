@@ -401,6 +401,17 @@ def _retain_repair_evidence(
 def mark_workflow_issues_changed(
     inventory: InventoryResult, previous_discovery: Mapping[str, Any] | None,
 ) -> InventoryResult:
+    current_discovery = inventory.workflow_discovery
+    if previous_discovery is not None and current_discovery is not None:
+        # Refreshing the same window is not new source evidence. Clock/GET usage
+        # changes must not reselect every associated tracker on each cycle.
+        # Derived time-dependent health changes are compared by the cycle.
+        operational_fields = {"collectedAt", "usage"}
+        if (
+            {key: value for key, value in previous_discovery.items() if key not in operational_fields}
+            == {key: value for key, value in current_discovery.items() if key not in operational_fields}
+        ):
+            return inventory
     plan = inventory.refresh_plan
     if plan is not None:
         managed = {issue["number"] for issue in inventory.open_issues}

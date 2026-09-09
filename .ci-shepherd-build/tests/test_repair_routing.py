@@ -169,6 +169,71 @@ def override_category(value, category):
 
 
 class RepairRoutingTests(unittest.TestCase):
+    def test_workflow_and_repair_context_match_the_issues_declared_job(self):
+        from test_workflow_health import workflow_snapshot
+
+        value = workflow_snapshot()
+        setup_job = job_payload(12, run_id=100, job_id=901)
+        setup_job["name"] = "Dependency setup (ubuntu-latest)"
+        setup_log = log_payload(
+            12, run_id=100, job_id=901,
+            excerpt="error: downloading https://feed.example/Foo failed: HTTP 503",
+        )
+        value["evidence"].update([
+            evidence("run:100:attempt:1:job:901", "workflow-job", setup_job),
+            evidence("run:100:attempt:1:job:901:log", "workflow-log", setup_log),
+        ])
+        value["evidence"]["issue:12"]["payload"]["ledger"]["rows"][0]["job"] = setup_job["name"]
+
+        issue, = prepare_assessment(value)["issues"]
+        self.assertEqual(setup_job["name"], issue["workflowHealth"]["job"])
+        self.assertEqual("transient-infrastructure", issue["repairEvidence"]["category"])
+        self.assertEqual(
+            {"issue:12", "run:100", "run:100:attempt:1:job:901", "run:100:attempt:1:job:901:log"},
+            set(issue["repairEvidence"]["evidenceIds"]),
+        )
+
+    def test_unknown_declared_job_does_not_borrow_another_failed_job(self):
+        from test_workflow_health import workflow_snapshot
+
+        value = workflow_snapshot()
+        value["evidence"]["issue:12"]["payload"]["ledger"]["rows"][0]["job"] = "Missing job (ubuntu-latest)"
+        issue, = prepare_assessment(value)["issues"]
+        self.assertFalse(issue["repairEvidence"]["ready"])
+        self.assertIsNone(issue.get("workflowHealth"))
+
+    def test_repair_witnesses_are_preserved_in_a_capped_evidence_bundle(self):
+        value = repair_snapshot()
+        for index in range(25):
+            job_id = 5000 + index
+            job = job_payload(21, run_id=100, job_id=job_id)
+            job.update(name=f"Unrelated job {index} (ubuntu-latest)", conclusion="success")
+            value["evidence"].update([evidence(
+                f"run:100:attempt:1:job:{job_id}", "workflow-job", job,
+            )])
+
+        prepared, compact, judgments, proposals = assess(value)
+        issue, = prepared["issues"]
+        self.assertTrue(issue["repairEvidence"]["ready"])
+        bundled = {record["id"] for record in issue["evidenceBundle"]}
+        self.assertLessEqual(len(bundled), 25)
+        self.assertEqual(set(), set(issue["repairEvidence"]["evidenceIds"]) - bundled)
+        self.assertEqual("delegate-copilot", judgments["issues"][0]["recommendations"][0]["disposition"])
+        self.assertEqual("assign-copilot", proposals["proposals"][0]["operation"])
+
+    def test_repair_readiness_names_witnesses_that_cannot_fit_the_bundle(self):
+        prepared = prepare_assessment(repair_snapshot(), max_bundle_records=3)
+        issue, = prepared["issues"]
+        self.assertFalse(issue["repairEvidence"]["ready"])
+        missing = set(issue["repairEvidence"]["evidenceIds"]) - {
+            record["id"] for record in issue["evidenceBundle"]
+        }
+        self.assertTrue(missing)
+        self.assertTrue(all(
+            any(evidence_id in fact for fact in issue["repairEvidence"]["missingFacts"])
+            for evidence_id in missing
+        ))
+
     def test_source_confirmed_quarantine_defaults_to_repair_without_local_handoff(self):
         prepared, compact, judgments, proposals = assess(quarantined_snapshot())
         recommendation = judgments["issues"][0]["recommendations"][0]

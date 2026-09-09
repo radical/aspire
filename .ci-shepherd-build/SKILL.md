@@ -553,6 +553,12 @@ an ARM64 failure with the same display name.
 These are factual inputs to assessment, not
 model-authored authority.
 
+When a complete issue ledger names an exact job, repair and workflow-health
+context must match that job rather than another failure in the same run.
+Discovered later executions inherit that scope only for the same workflow ID,
+path, and event. This does not turn issue prose into diagnostic or recovery proof;
+the underlying execution evidence and ordinary recovery guards still apply.
+
 Eligible work is ordered by the shared `repair_priority` function in
 `scripts/ci_shepherd/eligibility.py`, after hard eligibility/ownership exclusions
 and before allocating budget. `policy_selection.py` uses the same ordering as
@@ -646,6 +652,11 @@ Each witness run contributes its most recent matching failure's complete
 citations, not the accumulated evidence from all retries of that same run.
 Ordinary previews remain capped at eight; existing worker byte and case limits
 remain enforced.
+
+Preparation prioritizes the complete required repair, health, recovery, and
+quarantine-source witness chains within the existing 25-record bundle.
+Unrelated jobs cannot evict those witnesses. If a required repair citation still
+cannot fit, readiness is false and the exact missing IDs remain explicit.
 
 An assessment cannot bypass a known human decision by changing its disposition
 to delegation. Explicit operator nominations remain a separate decision path.
@@ -946,6 +957,11 @@ The limits in `scripts/ci_shepherd/investigations.py` and
 GETs for the same issue and directly related same-repository runs, jobs, logs,
 artifacts, and PRs. Do not search across repositories or inspect ignored files,
 secrets, other checkouts, or Git configuration.
+
+Attempt-specific job listings use the same diagnostic GET budget and repository
+boundary as run-wide listings: `/actions/runs/<run>/attempts/<attempt>/jobs`.
+Work-log row fields remain exact for their kind; an evidence row cannot carry a
+source `path`.
 
 Workers do not edit code, modify shared Git metadata, invoke a fixing workflow,
 or write to GitHub. If the bounded investigation cannot answer the question,
@@ -1970,6 +1986,12 @@ Lifecycle interpretation retains the proven independent-update baseline in
 existing assessment history, so later control timestamps cannot fabricate an
 issue-updated-after-fix disagreement. Current task/PR evidence is still derived
 afresh, and independent issue changes invalidate that baseline.
+Re-observing identical workflow discovery does not mark every associated issue
+as source-updated merely because its collection clock or request usage changed.
+Evidence rediscovered after a provisional retirement is reported as refreshed,
+not retired from the final snapshot. Genuine coverage and derived-context changes
+still trigger their normal reassessment.
+
 `agent-assessment.json` is the only assessment-agent output. `cycle.py finish`
 validates its exact top-level schema and snapshot, then derives
 `agent-judgments.json` and `agent-pull-request-judgments.json` before applying

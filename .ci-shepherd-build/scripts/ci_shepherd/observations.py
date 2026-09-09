@@ -140,6 +140,42 @@ _OCCURRENCE_IDENTITY_FIELDS = ("fingerprintId", "testName", "issueNumber", "runI
 _FACTUAL_HISTORY_FIELDS = frozenset({"occurrences", "coverage"})
 
 
+def matches_issue_job_scope(
+    snapshot: Mapping[str, Any], occurrence: Mapping[str, Any], issue_number: int,
+) -> bool:
+    ledger = snapshot["evidence"].get(f"issue:{issue_number}", {}).get("payload", {}).get("ledger", {})
+    if ledger.get("complete") is not True:
+        return True
+    rows = [
+        row for row in ledger.get("rows", [])
+        if isinstance(row, Mapping) and isinstance(row.get("job"), str) and row["job"].strip()
+    ]
+    direct_jobs = {
+        row["job"].strip() for row in rows
+        if row.get("sourceRun", row.get("runId")) == occurrence["runId"]
+    }
+    if direct_jobs:
+        return occurrence.get("jobName") in direct_jobs
+    run = snapshot["evidence"].get(f"run:{occurrence['runId']}", {}).get("payload", {})
+    identity = tuple(run.get(field) for field in ("workflowId", "workflowPath", "event"))
+    if not all(identity):
+        return True
+    # Later runs may be discovered rather than listed in the issue. Carry the
+    # declared job scope only across the same verified workflow/path/event;
+    # another failed job in that workflow is not this issue's repair subject.
+    matching_jobs = {
+        row["job"].strip()
+        for row in rows
+        if tuple(
+            snapshot["evidence"].get(
+                f"run:{row.get('sourceRun', row.get('runId'))}", {}
+            ).get("payload", {}).get(field)
+            for field in ("workflowId", "workflowPath", "event")
+        ) == identity
+    }
+    return not matching_jobs or occurrence.get("jobName") in matching_jobs
+
+
 def build_repair_evidence(
     snapshot: Mapping[str, Any], observations: Mapping[str, Any], issue_number: int,
 ) -> dict[str, Any]:
@@ -151,6 +187,9 @@ def build_repair_evidence(
     unverified_pr_scopes: set[tuple[object, ...]] = set()
     for occurrence in observations.get("occurrences", []):
         if occurrence["issueNumber"] != issue_number:
+            continue
+        if not matches_issue_job_scope(snapshot, occurrence, issue_number):
+            gaps.add("Match the issue's declared job or lane to its collected failed execution.")
             continue
         run = evidence.get(f"run:{occurrence['runId']}", {}).get("payload", {})
         scope = occurrence.get("verifiedScope", {})

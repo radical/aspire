@@ -721,6 +721,15 @@ class RefreshPlanTests(unittest.TestCase):
         self.assertEqual(planned_ids, set().union(*map(set, buckets)))
         self.assertEqual(sum(map(len, buckets)), len(planned_ids))
 
+    def test_rediscovered_evidence_is_not_reported_as_retired(self) -> None:
+        evidence_id = "run:99:attempt:1:job:101:log"
+        plan = RefreshPlan(retire=(evidence_id,))
+        completed = complete_refresh_plan(plan, {
+            evidence_id: evidence("workflow-log", {"excerpt": "Observed diagnostic"}),
+        })
+        self.assertEqual((), completed.retire)
+        self.assertEqual((evidence_id,), completed.refresh)
+
 
 class ReconstructionTests(unittest.TestCase):
     def test_reconstructs_complete_unchanged_issue_without_report_content(self) -> None:

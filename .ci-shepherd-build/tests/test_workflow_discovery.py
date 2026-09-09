@@ -634,6 +634,18 @@ class WorkflowDiscoveryTests(unittest.TestCase):
         self.assertEqual((42,), refreshed.refresh_plan.changed_issues)
         self.assertEqual("unavailable", refreshed.workflow_discovery["status"])
 
+    def test_identical_discovery_does_not_force_source_reassessment(self) -> None:
+        prior = enrich_workflow_discovery(
+            issue_inventory(), DiscoveryClient(responses_for([run(3), run(1)])), REPOSITORY, NOW,
+        ).workflow_discovery
+        prior = {**prior, "collectedAt": "2026-09-08T19:00:00Z", "usage": {}}
+        inventory = replace(issue_inventory(), refresh_plan=RefreshPlan(reuse=("issue:42",)))
+        refreshed = enrich_workflow_discovery(
+            inventory, DiscoveryClient(responses_for([run(3), run(1)])),
+            REPOSITORY, NOW, previous_discovery=prior,
+        )
+        self.assertEqual((), refreshed.refresh_plan.changed_issues)
+
     def test_unverified_issue_anchor_does_not_invalidate_an_independently_complete_window(self) -> None:
         responses = responses_for([run(3), run(1)])
         responses[f"/repos/{REPOSITORY}/actions/runs/1"] = {**run(1), "head_branch": None}

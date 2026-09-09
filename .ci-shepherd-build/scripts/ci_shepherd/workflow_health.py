@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any, Mapping
 
+from .observations import matches_issue_job_scope
 from .timeutils import parse_aware_iso8601
 
 
@@ -41,7 +42,11 @@ def build_workflow_health(
     evidence = snapshot["evidence"]
     failures = []
     for occurrence in observations["occurrences"]:
-        if occurrence["issueNumber"] != issue["issueNumber"] or occurrence.get("scopeConflict"):
+        if (
+            occurrence["issueNumber"] != issue["issueNumber"]
+            or occurrence.get("scopeConflict")
+            or not matches_issue_job_scope(snapshot, occurrence, issue["issueNumber"])
+        ):
             continue
         run = evidence.get(f"run:{occurrence['runId']}", {}).get("payload", {})
         if (

@@ -308,9 +308,11 @@ def complete_refresh_plan(
         if historical_run_retry_at(records.get(evidence_id)) is not None
     }
     planned_refresh = set(plan.refresh)
-    classified = planned_reuse | planned_refresh | set(plan.retry) | set(plan.retire)
+    # Discovery can re-observe a record slated for retirement by the initial
+    # plan. Classify the final inventory, not that provisional retirement.
+    retire = set(plan.retire) - current_ids
+    classified = planned_reuse | planned_refresh | set(plan.retry) | retire
     complete_ids = current_ids - failed_ids
-    retire = set(plan.retire)
     retry = (
         set(plan.retry)
         | (failed_ids - reused_unavailable)

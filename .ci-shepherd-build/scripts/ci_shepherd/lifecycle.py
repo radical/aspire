@@ -304,6 +304,8 @@ def prepare_assessment(
         prepared["defaultBranch"] = snapshot["workflowDiscovery"].get("defaultBranch")
     for candidate in candidates:
         _add_workflow_context(snapshot, observations, candidate, repair_observations)
+        _prioritize_required_evidence(snapshot, candidate, max_bundle_records)
+    add_test_maintenance_context(prepared, snapshot)
     if isinstance(snapshot.get("workflowDiscovery"), Mapping):
         closed_followups = _closed_issue_followups(snapshot, repair_observations)
         if closed_followups:
@@ -674,23 +676,9 @@ def _build_candidate(
     if not isinstance(payload, dict):
         raise ValueError(f"Issue evidence for #{issue_number} has no payload.")
 
-    scoped = [
-        (evidence_id, record)
-        for evidence_id, record in evidence.items()
-        if isinstance(evidence_id, str)
-        and isinstance(record, dict)
-        and is_scoped_to_issue(evidence_id, record, issue_number)
-    ]
-    scoped.sort(
-        key=lambda item: (
-            _EVIDENCE_PRIORITY.get(_bundle_kind(item[0], item[1]), 100),
-            item[0],
-        )
-    )
+    scoped = _scoped_issue_evidence(evidence, issue_number)
     proof_ids = set(recovery["evidenceIds"]) if recovery["status"] == "verified" else set()
     scoped.sort(key=lambda item: item[0] not in proof_ids)
-    selected = scoped[:max_bundle_records]
-    excluded = scoped[max_bundle_records:]
 
     producer = str(payload.get("producer") or "unknown")
     autoclose = payload.get("autoclose")
@@ -718,9 +706,6 @@ def _build_candidate(
         recovery_verified=recovery["status"] == "verified",
     )
 
-    excluded_counts = Counter(
-        _bundle_kind(evidence_id, record) or "unknown" for evidence_id, record in excluded
-    )
     return {
         "issueNumber": issue_number,
         "issueUrl": payload.get("url"),
@@ -733,6 +718,66 @@ def _build_candidate(
         "recovery": dict(recovery),
         **({"lifecycleIssueUpdatedAt": lifecycle_updated_at} if lifecycle_updated_at is not None else {}),
         **decision,
+        **_package_evidence(snapshot, scoped, issue_number, max_bundle_records),
+    }
+
+
+def _scoped_issue_evidence(
+    evidence: Mapping[str, Any], issue_number: int,
+) -> list[tuple[str, dict[str, Any]]]:
+    return sorted(
+        (
+            (evidence_id, record)
+            for evidence_id, record in evidence.items()
+            if isinstance(evidence_id, str)
+            and isinstance(record, dict)
+            and is_scoped_to_issue(evidence_id, record, issue_number)
+        ),
+        key=lambda item: (
+            _EVIDENCE_PRIORITY.get(_bundle_kind(item[0], item[1]), 100),
+            item[0],
+        ),
+    )
+
+
+def _prioritize_required_evidence(
+    snapshot: Mapping[str, Any], issue: dict[str, Any], max_bundle_records: int,
+) -> None:
+    number = issue["issueNumber"]
+    issue_id = f"issue:{number}"
+    required = {issue_id}
+    for field in ("repairEvidence", "workflowHealth", "testMaintenance"):
+        required.update(issue.get(field, {}).get("evidenceIds", []))
+    if issue["recovery"]["status"] == "verified":
+        required.update(issue["recovery"]["evidenceIds"])
+    scoped = _scoped_issue_evidence(snapshot["evidence"], number)
+    # Repair/health witnesses are derived after the initial candidate bundle.
+    # Preserve their complete citation chain before spending space on unrelated
+    # jobs or annotations; never widen the bundle or import foreign evidence.
+    scoped.sort(key=lambda item: (item[0] != issue_id, item[0] not in required))
+    issue.update(_package_evidence(snapshot, scoped, number, max_bundle_records))
+    bundled = {record["id"] for record in issue["evidenceBundle"]}
+    repair = issue["repairEvidence"]
+    missing = set(repair["evidenceIds"]) - bundled
+    if missing:
+        repair["ready"] = False
+        repair["missingFacts"] = [
+            *repair["missingFacts"],
+            *(f"Required repair evidence is outside the bounded assessment: {evidence_id}"
+              for evidence_id in sorted(missing)),
+        ]
+
+
+def _package_evidence(
+    snapshot: Mapping[str, Any], scoped: list[tuple[str, dict[str, Any]]],
+    issue_number: int, max_bundle_records: int,
+) -> dict[str, Any]:
+    selected = scoped[:max_bundle_records]
+    excluded = scoped[max_bundle_records:]
+    excluded_counts = Counter(
+        _bundle_kind(evidence_id, record) or "unknown" for evidence_id, record in excluded
+    )
+    return {
         "evidenceBundle": [
             {
                 "id": evidence_id,

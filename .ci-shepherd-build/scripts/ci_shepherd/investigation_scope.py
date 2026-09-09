@@ -132,6 +132,7 @@ def validate_work_log(
                 r"pulls/[1-9]\d*(?:/(?:files|reviews|commits))?",
                 r"pull/[1-9]\d*(?:/files)?",
                 r"actions/runs/[1-9]\d*(?:/(?:jobs|logs|artifacts|job/[1-9]\d*))?",
+                r"actions/runs/[1-9]\d*/attempts/[1-9]\d*/jobs",
                 r"actions/jobs/[1-9]\d*(?:/logs)?",
                 r"actions/artifacts/[1-9]\d*(?:/zip)?",
             )

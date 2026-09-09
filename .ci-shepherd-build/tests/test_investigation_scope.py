@@ -75,6 +75,27 @@ def _evidence_result() -> dict:
 
 
 class InvestigationScopeTests(unittest.TestCase):
+    def test_work_log_accepts_attempt_scoped_jobs_without_widening_other_routes(self) -> None:
+        with TemporaryDirectory() as directory:
+            checkout = _source_checkout(Path(directory))
+            request = _source_request(checkout)
+            entry = {
+                "kind": "github-get",
+                "url": "https://api.github.com/repos/owner/repo/actions/runs/210/attempts/1/jobs?per_page=100",
+                "finding": "Read the failing jobs from the recorded run attempt.",
+            }
+            self.assertEqual([entry], validate_work_log(request, [entry], checkout, []))
+            for suffix in ("attempts/0/jobs", "attempts/1/rerun", "attempts/1/../../secrets"):
+                with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "endpoint scope"):
+                    validate_work_log(request, [{
+                        **entry, "url": f"https://api.github.com/repos/owner/repo/actions/runs/210/{suffix}",
+                    }], checkout, [])
+            with self.assertRaisesRegex(ValueError, "fields do not match"):
+                validate_work_log(request, [{
+                    "kind": "evidence", "evidenceId": "issue:21",
+                    "path": "not-an-evidence-field", "finding": "Read the supplied evidence.",
+                }], checkout, [])
+
     def test_scoped_result_rejects_silent_unknown_or_malformed_fields(self) -> None:
         result = {
             "outcome": "inconclusive", "summary": "Some context is missing.",
