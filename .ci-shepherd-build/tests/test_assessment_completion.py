@@ -22,6 +22,151 @@ from tests.test_cycle import snapshot, pull_request_snapshot
 
 
 class AssessmentCompletionTests(unittest.TestCase):
+    def test_worker_completion_serializes_exact_receipts_after_explicit_review(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.json"
+            value = snapshot("2026-09-08T18:00:00Z")
+            value["evidence"]["issue:1"]["payload"]["body"] = "Diagnostic context.\n" * 400
+            source.write_text(json.dumps(value), encoding="utf-8")
+            work = root / "work"
+            with patch("ci_shepherd.assessment_batches.MAX_ASSESSMENT_PACKET_BYTES", 2000):
+                started = cycle.start_cycle(
+                    repository="owner/repo", state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="shepherd[bot]", input_path=source,
+                )
+            manifest, packets = load_assessment_packets(work, started["assessment"])
+            group, = manifest["workerGroups"]
+            self.assertGreater(len(group["packetFiles"]), 1)
+            response_path = work / group["responseFile"]
+            response = json.loads(response_path.read_text())
+            compact = json.loads((work / "assessment-defaults.json").read_text())
+            override = copy.deepcopy(compact["issues"][0]["defaultJudgment"])
+            override["recommendations"][0]["summary"] = "Determine the missing failure diagnostic."
+            response["issues"] = [override]
+            response_path.write_text(json.dumps(response), encoding="utf-8")
+            original_receipts = (work / "assessment-receipts.json").read_bytes()
+
+            result = cycle.complete_assessment_response(
+                work_dir=work, group_id=group["groupId"],
+                assessment_id=manifest["assessmentId"], reviewed_case_ids=["issue:1"],
+            )
+
+            completed = json.loads(response_path.read_text())
+            self.assertEqual([override], completed["issues"])
+            self.assertEqual("complete", completed["status"])
+            self.assertEqual(
+                worker_response(manifest, packets, group)["batches"], completed["batches"],
+            )
+            self.assertEqual(1, result["completedCaseCount"])
+            self.assertEqual(original_receipts, (work / "assessment-receipts.json").read_bytes())
+            self.assertEqual("awaiting-review", json.loads((work / "cycle.json").read_text())["stage"])
+            before = response_path.stat().st_mtime_ns
+            cycle.complete_assessment_response(
+                work_dir=work, group_id=group["groupId"],
+                assessment_id=manifest["assessmentId"], reviewed_case_ids=["issue:1"],
+            )
+            self.assertEqual(before, response_path.stat().st_mtime_ns)
+            self.assertEqual("complete", cycle.merge_assessments(work_dir=work)["status"])
+            self.assertEqual("completed", cycle.finish_cycle(
+                work_dir=work, agent_assessment_path=work / "agent-assessment.json",
+            )["stage"])
+
+    def test_worker_completion_rejects_unreviewed_stale_and_invalid_drafts_without_writing(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.json"
+            source.write_text(json.dumps(snapshot("2026-09-08T18:00:00Z")), encoding="utf-8")
+            work = root / "work"
+            started = cycle.start_cycle(
+                repository="owner/repo", state_dir=root / "state", work_dir=work,
+                checkout=None, shepherd_author="shepherd[bot]", input_path=source,
+            )
+            manifest, _ = load_assessment_packets(work, started["assessment"])
+            group, = manifest["workerGroups"]
+            response_path = work / group["responseFile"]
+            initial = response_path.read_bytes()
+            for reviewed in ([], ["issue:2"], ["issue:1", "issue:1"]):
+                with self.subTest(reviewed=reviewed), self.assertRaises(ValueError):
+                    cycle.complete_assessment_response(
+                        work_dir=work, group_id=group["groupId"],
+                        assessment_id=manifest["assessmentId"], reviewed_case_ids=reviewed,
+                    )
+                self.assertEqual(initial, response_path.read_bytes())
+            with self.assertRaisesRegex(ValueError, "stale"):
+                cycle.complete_assessment_response(
+                    work_dir=work, group_id=group["groupId"],
+                    assessment_id="assessment:stale", reviewed_case_ids=["issue:1"],
+                )
+            for fields in (
+                {"issues": [{"issueNumber": 1, "summary": "Not a judgment"}]},
+                {"issues": [{"issueNumber": 2, "summary": "Foreign case"}]},
+                {"snapshotId": "stale-snapshot"},
+            ):
+                response = {**json.loads(initial), **fields}
+                response_path.write_text(json.dumps(response), encoding="utf-8")
+                before = response_path.read_bytes()
+                with self.subTest(fields=fields), self.assertRaises(ValueError):
+                    cycle.complete_assessment_response(
+                        work_dir=work, group_id=group["groupId"],
+                        assessment_id=manifest["assessmentId"], reviewed_case_ids=["issue:1"],
+                    )
+                self.assertEqual(before, response_path.read_bytes())
+            self.assertFalse((root / "state/current.json").exists())
+
+    def test_worker_completion_cli_uses_the_frozen_group_binding(self) -> None:
+        for factory, case_id in ((snapshot, "issue:1"), (pull_request_snapshot, "pull-request:23")):
+            with self.subTest(case_id=case_id), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source.json"
+                source.write_text(json.dumps(factory("2026-09-08T18:00:00Z")), encoding="utf-8")
+                work = root / "work"
+                started = cycle.start_cycle(
+                    repository="owner/repo", state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="shepherd[bot]", input_path=source,
+                )
+                manifest, _ = load_assessment_packets(work, started["assessment"])
+                group, = manifest["workerGroups"]
+                command = [*group["completionCommand"], "--reviewed-case", case_id]
+                result = subprocess.run(command, check=False, capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(group["groupId"], json.loads(result.stdout)["groupId"])
+                response_path = work / group["responseFile"]
+                response = json.loads(response_path.read_text())
+                self.assertEqual("complete", response["status"])
+                if case_id == "pull-request:23":
+                    response["pullRequests"] = [{
+                        "pullRequestNumber": 23, "disposition": "review-close",
+                        "summary": "PR closure is not permitted.", "evidenceIds": ["pr:23"],
+                    }]
+                    response_path.write_text(json.dumps(response), encoding="utf-8")
+                    before = response_path.read_bytes()
+                    rejected = subprocess.run(command, check=False, capture_output=True, text=True)
+                    self.assertNotEqual(0, rejected.returncode)
+                    self.assertEqual(before, response_path.read_bytes())
+
+    def test_worker_completion_cannot_override_an_incomplete_group_budget(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.json"
+            source.write_text(json.dumps(snapshot("2026-09-08T18:00:00Z")), encoding="utf-8")
+            work = root / "work"
+            with patch("ci_shepherd.assessment_batches.MAX_ASSESSMENT_WORKER_BYTES", 100):
+                started = cycle.start_cycle(
+                    repository="owner/repo", state_dir=root / "state", work_dir=work,
+                    checkout=None, shepherd_author="shepherd[bot]", input_path=source,
+                )
+            manifest, _ = load_assessment_packets(work, started["assessment"])
+            group, = manifest["workerGroups"]
+            path = work / group["responseFile"]
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "remains incomplete"):
+                cycle.complete_assessment_response(
+                    work_dir=work, group_id=group["groupId"],
+                    assessment_id=manifest["assessmentId"], reviewed_case_ids=["issue:1"],
+                )
+            self.assertEqual(before, path.read_bytes())
+
     def test_materialization_keeps_full_evidence_once_and_preserves_decision_context(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

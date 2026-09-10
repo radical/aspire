@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
@@ -411,6 +412,17 @@ def materialize_assessment(work_dir: Path) -> dict[str, Any]:
         cases, snapshot_id=prepared["snapshotId"],
         source_fingerprints=_source_fingerprints(work_dir),
     )
+    for group in manifest["workerGroups"]:
+        group["completionCommand"] = [
+            sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "cycle.py"),
+            "complete-assessment", "--work-dir", str(work_dir.resolve()),
+            "--group-id", group["groupId"], "--assessment-id", manifest["assessmentId"],
+        ]
+        group["instructions"] += (
+            " Fill only sparse overrides in the generated response. After reviewing "
+            "every complete case, use completionCommand with an explicit "
+            "--reviewed-case for each reviewed logical case. Never acknowledge unread input."
+        )
     for name, packet in packets.items():
         _write_json(work_dir / name, packet)
     for path in previous_paths:

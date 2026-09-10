@@ -80,10 +80,30 @@ byte-bounded JSON fragments; read them in `partIndex` order and reconstruct the
 whole case before assessing it. Every part still requires its own receipt.
 
 Workers fill their pre-created `assessment-response-*.json` file, retaining its
-identities and setting `status` to `complete` only after assessing the entire
-group. Its `issues` and `pullRequests` contain sparse overrides; its `batches`
-contain the explicit case/evidence receipts. An incomplete response keeps those
-arrays empty and reports the blocker through the session response.
+identities and editing only the sparse `issues` and `pullRequests` overrides.
+After assessing the entire group, the worker uses its manifest
+`completionCommand`, appending an explicit `--reviewed-case` for each logical
+case it actually reviewed:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" complete-assessment \
+  --work-dir "$SCRATCH" --group-id "group:1" \
+  --assessment-id "<frozen assessmentId>" \
+  --reviewed-case "issue:42" --reviewed-case "pull-request:43"
+```
+
+The command validates the frozen identity, complete group acknowledgement,
+packet bounds, and sparse judgments before serializing the existing
+`status: complete` and exact part/evidence receipts into that worker's response.
+It changes neither judgments nor the result protocol and does not complete the
+cycle. Stale bindings, missing reviews, and invalid overrides fail without
+writing. The coordinator still merges responses and finalizes normally.
+Existing valid manually serialized responses remain compatible.
+
+Only the worker that performed the assessment may use this completion command.
+It is not permission for the coordinator to acknowledge unread cases or repair
+a failed worker's receipts. If the group cannot be completed, retain
+`status: incomplete`, empty all result arrays, and report the blocker.
 
 The assessment stage produces one combined sparse response at
 `$SCRATCH/agent-assessment.json`, with separate `issues` and `pullRequests`
@@ -124,7 +144,8 @@ If that correction or replacement fails, leave the group explicitly incomplete.
 
 After actually reading and assessing its cases, a worker may serialize exact
 receipt identifiers from those packets instead of hand-transcribing them.
-Serialization must not fabricate an assessment or acknowledge unread cases.
+Prefer the bound completion command above. Serialization must not fabricate
+an assessment or acknowledge unread cases.
 
 ## Autonomous local operator cycle
 
@@ -2253,8 +2274,13 @@ A fresh assessment worker reads only its assigned materialized
 evidence-supported overrides for selected issue and pull-request entries.
 Deterministic defaults already apply the safe recurrence rubric; omitting a
 selected item means "keep the default." Do not return unselected items or copy
-all defaults. Read each assigned packet once; numbered JSON fragments must all
-be read in order to reconstruct their complete case. Do not write `agent-judgments.json` or
+all defaults. Read every assigned packet completely; numbered JSON fragments
+must all be read in order to reconstruct their complete case. Use bounded
+displays rather than concatenating a whole group into one oversized tool result.
+If a display truncates, recover the unseen contents with smaller reads from the
+same frozen packets. Display truncation is not proof that the evidence file is
+truncated, and it does not permit acknowledging unread contents.
+Do not write `agent-judgments.json` or
 `agent-pull-request-judgments.json`; `cycle.py` derives them after validating
 the combined response. Report the number of issue and pull-request overrides,
 plus category and disposition counts, in the completion response. The

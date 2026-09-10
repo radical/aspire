@@ -84,7 +84,7 @@ from ci_shepherd.quarantine_reconciliation import (
     render_quarantine_source_reconciliation_section,
 )
 from ci_shepherd.repository_policy import load_embedded_repository_policy
-from ci_shepherd.review_selection import build_review_selection
+from ci_shepherd.review_selection import build_review_selection, merge_selected_poc_judgments
 from ci_shepherd.run_report import render_run_markdown
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 from collect import collect
@@ -973,6 +973,81 @@ def start_cycle(
     return manifest
 
 
+def complete_assessment_response(
+    *,
+    work_dir: Path,
+    group_id: str,
+    assessment_id: str,
+    reviewed_case_ids: Iterable[str],
+) -> dict[str, object]:
+    """Serialize a worker's explicit review attestations using the existing schema."""
+    work_dir = work_dir.expanduser().resolve(strict=True)
+    cycle_manifest = _load_json(work_dir / "cycle.json", "cycle manifest")
+    if cycle_manifest.get("stage") != "awaiting-review":
+        raise ValueError("Cycle is not awaiting assessment responses.")
+    manifest, packets = load_assessment_packets(work_dir, cycle_manifest.get("assessment"))
+    if assessment_id != manifest["assessmentId"]:
+        raise ValueError("Worker completion is stale for the current assessment.")
+    matches = [
+        (index, group) for index, group in enumerate(manifest["workerGroups"], start=1)
+        if group["groupId"] == group_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("Worker completion requires an exact current group.")
+    index, group = matches[0]
+    reviewed = list(reviewed_case_ids)
+    if (
+        any(not isinstance(case_id, str) for case_id in reviewed)
+        or len(reviewed) != len(set(reviewed))
+        or set(reviewed) != set(group["caseIds"])
+    ):
+        raise ValueError("Reviewed cases must match every logical case in this group exactly once.")
+    filename = f"assessment-response-{index:04d}.json"
+    if group["responseFile"] != filename:
+        raise ValueError("Assessment response path is invalid.")
+    path = work_dir / filename
+    response = _load_json(path, "assessment worker response")
+    # The caller attests that these cases were actually reviewed. Deriving the
+    # mechanical part/evidence identities is not proof of reading or reasoning.
+    candidate = {
+        **response,
+        "status": "complete",
+        "batches": [
+            {
+                "batchId": packets[name]["batchId"],
+                "cases": [
+                    {"caseId": case["caseId"], "reviewedEvidenceIds": list(case["evidenceIds"])}
+                    for case in packets[name]["cases"]
+                ],
+            }
+            for name in group["packetFiles"]
+        ],
+    }
+    combined, _, _ = merge_worker_responses(manifest, packets, [candidate])
+    issue_overrides, pr_overrides = _split_agent_assessment(
+        combined, snapshot_id=manifest["snapshotId"],
+    )
+    # Use the finalizer's validators before publishing the worker response; do
+    # not silently repair summary-shaped output, stale identities or bad judgments.
+    merge_selected_poc_judgments(
+        _load_json(work_dir / "assessment-defaults.json", "assessment defaults"),
+        _load_json(work_dir / "review-selection.json", "review selection"),
+        issue_overrides,
+    )
+    merge_pull_request_judgments(
+        _load_json(work_dir / "pull-request-review.json", "pull request review"),
+        pr_overrides,
+    )
+    if candidate != response:
+        _write_private_json(path, candidate)
+    return {
+        "groupId": group_id, "assessmentId": assessment_id,
+        "responseFile": filename, "completedCaseCount": len(reviewed),
+        "issueOverrideCount": len(candidate["issues"]),
+        "pullRequestOverrideCount": len(candidate["pullRequests"]),
+    }
+
+
 def merge_assessments(
     *,
     work_dir: Path,
@@ -1620,6 +1695,14 @@ def main() -> int:
         "--response", type=Path, action="append", default=[],
         help="Worker response file (repeatable). Defaults to all materialized group response files.",
     )
+    complete = subparsers.add_parser(
+        "complete-assessment",
+        help="Validate a worker draft and serialize receipts only for explicitly reviewed cases.",
+    )
+    complete.add_argument("--work-dir", type=Path, required=True)
+    complete.add_argument("--group-id", required=True)
+    complete.add_argument("--assessment-id", required=True)
+    complete.add_argument("--reviewed-case", action="append", required=True)
     args = parser.parse_args()
     if args.command == "start":
         try:
@@ -1645,6 +1728,11 @@ def main() -> int:
             )
         elif args.command == "merge-assessments":
             result = merge_assessments(work_dir=args.work_dir, response_paths=args.response)
+        elif args.command == "complete-assessment":
+            result = complete_assessment_response(
+                work_dir=args.work_dir, group_id=args.group_id,
+                assessment_id=args.assessment_id, reviewed_case_ids=args.reviewed_case,
+            )
         else:
             result = finish_cycle(
                 work_dir=args.work_dir,
