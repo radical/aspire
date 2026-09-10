@@ -212,6 +212,32 @@ def current_history(snapshot: dict[str, object] | None = None) -> dict[str, obje
 
 
 class RefreshPlanTests(unittest.TestCase):
+    def test_legacy_reference_stubs_are_retried_even_if_marked_available(self) -> None:
+        source = prior_snapshot()
+        source["evidence"]["run:99"]["payload"] = {
+            "runId": 99,
+            "targetRepository": REPOSITORY,
+            "referencedBy": [{"sourceIssueNumber": 1}],
+        }
+        plan = plan_refresh(
+            REPOSITORY, [issue_summary(1)], source, current_history(source),
+        )
+        self.assertIn("run:99", plan.retry)
+        self.assertNotIn("run:99", plan.reuse)
+        completed = complete_refresh_plan(RefreshPlan(refresh=("run:99",)), source["evidence"])
+        self.assertIn("run:99", completed.retry)
+        self.assertNotIn("run:99", completed.refresh)
+
+    def test_previous_collection_reparses_tracker_comment_selection(self) -> None:
+        source = prior_snapshot()
+        source["collectionVersion"] = COLLECTION_VERSION - 1
+        history = current_history(source)
+        history["sourceSchemaVersions"]["collection"] = COLLECTION_VERSION - 1
+        plan = plan_refresh(REPOSITORY, [issue_summary(1)], source, history)
+        self.assertEqual((1,), plan.changed_issues)
+        self.assertIn("issue:1", plan.refresh)
+        self.assertEqual((), plan.reuse)
+
     def test_same_unavailable_run_is_reused_until_exact_retry_time_without_becoming_available(self) -> None:
         snapshot = prior_snapshot()
         record = snapshot["evidence"]["run:99"]
@@ -703,7 +729,7 @@ class RefreshPlanTests(unittest.TestCase):
             ),
             "run:done": evidence(
                 "workflow-run",
-                {"runId": 1, "targetRepository": REPOSITORY},
+                {"runId": 1, "targetRepository": REPOSITORY, "status": "completed"},
             ),
         }
 

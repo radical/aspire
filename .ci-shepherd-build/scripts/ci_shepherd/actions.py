@@ -1690,6 +1690,7 @@ def _delegation_instructions(
     handoff: Mapping[str, Any] | None,
     verified_tests: object | None = None,
     *,
+    test_failure: bool,
     quarantine: bool = False,
     workflow_failure: bool = False,
     context_urls: tuple[str, ...] = (),
@@ -1720,8 +1721,7 @@ def _delegation_instructions(
             " Source reconciliation confirmed the quarantined target"
             f"{'s' if len(rendered_tests) != 1 else ''}: "
             + ", ".join(rendered_tests)
-            + ". Do not modify or remove the `[QuarantinedTest]` attribute; "
-            "unquarantine is a separately authorized change."
+            + "."
         )
     handoff_context = ""
     if handoff is not None:
@@ -1739,9 +1739,44 @@ def _delegation_instructions(
     issue_reference = "Refs" if verified_context or quarantine or workflow_failure else "Fixes"
     tracking_instructions = (
         "Keep the tracking issue open for the separate unquarantine reliability window. "
-        "Use the fix-flaky-test skill to reproduce and validate the fix. "
+        "Do not modify or remove the `[QuarantinedTest]` attribute in the final fix PR. "
+        "Under docs/unquarantine-policy.md, a separate process requires 21 consecutive "
+        "days of zero failures across all operating systems before unquarantine or closure. "
         if verified_context or quarantine else ""
     )
+    test_instructions = ""
+    if test_failure or verified_context or quarantine:
+        test_instructions = (
+            "\n\nInvoke the repository's fix-flaky-test skill "
+            "(.agents/skills/fix-flaky-test/SKILL.md) before changing the test. "
+            "Read the frozen failure evidence and test/fixture code, then reproduce "
+            "locally first with its run-test-repeatedly.sh or run-test-repeatedly.ps1. "
+            "When the failing OS is unavailable or local repetition does not reproduce "
+            "the failure, use .github/workflows/reproduce-flaky-tests.yml on the matching "
+            "OS and follow the skill's escalation to quarantine-project or log-based analysis. "
+            "Only propose a repair when the root cause and fix are high-confidence; "
+            "otherwise report the missing evidence without a speculative code change.\n\n"
+            "For quarantined targets, eng/Testing.props requires "
+            "/p:RunQuarantinedTests=true on BOTH dotnet build and dotnet test; "
+            "do not also pass --filter-not-trait \"quarantined=true\". For .NET targets, use MTP "
+            "--filter-method or --filter-class after -- and an exact target. "
+            "For other test runners, use the repository's targeted execution mechanism "
+            "with the same nonzero-count evidence. "
+            "Retain the quarantine attribute in the committed fix. "
+            "After changing code, rebuild and repeat the same reproduction mode, "
+            "target, and failing OS. Require a nonzero executed-test count in every "
+            "iteration and all post-fix iterations passing. An exit code of zero, "
+            "a skipped test, or normal green CI that excludes quarantine is NOT "
+            "validation. Do not weaken assertions, add skips, ignore failures, "
+            "or make failures non-blocking.\n\n"
+            "CI verification through the reproduce workflow is the final gate. "
+            "If permissions or environment prevent it, record the exact error and "
+            "manual command needed, leaving verification explicitly incomplete. "
+            "In the PR's Test execution evidence section, record pre-fix and post-fix "
+            "commands, OS, reproduction mode, target, executed-test counts, iterations "
+            "attempted/passed/failed, observed output, and CI run links when available. "
+            "Distinguish worker-reported execution from independently observed CI results."
+        )
     if workflow_failure:
         tracking_instructions += (
             "Keep the incident open for post-merge verification of the affected "
@@ -1750,6 +1785,11 @@ def _delegation_instructions(
             "If credentials, permissions, an external outage, or another human-owned "
             "decision blocks a repository fix, report that blocker instead. "
         )
+    reference_instructions = (
+        f"Do not use closing keywords (Fixes, Closes, Resolves or their variants) "
+        f"for #{issue_number} anywhere in the PR body, including generated suffixes. "
+        if issue_reference == "Refs" else ""
+    )
     return (
         f"Investigate and fix issue #{issue_number}. Make the smallest complete "
         "change that addresses the reported failure, add focused regression "
@@ -1758,9 +1798,9 @@ def _delegation_instructions(
         "validation yourself when they are not already known. "
         "Do not remove quarantine or skip attributes to make tests pass."
         f"{verified_context} "
-        f"{handoff_context}\n\n"
+        f"{handoff_context}{test_instructions}\n\n"
         f"Open a draft pull request whose body includes `{issue_reference} #{issue_number}`. "
-        f"{tracking_instructions}"
+        f"{tracking_instructions}{reference_instructions}"
         "If the issue cannot be fixed from the available evidence, keep the pull "
         "request in draft and clearly record the missing evidence or human "
         "decision needed. Do not manufacture a code change merely to produce a diff. "
@@ -2001,6 +2041,7 @@ def build_action_proposals(
                         if verified_quarantine is not None
                         else None
                     ),
+                    test_failure=issue["category"] == "flaky-test",
                     quarantine=assignment_context.get("readiness", {}).get("quarantine", False),
                     workflow_failure=frozen_issues.get(issue_number, {}).get("workflowHealth") is not None,
                     context_urls=tuple(dict.fromkeys(context_urls))[:5],

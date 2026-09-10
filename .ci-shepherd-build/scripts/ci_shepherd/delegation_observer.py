@@ -41,6 +41,77 @@ class DelegationObservation:
     pull_request_outcome_sources: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
 
 
+def closing_keyword_contract(
+    body: object, repository: str, issue_number: int, *, keep_open: bool | None,
+) -> dict[str, object]:
+    """Inspect the entire observed PR body, never its truncated outcome preview.
+
+    GitHub recognizes ``Fixes #42``, ``Closes owner/repo#42`` and
+    ``Resolved https://github.com/owner/repo/issues/42`` (case insensitive).
+    Match the exact tracking issue, not another issue or a numeric prefix.
+    https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
+    """
+    if not isinstance(body, str):
+        return {"status": "unavailable", "matches": [], "detail": "PR body unavailable; closing contract not checked."}
+    repository_pattern = re.escape(repository)
+    reference = (
+        rf"(?:https://github\.com/{repository_pattern}/issues/|{repository_pattern}\#|\#)"
+        rf"{issue_number}(?![\w/])"
+    )
+    pattern = re.compile(
+        rf"(?<![\w/])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b:?\s+{reference}",
+        re.IGNORECASE,
+    )
+    matches = list(dict.fromkeys(match.group(0) for match in pattern.finditer(body)))
+    if keep_open is None:
+        return {"status": "unknown", "matches": matches, "detail": "Keep-open contract unavailable from frozen dispatch instructions or source facts."}
+    violation = keep_open and bool(matches)
+    return {
+        "status": "violation" if violation else "clear" if keep_open else "not-applicable",
+        "matches": matches,
+        "detail": (
+            f"PR uses closing keywords for keep-open tracking issue #{issue_number}; "
+            "replace them with Refs and keep the issue open."
+            if violation else "No closing keyword for this keep-open tracking issue."
+            if keep_open else "Frozen dispatch permits a closing reference for this issue."
+        ),
+    }
+
+
+def reported_test_execution_section(body: object) -> str | None:
+    """Quote the requested section without interpreting its numbers or claims."""
+    if not isinstance(body, str):
+        return None
+    # The dispatch contract requests an explicit Markdown section, for example:
+    #   ### Test execution evidence
+    #   | Phase | Mode | Command | OS | Executed | Iterations | Result |
+    # Keep its text verbatim, including missing values or contradictory claims.
+    # A heading inside a fenced command/log is not a new report section.
+    lines = body.splitlines()
+    selected: list[str] | None = None
+    level = 0
+    fence: tuple[str, int] | None = None
+    for line in lines:
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            if fence is None:
+                fence = (marker[1][0], len(marker[1]))
+            elif marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not marker[2].strip():
+                fence = None
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", line) if fence is None else None
+        if heading:
+            if selected is not None and len(heading[1]) <= level:
+                break
+            if selected is None and heading[2].strip("* ").casefold() == "test execution evidence":
+                selected = []
+                level = len(heading[1])
+                continue
+        if selected is not None:
+            selected.append(line)
+    section = "\n".join(selected).strip() if selected is not None else ""
+    return section or None
+
+
 def _outcome_body(body: object, limit: int) -> dict[str, object] | None:
     from .investigations import _fingerprint
 

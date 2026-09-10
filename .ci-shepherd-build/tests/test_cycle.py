@@ -2950,7 +2950,10 @@ class CycleTests(unittest.TestCase):
             )
 
             self.assertEqual("completed", completed["stage"])
-            self.assertIn("## Pull requests", (work / "report.md").read_text())
+            report = (work / "report.md").read_text()
+            self.assertIn("## No action/closed", report)
+            self.assertIn("| Subject kind |", report)
+            self.assertIn("| Pull request |", report)
             proposals = json.loads(
                 (work / "action-proposals.json").read_text(encoding="utf-8")
             )

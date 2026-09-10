@@ -354,7 +354,7 @@ def _repair_order(proposal: Mapping[str, object]) -> tuple[object, ...]:
     if proposal["operation"] in COMMENT_OPERATIONS and suffix in {
         "watch-comment", "retire-status-comment", "quarantine-blocked-comment", "quarantine-reconciliation-comment",
     }:
-        rank = 5
+        rank = 6
     return rank, not_recurrent, last_failure
 
 

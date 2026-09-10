@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 import unittest
 
@@ -9,12 +10,55 @@ from tests.test_assessment_batches import issue_case
 
 
 class RunReportTests(unittest.TestCase):
+    def test_report_quotes_execution_fields_without_promoting_claims_to_verified_validation(self) -> None:
+        from ci_shepherd.delegation_observer import attach_cloud_outcomes
+        from tests.test_cloud_outcomes import outcome_snapshot
+        from tests.test_delegation_observer import ScriptedClient
+
+        section = (
+            "| Phase | Mode | Commands | OS | Target | Executed per iteration | Attempts | Passed | Failed |\n"
+            "| Pre-fix | quarantine-project local | ./repeat.sh -n 20 | Linux | Tests.Flakey | 3 | 20 | 18 | 2 |\n"
+            "| Post-fix | quarantine-project CI | reproduce-flaky-tests.yml | Linux | Tests.Flakey | 0 | 20 | 20 | 0 |\n"
+            "Claim: all tests passed. CI run: https://github.com/owner/repo/actions/runs/123"
+        )
+        value = outcome_snapshot(body="### Test execution evidence\n" + section)
+        value["delegatedIssueDetails"][0]["labels"] = ["quarantined-test"]
+        attach_cloud_outcomes(value, None, ScriptedClient({}))
+        report = render_run_markdown(value, self.prepared, self.judgments)
+        self.assertIn("<pre>" + section + "</pre>", report)
+        self.assertIn("PR body at https://github.com/owner/repo/pull/201 by Copilot", report)
+        self.assertIn("Test execution evidence: reported; not independently verified", report)
+        self.assertIn("no values or successful validation are inferred", report)
+        self.assertIn("zero executed tests is not validation", report)
+        self.assertIn("Final-PR QuarantinedTest retention: unknown", report)
+        self.assertIn("separate 21-day zero-failure reliability window; use Refs", report)
+        self.assertIn("same mode/target/failing OS and all iterations must pass", report)
+
+    def test_green_ci_and_missing_execution_source_leave_flaky_validation_unknown(self) -> None:
+        from ci_shepherd.delegation_observer import attach_cloud_outcomes
+        from tests.test_cloud_outcomes import outcome_snapshot
+        from tests.test_delegation_observer import ScriptedClient
+
+        value = outcome_snapshot(body="All normal CI checks passed; process exited zero.")
+        value["delegatedIssueDetails"][0]["labels"] = ["quarantined-test"]
+        value["delegationStatus"]["records"][0]["pullRequests"][0]["currentState"] = {
+            "checks": {"state": "green"}, "draft": True,
+        }
+        attach_cloud_outcomes(value, None, ScriptedClient({}))
+        report = render_run_markdown(value, self.prepared, self.judgments)
+        visible = re.sub(r"<details\b[^>]*>.*?</details>", "", report, flags=re.DOTALL)
+        self.assertIn("checks: green", visible)
+        self.assertIn("Test execution evidence: unknown / missing", visible)
+        self.assertIn("unknown; no explicit Test execution evidence section was captured.", report)
+        self.assertIn("skill invocation and final matching-OS CI verification remain unverified", report)
+
     def test_cloud_outcome_keeps_reported_sources_separate_from_task_pr_and_assessment(self) -> None:
         from ci_shepherd import delegation_observer
         from tests.test_cloud_outcomes import outcome_snapshot
         from tests.test_delegation_observer import ScriptedClient
 
         value = outcome_snapshot(body="<script>untrusted</script> Need credentials. " + "x" * 4000)
+        value["delegatedIssueDetails"][0]["labels"] = ["quarantined-test"]
         record = value["delegationStatus"]["records"][0]
         source = delegation_observer._outcome_pull_source("owner/repo", record["pullRequests"][0], {
             "html_url": "https://github.com/owner/repo/pull/201", "comments": 1,
@@ -24,13 +68,13 @@ class RunReportTests(unittest.TestCase):
             "/repos/owner/repo/issues/201/comments?per_page=5&page=1": [{
                 "id": 91, "html_url": "https://github.com/owner/repo/pull/201#issuecomment-91",
                 "issue_url": "https://api.github.com/repos/owner/repo/issues/201",
-                "user": {"login": "Copilot"}, "body": "Need current failure logs.",
+                "user": {"login": "Copilot"}, "body": "### Test execution evidence\nNeed current failure logs.",
                 "created_at": "2026-09-02T18:59:00Z", "updated_at": "2026-09-02T18:59:00Z",
             }],
         }))
         report = render_run_markdown(value, self.prepared, self.judgments)
         for expected in (
-            "task state: completed", "#201 (open); draft: True; changed files: 3",
+            "task state: completed", "[PR #201](https://github.com/owner/repo/pull/201) (open); draft: True; changed files: 3",
             "Reported cloud outcome (untrusted)", "attempt assignment:1, task task-1",
             "PR body reported at https://github.com/owner/repo/pull/201 by Copilot",
             "&lt;script&gt;untrusted&lt;/script&gt; Need credentials.",
@@ -38,6 +82,9 @@ class RunReportTests(unittest.TestCase):
             "PR comment reported at https://github.com/owner/repo/pull/201#issuecomment-91 by Copilot",
             "Need current failure logs.", "observed head: " + "a" * 40,
             "Assessed repair outcome:", "Task completion and draft contents are not verified repair.",
+            "PR comment at https://github.com/owner/repo/pull/201#issuecomment-91 by Copilot",
+            "<pre>Need current failure logs.</pre>",
+            "Fields not explicitly reported remain unknown",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, report)
@@ -192,6 +239,35 @@ class RunReportTests(unittest.TestCase):
         self.assertIn("Investigation completed; duration: unknown", report)
         self.assertIn("one-shot; runtime session: unknown", report)
 
+    def test_observed_worker_duration_is_separate_from_result_acceptance_and_runtime_identity(self) -> None:
+        result = {
+            "issueNumber": 1, "repository": "owner/repo", "investigationId": "inv:one",
+            "launchMode": "one-shot", "attemptId": "attempt:one", "sessionId": None,
+            "outcome": "needs-evidence", "summary": "Missing failure logs.",
+            "recordedAt": "2026-09-05T12:05:00Z", "acceptedResultAt": "2026-09-05T12:05:00Z",
+            "runtimeObservation": {
+                "runtimeSessionId": None, "workerStartedAt": "2026-09-05T12:01:00Z",
+                "workerCompletedAt": "2026-09-05T12:01:35Z",
+                "observationEvidence": "Observed launcher start and end.",
+            },
+        }
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            investigation_plan={"requests": [{"issueNumber": 1, "investigationId": "inv:one"}]},
+            investigation_results=[result],
+        )
+        self.assertIn("duration: 35s", report)
+        self.assertIn("one-shot; runtime session: unknown", report)
+        self.assertIn("result accepted: 2026-09-05T12:05:00Z", report)
+        self.assertIn("timing basis: Observed launcher start and end.", report)
+        result["runtimeObservation"]["workerCompletedAt"] = None
+        unknown = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            investigation_plan={"requests": [{"issueNumber": 1, "investigationId": "inv:one"}]},
+            investigation_results=[result],
+        )
+        self.assertIn("Investigation completed; duration: unknown", unknown)
+
     def test_investigation_report_shows_work_and_observed_command_output(self) -> None:
         report = render_run_markdown(
             self.snapshot, self.prepared, self.judgments,
@@ -278,7 +354,7 @@ class RunReportTests(unittest.TestCase):
             "pullRequests": [{"number": 2, "state": "merged", "changedFiles": 4}],
         }]}
         report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
-        for expected in ("task state: failed", "#2 (merged)", "attempt: merged",
+        for expected in ("task state: failed", "[PR #2](https://github.com/owner/repo/pull/2) (merged)", "attempt: merged",
                          "issue remains open", "quarantine reliability", "new decision required"):
             self.assertIn(expected, report)
 
@@ -398,7 +474,8 @@ class RunReportTests(unittest.TestCase):
         )
         self.assertIn("0 executed effects", report)
         self.assertIn("⚪ No action", report)
-        self.assertIn("No executed action recorded", report)
+        self.assertNotIn("No executed action recorded", report)
+        self.assertNotIn("**Executed action:**", report)
         visible = re.sub(r"<details\b[^>]*>.*?</details>", "", report, flags=re.DOTALL)
         for state in ("checks: green", "draft: yes", "review: review-required", "NO-MERGE", "mergeability: blocked"):
             self.assertIn(state, visible)
@@ -440,6 +517,7 @@ class RunReportTests(unittest.TestCase):
         )
         self.assertIn("1 executed effects", report)
         self.assertIn("**Blocker:** None recorded", report)
+        self.assertIn("indeterminate (2026-09-05T12:01:00Z) → executed (2026-09-05T12:02:00Z) (reconciled)", report)
 
     def test_grouped_coverage_investigation_conclusion_and_source_readiness(self) -> None:
         self.snapshot["issues"] = [
@@ -479,7 +557,7 @@ class RunReportTests(unittest.TestCase):
             ],
         )
         for expected in (
-            "## Other issues", "## Flaky / failing test issues", "## Workflow / CI incidents",
+            "Other issues", "Flaky / failing test issues", "Workflow / CI incidents",
             "duration: 2m", "conclusion: needs-evidence", "No diagnostic stack was supplied.",
             "diagnostic-stack", "Failure diagnostics arrive.", "sourceState: ActiveIssue-disabled",
             "fixReadiness: requires-local-reproduction", "Owner: assigned-owner",
@@ -553,7 +631,8 @@ class RunReportTests(unittest.TestCase):
                     }
                 report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
                 row = next(line for line in report.splitlines() if line.startswith("| [#1]"))
-                self.assertEqual(row.split(" | ")[2], expected)
+                self.assertEqual(row.split(" | ")[3], "No action planned")
+                self.assertIn(f"**Current state:** {expected}", report)
 
     def test_started_session_is_running_even_before_plan_is_refreshed(self) -> None:
         report = render_run_markdown(
@@ -765,8 +844,8 @@ class RunReportTests(unittest.TestCase):
                 "totalNanoAiu": {"value": 1234, "coveredSessions": 1},
             }},
         )
-        self.assertLess(report.index("## Investigations this run"), report.index("## Pull requests"))
-        self.assertLess(report.index("## Usage"), report.index("## Pull requests"))
+        self.assertLess(report.index("## Acted this run"), report.index("## Investigations this run"))
+        self.assertLess(report.index("## No action/closed"), report.index("## Usage"))
         visible = re.sub(r"<details\b[^>]*>.*?</details>", "", report, flags=re.DOTALL)
         overview = visible.split("## Investigations this run\n", 1)[1].split("\n## ", 1)[0]
         rows = [line for line in overview.splitlines() if line.startswith("| [Issue #")]
@@ -781,7 +860,7 @@ class RunReportTests(unittest.TestCase):
         self.assertIn("| Provider cost (nano-AI units) | 1234 |", visible)
         for line in visible.splitlines():
             if line.startswith("| [#"):
-                self.assertEqual(len(line.strip("| ").split(" | ")), 6)
+                self.assertEqual(len(line.strip("| ").split(" | ")), 7)
         for number in range(1, 8):
             self.assertEqual(report.count(f"[#{number}]"), 1)
 
@@ -810,6 +889,79 @@ class RunReportTests(unittest.TestCase):
             "<summary>1 unchanged / excluded inventory items</summary>\n\nPR #24 (unchanged-stable)",
             report,
         )
+
+    def test_outcome_sections_precede_diagnostics_and_capacity_has_a_concrete_retry(self) -> None:
+        self.snapshot["issues"] = [
+            {"number": number, "title": f"Failure {number}", "state": "open"}
+            for number in range(1, 32)
+        ]
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments,
+            investigation_plan={"deferredRequests": [
+                {"issueNumber": number, "investigationId": f"inv:{number}", "reason": "per-cycle-investigation-budget"}
+                for number in range(2, 32)
+            ]},
+        )
+        self.assertEqual([
+            "Acted this run", "Delegated to Copilot awaiting task/PR", "Human action required",
+            "Blocked on evidence", "Watching", "Not reached due tool capacity", "No action/closed",
+        ], re.findall(r"^## (.+)$", report, re.MULTILINE)[:7])
+        capacity = report.split("## Not reached due tool capacity\n", 1)[1].split("## No action/closed", 1)[0]
+        self.assertIn("<summary>30 capacity-deferred items — not attempted</summary>", capacity)
+        self.assertIn("Next invocation with a fresh per-cycle investigation budget and an available worker slot.", capacity)
+        self.assertIn("per-cycle-investigation-budget", capacity)
+        self.assertIn("| Subject kind |", report)
+        self.assertIn("Owner: unassigned", report)
+        self.assertNotIn("No executed action recorded", report)
+
+    def test_repeated_blockers_are_deduplicated_and_full_details_can_be_separate(self) -> None:
+        self.prepared["issues"][0].update(blockers=["Missing log"], missingPrerequisites=["Missing log"])
+        self.judgments["issues"][0]["recommendations"][0]["missingEvidence"] = ["Missing log"]
+        details = []
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments, audit_details=details,
+            audit_details_url="final-report-details.md",
+        )
+        self.assertIn("## Blocked on evidence", report)
+        row = next(line for line in report.splitlines() if line.startswith("| [#1]"))
+        self.assertEqual(1, row.count("Missing log"))
+        self.assertIn("[Details](final-report-details.md#details-issue-1)", report)
+        self.assertIn("**Blocker:** ⛔ Missing log", "\n".join(details))
+        self.assertNotIn("**Evidence / validation:**", report)
+
+    def test_post_effect_observation_is_report_only_and_contract_alert_is_visible(self) -> None:
+        frozen = copy.deepcopy(self.snapshot)
+        observation = {
+            "repository": "owner/repo", "snapshotId": "snapshot:current", "status": "partial",
+            "startedAt": "2026-09-05T12:10:00Z", "observedAt": "2026-09-05T12:11:00Z",
+            "apiCalls": 3, "maxApiCalls": 3, "problems": ["Check inventory unavailable."],
+            "delegationStatus": {"records": [{
+                "issueNumber": 1, "taskId": "new-task", "taskState": "completed",
+                "lifecycle": "awaiting_pull_request", "pullRequests": [{
+                    "number": 99, "state": "open", "isDraft": True,
+                    "currentState": {"checks": {"state": "unknown"}, "draft": True},
+                    "closingContract": {"status": "violation", "detail": "Fixes #1 closes the quarantine tracker."},
+                }],
+            }]},
+        }
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments, post_execution_observation=observation,
+        )
+        visible = re.sub(r"<details\b[^>]*>.*?</details>", "", report, flags=re.DOTALL)
+        self.assertIn("frozen pre-effect evidence collected 2026-09-05T12:00:00Z", visible)
+        self.assertIn("observed 2026-09-05T12:11:00Z", visible)
+        self.assertIn("0 executed effects recorded", visible)
+        self.assertIn("Read-only reporting evidence only", visible)
+        self.assertIn("CLOSING CONTRACT ALERT", visible)
+        human = visible.split("## Human action required\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("new-task", human)
+        self.assertIn("Remove closing keywords", human)
+        self.assertEqual(frozen, self.snapshot)
+        with self.assertRaisesRegex(ValueError, "must match"):
+            render_run_markdown(
+                self.snapshot, self.prepared, self.judgments,
+                post_execution_observation={**observation, "snapshotId": "different"},
+            )
 
     def test_duration_and_age_use_compact_human_units(self) -> None:
         self.prepared["issues"][0]["recovery"] = {"subjects": [{

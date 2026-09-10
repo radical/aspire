@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from ci_shepherd import investigations
+from ci_shepherd.jsonl import read_jsonl_rows
 from ci_shepherd.investigations import (
     build_investigation_plan,
     load_one_shot_result,
@@ -210,6 +211,258 @@ class OneShotInvestigationTests(unittest.TestCase):
         self.assertEqual([], read_investigation_results(self.state))
         with self.assertRaisesRegex(ValueError, "active|pending|prepared"):
             self.prepare()
+
+    def test_identical_result_failures_stop_dispatch_and_admission_without_accepting_results(self) -> None:
+        allocations = [list_investigation_worktrees(self.state)[0], *[
+            self._allocate_attempt({**self.request, "investigationId": f"investigation:breaker-{index}"})
+            for index in (2, 3)
+        ]]
+        self.prepare()
+        for allocation in allocations[1:]:
+            self._register_attempt(allocation, "one-shot")
+        self.dispatch()
+
+        def dispatch(allocation):
+            return record_investigation_session_event(
+                self.state, allocation["request"], status="dispatching", session_id=None,
+                attempt_id=allocation["ownershipId"], recorded_at="2026-09-08T23:03:00Z",
+            )
+
+        with self.assertRaisesRegex(ValueError, "Preflight the first"):
+            dispatch(allocations[1])
+        for index, allocation in enumerate(allocations[:2]):
+            if index:
+                dispatch(allocation)
+                with self.assertRaisesRegex(ValueError, "Preflight the first"):
+                    dispatch(allocations[2])
+            response = {
+                "schemaVersion": 1, "attemptId": allocation["ownershipId"],
+                "requestFingerprint": allocation["requestFingerprint"],
+                "result": {**_evidence_result(), "workLog": [{
+                    "kind": "github-get", "url": "https://api.github.com/repos/owner/repo/commits/main",
+                    "finding": "The fixture returned a disallowed history GET, matching the rejected worker failure shape.",
+                }]},
+            }
+            for _ in range(2):
+                with self.assertRaisesRegex(ValueError, "bounded diagnostic endpoint scope"):
+                    record_investigation_result(
+                        self.state, allocation["request"], response, session_id=None,
+                        attempt_id=allocation["ownershipId"], checkout=Path(allocation["checkoutPath"]),
+                        recorded_at="2026-09-08T23:04:00Z", preflight_only=True,
+                        execution_evidence="Fixture represents a returned response, not a running worker.",
+                        confirm_worker_stopped=True,
+                    )
+            rows = read_jsonl_rows(self.state / "ledgers/investigation-validations.jsonl")
+            self.assertEqual(index + 1, len(rows))
+            self.assertTrue(all(row["valid"] is False for row in rows))
+            record_investigation_session_event(
+                self.state, allocation["request"], status="failed", session_id=None,
+                attempt_id=allocation["ownershipId"], recorded_at="2026-09-08T23:05:00Z",
+                failure_reason="The actual fixture response failed endpoint validation.",
+                failure_category="out-of-scope-evidence", execution_state="returned",
+                execution_evidence="Fixture response returned without launching a background process.",
+                confirm_worker_stopped=True,
+            )
+        before = read_investigation_session_events(self.state)
+        with self.assertRaisesRegex(ValueError, "circuit is open"):
+            dispatch(allocations[2])
+        with self.assertRaisesRegex(ValueError, "circuit is open"):
+            self._allocate_attempt({**self.request, "investigationId": "investigation:breaker-next-wave"})
+        self.assertEqual(before, read_investigation_session_events(self.state))
+        self.assertEqual([], read_investigation_results(self.state))
+        self.assertEqual(1, investigation_capacity_inventory(self.state, self.request["repository"])["occupiedSlots"])
+        self.assertEqual(2, sum(row["status"] == "dispatching" for row in before))
+
+    def test_structural_schema_rejection_is_durable_without_terminalizing_worker(self) -> None:
+        self.prepare()
+        self.dispatch()
+        response = self.response()
+        response["result"]["unexpected"] = "not part of the result schema"
+        observation = {
+            "runtimeSessionId": None, "workerStartedAt": "2026-09-08T23:01:10Z",
+            "workerCompletedAt": "2026-09-08T23:01:20Z",
+            "observationEvidence": "Observed fixture runtime timestamps accompanying the rejected response.",
+        }
+        with self.assertRaisesRegex(ValueError, "result schema"):
+            self.complete(response, runtime_observation=observation)
+        validation, = read_jsonl_rows(self.state / "ledgers/investigation-validations.jsonl")
+        self.assertFalse(validation["valid"])
+        self.assertEqual(self.owner, validation["attemptId"])
+        self.assertEqual(observation, validation["runtimeObservation"])
+        self.assertEqual("dispatching", read_investigation_session_events(self.state)[-1]["status"])
+        self.assertEqual([], read_investigation_results(self.state))
+        self.assertEqual(1, investigation_capacity_inventory(self.state, self.request["repository"])["occupiedSlots"])
+
+    def test_admission_honors_frozen_planner_priority_before_allocating_worktrees(self) -> None:
+        prepared, judgments = _prepared(), _judgments()
+        prepared["sourceRevision"] = self.request["sourceRevision"]
+        low = prepared["issues"][0]
+        low["sourceRevision"] = self.request["sourceRevision"]
+        for number, workflow, category in (
+            (307, ".github/workflows/ci.yml", "blocking-build"),
+            (308, ".github/workflows/another-workflow.yml", "blocking-build"),
+            (309, ".github/workflows/tests.yml", "flaky-test"),
+            (310, ".github/workflows/tests-quarantine.yml", "flaky-test"),
+        ):
+            issue = copy.deepcopy(low)
+            issue.update(
+                issueNumber=number, issueUrl=f"https://github.com/owner/repo/issues/{number}",
+                repairEvidence={"current": True, "workflowPath": workflow, "category": category},
+            )
+            issue["evidenceBundle"][0]["id"] = f"issue:{number}"
+            prepared["issues"].append(issue)
+            judgment = copy.deepcopy(judgments["issues"][0])
+            judgment["issueNumber"] = number
+            judgment["recommendations"][0]["target"]["value"] = number
+            judgment["recommendations"][0]["evidenceIds"][0] = f"issue:{number}"
+            judgments["issues"].append(judgment)
+        plan = build_investigation_plan(prepared, judgments, [])
+        requests = plan["requests"]
+        self.assertEqual([307, 308, 309, 310, 21], [row["issueNumber"] for row in requests])
+        state = self.root / "priority-state"
+
+        def provision(request):
+            return provision_investigation_worktree(
+                state, request, source_checkout=self.source, attempt=1,
+                recorded_at="2026-09-08T23:00:00Z", managed_root=self.root / "priority-workers",
+            )
+
+        for index, request in enumerate(requests):
+            self.assertEqual(
+                [row["investigationId"] for row in requests[:index]],
+                request["admissionPredecessors"],
+            )
+            allocation = provision(request)
+            before = list_investigation_worktrees(state)
+            for lower_priority in requests[index + 1:]:
+                with self.subTest(issue=lower_priority["issueNumber"]), self.assertRaisesRegex(ValueError, "higher-priority"):
+                    provision(lower_priority)
+                self.assertEqual(before, list_investigation_worktrees(state))
+            record_investigation_session_event(
+                state, request, status="prepared", session_id=None, launch_mode="one-shot",
+                checkout=Path(allocation["checkoutPath"]),
+                result_path=self.root / "priority-results" / f"{allocation['ownershipId']}.json",
+                recorded_at="2026-09-08T23:01:00Z",
+            )
+            record_investigation_session_event(
+                state, request, status="failed", session_id=None, attempt_id=allocation["ownershipId"],
+                recorded_at="2026-09-08T23:02:00Z", execution_state="not-launched",
+                execution_evidence="Admission fixture did not invoke a worker.",
+                failure_reason="Fixture stops after proving admission order.", confirm_worker_stopped=True,
+            )
+        self.assertEqual(
+            [307, 308, 309, 310, 21],
+            [row["issueNumber"] for row in read_investigation_session_events(state) if row["status"] == "prepared"],
+        )
+        self.assertEqual([], read_investigation_results(state))
+
+    def test_observed_worker_timing_and_acceptance_are_distinct_and_replayable(self) -> None:
+        self.prepare()
+        self.dispatch()
+        observation = {
+            "runtimeSessionId": "runtime:observed-fixture",
+            "workerStartedAt": "2026-09-08T23:01:10Z",
+            "workerCompletedAt": "2026-09-08T23:01:45Z",
+            "observationEvidence": "Recorded fixture launcher start/completion events, not result-file metadata.",
+        }
+        preflight = self.complete(preflight_only=True, runtime_observation=observation)
+        self.assertTrue(preflight["valid"])
+        self.assertEqual(observation, preflight["runtimeObservation"])
+        self.assertNotIn("acceptedResultAt", preflight)
+        self.assertEqual([], read_investigation_results(self.state))
+        self.assertEqual("dispatching", read_investigation_session_events(self.state)[-1]["status"])
+        next_allocation = self._allocate_attempt({
+            **self.request, "investigationId": "investigation:after-representative-preflight",
+        })
+        self._register_attempt(next_allocation, "one-shot")
+        next_dispatch = record_investigation_session_event(
+            self.state, next_allocation["request"], status="dispatching", session_id=None,
+            attempt_id=next_allocation["ownershipId"], recorded_at="2026-09-08T23:02:00Z",
+        )
+        self.assertTrue(next_dispatch["dispatchAllowed"])
+        accepted = self.complete(runtime_observation=observation)
+        self.assertEqual("2026-09-08T23:02:00Z", accepted["acceptedResultAt"])
+        self.assertEqual(observation, accepted["runtimeObservation"])
+        self.assertEqual("runtime:observed-fixture", accepted["runtimeSessionId"])
+        self.assertEqual(accepted, self.complete())
+        self.assertEqual(accepted, self.complete(runtime_observation=observation))
+        with self.assertRaisesRegex(ValueError, "already recorded"):
+            self.complete(runtime_observation={**observation, "runtimeSessionId": "another-worker"})
+        self.assertEqual(observation, read_investigation_session_events(self.state)[-1]["runtimeObservation"])
+
+    def test_missing_timing_stays_unknown_and_invalid_observations_cannot_accept(self) -> None:
+        self.prepare()
+        self.dispatch()
+        observation = {
+            "runtimeSessionId": None, "workerStartedAt": None, "workerCompletedAt": None,
+            "observationEvidence": "Runtime did not expose timings or an event stream.",
+        }
+        for change in (
+            {"observationEvidence": ""},
+            {"workerStartedAt": "2026-09-08T23:02:01Z"},
+            {"workerStartedAt": "2026-09-08T23:01:45Z", "workerCompletedAt": "2026-09-08T23:01:10Z"},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.complete(runtime_observation={**observation, **change})
+        self.assertEqual([], read_investigation_results(self.state))
+        accepted = self.complete()
+        self.assertIsNone(accepted["runtimeObservation"])
+        self.assertIsNone(accepted["runtimeSessionId"])
+        self.assertEqual("2026-09-08T23:02:00Z", accepted["acceptedResultAt"])
+
+    def test_failed_worker_can_record_observed_timing_without_accepted_result(self) -> None:
+        self.prepare()
+        self.dispatch()
+        observation = {
+            "runtimeSessionId": None,
+            "workerStartedAt": "2026-09-08T23:01:10Z",
+            "workerCompletedAt": "2026-09-08T23:01:45Z",
+            "observationEvidence": "Observed fixture worker return with no usable runtime session ID.",
+        }
+        failed = self.record_failure(execution_state="returned", runtime_observation=observation)
+        self.assertEqual(observation, failed["runtimeObservation"])
+        self.assertNotIn("acceptedResultAt", failed)
+        self.assertEqual([], read_investigation_results(self.state))
+        self.assertEqual(failed, self.record_failure(execution_state="returned", runtime_observation=observation))
+
+    def test_different_structural_errors_do_not_trip_identical_failure_circuit(self) -> None:
+        allocations = [list_investigation_worktrees(self.state)[0], *[
+            self._allocate_attempt({**self.request, "investigationId": f"investigation:different-errors-{index}"})
+            for index in (2, 3)
+        ]]
+        for allocation in allocations:
+            self._register_attempt(allocation, "one-shot")
+        for allocation, url in zip(allocations, (
+            "https://api.github.com/repos/owner/repo/commits/main",
+            "https://api.github.com/repos/other/repo/issues/21",
+        )):
+            record_investigation_session_event(
+                self.state, allocation["request"], status="dispatching", session_id=None,
+                attempt_id=allocation["ownershipId"], recorded_at="2026-09-08T23:02:00Z",
+            )
+            response = {
+                "schemaVersion": 1, "attemptId": allocation["ownershipId"],
+                "requestFingerprint": allocation["requestFingerprint"],
+                "result": {**_evidence_result(), "workLog": [{
+                    "kind": "github-get", "url": url, "finding": "A fixture diagnostic request outside the contract.",
+                }]},
+            }
+            with self.assertRaises(ValueError):
+                record_investigation_result(
+                    self.state, allocation["request"], response, session_id=None,
+                    attempt_id=allocation["ownershipId"], checkout=Path(allocation["checkoutPath"]),
+                    recorded_at="2026-09-08T23:03:00Z", confirm_worker_stopped=True,
+                    execution_evidence="The fixture response returned.",
+                )
+        third = allocations[2]
+        dispatched = record_investigation_session_event(
+            self.state, third["request"], status="dispatching", session_id=None,
+            attempt_id=third["ownershipId"], recorded_at="2026-09-08T23:04:00Z",
+        )
+        self.assertTrue(dispatched["dispatchAllowed"])
+        validations = read_jsonl_rows(self.state / "ledgers/investigation-validations.jsonl")
+        self.assertEqual(2, len({row["errorCode"] for row in validations}))
+        self.assertEqual([], read_investigation_results(self.state))
 
     def test_concurrent_dispatchers_receive_only_one_launch_authorization(self) -> None:
         self.prepare()
@@ -742,6 +995,10 @@ class OneShotInvestigationTests(unittest.TestCase):
             "--recorded-at", "2026-09-09T00:03:00Z", "--confirm-worker-stopped",
             "--execution-evidence", "Synchronous process returned exit code 0; no background children launched.",
         ]
+        preflight = self._cli("investigation_result.py", *completion_args, "--preflight")
+        self.assertTrue(preflight["valid"])
+        self.assertEqual([], read_investigation_results(state))
+        self.assertEqual("dispatching", read_investigation_session_events(state)[-1]["status"])
         recorded = self._cli("investigation_result.py", *completion_args)
         self.assertIsNone(recorded["sessionId"])
         self.assertIsNone(recorded["runtimeSessionId"])

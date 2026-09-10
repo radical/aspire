@@ -3030,7 +3030,233 @@ class CausePrecedenceTests(unittest.TestCase):
         )
 
 
+class ObservedFailureSchedulingTests(unittest.TestCase):
+    def test_missing_diagnostics_preserve_verified_scheduling_facts_only(self) -> None:
+        from ci_shepherd.eligibility import repair_priority
+        from test_workflow_health import workflow_snapshot
+
+        for path, priority in (
+            (".github/workflows/ci.yml", "current-ci-workflow-break"),
+            (".github/workflows/tests.yml", "unquarantined-test-instability"),
+            (".github/workflows/tests-quarantine.yml", "quarantined-test-repair"),
+        ):
+            with self.subTest(path=path):
+                data = workflow_snapshot()
+                del data["workflowDiscovery"]
+                del data["evidence"]["run:100:attempt:1:job:900:log"]
+                data["evidence"]["run:100"]["payload"]["workflowPath"] = path
+                prepared = lifecycle.prepare_assessment(data)
+                issue = prepared["issues"][0]
+                repair = issue["repairEvidence"]
+                self.assertFalse(repair["current"])
+                self.assertFalse(repair["ready"])
+                self.assertEqual(
+                    {
+                        "current": True, "workflowPath": path, "category": "unknown",
+                        "lastFailureAt": "2026-08-19T15:30:00Z",
+                        "quarantinedCoverage": path == ".github/workflows/tests-quarantine.yml",
+                        "evidenceIds": ["run:100", "run:100:attempt:1:job:900"],
+                    },
+                    repair["observedFailure"],
+                )
+                self.assertEqual(priority, repair_priority(issue)["kind"])
+                self.assertTrue(set(repair["observedFailure"]["evidenceIds"]).issubset(
+                    {record["id"] for record in issue["evidenceBundle"]},
+                ))
+
+    def test_incomplete_diagnostics_and_reported_test_do_not_create_readiness(self) -> None:
+        from test_workflow_health import workflow_snapshot
+
+        for reported_only in (False, True):
+            with self.subTest(reported_only=reported_only):
+                data = workflow_snapshot()
+                del data["workflowDiscovery"]
+                log = data["evidence"]["run:100:attempt:1:job:900:log"]["payload"]
+                log["truncated"] = True
+                if reported_only:
+                    data["evidence"]["issue:12"]["payload"]["facts"] = [fact("testName", "Namespace.Type.Reported")]
+                    log["excerpt"] = ""
+                repair = lifecycle.prepare_assessment(data)["issues"][0]["repairEvidence"]
+                self.assertFalse(repair["current"])
+                self.assertFalse(repair["ready"])
+                self.assertTrue(repair["observedFailure"]["current"])
+                self.assertEqual("unknown" if reported_only else "blocking-build",
+                                 repair["observedFailure"]["category"])
+
+    def test_scheduling_requires_verified_recent_scoped_failed_execution(self) -> None:
+        from test_workflow_health import workflow_snapshot
+
+        for condition in (
+            "unknown-scope", "wrong-job", "foreign-repository", "foreign-job", "scope-conflict",
+            "stale", "future", "missing-workflow", "zero-workflow",
+            "unavailable-run", "unavailable-job", "successful-run", "old-attempt",
+        ):
+            with self.subTest(condition=condition):
+                data = workflow_snapshot()
+                del data["workflowDiscovery"]
+                del data["evidence"]["run:100:attempt:1:job:900:log"]
+                run_record = data["evidence"]["run:100"]
+                job_record = data["evidence"]["run:100:attempt:1:job:900"]
+                run, job = run_record["payload"], job_record["payload"]
+                if condition == "unknown-scope":
+                    run["headSha"] = ""
+                elif condition == "wrong-job":
+                    job["name"] = "Unrelated job (ubuntu-latest)"
+                elif condition == "foreign-repository":
+                    run["targetRepository"] = "other/repo"
+                elif condition == "foreign-job":
+                    job["targetRepository"] = "other/repo"
+                elif condition == "scope-conflict":
+                    data["evidence"]["issue:12"]["payload"]["ledger"]["rows"][0]["pullRequest"] = 123
+                elif condition in {"stale", "future"}:
+                    job["completedAt"] = "2026-08-01T15:30:00Z" if condition == "stale" else "2026-08-20T15:30:00Z"
+                elif condition == "missing-workflow":
+                    del run["workflowPath"]
+                elif condition == "zero-workflow":
+                    run["workflowId"] = 0
+                elif condition == "unavailable-run":
+                    run_record["availability"] = "partial"
+                elif condition == "unavailable-job":
+                    job_record["availability"] = "partial"
+                elif condition == "successful-run":
+                    run["conclusion"] = "success"
+                elif condition == "old-attempt":
+                    run["attempt"] = 2
+                repair = lifecycle.prepare_assessment(data)["issues"][0]["repairEvidence"]
+                self.assertFalse(repair["observedFailure"]["current"])
+                self.assertEqual([], repair["observedFailure"]["evidenceIds"])
+
+    def test_positive_execution_coverage_does_not_schedule_the_old_failure_as_current(self) -> None:
+        from test_workflow_health import add_execution, workflow_snapshot
+
+        data = workflow_snapshot()
+        add_execution(data, 101, "2026-08-19T15:45:00Z", conclusion="success")
+        repair = lifecycle.prepare_assessment(data)["issues"][0]["repairEvidence"]
+        self.assertFalse(repair["observedFailure"]["current"])
+        self.assertEqual("2026-08-19T15:30:00Z", repair["observedFailure"]["lastFailureAt"])
+
+    def test_latest_verified_failure_has_bounded_frozen_citations(self) -> None:
+        from test_workflow_health import add_execution, workflow_snapshot
+
+        data = workflow_snapshot()
+        add_execution(data, 101, "2026-08-19T15:45:00Z", excerpt="")
+        del data["workflowDiscovery"]
+        for record in data["evidence"].values():
+            if record["kind"] == "workflow-log":
+                record["payload"]["truncated"] = True
+        observed = build_observations(data, policy=policy())
+        for ordering in (observed["occurrences"], list(reversed(observed["occurrences"]))):
+            repair = observations.build_repair_evidence(data, {**observed, "occurrences": ordering}, 12)
+            self.assertFalse(repair["ready"])
+            self.assertEqual("2026-08-19T15:45:00Z", repair["observedFailure"]["lastFailureAt"])
+            self.assertEqual(["run:101", "run:101:attempt:1:job:1010"],
+                             repair["observedFailure"]["evidenceIds"])
+
+    def test_observed_failure_selection_uses_canonical_priority_before_recency(self) -> None:
+        from test_workflow_health import add_execution, workflow_snapshot
+
+        ci_path = ".github/workflows/ci.yml"
+        tests_path = ".github/workflows/tests.yml"
+        custom_path = ".github/workflows/custom.yml"
+        quarantine_path = ".github/workflows/tests-quarantine.yml"
+        for older_path, newer_path, covered_run, expected_run in (
+            (ci_path, tests_path, None, 100),
+            (ci_path, tests_path, 101, 100),
+            (tests_path, ci_path, 101, 100),
+            (ci_path, tests_path, 100, 101),
+            (custom_path, tests_path, None, 100),
+            (custom_path, quarantine_path, None, 100),
+            (tests_path, quarantine_path, None, 100),
+            (quarantine_path, tests_path, None, 101),
+        ):
+            with self.subTest(older_path=older_path, newer_path=newer_path, covered_run=covered_run):
+                data = workflow_snapshot()
+                data["evidence"]["run:100:attempt:1:job:900:log"]["payload"]["excerpt"] = ""
+                add_execution(data, 101, "2026-08-19T15:45:00Z", excerpt="")
+                if covered_run is not None:
+                    add_execution(data, 102, "2026-08-19T15:50:00Z", conclusion="success")
+                paths = {100: older_path, 101: newer_path}
+                if covered_run is not None:
+                    paths[102] = paths[covered_run]
+                for run_id, path in paths.items():
+                    data["evidence"][f"run:{run_id}"]["payload"].update(
+                        workflowPath=path, workflowId=9 if path == ci_path else 10,
+                        workflow="CI" if path == ci_path else "Tests",
+                    )
+                del data["workflowDiscovery"]
+                observed = build_observations(data, policy=policy())
+                self.assertEqual(
+                    {run_id: "covered" if run_id == covered_run else "needs-positive-coverage"
+                     for run_id in (100, 101)},
+                    {item["runId"]: item["coverageState"] for item in observed["occurrences"]},
+                )
+                for ordering in (observed["occurrences"], list(reversed(observed["occurrences"]))):
+                    repair = observations.build_repair_evidence(data, {**observed, "occurrences": ordering}, 12)
+                    self.assertFalse(repair["current"])
+                    self.assertFalse(repair["ready"])
+                    failure = repair["observedFailure"]
+                    self.assertTrue(failure["current"])
+                    self.assertEqual(paths[expected_run], failure["workflowPath"])
+                    self.assertEqual(
+                        [f"run:{expected_run}", f"run:{expected_run}:attempt:1:job:{900 if expected_run == 100 else 1010}"],
+                        failure["evidenceIds"],
+                    )
+
+
 class StructuredJobDimensionTests(unittest.TestCase):
+    def test_repair_workflow_path_comes_from_the_verified_execution(self) -> None:
+        for workflow_path, broader_impact, quarantined in (
+            (".github/workflows/ci.yml", True, False),
+            (".github/workflows/tests.yml", True, False),
+            (".github/workflows/tests-quarantine.yml", False, True),
+            (".github/workflows/custom.yml", False, False),
+        ):
+            with self.subTest(workflow_path=workflow_path):
+                data = snapshot(
+                    issue_payload(12),
+                    evidence(
+                        "run:100", "workflow-run",
+                        {**run_payload(), "workflowPath": workflow_path, "referencedBy": association(12)},
+                    ),
+                    evidence("run:100:attempt:1:job:900", "workflow-job", job_payload(12)),
+                    evidence(
+                        "run:100:attempt:1:job:900:log", "workflow-log",
+                        log_payload(12, excerpt="src/File.cs(1,1): error CS1002: ; expected"),
+                    ),
+                )
+                repair = lifecycle.prepare_assessment(data)["issues"][0]["repairEvidence"]
+                self.assertEqual(workflow_path, repair["workflowPath"])
+                self.assertEqual(broader_impact, repair["broaderImpact"])
+                self.assertEqual(quarantined, repair["quarantinedCoverage"])
+                self.assertTrue(repair["current"])
+                self.assertTrue(repair["ready"])
+
+    def test_reference_stub_cannot_be_presented_as_complete_execution(self) -> None:
+        for availability in ("available", "not-enriched"):
+            with self.subTest(availability=availability):
+                data = snapshot(
+                    {
+                        **issue_payload(12),
+                        "producer": "tracking-issue",
+                        "labels": ["automation-broken"],
+                    },
+                    evidence(
+                        "run:100", "workflow-run",
+                        {"runId": 100, "targetRepository": REPOSITORY, "referencedBy": association(12)},
+                        availability=availability,
+                    ),
+                )
+                prepared = lifecycle.prepare_assessment(data)
+                run = next(item for item in prepared["issues"][0]["evidenceBundle"] if item["id"] == "run:100")
+                self.assertEqual("not-enriched", run["availability"])
+                self.assertEqual(availability, data["evidence"]["run:100"]["availability"])
+                self.assertEqual([], prepared["observations"]["occurrences"])
+                self.assertEqual([], prepared["observations"]["coverage"])
+                repair = prepared["issues"][0]["repairEvidence"]
+                self.assertFalse(repair["ready"])
+                self.assertEqual(0, repair["independentRunCount"])
+                self.assertIsNone(repair["workflowPath"])
+
     def test_structured_job_payload_lane_os_and_failing_step_are_preferred(self) -> None:
         issue_number = 12
         log_id = "run:100:attempt:1:job:900:log"

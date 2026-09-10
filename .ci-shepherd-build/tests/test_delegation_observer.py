@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ci_shepherd.delegation_observer import _human_identity, observe_capacity_task_records, observe_commit_comparison, observe_delegations
+from ci_shepherd.delegation_observer import _human_identity, closing_keyword_contract, observe_capacity_task_records, observe_commit_comparison, observe_delegations, reported_test_execution_section
 from ci_shepherd.delegations import PullRequestState, TaskState
 from ci_shepherd.github import GitHubApiError
 from ci_shepherd.models import validate_commit_comparison
@@ -36,6 +36,50 @@ class ScriptedClient:
 
 
 class DelegationObserverTests(unittest.TestCase):
+    def test_execution_section_is_quoted_without_parsing_pass_claims_or_command_logs(self) -> None:
+        section = (
+            "Before: single-test; Windows; ./repeat.ps1; executed: 1; iterations: 20; passed: 18; failed: 2\n"
+            "#### After\n"
+            "After: same mode; Windows; ./repeat.ps1; executed: 0; iterations: 20; passed: 20; failed: 0\n"
+            "```text\n## This is a log line, not another section\nAll tests passed\n```"
+        )
+        body = f"### Test execution evidence\n{section}\n\n### Notes\nNot execution evidence."
+        self.assertEqual(section, reported_test_execution_section(body))
+        for missing in (
+            "All checks green; exit code zero.", "### Test execution evidence\n\n### Notes\nNothing.",
+            "```text\n### Test execution evidence\nfabricated heading inside a quoted log\n```",
+            "````text\n```\n### Test execution evidence\nstill inside the four-backtick fence\n````",
+            None,
+        ):
+            with self.subTest(missing=missing):
+                self.assertIsNone(reported_test_execution_section(missing))
+
+    def test_closing_contract_checks_every_github_keyword_and_exact_tracking_issue(self) -> None:
+        for keyword in ("close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"):
+            for reference in ("#42", "Owner/Repo#42", "https://github.com/Owner/Repo/issues/42"):
+                with self.subTest(keyword=keyword, reference=reference):
+                    body = f"Refs #42\n{'x' * 5000}\nAutomatically generated suffix: {keyword.upper()} {reference}"
+                    result = closing_keyword_contract(body, "owner/repo", 42, keep_open=True)
+                    self.assertEqual("violation", result["status"])
+                    self.assertEqual([f"{keyword.upper()} {reference}"], result["matches"])
+                    self.assertIn("replace them with Refs", result["detail"])
+
+    def test_closing_contract_does_not_match_other_issues_repos_or_nonclosing_words(self) -> None:
+        for body in (
+            "Refs #42", "Fixes #420", "Fixes other/repo#42",
+            "Fixes https://github.com/other/repo/issues/42",
+            "Fixes https://github.com/owner/repo/pull/42",
+            "prefixfixes #42", "Fixing #42", "Resolved #41\nRefs #42",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(
+                    {"status": "clear", "matches": [], "detail": "No closing keyword for this keep-open tracking issue."},
+                    closing_keyword_contract(body, "owner/repo", 42, keep_open=True),
+                )
+        self.assertEqual("unavailable", closing_keyword_contract(None, "owner/repo", 42, keep_open=True)["status"])
+        self.assertEqual("not-applicable", closing_keyword_contract("Fixes #42", "owner/repo", 42, keep_open=False)["status"])
+        self.assertEqual("unknown", closing_keyword_contract("Fixes #42", "owner/repo", 42, keep_open=None)["status"])
+
     def test_capacity_task_detail_can_expand_sessions_without_conflicting_with_inventory(self) -> None:
         endpoint = "/agents/repos/owner/repo/tasks/task-1"
         running = "/agents/repos/owner/repo/tasks?state=queued%2Cin_progress&is_archived=false&per_page=100"

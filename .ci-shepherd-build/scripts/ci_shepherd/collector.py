@@ -17,7 +17,7 @@ from . import ownership
 from .eligibility import MAX_DELEGATION_REQUESTS
 from .github import GitHubApiError
 from .pull_requests import build_pull_request_current_state
-from .signals import Occurrence, extract_issue_signals, select_references
+from .signals import Occurrence, extract_issue_signals, reference_timestamp, select_references
 from .trx import parse_test_results_archive
 from .repository_policy import RepositoryPolicy
 
@@ -1120,12 +1120,16 @@ class Collector:
 
         selected_run_targets = sorted(
             run_targets.items(),
-            key=lambda item: (item[0][1], item[0][0]),
+            key=lambda item: (
+                any(ref.get("decisionValue") == "explicit-resolution" for ref in item[1]),
+                max((reference_timestamp(ref) or 0 for ref in item[1]), default=0),
+                item[0][1], item[0][0],
+            ),
             reverse=True,
         )
         if minimal_run_evidence and len(selected_run_targets) > 10:
             warnings.append(
-                f"minimal run evidence retained the 10 newest of {len(selected_run_targets)} referenced runs."
+                f"minimal run evidence retained the 10 highest-priority of {len(selected_run_targets)} referenced runs."
             )
             for (target_repository, run_id), refs in selected_run_targets[10:]:
                 evidence_id = f"run:{run_id}"
@@ -1407,6 +1411,8 @@ class Collector:
                 evidence_id,
                 comment["url"],
             )
+            for reference in comment_references:
+                reference["sourceCreatedAt"] = comment["createdAt"]
             comment_payloads.append(
                 (evidence_id, comment, markers, facts, comment_references)
             )
@@ -2443,12 +2449,15 @@ class Collector:
             None,
             markers,
             self._extract_facts(comment["body"], evidence_id),
-            self._extract_references(
-                issue_number,
-                comment["body"],
-                evidence_id,
-                comment["url"],
-            ),
+            [
+                {**reference, "sourceCreatedAt": comment["createdAt"]}
+                for reference in self._extract_references(
+                    issue_number,
+                    comment["body"],
+                    evidence_id,
+                    comment["url"],
+                )
+            ],
         )
 
     def _extract_markers(self, text: str, source_evidence_id: str) -> list[dict[str, Any]]:
@@ -3302,6 +3311,9 @@ class Collector:
                             "referencedBy": [],
                         },
                     )
+                    # A link establishes provenance, not an observed execution,
+                    # PR state or commit. Enrichment alone may make it available.
+                    record["availability"] = "not-enriched"
                     stubs[evidence_id] = record
 
                 record["payload"]["referencedBy"].append(

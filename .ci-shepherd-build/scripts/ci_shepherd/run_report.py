@@ -7,6 +7,7 @@ from html import escape
 import math
 from typing import Any
 
+from ci_shepherd.delegation_observer import reported_test_execution_section
 from ci_shepherd.eligibility import related_repairs_block_delegation, repair_priority
 from ci_shepherd.lifecycle import latest_occurrence_timestamp
 
@@ -139,10 +140,10 @@ def _owner(row: Mapping[str, Any]) -> str:
     assignees = row.get("assignees")
     if isinstance(assignees, list) and assignees:
         return _text([person.get("login") if isinstance(person, Mapping) else person for person in assignees])
-    return _text(row.get("actualOwner"))
+    return _text(row["actualOwner"]) if row.get("actualOwner") else "unassigned"
 
 
-def _tracking_summary(records: list[Mapping[str, Any]]) -> str:
+def _tracking_summary(records: list[Mapping[str, Any]], repository: str) -> str:
     return "; ".join(
         f"task {_text(record.get('taskId'))}: {_text(record.get('lifecycle'))}; "
         + f"task state: {_text(record.get('taskState'))}; "
@@ -153,8 +154,11 @@ def _tracking_summary(records: list[Mapping[str, Any]]) -> str:
         + ("issue observation unavailable; " if record.get("issueObservation") == "unavailable" else "")
         + ("human-owned; " if record.get("humanAssigned") is True else "")
         + "PRs: " + _text([
-            f"#{pull['number']} ({pull.get('state', 'unknown')})"
+            f"[PR #{pull['number']}]({pull.get('url') or 'https://github.com/' + repository + '/pull/' + str(pull['number'])}) ({pull.get('state', 'unknown')})"
             + f"; draft: {_text(pull.get('isDraft'))}; changed files: {_text(pull.get('changedFiles'))}"
+            + f"; checks: {_text((pull.get('currentState') or {}).get('checks', {}).get('state'))}"
+            + (f"; CLOSING CONTRACT ALERT: {_text(pull['closingContract']['detail'])}"
+               if (pull.get("closingContract") or {}).get("status") == "violation" else "")
             + (f" [last verified: {pull['lastKnownState']}]" if pull.get("lastKnownState") else "")
             for pull in _rows(record.get("pullRequests")) if pull.get("number")
         ])
@@ -193,6 +197,49 @@ def _reported_cloud_outcomes(records: list[Mapping[str, Any]]) -> str:
     return "; ".join(parts)
 
 
+def _reported_test_execution(records: list[Mapping[str, Any]]) -> tuple[str, str]:
+    sources = []
+    incomplete = False
+    for record in records:
+        current = {pull.get("number"): pull for pull in _rows(record.get("pullRequests"))}
+        for pull in _rows((record.get("outcomeEvidence") or {}).get("pullRequests")):
+            reported = [
+                ("PR body", pull.get("body"), pull.get("url"), pull.get("author")),
+                *[("PR comment", comment.get("body"), comment.get("url"), comment.get("author"))
+                  for comment in _rows(pull.get("comments"))],
+            ]
+            # The final observer can quote a section beyond the normal 4,000
+            # character body preview from that same already-read PR response.
+            full_section = current.get(pull.get("number"), {}).get("reportedTestExecution")
+            if isinstance(full_section, Mapping):
+                reported[0] = ("PR body section", full_section, pull.get("url"), pull.get("author"))
+            for kind, body, url, author in reported:
+                if not isinstance(body, Mapping):
+                    incomplete = True
+                    continue
+                section = body.get("preview") if kind == "PR body section" else reported_test_execution_section(body.get("preview"))
+                incomplete |= body.get("truncated") is True
+                if section:
+                    sources.append(
+                        f"{kind} at {_text(url)} by {_text(author)} — "
+                        + "<pre>" + escape(section, quote=False) + "</pre>"
+                        + (" (source preview truncated; omitted fields unknown)" if body.get("truncated") else "")
+                    )
+            incomplete |= pull.get("commentsAvailability") != "available" or pull.get("commentWindowTruncated") is True
+    status = "reported; not independently verified" if sources else "unknown / missing"
+    detail = (
+        "Before/after mode, commands, OS, target, nonzero executed-test counts per iteration, "
+        "iterations attempted/passed/failed, local repetition and matching-OS CI evidence: "
+        + ("<br>".join(sources) if sources else "unknown; no explicit Test execution evidence section was captured.")
+        + " Fields not explicitly reported remain unknown; no values or successful validation are inferred."
+        + (" Source coverage is incomplete." if incomplete else "")
+        + " A green check, exit code zero, skipped target, or zero executed tests is not validation. "
+        "Post-fix reproduction must use the same mode/target/failing OS and all iterations must pass; "
+        "skill invocation and final matching-OS CI verification remain unverified by these reported claims."
+    )
+    return status, detail
+
+
 def _readiness(task: Mapping[str, Any]) -> str:
     state = task.get("currentState") or {}
     checks = state.get("checks") or {}
@@ -215,6 +262,18 @@ def _readiness(task: Mapping[str, Any]) -> str:
     if state.get("incompleteReasons"):
         parts.append("missing: " + _text(state["incompleteReasons"]))
     return "; ".join(parts)
+
+
+def _worker_observation(row: Mapping[str, Any], events: list[Mapping[str, Any]]) -> Mapping[str, Any]:
+    from ci_shepherd.investigations import _runtime_observation
+
+    source = row if row.get("runtimeObservation") else next(
+        (event for event in reversed(events) if event.get("runtimeObservation")), {},
+    )
+    try:
+        return _runtime_observation(source.get("runtimeObservation"), source.get("recordedAt")) or {}
+    except ValueError:
+        return {}
 
 
 def _investigation(
@@ -251,10 +310,17 @@ def _investigation(
         starts = [row.get("recordedAt") for row in events if row.get("status") in ("started", "running")]
         ends = [row.get("recordedAt") for row in events if row.get("status") == "completed"]
         elapsed = _duration(min(starts), max(ends)) if starts and ends and result.get("launchMode") != "one-shot" else "unknown"
+        observed = _worker_observation(result, events)
+        if observed:
+            elapsed = _duration(observed.get("workerStartedAt"), observed.get("workerCompletedAt"))
         prefix = "♻ Reused result" if result.get("investigationId") in reused else "✅ Investigation completed"
         text = f"{prefix}; duration: {elapsed}; conclusion: {_text(result.get('outcome'))} — {_text(result.get('summary'))}"
         if result.get("launchMode") == "one-shot":
-            text += "; one-shot; runtime session: unknown"
+            text += "; one-shot; runtime session: " + _text(observed.get("runtimeSessionId"))
+        if observed:
+            text += "; timing basis: " + _text(observed["observationEvidence"])
+        if result.get("acceptedResultAt"):
+            text += "; result accepted: " + _text(result["acceptedResultAt"])
         if result.get("validation"):
             text += "; validation: " + _text(result["validation"])
         work = []
@@ -290,8 +356,10 @@ def _investigation(
         if latest.get("status") in ("started", "running"):
             return "🔄 Investigation running; duration: unknown; conclusion: pending", [], None, latest.get("sessionId")
         if latest.get("status") in ("failed", "completed", "abandoned"):
-            identity = "; one-shot; runtime session: unknown" if latest.get("launchMode") == "one-shot" else ""
-            return "⛔ Investigation ended without a recorded conclusion; duration: unknown" + identity, ["investigation-result-missing"], None, latest.get("sessionId")
+            observed = _worker_observation(latest, [])
+            elapsed = _duration(observed.get("workerStartedAt"), observed.get("workerCompletedAt"))
+            identity = "; one-shot; runtime session: " + _text(observed.get("runtimeSessionId")) if latest.get("launchMode") == "one-shot" else ""
+            return f"⛔ Investigation ended without a recorded conclusion; duration: {elapsed}" + identity, ["investigation-result-missing"], None, latest.get("sessionId")
     if any(row.get("issueNumber") == number for row in _rows(plan.get("activeInvestigations"))):
         return "🔄 Investigation running; duration: unknown; conclusion: pending", [], None, None
     blockers = [
@@ -397,6 +465,18 @@ def _operational_state(
     ]
     if state_effects and state_effects[-1] == "closed" and not tracking:
         return "Closed", "No next event recorded after closure."
+    capacity_attempts = [
+        row for row in attempts
+        if row.get("outcome") == "skipped"
+        and any(word in str(row.get("reason", (row.get("result") or {}).get("reason", ""))).lower()
+                for word in ("capacity", "budget"))
+    ]
+    if capacity_attempts:
+        reason = capacity_attempts[-1].get("reason", (capacity_attempts[-1].get("result") or {}).get("reason"))
+        return (
+            "Waiting for action capacity (" + _text(reason) + ")",
+            "When the recorded capacity or rolling-budget limit clears; reselect against fresh evidence before requesting another grant.",
+        )
 
     requests = [
         row for key in ("requests", "deferredRequests", "activeInvestigations", "pendingInvestigations", "blockedAwaitingEvidence")
@@ -440,16 +520,22 @@ def _operational_state(
         for record in tracking:
             if record.get("lifecycle") == lifecycle:
                 return label, record.get("nextWakeup")
+    if history_state == "deferred":
+        reasons = [row.get("reason") for row in _rows(plan.get("deferredRequests")) if row.get("issueNumber") == number]
+        if any("budget" in str(reason) or "capacity" in str(reason) for reason in reasons):
+            return (
+                f"Waiting for investigation capacity ({_text(reasons)})",
+                "Next invocation with a fresh per-cycle investigation budget and an available worker slot."
+                if any("budget" in str(reason) for reason in reasons)
+                else "When an occupied worker slot is released; the attempt must still satisfy the current cycle budget.",
+            )
+        return f"Investigation planned ({_text(reasons)})", "A bounded worker launch after the recorded deferral is resolved."
     if "watch" in decisions:
         return "Watching for recurrence/recovery", decisions["watch"].get("reassessWhen")
     if outcome == "needs-evidence" or any(row.get("issueNumber") == number for row in _rows(plan.get("blockedAwaitingEvidence"))):
         return "Waiting for evidence", None
     if outcome == "needs-human":
         return "Waiting for human decision", None
-    if history_state == "deferred":
-        reasons = [row.get("reason") for row in _rows(plan.get("deferredRequests")) if row.get("issueNumber") == number]
-        label = "Waiting for investigation capacity" if "per-cycle-investigation-budget" in reasons else "Investigation planned"
-        return f"{label} ({_text(reasons)})", None
     if history_state == "requested":
         return "Investigation planned", None
     if history_state == "blocked":
@@ -459,6 +545,33 @@ def _operational_state(
     if outcome == "fixable":
         return "Waiting for fix handoff", None
     return "Current queue unknown", None
+
+
+_OUTCOME_GROUPS = (
+    "Acted this run",
+    "Delegated to Copilot awaiting task/PR",
+    "Human action required",
+    "Blocked on evidence",
+    "Watching",
+    "Not reached due tool capacity",
+    "No action/closed",
+)
+
+
+def _outcome_group(state: str, investigation: str, *, acted: bool, blockers: bool) -> str:
+    if acted or _investigation_summary(investigation)[0] == "completed":
+        return _OUTCOME_GROUPS[0]
+    if "capacity" in state:
+        return _OUTCOME_GROUPS[5]
+    if "Copilot" in state or state == "Copilot repair in progress":
+        return _OUTCOME_GROUPS[1]
+    if any(word in state.lower() for word in ("human", "closed unmerged", "decision", "execution unknown", "dispatch unconfirmed", "prior attempt outcome unknown")):
+        return _OUTCOME_GROUPS[2]
+    if blockers or any(word in state.lower() for word in ("evidence", "unknown", "blocked", "missing", "result")):
+        return _OUTCOME_GROUPS[3]
+    if state in ("Closed", "No action planned"):
+        return _OUTCOME_GROUPS[6]
+    return _OUTCOME_GROUPS[4]
 
 
 def _append_investigation_overview(
@@ -522,18 +635,20 @@ def _append_investigation_overview(
 
 def _append_group(
     lines: list[str], rows: list[list[str]], identities: Mapping[str, str],
-    decisions: Mapping[str, str],
+    decisions: Mapping[str, str], subject_kinds: Mapping[str, str],
+    operational_states: Mapping[str, tuple[str, object]],
+    *, audit_details: list[str] | None = None, audit_details_url: str | None = None,
 ) -> None:
     def priority(row: list[str]) -> int:
         state = _investigation_summary(row[4])[0]
-        if row[6] != "No executed action recorded" or state in ("completed", "running", "blocked"):
+        if row[6] or state in ("completed", "running", "blocked"):
             return 0
         return 1 if state == "reused" else 2
 
     rows = sorted(rows, key=priority)
     lines.extend([
-        "| Item | This run / prior | Status / blocker | Investigation / actual effect | Decision / next | Owner |",
-        "|---|---|---|---|---|---|",
+        "| Item | This run / prior | Subject kind | Status / blocker | Investigation / actual effect | Decision / next | Owner |",
+        "|---|---|---|---|---|---|---|",
     ])
     for row in rows:
         identity = identities[row[0]]
@@ -542,7 +657,7 @@ def _append_group(
         work = {
             "completed": "✅ Investigated", "running": "🔄 Investigating",
             "blocked": "⛔ Investigation blocked", "reused": "♻ Reused investigation",
-            "deferred": "⏸ Deferred", "requested": "🔎 Not started", "none": "⚪ No investigation",
+            "deferred": "⏸ Deferred", "requested": "🔎 Not started", "none": "",
             "launch-blocked": "⛔ Investigation blocked before start",
             "prepared": "Prepared; not dispatched",
             "dispatch-unconfirmed": "Dispatch unconfirmed",
@@ -551,34 +666,40 @@ def _append_group(
         }[state]
         if conclusion:
             work += ": " + _short(conclusion.partition(" — ")[0], 50)
-        work += "; " + row[6]
+        work = "; ".join(value for value in (work, row[6]) if value and value != "No executed action recorded") or "—"
+        current_state, next_event = operational_states[row[0]]
         if identity.startswith("pr-"):
             readiness, marker, progress = row[2].partition("; last meaningful change: ")
             status = readiness + (marker + _short(progress, 90) if marker else "")
         else:
-            status = _short(row[2], 300)
+            status = current_state
+            if "; Copilot tracking: " in row[2]:
+                tracking = row[2].partition("; Copilot tracking: ")[2].partition("; Reported cloud outcome")[0]
+                status += "; " + tracking
         if row[7] not in ("None recorded", "none recorded"):
             status += "; " + _short(row[7], 100)
+        details_target = f"{audit_details_url or ''}#details-{identity}" if audit_details is not None else f"#details-{identity}"
         visible = [
-            f"{link}) {_short(title, 72)} <a id=\"{identity}\"></a> [Details](#details-{identity})",
-            row[1], status, work,
-            decisions[row[0]] + "; next: " + _short(row[9], 90),
+            f"{link}) {_short(title, 72)} <a id=\"{identity}\"></a> [Details]({details_target})",
+            row[1], subject_kinds[row[0]], status, work,
+            decisions[row[0]] + "; next: " + _short(_text(next_event) if next_event else row[9], 180),
             _short(row[8].partition("; investigator session: ")[0], 100),
         ]
         lines.append("| " + " | ".join(visible) + " |")
-    lines.extend(["", "<details>", f"<summary>Evidence and full assessments ({len(rows)} items)</summary>", ""])
+    details = lines if audit_details is None else audit_details
+    details.extend(["", "<details>", f"<summary>Evidence and full assessments ({len(rows)} items)</summary>", ""])
     labels = (
         "This run / prior", "Current state", "Evidence / validation", "Investigation",
         "Decision", "Executed action", "Blocker", "Owner / suggested next actor", "Next wake-up event",
     )
     for row in rows:
         identity = identities[row[0]]
-        lines.extend([
+        details.extend([
             f"<a id=\"details-{identity}\"></a>",
             f"### {identity}: {row[0].partition(') ')[2]}", "",
         ])
-        lines.extend(f"**{label}:** {value}\n" for label, value in zip(labels, row[1:]))
-    lines.extend(["</details>", ""])
+        details.extend(f"**{label}:** {value}\n" for label, value in zip(labels, row[1:]) if value)
+    details.extend(["</details>", ""])
 
 
 def render_run_markdown(
@@ -607,6 +728,8 @@ def render_run_markdown(
     pre_expansion_assessment_coverage: Mapping[str, Any] | None = None,
     assessment_manifest: Mapping[str, Any] | None = None,
     pre_expansion_assessment_manifest: Mapping[str, Any] | None = None,
+    post_execution_observation: Mapping[str, Any] | None = None,
+    audit_details: list[str] | None = None,
 ) -> str:
     """Render projections only; callers supply canonical records and refresh time.
 
@@ -618,6 +741,11 @@ def render_run_markdown(
         raise ValueError("The usage run must match the explicit report run_id.")
     repository = str(snapshot["repository"])
     snapshot_id = prepared["snapshotId"]
+    if post_execution_observation is not None and (
+        post_execution_observation.get("repository") != repository
+        or post_execution_observation.get("snapshotId") != snapshot_id
+    ):
+        raise ValueError("Post-execution observation must match the frozen report repository and snapshot.")
     # Expansion replaces the assessment handoff, not the work already done in
     # that cycle. Deduplicate reviewed identities, preferring the latest round.
     selected = {
@@ -659,7 +787,8 @@ def render_run_markdown(
     }
     tracking_by_issue: dict[int, list[Mapping[str, Any]]] = {}
     tracked_pulls: dict[int, Mapping[str, Any]] = {}
-    for record in _rows((snapshot.get("delegationStatus") or {}).get("records")):
+    report_tracking = (post_execution_observation or {}).get("delegationStatus", snapshot.get("delegationStatus")) or {}
+    for record in _rows(report_tracking.get("records")):
         number = _number(record)
         if number is not None:
             tracking_by_issue.setdefault(number, []).append(record)
@@ -675,6 +804,7 @@ def render_run_markdown(
     sessions = [row for row in investigation_sessions if _not_after(row, as_of)]
     effects: dict[tuple[object, ...], Mapping[str, Any]] = {}
     terminals: dict[tuple[object, ...], Mapping[str, Any]] = {}
+    effect_history: dict[tuple[object, ...], list[Mapping[str, Any]]] = {}
     attempts: dict[tuple[str, int], list[Mapping[str, Any]]] = {}
     for event in action_events:
         if event.get("repository") != repository or event.get("eventType") != "terminal" or not _not_after(event, as_of):
@@ -687,6 +817,9 @@ def render_run_markdown(
         if number is None:
             continue
         identity = (event.get("actionId"), kind, number, event.get("operation"))
+        history = effect_history.setdefault(identity, [])
+        if event not in history:
+            history.append(event)
         # Ledger order preserves superseding reconciliation: a resolved action
         # must not retain its earlier indeterminate outcome as a current blocker.
         terminals[identity] = event
@@ -696,16 +829,8 @@ def render_run_markdown(
         if event.get("outcome") == "executed":
             effects[identity] = event
 
-    groups: dict[str, list[list[str]]] = {
-        "Pull requests": [], "Other issues": [], "Flaky / failing test issues": [], "Workflow / CI incidents": [],
-    }
-    if "workflowDiscovery" in snapshot:
-        groups = {
-            heading: groups[heading] for heading in (
-                "Workflow / CI incidents", "Pull requests",
-                "Flaky / failing test issues", "Other issues",
-            )
-        }
+    groups: dict[str, list[list[str]]] = {heading: [] for heading in _OUTCOME_GROUPS}
+    subject_kinds: dict[str, str] = {}
     identities: dict[str, str] = {}
     brief_decisions: dict[str, str] = {}
     next_evidence: dict[str, str] = {}
@@ -716,9 +841,21 @@ def render_run_markdown(
 
     def executed(kind: str, number: int) -> str:
         matching = [row for row in effects.values() if _number(row) == number and row.get("target", {}).get("kind", "issue") == kind]
-        if matching:
-            return "; ".join("✅ Executed: " + _text(row.get("operation")) for row in matching)
-        return "No executed action recorded"
+        descriptions = ["✅ Executed: " + _text(row.get("operation")) for row in matching]
+        for identity, history in effect_history.items():
+            if identity[1:3] == (kind, number) and history[-1].get("outcome") != "executed":
+                latest = history[-1]
+                descriptions.append(
+                    "Attempt: " + _text(identity[3]) + " — " + _text(latest.get("outcome"))
+                    + (": " + _text(latest["reason"]) if latest.get("reason") else "")
+                )
+            if identity[1:3] == (kind, number) and len(history) > 1:
+                descriptions.append(
+                    _text(identity[3]) + ": " + " → ".join(
+                        f"{_text(row.get('outcome'))} ({_text(row.get('recordedAt'))})" for row in history
+                    ) + (" (reconciled)" if history[-1].get("outcome") != "indeterminate" else " (still indeterminate)")
+                )
+        return "; ".join(descriptions)
 
     for number in sorted(value for value in issue_numbers if value is not None):
         item = metadata.get(number, {})
@@ -803,6 +940,9 @@ def render_run_markdown(
             if key in assessment:
                 state += f"; {key}: {_text(assessment[key])}"
         maintenance = assessment.get("testMaintenance") or {}
+        test_repair = bool(maintenance) or category in ("test-failure", "flaky-test") or any(
+            label in labels for label in ("failing-test", "flaky-test", "quarantined-test", "test-failure")
+        )
         if maintenance:
             state += f"; quarantine source: {_text(maintenance.get('state'))}; evidence complete: {_text(maintenance.get('evidenceComplete'))}"
             if maintenance.get("reason"):
@@ -811,7 +951,10 @@ def render_run_markdown(
         if actionability:
             state += f"; fix handoff: {_text(actionability.get('status'))} (not an executed fix)"
         if tracking:
-            state += "; Copilot tracking: " + _tracking_summary(tracking)
+            state += "; Copilot tracking: " + _tracking_summary(tracking, repository)
+            if test_repair:
+                execution_status, execution_detail = _reported_test_execution(tracking)
+                state += "; Test execution evidence: " + execution_status
             state += "; Reported cloud outcome (untrusted): " + _reported_cloud_outcomes(tracking)
             state += "; Task completion and draft contents are not verified repair."
             if "quarantined-test" in labels and any(
@@ -853,7 +996,8 @@ def render_run_markdown(
             for record in tracking if record.get("nextWakeup")
         ]
         state += "; last matching failure: " + _failure_age(assessment, as_of)
-        groups[group].append([
+        blockers = list(dict.fromkeys(_text(value) for value in blockers if value))
+        row = [
             f"[#{number}]({_text(url)}) {_text(item.get('title', assessment.get('title')))}",
             f"{change}; {review}; prior: {_text(prior)}",
             state,
@@ -861,18 +1005,26 @@ def render_run_markdown(
                 *[value for row in recommendations for value in row.get("evidenceIds", [])],
                 *maintenance.get("evidenceIds", []),
                 *verification.get("evidenceIds", []),
-            ]))),
+            ]))) + (
+                "<br>**Reported test execution evidence:** " + execution_detail
+                + ("<br>Final-PR QuarantinedTest retention: unknown (PR source not inspected). "
+                   "The final repair must retain QuarantinedTest and keep the tracking issue open "
+                   "for the separate 21-day zero-failure reliability window; use Refs, not closing keywords."
+                   if maintenance.get("state") == "quarantined" or "quarantined-test" in labels else "")
+                if tracking and test_repair else ""
+            ),
             investigation,
             ("Assessed repair outcome: " if tracking else "")
             + ("; ".join(f"{_status(row.get('disposition'))}: {_text(row.get('summary'))}" for row in recommendations)
                or "No decision recorded"),
             executed("issue", number),
-            ("⛔ " + _text(blockers)) if blockers else "None recorded",
+            ("⛔ " + "; ".join(blockers)) if blockers else "None recorded",
             f"Owner: {_owner(item)}; suggested next actor: {_text(suggested) if suggested else 'unknown'}"
             + (f"; investigator session: {_text(investigator)}" if investigator else ""),
             _text(wake or wakeups or [row.get("reassessWhen") for row in recommendations]),
-        ])
-        label = groups[group][-1][0]
+        ]
+        label = row[0]
+        subject_kinds[label] = group
         identities[label] = f"issue-{number}"
         brief_decisions[label] = "; ".join(_status(row.get("disposition")) for row in recommendations) or "No decision recorded"
         next_evidence[label] = _text([*missing, *repair_missing])
@@ -880,13 +1032,29 @@ def render_run_markdown(
             number, plan, sessions, repository, recommendations, tracking,
             attempts.get(("issue", number), []), investigation,
         )
-        if repair_followup:
+        if repair_followup and not (post_execution_observation is not None and tracking):
             operational_states[label] = _repair_progress(repair_followup)
-        elif related_repairs_block_delegation(assessment):
+        elif not tracking and related_repairs_block_delegation(assessment):
             operational_states[label] = (
                 "Related workflow repair needs resolution",
                 "Follow the linked repair; another assignment requires resolved work and a fresh operator decision.",
             )
+        elif not tracking and assessment.get("issueState", item.get("state")) == "closed":
+            operational_states[label] = "Closed", "No further action while the issue remains closed."
+        if any((pull.get("closingContract") or {}).get("status") == "violation"
+               for record in tracking for pull in _rows(record.get("pullRequests"))):
+            operational_states[label] = (
+                "Repair needs human decision",
+                "Remove closing keywords from the linked repair PR; retain Refs and keep the tracking issue open.",
+            )
+        current_state, next_event = operational_states[label]
+        if "capacity" in current_state:
+            row[9] = _text(next_event)
+        groups[_outcome_group(
+            current_state, investigation,
+            acted=any(event.get("outcome") == "executed" for event in attempts.get(("issue", number), [])),
+            blockers=bool(blockers),
+        )].append(row)
 
     pr_judgments = {_number(row): row for row in _rows((pull_request_judgments or {}).get("pullRequests"))}
     tasks = {
@@ -909,6 +1077,8 @@ def render_run_markdown(
         }
         if source_state is not None:
             task["currentState"] = source_state
+        if tracked.get("currentState") is not None:
+            task["currentState"] = tracked["currentState"]
         judgment = pr_judgments.get(number, task.get("defaultJudgment") or {})
         review = (
             "assessment acknowledged" if number in acknowledged_prs
@@ -917,7 +1087,7 @@ def render_run_markdown(
         )
         progress = task.get("meaningfulProgress", inventory_prs.get(number, {}).get("meaningfulProgress")) or {}
         url = task.get("html_url") or task.get("url") or f"https://github.com/{repository}/pull/{number}"
-        groups["Pull requests"].append([
+        row = [
             f"[#{number}]({_text(url)}) {_text(task.get('title'))}",
             f"{'🆕 New' if task.get('changeClass') == 'new' else 'Existing'}; {review}; prior: {_text(task.get('previousDefaultDisposition'))}",
             _readiness(task) + "; last meaningful change: " + _progress_age(progress, as_of),
@@ -931,14 +1101,26 @@ def render_run_markdown(
             _text(judgment.get("missingEvidence", [])),
             f"Owner: {_owner(task)}; suggested next actor: {_text((judgment.get('humanEscalation') or {}).get('routingHint'))}",
             _text(judgment.get("reassessWhen") or task.get("nextWakeupEvent")),
-        ])
-        label = groups["Pull requests"][-1][0]
+        ]
+        label = row[0]
+        subject_kinds[label] = "Pull request"
         identities[label] = f"pr-{number}"
         brief_decisions[label] = _status(judgment.get("disposition")) if judgment else "No fresh assessment"
+        state = (
+            "Waiting for human decision" if judgment.get("disposition") == "ping-human"
+            else "No action planned" if judgment.get("disposition") == "no-action"
+            else "Watching pull-request progress"
+        )
+        operational_states[label] = state, None
+        groups[_outcome_group(
+            state, row[4],
+            acted=any(event.get("outcome") == "executed" for event in attempts.get(("pull-request", number), [])),
+            blockers=bool(judgment.get("missingEvidence")),
+        )].append(row)
 
     lines = [
         "# CI Shepherd run report", "",
-        f"**{_text(repository)}** · report as of {_text(as_of)} · snapshot collected {_text(snapshot.get('collectedAt'))}",
+        f"**{_text(repository)}** · report as of {_text(as_of)} · frozen pre-effect evidence collected {_text(snapshot.get('collectedAt'))}",
         f"**{len(effects)} executed effects recorded** · {len(selected)} issues selected for review · {len(tasks)} PRs selected for review",
         f"{len(acknowledged_issues)} issues / {len(acknowledged_prs)} PRs with assessment acknowledgements.",
         "Acknowledgements establish packet coverage, not independent proof of reasoning quality.", "",
@@ -946,6 +1128,33 @@ def render_run_markdown(
         "⚪ No action · 🆕 New · 🔄 Running · ✅ Evidence review finished · ⛔ Blocked · ⏸ Deferred · 👤 Human input", "",
         _collection_summary(snapshot, audit_details_url), "",
     ]
+    if post_execution_observation is not None:
+        observation_problems = post_execution_observation.get("problems", [])
+        lines.extend([
+            f"**Post-effect delegation observation:** {_text(post_execution_observation.get('status'))}; "
+            f"started {_text(post_execution_observation.get('startedAt'))}; observed {_text(post_execution_observation.get('observedAt'))}; "
+            f"GETs {_text(post_execution_observation.get('apiCalls'))}/{_text(post_execution_observation.get('maxApiCalls'))}.",
+            "Read-only reporting evidence only; it does not refresh action authority or change the action ledger.",
+            *[f"- Observation unavailable: {_text(problem)}" for problem in observation_problems[:3]],
+            *([f"{len(observation_problems) - 3} additional observation problems; see the observation audit."]
+              if len(observation_problems) > 3 else []),
+            "[Post-execution observation audit](post-execution-observation.json)",
+            "",
+        ])
+    for heading, rows in groups.items():
+        lines.extend([f"## {heading}", ""])
+        if not rows:
+            lines.extend(["None recorded.", ""])
+            continue
+        collapsed = heading == "Not reached due tool capacity"
+        if collapsed:
+            lines.extend(["<details>", f"<summary>{len(rows)} capacity-deferred items — not attempted</summary>", ""])
+        _append_group(
+            lines, rows, identities, brief_decisions, subject_kinds, operational_states,
+            audit_details=audit_details, audit_details_url=audit_details_url,
+        )
+        if collapsed:
+            lines.extend(["</details>", ""])
     investigation_cells = [row[4] for rows in groups.values() for row in rows]
     lines.extend([
         f"Investigations: {sum(cell.startswith('✅ Investigation completed') for cell in investigation_cells)} evidence reviews finished, "
@@ -996,12 +1205,6 @@ def render_run_markdown(
     else:
         lines.extend(usage_markdown(usage))
     lines.append("")
-    for heading, rows in groups.items():
-        lines.extend([f"## {heading}", ""])
-        if not rows:
-            lines.extend(["None recorded.", ""])
-            continue
-        _append_group(lines, rows, identities, brief_decisions)
     excluded_prs = _rows((pull_request_review or {}).get("excluded"))
     unchanged.extend(
         f"PR #{row['number']} ({_text(row.get('reason'))})"

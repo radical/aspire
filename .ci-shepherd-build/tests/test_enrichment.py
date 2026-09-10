@@ -13,6 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from ci_shepherd.collector import Collector, InventoryResult
 from ci_shepherd.models import validate_snapshot
+from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.refresh import RefreshPlan
 from ci_shepherd.repository_policy import (
     load_repository_policy,
@@ -189,6 +190,96 @@ def snapshot_from_result(result) -> dict[str, object]:
 
 
 class GitHubEnrichmentTests(unittest.TestCase):
+    def test_newest_tracker_comments_are_enriched_with_bounded_execution_evidence(self) -> None:
+        comments = [
+            {
+                "id": day,
+                "html_url": f"https://github.com/{REPOSITORY}/issues/11#issuecomment-{day}",
+                "created_at": f"2026-08-{day:02d}T00:00:00Z",
+                "updated_at": f"2026-08-{day:02d}T00:00:00Z",
+                "user": {"login": "github-actions[bot]"},
+                "body": f"Run failed.\n<!-- run:{1000 - day} -->",
+            }
+            for day in range(1, 15)
+        ]
+        client = EnrichmentClient(pages={
+            f"/repos/{REPOSITORY}/issues?state=open&labels=ci-failure-cause&per_page=100": [],
+            f"/repos/{REPOSITORY}/issues?state=open&labels=automation-broken&per_page=100": [
+                make_issue(11, labels=["automation-broken"], body="<!-- ci-failure:deployment-tests -->")
+            ],
+            f"/repos/{REPOSITORY}/issues/11/comments": list(reversed(comments)),
+        })
+        collector = Collector(client, REPOSITORY, NOW)
+        inventory = collector.collect(include_supporting=False, include_timeline=False)
+        self.assertEqual(list(range(986, 998)), [ref["runId"] for ref in inventory.references[11]])
+        self.assertEqual(
+            {"not-enriched"},
+            {record["availability"] for record in inventory.evidence.values() if record["kind"] == "workflow-run"},
+        )
+        newest = inventory.references[11][0]
+        self.assertEqual("issue:11:comment:14", newest["sourceEvidenceId"])
+        self.assertEqual(comments[-1]["created_at"], newest["sourceCreatedAt"])
+        self.assertEqual(14, inventory.open_issues[0]["ledger"]["parsedRowCount"])
+        initial = prepare_assessment(snapshot_from_result(inventory))
+        self.assertEqual([], initial["observations"]["occurrences"])
+        self.assertFalse(initial["issues"][0]["repairEvidence"]["ready"])
+        self.assertIn("issue:11:comment:14", {record["id"] for record in initial["issues"][0]["evidenceBundle"]})
+        original = copy.deepcopy(inventory.evidence)
+        for run_id in range(986, 998):
+            day = 1000 - run_id
+            client._singles[f"/repos/{REPOSITORY}/actions/runs/{run_id}"] = {
+                **self.make_run(run_id),
+                "created_at": f"2026-08-{day:02d}T00:00:00Z",
+                "workflow_id": 9001,
+                "path": ".github/workflows/ci.yml",
+                "head_branch": "main",
+            }
+            client._pages[f"/repos/{REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100"] = {
+                "jobs": [{
+                    **self.make_job(run_id),
+                    "run_id": run_id,
+                    "name": "Tests (ubuntu-latest)",
+                    "labels": ["ubuntu-latest"],
+                    "steps": [{"number": 1, "name": "Download runtime", "status": "completed", "conclusion": "failure"}],
+                }],
+            }
+            client._texts[f"/repos/{REPOSITORY}/actions/jobs/{run_id}/logs"] = FakeTextResponse(
+                f"error: runtime-{run_id} download failed: connection reset by peer", truncated=False,
+            )
+        client.calls.clear()
+        enriched = collector.enrich_github_evidence(inventory, minimal_run_evidence=True)
+        self.assertEqual(
+            [
+                call
+                for run_id in range(986, 996)
+                for call in (
+                    ("get", f"/repos/{REPOSITORY}/actions/runs/{run_id}"),
+                    ("get_pages", f"/repos/{REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100"),
+                )
+            ],
+            client.calls,
+        )
+        self.assertEqual(10, len(client.text_calls))
+        self.assertEqual([], client.byte_calls)
+        self.assertEqual([], enriched.collection_errors)
+        self.assertEqual(original, inventory.evidence)
+        for run_id in (996, 997):
+            self.assertEqual("partial", enriched.evidence[f"run:{run_id}"]["availability"])
+            self.assertTrue(enriched.evidence[f"run:{run_id}"]["payload"]["runBudgetExcluded"])
+        prepared = prepare_assessment(snapshot_from_result(enriched))
+        self.assertEqual(10, len(prepared["observations"]["occurrences"]))
+        repair = prepared["issues"][0]["repairEvidence"]
+        self.assertTrue(repair["current"])
+        self.assertFalse(repair["ready"])
+        self.assertEqual(1, repair["independentRunCount"])
+        self.assertEqual(1, len(repair["runIds"]))
+        self.assertTrue(repair["missingFacts"])
+        self.assertEqual(
+            "issue:11:comment:14",
+            enriched.evidence["run:986"]["payload"]["referencedBy"][0]["sourceEvidenceId"],
+        )
+        validate_snapshot(snapshot_from_result(enriched))
+
     def test_retry_evidence_requires_an_explicit_repository_policy(self) -> None:
         inventory = InventoryResult(
             open_issues=[],

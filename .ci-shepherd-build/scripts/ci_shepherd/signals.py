@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from types import MappingProxyType
 import re
 from typing import Mapping
+
+from .timeutils import parse_aware_iso8601
 
 
 _MAX_GITHUB_ID_DIGITS = 20
@@ -172,6 +174,23 @@ class ReferenceSelection:
     excluded: tuple[Mapping[str, object], ...]
 
 
+def reference_timestamp(reference: Mapping[str, object]) -> float | None:
+    """Return a factual reference date for selection, not an execution timestamp."""
+    occurrence_date = reference.get("occurrenceDate")
+    if isinstance(occurrence_date, str):
+        try:
+            return datetime.combine(date.fromisoformat(occurrence_date), datetime.min.time(), UTC).timestamp()
+        except ValueError:
+            pass
+    created_at = reference.get("sourceCreatedAt")
+    if isinstance(created_at, str) and created_at:
+        try:
+            return parse_aware_iso8601(created_at, "reference.sourceCreatedAt").timestamp()
+        except ValueError:
+            pass
+    return None
+
+
 def select_references(
     references: tuple[Mapping[str, object], ...],
     occurrences: tuple[Occurrence, ...],
@@ -180,23 +199,27 @@ def select_references(
     max_issue_refs_per_issue: int,
     max_commit_refs_per_issue: int,
 ) -> ReferenceSelection:
-    occurrence_dates = {
-        occurrence.source_run: occurrence.date
-        for occurrence in occurrences
-    }
+    occurrence_dates: dict[int, str] = {}
+    for occurrence in occurrences:
+        occurrence_dates[occurrence.source_run] = max(
+            occurrence.date, occurrence_dates.get(occurrence.source_run, ""),
+        )
 
     def decision_key(reference: Mapping[str, object]) -> tuple[object, ...]:
         target_type = str(reference.get("targetType", ""))
         extraction_method = str(reference.get("extractionMethod", ""))
         run_id = reference.get("runId")
+        observed_at = reference_timestamp(reference)
+        if observed_at is None and isinstance(run_id, int) and run_id in occurrence_dates:
+            observed_at = reference_timestamp({"occurrenceDate": occurrence_dates[run_id]})
         if target_type == "workflow-run" and reference.get("decisionValue") == "explicit-resolution":
             priority = 0
             value: object = int(reference.get("decisionOrder", 0))
             secondary_value: object = 0
-        elif target_type == "workflow-run" and isinstance(run_id, int) and run_id in occurrence_dates:
+        elif target_type == "workflow-run" and observed_at is not None:
             priority = 1
-            value: object = -int(occurrence_dates[run_id].replace("-", ""))
-            secondary_value: object = -run_id
+            value = -observed_at
+            secondary_value = -int(run_id)
         elif reference.get("decisionValue") == "explicit-resolution":
             priority = 2
             value = int(reference.get("decisionOrder", 0))
@@ -292,6 +315,14 @@ def extract_issue_signals(
         occurrences,
         occurrence_spans,
     )
+    occurrence_dates: dict[str, str] = {}
+    for occurrence in occurrences:
+        occurrence_dates[occurrence.run_url] = max(
+            occurrence.date, occurrence_dates.get(occurrence.run_url, ""),
+        )
+    for reference in references:
+        if reference.get("targetType") == "workflow-run" and reference.get("targetUrl") in occurrence_dates:
+            reference["occurrenceDate"] = occurrence_dates[str(reference["targetUrl"])]
     return IssueSignals(
         markers=_freeze_records(
             markers,

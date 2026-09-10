@@ -2467,22 +2467,25 @@ System.TimeoutException : Timed out.
                 ("commit", full_sha),
                 ("issue", 401),
                 ("pull-request", 77),
-                ("workflow-run", 6666),
+                ("workflow-run", 7777),
             },
             retained_targets,
         )
-        self.assertNotIn(("workflow-run", 7777), retained_targets)
+        self.assertNotIn(("workflow-run", 6666), retained_targets)
         self.assertNotIn(402, result.references)
 
         issue_payload_refs = result.evidence["issue:21"]["payload"]["references"]
         self.assertEqual(result.references[21], issue_payload_refs)
-        self.assertEqual([], result.evidence["issue:21:comment:2101"]["payload"]["references"])
+        self.assertEqual(
+            [7777],
+            [ref["runId"] for ref in result.evidence["issue:21:comment:2101"]["payload"]["references"]],
+        )
         self.assertNotIn("issue:402", result.evidence)
         self.assertFalse(any(evidence_id.startswith("issue:402:") for evidence_id in result.evidence))
         self.assertIn("pr:77", result.evidence)
-        self.assertIn("run:6666", result.evidence)
+        self.assertIn("run:7777", result.evidence)
         self.assertIn(f"commit:{full_sha}", result.evidence)
-        self.assertNotIn("run:7777", result.evidence)
+        self.assertNotIn("run:6666", result.evidence)
         self.assertIn("discarded 1", "\n".join(result.warnings))
         self.assertIn("max_run_refs_per_issue", "\n".join(result.warnings))
 

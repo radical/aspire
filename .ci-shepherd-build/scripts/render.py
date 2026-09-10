@@ -2,14 +2,23 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from collections import Counter
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
+import time
 from urllib.parse import quote
 
+from ci_shepherd.delegation_observer import _outcome_body, closing_keyword_contract, reported_test_execution_section
+from ci_shepherd.delegations import derive_delegation_tracking
+from ci_shepherd.github import GitHubApiError, GitHubClient
 from ci_shepherd.models import validate_report, validate_snapshot
 from ci_shepherd.poc import validate_poc_judgments
+from ci_shepherd.pull_requests import build_pull_request_current_state
 from ci_shepherd.run_report import render_run_markdown
 from ci_shepherd.investigation_worktrees import investigation_capacity_inventory
 from ci_shepherd.jsonl import read_jsonl_rows
@@ -504,6 +513,206 @@ def _write_markdown(path: Path, markdown: str) -> Path:
     return path.resolve()
 
 
+class _ReportReadClient:
+    """Bound an observer, retaining the exact GET responses for report-only checks."""
+
+    def __init__(self, client: object, max_calls: int) -> None:
+        self.client = client
+        self.max_calls = max_calls
+        self.calls = 0
+        self.responses: dict[str, object] = {}
+        self.pages: dict[tuple[str, str | None], list[object]] = {}
+        self.problems: list[str] = []
+
+    def _read(self, endpoint: str, key: str | None = None, *, pages: bool = False) -> object:
+        if pages and (endpoint, key) in self.pages:
+            return self.pages[(endpoint, key)]
+        if not pages and endpoint in self.responses:
+            return self.responses[endpoint]
+        if self.calls >= self.max_calls:
+            problem = f"Final observation GET budget ({self.max_calls}) exhausted: {endpoint}"
+            if problem not in self.problems:
+                self.problems.append(problem)
+            raise GitHubApiError(
+                category="report-budget", endpoint=endpoint, status=0, headers={},
+                retryable=False, attempts=0, sanitized_stderr="",
+            )
+        self.calls += 1
+        try:
+            value = self.client.get_pages(endpoint, key=key) if pages else self.client.get(endpoint)
+        except (GitHubApiError, ValueError, RuntimeError) as exc:
+            self.problems.append(str(exc))
+            raise
+        if pages:
+            self.pages[(endpoint, key)] = value
+        else:
+            self.responses[endpoint] = value
+        return value
+
+    def get(self, endpoint: str) -> object:
+        return self._read(endpoint)
+
+    def get_pages(self, endpoint: str, key: str | None = None) -> list[object]:
+        return self._read(endpoint, key, pages=True)
+
+
+def _keep_open_contract(issue_number: int, instructions: object, issue: dict[str, object]) -> tuple[bool | None, str]:
+    if isinstance(instructions, str):
+        # Read the exact final clause emitted by actions._delegation_instructions,
+        # not a bare "Refs #N" that may also appear in quoted handoff context.
+        references = re.findall(
+            rf"Open a draft pull request whose body includes `(Refs|Fixes) #{issue_number}`\.",
+            instructions,
+        )
+        if references:
+            return references[-1] == "Refs", "frozen dispatch instructions"
+    if (issue.get("testMaintenance") or {}).get("state") == "quarantined":
+        return True, "frozen quarantine source facts"
+    health = issue.get("workflowHealth") or {}
+    if (health.get("workflowPath") or health.get("workflow")) and health.get("job") and health.get("evidenceIds"):
+        return True, "frozen workflow failure facts"
+    followup = issue.get("repairFollowup") or {}
+    subject = followup.get("subject") or {}
+    if subject.get("workflowPath") and subject.get("job") and followup.get("evidenceIds"):
+        return True, "frozen workflow repair subject"
+    return None, "unavailable"
+
+
+def refresh_report_delegations(
+    snapshot: dict[str, object], prepared: dict[str, object], events: list[dict[str, object]],
+    *, client: object, max_api_calls: int = 30, now=None,
+    action_proposals: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Observe existing assignments without recollection, scheduling, or ledger writes.
+
+    The injected client must perform one request per get/get_pages, without
+    retries. The canonical CLI enforces this with max_pages=max_attempts=1.
+    """
+    from collect import observe_delegation_status
+
+    if type(max_api_calls) is not int or not 1 <= max_api_calls <= 30:
+        raise ValueError("Final observation requires a GET budget from 1 through 30.")
+    clock = now or (lambda: datetime.now(timezone.utc))
+    started = clock()
+    repository = str(snapshot["repository"])
+    frozen_events = [event for event in events if event.get("repository") == repository]
+    reader = _ReportReadClient(client, max_api_calls)
+    status: dict[str, object] = {"status": "complete", "records": []}
+    # No assignment history means there is nothing to observe. Do not spend a
+    # repository-wide capacity inventory GET merely to render an empty report.
+    baselines = {event["actionId"]: event for event in frozen_events if event.get("eventType") == "delegation-baseline"}
+    if baselines:
+        # Prefer the newest dispatches and preserve each successful observation
+        # if a later attempt exhausts the bound. Shared GETs are cached, including
+        # the repository running-task page used by the existing observer.
+        for action_id in sorted(baselines, key=lambda key: str(baselines[key].get("recordedAt", "")), reverse=True):
+            attempt_events = [event for event in frozen_events if event.get("actionId") == action_id]
+            try:
+                observed_status, _ = observe_delegation_status(reader, repository, events=attempt_events, now=started)
+                status["records"].extend(observed_status["records"])
+            except (GitHubApiError, ValueError, RuntimeError) as exc:
+                reader.problems.append(str(exc))
+                status["status"] = "incomplete"
+                status["records"].extend(derive_delegation_tracking(
+                    events=attempt_events, tasks=(), pull_requests=(), issues=(),
+                    unavailable_task_ids=frozenset(
+                        event["result"]["taskId"] for event in attempt_events
+                        if isinstance(event.get("result"), dict) and event["result"].get("taskId")
+                    ),
+                    unavailable_issue_numbers=frozenset(
+                        event["target"]["number"] for event in attempt_events
+                        if event.get("eventType") == "delegation-baseline"
+                    ),
+                ))
+    elif (snapshot.get("delegationStatus") or {}).get("records"):
+        # A historical snapshot is not a substitute for the current assignment
+        # ledger. Preserve it as explicitly stale reporting evidence.
+        status = copy.deepcopy(snapshot["delegationStatus"])
+        status["status"] = "incomplete"
+        reader.problems.append("Assignment ledger unavailable; retained delegation evidence is frozen, not reobserved.")
+    issues = {issue["issueNumber"]: issue for issue in prepared.get("issues", [])}
+    proposals = action_proposals or {}
+    bound_proposals = proposals.get("proposals", []) if (
+        proposals.get("repository") == repository and proposals.get("snapshotId") == prepared["snapshotId"]
+    ) else []
+    current_states: dict[int, dict[str, object]] = {}
+    for record in status["records"]:
+        issue_number = record["issueNumber"]
+        issue = issues.get(issue_number, {})
+        instructions = next((
+            event["customInstructions"] for event in reversed(frozen_events)
+            if event.get("actionId") == record["actionId"] and event.get("eventType") in {"intent", "delegation-baseline"}
+            and event.get("operation") == "assign-copilot"
+            and event.get("target") == {"kind": "issue", "number": issue_number}
+            and isinstance(event.get("customInstructions"), str)
+        ), None)
+        if instructions is None and baselines.get(record["actionId"], {}).get("snapshotId") == prepared["snapshotId"]:
+            instructions = next((
+                proposal.get("customInstructions") for proposal in bound_proposals
+                if proposal.get("actionId") == record["actionId"] and proposal.get("issueNumber") == issue_number
+                and proposal.get("operation") == "assign-copilot"
+            ), None)
+        keep_open, contract_basis = _keep_open_contract(issue_number, instructions, issue)
+        for pull in record.get("pullRequests", []):
+            number = pull.get("number")
+            if not number:
+                continue
+            pull["url"] = f"https://github.com/{repository}/pull/{number}"
+            detail = reader.responses.get(f"/repos/{repository}/pulls/{number}") or {}
+            if detail.get("html_url") != pull["url"]:
+                detail = {}
+            contract = closing_keyword_contract(detail.get("body"), repository, issue_number, keep_open=keep_open)
+            contract["basis"] = contract_basis
+            pull["closingContract"] = contract
+            section = reported_test_execution_section(detail.get("body"))
+            if section is not None:
+                pull["reportedTestExecution"] = _outcome_body(section, 4000)
+            if contract["status"] in {"unavailable", "unknown"}:
+                reader.problems.append(f"PR #{number}: {contract['detail']}")
+            if number not in current_states:
+                check_runs = combined_status = None
+                sha = (detail.get("head") or {}).get("sha")
+                if isinstance(sha, str) and sha:
+                    try:
+                        checks = reader.get(f"/repos/{repository}/commits/{sha}/check-runs?per_page=100")
+                        if (not isinstance(checks, dict) or not isinstance(checks.get("check_runs"), list)
+                                or type(checks.get("total_count")) is not int
+                                or checks["total_count"] != len(checks["check_runs"])):
+                            raise ValueError(f"PR #{number}: head check inventory incomplete.")
+                        check_runs = checks["check_runs"]
+                        # Reuse the existing check-state normalizer. Combined
+                        # status is necessary only when no check runs exist.
+                        if not check_runs:
+                            combined_status = reader.get(f"/repos/{repository}/commits/{sha}/status?per_page=100")
+                            if (not isinstance(combined_status, dict)
+                                    or combined_status.get("total_count") != len(combined_status.get("statuses", []))):
+                                raise ValueError(f"PR #{number}: commit status inventory incomplete.")
+                    except (GitHubApiError, ValueError, RuntimeError) as exc:
+                        reader.problems.append(str(exc))
+                        check_runs = combined_status = None
+                else:
+                    reader.problems.append(f"PR #{number}: current head unavailable; checks unknown.")
+                current = build_pull_request_current_state(
+                    detail, check_runs=check_runs, combined_status=combined_status,
+                )
+                if "draft" not in detail:
+                    current["draft"] = None
+                current_states[number] = current
+            pull["currentState"] = current_states[number]
+    observed = clock()
+    problems = list(dict.fromkeys(reader.problems))
+    return {
+        "schemaVersion": 1, "repository": repository, "snapshotId": prepared["snapshotId"],
+        "frozenEvidenceCollectedAt": snapshot.get("collectedAt"),
+        "startedAt": started.isoformat().replace("+00:00", "Z"),
+        "observedAt": observed.isoformat().replace("+00:00", "Z"),
+        "status": "partial" if problems else "complete",
+        "apiCalls": reader.calls, "maxApiCalls": max_api_calls,
+        "problems": problems, "delegationStatus": status,
+        "authority": "report-only",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Render a validated CI shepherd report as Markdown.")
     parser.add_argument("--prepared", type=Path, required=True)
@@ -522,10 +731,26 @@ def main() -> int:
     parser.add_argument("--as-of")
     parser.add_argument("--run-id")
     parser.add_argument(
+        "--finalize-run", action="store_true",
+        help="Bounded read-only delegation refresh, canonical final report, then record invocation completion.",
+    )
+    parser.add_argument("--max-observation-api-calls", type=int, default=30)
+    parser.add_argument(
         "--invocation", type=Path,
         help="Existing invocation manifest with runId, boundary scope, startedAt/completedAt, and optional recordingWindows.",
     )
     args = parser.parse_args()
+    if args.finalize_run and (not args.run_report or args.invocation is None or args.state_dir is None):
+        parser.error("--finalize-run requires --run-report, --invocation, and --state-dir.")
+    if args.finalize_run:
+        if args.prepared.resolve().is_relative_to((args.state_dir / "runs").resolve()):
+            parser.error("Cannot finalize or supersede a sealed historical cycle; use its original work directory.")
+        if args.output.resolve().is_relative_to(args.state_dir.resolve()):
+            parser.error("The final report must be outside the read-only state directory.")
+        if args.output.resolve() in {path.resolve() for path in (args.prepared, args.judgments, args.snapshot, args.invocation)}:
+            parser.error("The final report must not overwrite a report input.")
+        if not 1 <= args.max_observation_api_calls <= 30:
+            parser.error("--max-observation-api-calls must be from 1 through 30.")
 
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
     judgments = json.loads(args.judgments.read_text(encoding="utf-8"))
@@ -533,6 +758,10 @@ def main() -> int:
     if args.run_report:
         validate_poc_judgments(prepared, judgments)
         invocation = json.loads(args.invocation.read_text(encoding="utf-8")) if args.invocation else {}
+        if args.finalize_run and (not invocation.get("runId") or not invocation.get("startedAt")):
+            raise ValueError("Finalization requires the recorded invocation runId and startedAt.")
+        if args.finalize_run and args.run_id is not None and args.run_id != invocation["runId"]:
+            raise ValueError("Finalization run ID must match the recorded invocation.")
 
         def companion(name: str) -> object:
             path = args.prepared.parent / name
@@ -560,13 +789,45 @@ def main() -> int:
                 raise ValueError("Recorded assessment completion does not match its verified receipts.")
             return verified
 
+        action_events = events(args.action_events or (args.state_dir / "action-events.jsonl" if args.state_dir else None))
+        observation = None
+        audit_details = [] if args.finalize_run else None
+        render_started = datetime.now(timezone.utc)
+        if args.finalize_run:
+            observation = refresh_report_delegations(
+                snapshot, prepared, action_events,
+                client=GitHubClient(
+                    runner=subprocess.run, popen_factory=subprocess.Popen, sleep=time.sleep,
+                    now=lambda: datetime.now(timezone.utc), max_attempts=1, max_pages=1,
+                    request_timeout_seconds=10,
+                ),
+                max_api_calls=args.max_observation_api_calls,
+                action_proposals=companion("action-proposals.json"),
+            )
+            _write_markdown(
+                args.output.parent / "post-execution-observation.json",
+                json.dumps(observation, indent=2) + "\n",
+            )
+            args.as_of = observation["observedAt"]
+            # A previous completion does not describe this finalization. Retain
+            # all original phase windows, but seal the new completion only once
+            # the canonical report and its details have been successfully written.
+            invocation = {key: value for key, value in invocation.items() if key != "completedAt"}
+            invocation.setdefault("recordingWindows", []).append({
+                "label": "Post-effect delegation observation",
+                "startedAt": observation["startedAt"], "completedAt": observation["observedAt"],
+                "measurement": "recorded-window", "basis": "Bounded GET-only final report observation",
+            })
         audit_path = args.prepared.parent / "report-details.md"
         if not audit_path.is_file():
             # Older cycles stored the detailed audit directly in report.md.
             audit_path = args.prepared.parent / "report.md"
+        final_audit_path = args.output.parent / "final-report-details.md"
+        if args.finalize_run:
+            audit_path = final_audit_path
         audit_details_url = (
             quote(Path(os.path.relpath(audit_path, args.output.parent)).as_posix(), safe="/")
-            if audit_path.is_file() and audit_path.resolve() != args.output.resolve()
+            if (audit_path.is_file() or args.finalize_run) and audit_path.resolve() != args.output.resolve()
             else None
         )
         markdown = render_run_markdown(
@@ -575,7 +836,7 @@ def main() -> int:
             pull_request_review=companion("pull-request-review.json"),
             pull_request_judgments=companion("pull-request-judgments.json"),
             investigation_plan=companion("investigation-plan.json"),
-            action_events=events(args.action_events),
+            action_events=action_events,
             investigation_results=events(args.investigation_results),
             investigation_capacity=(
                 investigation_capacity_inventory(args.state_dir, str(snapshot["repository"]))
@@ -594,7 +855,20 @@ def main() -> int:
             pre_expansion_assessment_coverage=completed_assessment(pre_expansion=True),
             assessment_manifest=companion("assessment-batches.json"),
             pre_expansion_assessment_manifest=companion("assessment-batches.pre-expansion.json"),
+            post_execution_observation=observation,
+            audit_details=audit_details,
         )
+        if args.finalize_run:
+            source_audit = args.prepared.parent / "report-details.md"
+            original = source_audit.read_text(encoding="utf-8") if source_audit.is_file() else ""
+            _write_markdown(final_audit_path, original.rstrip() + "\n\n## Post-execution report detail\n\n" + "\n".join(audit_details))
+            completion_url = quote(Path(os.path.relpath(args.invocation, args.output.parent)).as_posix(), safe="/")
+            markdown = markdown.replace(
+                "# CI Shepherd run report",
+                "# CI Shepherd run report\n\n**Canonical post-execution report.** The pre-execution decision report is superseded.\n\n"
+                f"Final render completion (`completedAt`) is recorded after this file is written in the [invocation manifest]({completion_url}).",
+                1,
+            )
     else:
         markdown = render_poc_markdown(
             prepared,
@@ -603,7 +877,35 @@ def main() -> int:
             snapshot=snapshot,
         )
 
-    print(_write_markdown(args.output, markdown))
+    output = _write_markdown(args.output, markdown)
+    if args.finalize_run:
+        completed = datetime.now(timezone.utc)
+        # This timestamp is measured after the report write, not guessed before
+        # it. A render failure therefore cannot mark the invocation completed.
+        invocation["completedAt"] = completed.isoformat().replace("+00:00", "Z")
+        invocation["finalReport"] = str(output)
+        invocation["postExecutionObservation"] = str((args.output.parent / "post-execution-observation.json").resolve())
+        invocation.setdefault("recordingWindows", []).append({
+            "label": "Final observation and render",
+            "startedAt": render_started.isoformat().replace("+00:00", "Z"),
+            "completedAt": invocation["completedAt"],
+            "measurement": "recorded-window",
+            "basis": "render.py --finalize-run entry through successful final report write",
+        })
+        pre_report = args.prepared.parent / "report.md"
+        if pre_report.is_file() and pre_report.resolve() != output:
+            relative = quote(Path(os.path.relpath(output, pre_report.parent)).as_posix(), safe="/")
+            original_report = pre_report.read_text(encoding="utf-8")
+            if original_report.startswith("<!-- superseded-report -->"):
+                original_report = original_report.partition("<!-- frozen-report -->\n")[2]
+            _write_markdown(
+                pre_report,
+                "<!-- superseded-report -->\n"
+                f"**Superseded pre-execution report.** [Canonical post-execution report]({relative})\n\n"
+                "<!-- frozen-report -->\n" + original_report,
+            )
+        _write_markdown(args.invocation, json.dumps(invocation, indent=2) + "\n")
+    print(output)
     return 0
 
 

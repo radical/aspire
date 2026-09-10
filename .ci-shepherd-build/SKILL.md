@@ -271,11 +271,14 @@ not consume a future typed wakeup.
 
 ## Run report and expense accounting
 
-`scripts/ci_shepherd/run_report.py` groups the operator view into pull requests,
-other issues, flaky/failing tests, and workflow incidents. These are navigation
-groups, not separate owners or lifecycle engines. Investigation results,
-durations, actual effects, current blockers, and the next expected event remain
-distinct from the assessment's recommendations.
+`scripts/ci_shepherd/run_report.py` groups the operator view by outcome, in this
+order: acted this run; delegated to Copilot awaiting task/PR; human action
+required; blocked on evidence; watching; not reached due tool capacity; and
+no action/closed. Subject kind is a column, not a lifecycle group. The capacity
+section is collapsed, and a capacity deferral names the next available
+investigation slot rather than asking for evidence that is already present.
+Investigation results, durations, actual effects, current blockers, and the next
+expected event remain distinct from the assessment's recommendations.
 
 The initial `report.md` describes decision finalization. It cannot claim that
 later investigations or proposed effects have happened. `report-details.md`
@@ -286,6 +289,11 @@ Refresh the operator report after actions and investigations have reached their
 recorded outcomes. Use the same invocation manifest and usage projection
 through any immediate follow-up and retrospectives. Keep them beside the cycle
 directories, not inside a cycle work directory that must initially be empty.
+Use `--finalize-run` for the canonical post-execution report. It performs one
+bounded read-only delegation refresh before rendering: at most 30 GETs, one
+page per request, no retries, and a 10-second request timeout. Set
+`--max-observation-api-calls` from 1 through 30 for a tighter budget. Exhausted
+or unavailable observations are explicitly partial, never successful repairs.
 Never rewrite a sealed historical cycle to add later activity.
 
 ```bash
@@ -295,7 +303,7 @@ PYTHONPATH="$CI_SHEPHERD_ROOT/scripts" python3 -m ci_shepherd.usage \
   --as-of "$AS_OF" \
   --output "$INVOCATION_DIR/usage.json"
 
-python3 "$CI_SHEPHERD_ROOT/scripts/render.py" --run-report \
+python3 "$CI_SHEPHERD_ROOT/scripts/render.py" --run-report --finalize-run \
   --prepared "$SCRATCH/assessment-input.json" \
   --judgments "$SCRATCH/judgments.json" \
   --snapshot "$SCRATCH/input.json" \
@@ -305,9 +313,23 @@ python3 "$CI_SHEPHERD_ROOT/scripts/render.py" --run-report \
   --state-dir "$STATE" \
   --invocation "$INVOCATION_DIR/invocation.json" \
   --usage "$INVOCATION_DIR/usage.json" \
-  --as-of "$AS_OF" \
   --output "$INVOCATION_DIR/final-operator-report.md"
 ```
+
+Do not supply `--as-of` to finalization; the observation captures its actual
+timestamp. `post-execution-observation.json` and `final-report-details.md` are
+written beside the final report. The local pre-execution `report.md` is marked
+superseded and points to the canonical report; sealed historical cycle files
+stay unchanged. The invocation manifest records `completedAt`, `finalReport`,
+and the observation path only after the final report is successfully written.
+
+The final report distinguishes frozen pre-effect evidence from post-effect
+observations of task IDs, linked PRs, draft/check states and keep-open contract
+alerts. A dispatched task, draft PR, merge, or reported test-execution section
+is not independently verified repair. Indeterminate and later reconciled
+execution events remain visible rather than being replaced by the final state.
+The usage projection predates this final render; unavailable tail usage remains
+unknown, not zero.
 
 The renderer reads the review, PR judgment and investigation-plan companions
 beside the prepared input. Action counts are scoped to that snapshot; render a
@@ -331,8 +353,9 @@ Missing manifests remain unknown rather than appearing as zero work.
 
 At invocation entry, record `runId` and `startedAt` in the private invocation
 manifest. Add each coordinator, investigator and retrospective session to its
-`sessions` roster. Record `completedAt` only after the optional follow-up and
-retrospectives finish. Set `scope: "whole-invocation"` only for complete
+`sessions` roster. Do not pre-set `completedAt`: after the optional follow-up
+and retrospectives finish, the finalizer records it after writing the final
+report. Set `scope: "whole-invocation"` only for complete
 invocation boundaries; use `scope: "owner-held"` for a lock-held window.
 These manifest timestamps describe a recorded window, not independently
 verified runtime session boundaries. The report keeps whole-invocation time
@@ -602,15 +625,34 @@ local classification; priority never overrides a denial or capacity limit.
 
 | Scheduling priority | Work |
 |---|---|
-| `current-workflow-break` | Current build/configuration failure or verified reporting outage |
-| `recurrent-ci-failure` | Recurrent ordinary PR-CI job, harness, or toolchain failure |
-| `unquarantined-test-instability` | Unquarantined test instability |
-| `automation-defect` | Other automation defects |
+| `current-ci-workflow-break` | Any current verified failure in `.github/workflows/ci.yml`, before all other work |
+| `current-workflow-break` | Other current broken workflows, build/configuration failures, or verified reporting outages |
+| `unquarantined-test-instability` | Undiagnosed or unquarantined failing tests affecting normal CI |
 | `quarantined-test-repair` | Already-quarantined coverage, unless broader impact is independently established |
+| `automation-defect` | Non-current or unclassified automation trackers needing scoped evidence |
+| `unclassified-issue` | Other unknown or non-current issues |
 
 Within a priority, verified recurrence and matching failure recency precede
 the deterministic issue-number tie-break. An unknown timestamp is not current.
+`repairEvidence.observedFailure` carries a verified current failed execution
+for scheduling even when incomplete diagnostics prevent a repair identity.
+It never establishes repair readiness or authorizes an assignment. Unknown
+generic issues cannot jump ahead of current failures or quarantined repairs.
 Required prerequisite comments and exact-action authorization remain intact.
+
+Broad `tracking-issue` umbrellas are classification work, not automatic Copilot
+repair targets. Inspect the newest run and failed jobs, then cluster exact
+test/diagnostic subjects by lane. A useful latest sample does not prove that
+all failures in the tracker share one cause. An explicit operator nomination
+remains a separate authorization path.
+
+`signals.py` ranks dated run references by occurrence date or source comment
+creation time, newest first after explicit resolution references. `collector.py`
+enriches the highest-priority selected references within its existing bounds;
+a URL stub is `not-enriched`, not an observed execution. Collection-budget gaps
+remain missing evidence, distinct from investigation or Copilot capacity.
+`refresh.py` collection version 4 reparses older selections rather than reusing
+their stale reference choices.
 
 Use these starting rules:
 
@@ -824,6 +866,11 @@ When startup output exceeds the log preview budget, preparation retains a
 contiguous failure-centered window using the existing diagnostic selector.
 This keeps compiler errors and failed-test context visible without increasing
 the 4,000-character bound or clearing truncation indicators.
+`observations.py` excludes echoed commands and timeout options from diagnostic
+identity candidates, so repeated `--timeout` or `--hangdump-timeout` flags cannot
+displace a late `Failed to CreateArtifact: Unable to make request: ETIMEDOUT`.
+The retained error does not make a transport-truncated log complete or authorize
+a repair.
 
 ### Owned worker checkouts
 
@@ -841,6 +888,11 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" list \
 Provisioning preflights capacity before creating another checkout. Registration
 still rechecks admission under its lifecycle lock, so rejection after allocation
 must be handled explicitly rather than leaving an untracked tree.
+The frozen `admissionPredecessors` preserve the planner's priority order:
+higher-priority requests must be registered or durably reconciled as not
+launched before lower-priority admission. Provisioning alone does not satisfy
+that gate. The existing five-per-cycle and three-concurrent limits are unchanged;
+old or uncertain reservations still count.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_worktree.py" provision \
@@ -964,7 +1016,9 @@ Provision the owned worktree first, then prepare the complete initial prompt.
 Use the returned `ownershipId` as `ATTEMPT_ID`, the returned `checkoutPath` as
 `WORKER_CHECKOUT`, and an absolute result path outside the source tree named
 `<ownershipId>.json`. These are logical attempt identities: `sessionId` and
-`runtimeSessionId` remain `null`.
+`runtimeSessionId` remain `null` unless the launcher supplies an actual runtime
+binding, which is recorded with the observed result rather than inferred from
+the logical attempt.
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
@@ -994,15 +1048,23 @@ The worker must preserve `schemaVersion`, `attemptId`, and `requestFingerprint`
 around its strict `result` object. It must not launch subagents or background
 processes.
 
+New source-scoped plans carry `resultValidationProtocol: 1`. Dispatch one
+representative worker first, and preflight its actual returned result before
+expanding to concurrent workers. Do not fabricate a sample result to unlock
+dispatch. Until validation is observed, another dispatch is blocked. After an
+invalid response, inspect the specific contract error before trying another
+worker; do not launch an entire wave with the same broken instructions.
+
 Preparation is `prepared`/`not-dispatched`, not execution. Dispatch intent is
 `dispatching`/`unknown`, not proof that the worker started. Replaying dispatch
 returns `dispatchAllowed: false`; never infer permission to launch again from
 an absent result. Prepared and uncertain attempts occupy capacity.
 
-After observing that the invocation ended, record the worker's result:
+After observing that the invocation ended, preflight the worker's result:
 
 ```bash
 python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
+  --preflight \
   --state-dir "$STATE" \
   --plan "$SCRATCH/investigation-plan.json" \
   --investigation-id "investigation:..." \
@@ -1013,6 +1075,18 @@ python3 "$CI_SHEPHERD_ROOT/scripts/investigation_result.py" \
   --confirm-worker-stopped \
   --recorded-at "$CURRENT_TIMESTAMP"
 ```
+
+Preflight writes only a validation observation to
+`$STATE/ledgers/investigation-validations.jsonl`; it neither accepts a result nor
+terminalizes a worker. After successful preflight, repeat the same command
+without `--preflight` to accept the result. On rejection, use the existing
+failed-attempt recording and observed-termination cleanup protocol.
+
+Two distinct owned attempts with the same structural validation error open a
+fail-closed circuit for that repository, snapshot, and source revision. Further
+admission and one-shot dispatch stop; exact response replays count once.
+Rejection does not release reservations or create successful results. Report
+the contract failure instead of consuming the remaining investigation waves.
 
 `--execution-evidence` is a factual description of the observed launcher outcome
 and its supporting tool response or record, not a path to inferred proof.
@@ -1034,6 +1108,23 @@ Attempt-specific job listings use the same diagnostic GET budget and repository
 boundary as run-wide listings: `/actions/runs/<run>/attempts/<attempt>/jobs`.
 Work-log row fields remain exact for their kind; an evidence row cannot carry a
 source `path`.
+
+The worker prompt and result validator share the route definitions in
+`scripts/ci_shepherd/investigation_scope.py`. Print that contract or check an
+exact URL before fetching it with the offline helper:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_get.py" \
+  --repository "$REPOSITORY" --issue-number "$ISSUE_NUMBER"
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_get.py" \
+  --repository "$REPOSITORY" --issue-number "$ISSUE_NUMBER" \
+  --url "$DIAGNOSTIC_URL"
+```
+
+The helper performs no GET and cannot prove execution. Source/history lookup
+uses the pinned local checkout, not contents, blob, commit, compare or search
+API routes. Do not invoke a broader investigation skill that authorizes
+different endpoints inside this bounded worker.
 
 Workers do not edit code, modify shared Git metadata, invoke a fixing workflow,
 or write to GitHub. If the bounded investigation cannot answer the question,
@@ -1092,6 +1183,16 @@ the launcher is known not to have started the worker. Use `returned` after an
 observed invocation return, including a returned but invalid result. A launch
 rejection is not a failed source investigation; preserve that distinction in
 the report.
+
+When the launcher exposes actual runtime identity or timestamps, pass
+`--runtime-observation <operator-owned-json-file>` to the result recorder or
+terminal failure recorder. Its exact fields are `runtimeSessionId`,
+`workerStartedAt`, `workerCompletedAt`, and `observationEvidence`; unavailable
+identity/timestamps are `null`. Record observed launcher/runtime evidence, not
+worker self-report or preparation/dispatch time. The validation ledger retains
+these observations even when a returned result is rejected. `acceptedResultAt`
+is the later acceptance-recording timestamp, never a worker completion time.
+Missing runtime or cost telemetry remains unknown.
 
 If a worker disappears, first independently confirm that it stopped. Use the
 session manager for an addressable worker and launcher/runtime evidence for an
@@ -1427,6 +1528,38 @@ The instructions also request a concise conclusion: outcome, evidence actually
 inspected, changes made, missing evidence or human decision, and suggested next
 step. Copilot must not manufacture a code change just to produce a diff. An
 unsuccessful attempt can leave an empty draft; do not promise that it creates no PR.
+
+For flaky or quarantined test repairs, invoke the repository's
+`.agents/skills/fix-flaky-test/SKILL.md`. Read the frozen failure and test/fixture
+code, then use `run-test-repeatedly.sh` or `run-test-repeatedly.ps1` for local
+reproduction first. If the failing OS is unavailable or local repetitions do
+not reproduce the failure, use `reproduce-flaky-tests.yml` on the matching OS
+and follow the skill's contention/log-based escalation. A repair based on logs
+rather than a local reproduction still requires high-confidence root cause
+and an explicit statement of the reproduction limitation.
+
+The final fix PR **must retain `[QuarantinedTest]`**. Under
+`docs/unquarantine-policy.md`, unquarantine and issue closure require a separate
+21-day zero-failure window across all operating systems. Use `Refs #N`, not
+closing keywords, anywhere in the PR body, including generated suffixes.
+Keeping quarantine does not excuse skipping the repaired test:
+`eng/Testing.props` requires `/p:RunQuarantinedTests=true` on both build and test
+for targeted quarantine execution. Do not simultaneously exclude the quarantine
+trait. Use MTP filters after `--`.
+
+After changing code, rebuild and repeat the same target, OS, and reproduction
+mode. Every iteration must execute a nonzero test count, and all post-fix
+iterations must pass. Normal green CI that excludes the target is not
+validation. Do not weaken assertions, add skips, ignore failures, or make them
+non-blocking. The reproduce workflow remains the final CI gate; unavailable
+permissions or environment must leave verification explicitly incomplete,
+with the exact error and manual command recorded.
+
+Require a **Test execution evidence** section in the PR: pre-fix and post-fix
+commands, OS, reproduction mode, exact target, executed-test counts, iterations
+attempted/passed/failed, observed output, and available CI links. Treat this
+as worker-reported evidence unless independently observed. A task completion,
+draft PR, successful unrelated check, or merge is not proof of a verified fix.
 
 Before an assignment write, the executor fsyncs the exact action intent and a
 complete active-plus-archived Agent Task inventory. It then associates the

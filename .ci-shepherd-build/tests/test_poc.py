@@ -693,7 +693,7 @@ class PocValidationTests(unittest.TestCase):
         self.assertEqual(8, len(issue_101["allowedEvidence"]))
         self.assertNotIn("payload", issue_101["allowedEvidence"][0])
         self.assertEqual(
-            ["issue:101", "run:1001", "run:1002"],
+            ["issue:101", "run:1002", "run:1001"],
             issue_101["defaultJudgment"]["recommendations"][0]["evidenceIds"],
         )
         self.assertEqual(
@@ -706,7 +706,7 @@ class PocValidationTests(unittest.TestCase):
                         "target": {"kind": "test", "value": "Namespace.Type.Test"},
                         "confidence": "medium",
                         "summary": "Review this recurrent test for quarantine.",
-                        "evidenceIds": ["issue:101", "run:1001", "run:1002"],
+                        "evidenceIds": ["issue:101", "run:1002", "run:1001"],
                         "missingEvidence": [],
                         "reassessWhen": "After the quarantine review or new recurrence evidence.",
                     }
@@ -723,7 +723,10 @@ class PocValidationTests(unittest.TestCase):
         self.assertEqual("2026-08-17", issue_102["occurrenceSummary"]["lastSeenDate"])
         self.assertEqual("investigate", issue_102["defaultJudgment"]["recommendations"][0]["disposition"])
         self.assertEqual({"kind": "issue", "value": 102}, issue_102["defaultJudgment"]["recommendations"][0]["target"])
-        self.assertEqual(["complete-comment-run-ledger"], issue_102["defaultJudgment"]["recommendations"][0]["missingEvidence"])
+        self.assertEqual([
+            "complete-comment-run-ledger",
+            "Current tracker run and failed-job diagnostics, grouped by exact test or repair subject and lane.",
+        ], issue_102["defaultJudgment"]["recommendations"][0]["missingEvidence"])
 
         issue_103 = compact["issues"][2]
         self.assertEqual(0, issue_103["occurrenceCount"])

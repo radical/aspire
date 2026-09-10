@@ -70,6 +70,10 @@ def main() -> int:
     )
     parser.add_argument("--confirm-worker-stopped", action="store_true")
     parser.add_argument(
+        "--runtime-observation", type=Path,
+        help="Operator-owned observed runtime ID/start/end/evidence JSON for a terminal worker; never worker self-report.",
+    )
+    parser.add_argument(
         "--allow-reproduction-command", action="append", type=json.loads,
         help="Explicitly authorize one exact JSON argv array for this local session; repeat up to three times. Never shell text.",
     )
@@ -146,6 +150,10 @@ def main() -> int:
                 execution_state=args.execution_state,
                 execution_evidence=args.execution_evidence,
                 require_unique_session_identity=args.recover_recorded,
+                runtime_observation=(
+                    json.loads(args.runtime_observation.read_text(encoding="utf-8"))
+                    if args.runtime_observation is not None else None
+                ),
             )
         except (ValueError, OSError) as error:
             parser.error(str(error))

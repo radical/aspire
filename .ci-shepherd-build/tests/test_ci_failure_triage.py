@@ -69,6 +69,69 @@ class CiFailureTriageTests(unittest.TestCase):
             families.append(case["family"]["familyId"])
         self.assertNotEqual(families[0], families[1])
 
+    def test_noisy_timeout_options_do_not_hide_late_artifact_failure(self) -> None:
+        from ci_shepherd.observations import _repair_diagnostic_lines
+
+        noise = "".join(
+            f"2026-08-19T15:00:00Z ##[command]dotnet test Project{index} --timeout {index}m\n"
+            f"2026-08-19T15:00:00Z   --hangdump-timeout {index}m\n"
+            f"2026-08-19T15:00:00Z Parsing option --timeout with value {index}m\n"
+            f"2026-08-19T15:00:00Z \x1b[36;1m'--ignore-exit-code 8 "
+            f"--hangdump-timeout {index}m --timeout {index}m'\x1b[0m\n"
+            for index in range(30)
+        )
+        diagnostic = "##[error]Failed to CreateArtifact: Unable to make request: ETIMEDOUT"
+        startup = noise + "Preparing repository checkout.\n" * 6400
+        # The observed transport-limited log was 196415 characters, with its
+        # actual upload failure at 193070, after many distinct option echoes.
+        text = (startup[:193069] + "\n" + diagnostic).ljust(196415, "\n")
+        self.assertEqual(193070, text.index(diagnostic))
+        self.assertEqual(196415, len(text))
+        self.assertEqual([diagnostic.removeprefix("##[error]")], _repair_diagnostic_lines(text))
+        data = workflow_snapshot()
+        payload = data["evidence"]["run:100:attempt:1:job:900:log"]["payload"]
+        payload.update(excerpt=text, truncated=True)
+        prepared = prepare_assessment(data)
+        log = next(record["payload"] for record in prepared["issues"][0]["evidenceBundle"]
+                   if record["kind"] == "workflow-log")
+        self.assertIn(diagnostic, log["excerpt"])
+        self.assertEqual(4000, len(log["excerpt"]))
+        self.assertTrue(log["truncated"])
+        self.assertTrue(log["excerptTruncated"])
+        self.assertFalse(prepared["issues"][0]["repairEvidence"]["ready"])
+        case = build_ci_failure_triage(prepared)["assessments"][0]
+        self.assertEqual("incomplete", case["evidenceCompleteness"])
+
+    def test_command_echoes_and_assertion_values_are_not_diagnostic_identity(self) -> None:
+        from ci_shepherd.observations import _repair_diagnostic_lines, workflow_log_preview
+
+        for line in (
+            "Run dotnet test --timeout 5m",
+            "##[command]dotnet test --timeout 5m",
+            "+ dotnet test --timeout 5m",
+            "dotnet test Example.csproj --timeout 5m",
+            "dotnet --timeout 5m",
+            '"/usr/local/bin/dotnet" test Example.csproj --timeout 5m',
+            "  --timeout <time>",
+            "Parsing option --timeout with value 5m",
+            "timeout-minutes: 60",
+            "Command: dotnet test --timeout 5m",
+            "\x1b[36;1m'--ignore-exit-code 8 --hangdump-timeout 5m --timeout 5m'\x1b[0m",
+            "Expected: Failed to CreateArtifact: Unable to make request: ETIMEDOUT",
+            "Actual: error CS1002: unexpected response",
+            "##[error]Assert.Equal() Failure: Expected HTTP 503",
+        ):
+            with self.subTest(line=line):
+                text = "Preparing repository checkout.\n" * 150 + "2026-08-19T15:00:00Z " + line
+                self.assertEqual([], _repair_diagnostic_lines(text))
+                self.assertEqual(text[:4000], workflow_log_preview(text, 4000))
+
+    def test_many_real_diagnostics_still_require_narrower_identity(self) -> None:
+        from ci_shepherd.observations import _repair_diagnostic_lines
+
+        text = "\n".join(f"error: runtime-{index} download failed" for index in range(21))
+        self.assertEqual([], _repair_diagnostic_lines(text))
+
     def test_generic_setup_transport_error_does_not_verify_a_family(self) -> None:
         case = build_ci_failure_triage(self._prepared(
             "Run dotnet tool restore\nerror: connection reset by peer"

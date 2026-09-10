@@ -268,7 +268,7 @@ class CloudOutcomeTests(unittest.TestCase):
                     self.assertEqual("edit-comment", proposals[0]["operation"])
 
     def test_conclusion_request_preserves_scope_and_does_not_require_a_useless_diff(self):
-        instructions = _delegation_instructions(1, None, workflow_failure=True)
+        instructions = _delegation_instructions(1, None, workflow_failure=True, test_failure=False)
         for expected in (
             "smallest complete", "draft pull request", "Do not remove quarantine or skip attributes",
             "Keep the incident open", "Do not manufacture a code change merely to produce a diff",

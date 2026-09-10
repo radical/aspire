@@ -11,7 +11,7 @@ from urllib.parse import unquote
 from .timeutils import parse_aware_iso8601
 
 
-COLLECTION_VERSION = 3
+COLLECTION_VERSION = 4
 
 
 _ISSUE_EVIDENCE_ID_RE = re.compile(
@@ -407,6 +407,8 @@ def _record_is_complete(value: object) -> bool:
         return False
     payload = value.get("payload")
     if not isinstance(payload, Mapping) or _contains_report_content(value):
+        return False
+    if value.get("kind") == "workflow-run" and not payload.get("status"):
         return False
     return True
 

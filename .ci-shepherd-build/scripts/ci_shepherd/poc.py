@@ -611,7 +611,8 @@ _WATCH_SUMMARY_BY_REASON = {
         "failure or positive recovery."
     ),
     "missing-diagnostic-identity": (
-        "Watch this missing-diagnostic-identity until logs or recurrence identify the cause."
+        "The diagnostic does not yet identify a repair target. Read the failing "
+        "job's error and surrounding context before deciding whether to repair or retry."
     ),
     "insufficient-evidence": (
         "Watch this insufficient-evidence case until a specific failure or recovery is observed."
@@ -845,6 +846,12 @@ def _build_compact_issue(
         missing_prerequisites=missing_prerequisites,
         resolution_evidence=resolution_evidence if recovery.get("status") == "verified" else {},
         allowed_evidence_ids=allowed_evidence_ids,
+        failed_run_evidence_ids=[
+            record["id"] for record in evidence_bundle
+            if record.get("availability") == "available"
+            and record.get("kind") == "workflow-run"
+            and record.get("payload", {}).get("conclusion") == "failure"
+        ],
         human_context=human_context,
         verification_context=verification_context,
         diagnostics_unavailable=_diagnostics_unavailable(
@@ -2246,6 +2253,7 @@ def _build_default_judgment(
     missing_prerequisites: list[str],
     resolution_evidence: Mapping[str, Any],
     allowed_evidence_ids: list[str],
+    failed_run_evidence_ids: list[str],
     human_context: Mapping[str, Any] | None,
     verification_context: Mapping[str, Any] | None = None,
     diagnostics_unavailable: bool = False,
@@ -2295,7 +2303,11 @@ def _build_default_judgment(
         resolution_evidence,
         allowed_evidence_ids,
         priority_evidence_ids=(
-            (recovered_run_evidence_id,) if recovered_run_evidence_id else ()
+            # Newest-first bundles can put successful runs ahead of failures.
+            # Repair/quarantine recommendations must still cite their failures.
+            failed_run_evidence_ids
+            if disposition in {"investigate", "review-quarantine", "delegate-copilot"}
+            else (recovered_run_evidence_id,) if recovered_run_evidence_id else ()
         ),
     )
     human_escalation = (
@@ -2331,6 +2343,15 @@ def _build_default_judgment(
     }
     if human_escalation is not None:
         recommendation["humanEscalation"] = human_escalation
+    if producer == "tracking-issue" and disposition == "investigate":
+        recommendation.update(
+            summary="Inspect the newest tracker failures and group matching diagnostics into bounded repair targets.",
+            missingEvidence=list(dict.fromkeys([
+                *missing_prerequisites,
+                "Current tracker run and failed-job diagnostics, grouped by exact test or repair subject and lane.",
+            ])),
+            reassessWhen="After the newest tracker run diagnostics identify a scoped failure cluster; do not delegate the umbrella.",
+        )
 
     return {
         "issueNumber": issue_number,

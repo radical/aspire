@@ -36,6 +36,14 @@ def main() -> int:
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--execution-evidence", help="Observed ended-invocation evidence, required for one-shot results.")
     parser.add_argument("--confirm-worker-stopped", action="store_true")
+    parser.add_argument(
+        "--preflight", action="store_true",
+        help="Validate the actual returned result and record only a validation observation; do not accept or terminalize it.",
+    )
+    parser.add_argument(
+        "--runtime-observation", type=Path,
+        help="Operator-owned JSON containing observed runtimeSessionId, workerStartedAt, workerCompletedAt, observationEvidence; unknown values are null.",
+    )
     args = parser.parse_args()
 
     old_umask = os.umask(0o077)
@@ -57,6 +65,11 @@ def main() -> int:
             attempt_id=args.attempt_id,
             execution_evidence=args.execution_evidence,
             confirm_worker_stopped=args.confirm_worker_stopped,
+            preflight_only=args.preflight,
+            runtime_observation=(
+                _load_object(args.runtime_observation, "Runtime observation")
+                if args.runtime_observation is not None else None
+            ),
         )
     finally:
         os.umask(old_umask)

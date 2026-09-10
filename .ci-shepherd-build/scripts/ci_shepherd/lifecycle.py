@@ -19,6 +19,7 @@ from ci_shepherd.policy import load_policy
 from ci_shepherd.quarantine_reconciliation import add_test_maintenance_context
 from ci_shepherd.repair_followup import build_related_workflow_repairs, build_repair_followup, build_upstream_repairs
 from ci_shepherd.run_scope import verified_run_scope
+from ci_shepherd.signals import reference_timestamp
 from ci_shepherd.timeutils import format_utc_z, parse_aware_iso8601
 from ci_shepherd.workflow_health import build_workflow_health
 
@@ -379,6 +380,7 @@ def _add_workflow_context(
             run = producer["run"]
             issue["repairEvidence"].update(
                 current=True, ready=True, category="product-or-tooling",
+                workflowPath=run["payload"]["workflowPath"],
                 allowedCategories=["product-or-tooling", "automation-tracker"],
                 lastFailureAt=run["payload"]["createdAt"], runIds=[run["payload"]["runId"]],
                 independentRunCount=1, evidenceIds=[f"issue:{issue['issueNumber']}", run["id"]],
@@ -749,6 +751,9 @@ def _scoped_issue_evidence(
         ),
         key=lambda item: (
             _EVIDENCE_PRIORITY.get(_bundle_kind(item[0], item[1]), 100),
+            -(
+                reference_timestamp({"sourceCreatedAt": item[1].get("payload", {}).get("createdAt")}) or 0
+            ) if item[1].get("kind") in {"issue-comment", "workflow-run"} else 0,
             item[0],
         ),
     )
@@ -762,6 +767,7 @@ def _prioritize_required_evidence(
     required = {issue_id}
     for field in ("repairEvidence", "workflowHealth", "testMaintenance"):
         required.update(issue.get(field, {}).get("evidenceIds", []))
+    required.update(issue.get("repairEvidence", {}).get("observedFailure", {}).get("evidenceIds", []))
     if issue["recovery"]["status"] == "verified":
         required.update(issue["recovery"]["evidenceIds"])
     scoped = _scoped_issue_evidence(snapshot["evidence"], number)
@@ -797,7 +803,13 @@ def _package_evidence(
                 "id": evidence_id,
                 "kind": _bundle_kind(evidence_id, record),
                 "url": record.get("url"),
-                "availability": record.get("availability"),
+                "availability": (
+                    "not-enriched"
+                    if record.get("kind") == "workflow-run"
+                    and record.get("availability") == "available"
+                    and not record.get("payload", {}).get("status")
+                    else record.get("availability")
+                ),
                 "payload": _compact_payload(evidence_id, record),
             }
             for evidence_id, record in selected

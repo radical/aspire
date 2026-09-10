@@ -231,7 +231,7 @@ class CheckedInRepairCapacityTests(unittest.TestCase):
         collect_triggering_pull_request(value, source_text=source["body"])
         proposal = self._execute_assessed_repair(value, None)
         self.assertEqual("workflow-producer", proposal["evidenceBasis"])
-        self.assertEqual("current-workflow-break", proposal["repairPriority"]["kind"])
+        self.assertEqual("current-ci-workflow-break", proposal["repairPriority"]["kind"])
 
     def test_collected_job_diagnostics_pass_policy_grant_capacity_and_assignment(self) -> None:
         value = collect_repair_logs(repair_snapshot(category="job"), [
@@ -239,7 +239,7 @@ class CheckedInRepairCapacityTests(unittest.TestCase):
             "##[error]Unable to locate the browser executable",
         ])
         proposal = self._execute_assessed_repair(value, "product-or-tooling")
-        self.assertEqual("recurrent-ci-failure", proposal["repairPriority"]["kind"])
+        self.assertEqual("current-ci-workflow-break", proposal["repairPriority"]["kind"])
 
     def test_collected_triggering_pr_passes_policy_grant_capacity_and_assignment(self) -> None:
         value = collect_repair_logs(repair_snapshot(), [
@@ -247,7 +247,7 @@ class CheckedInRepairCapacityTests(unittest.TestCase):
         ])
         collect_triggering_pull_request(value)
         proposal = self._execute_assessed_repair(value, "flaky-test")
-        self.assertEqual("unquarantined-test-instability", proposal["repairPriority"]["kind"])
+        self.assertEqual("current-ci-workflow-break", proposal["repairPriority"]["kind"])
 
     def test_unrelated_http_failures_cannot_reach_policy_grant_or_capacity(self) -> None:
         value = collect_repair_logs(repair_snapshot(category="job"), [
@@ -358,8 +358,10 @@ class CheckedInRepairCapacityTests(unittest.TestCase):
         facts = [
             {"producer": "gh-aw-failure-issue"},
             {"repairEvidence": {"current": True, "category": "flaky-test", "recurrent": True}},
-            {"repairEvidence": {"current": True, "category": "product-or-tooling", "recurrent": True}},
-            {"repairEvidence": {"current": True, "category": "blocking-build"}},
+            {"repairEvidence": {"current": True, "category": "product-or-tooling", "recurrent": True,
+                                "workflowPath": ".github/workflows/release.yml"}},
+            {"repairEvidence": {"current": True, "category": "blocking-build",
+                                "workflowPath": ".github/workflows/ci.yml"}},
             {"testMaintenance": {"state": "quarantined"}},
         ]
         for proposal, priority_facts in zip(proposals, facts):
@@ -372,7 +374,7 @@ class CheckedInRepairCapacityTests(unittest.TestCase):
             "violations": [{"actionId": proposals[3]["actionId"], "blockingReasons": ["missing-ci-label"]}],
         }
         self.fixture._write_proposals()
-        self.assertEqual([proposals[index]["actionId"] for index in (2, 1, 0)], self._selection()["selectedActionIds"])
+        self.assertEqual([proposals[index]["actionId"] for index in (2, 1, 4)], self._selection()["selectedActionIds"])
 
     def test_forged_model_priority_is_rejected_before_selection(self) -> None:
         proposal = self.fixture.proposals["proposals"][0]

@@ -243,6 +243,41 @@ class RepairRoutingTests(unittest.TestCase):
         self.assertEqual("assign-copilot", proposals["proposals"][0]["operation"])
         self.assertEqual([21], [item["issueNumber"] for item in build_review_selection(compact)["selected"]])
 
+    def test_quarantine_repair_requires_executed_reproduction_without_unquarantining(self):
+        instructions = assess(quarantined_snapshot())[3]["proposals"][0]["customInstructions"]
+        for required in (
+            "Invoke the repository's fix-flaky-test skill",
+            "run-test-repeatedly.sh", "run-test-repeatedly.ps1",
+            ".github/workflows/reproduce-flaky-tests.yml",
+            "/p:RunQuarantinedTests=true on BOTH dotnet build and dotnet test",
+            "same reproduction mode", "nonzero executed-test count in every iteration",
+            "all post-fix iterations passing", "normal green CI that excludes quarantine is NOT validation",
+            "Test execution evidence", "21 consecutive days", "Refs #21",
+            "Keep the tracking issue open", "Do not use closing keywords",
+            "including generated suffixes",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, instructions)
+        self.assertIn("Do not modify or remove the `[QuarantinedTest]` attribute in the final fix PR", instructions)
+
+    def test_unquarantined_test_repair_also_requires_nonzero_executions(self):
+        instructions = assess(repair_snapshot())[3]["proposals"][0]["customInstructions"]
+        self.assertIn("Invoke the repository's fix-flaky-test skill", instructions)
+        self.assertIn("nonzero executed-test count", instructions)
+        self.assertIn("Only propose a repair when the root cause and fix are high-confidence", instructions)
+
+    def test_broad_tracker_requires_scoped_classification_even_with_repair_evidence(self):
+        value = repair_snapshot()
+        value["evidence"]["issue:21"]["payload"]["producer"] = "tracking-issue"
+        prepared, compact, judgments, proposals = assess(value)
+        self.assertTrue(prepared["issues"][0]["repairEvidence"]["ready"])
+        self.assertIsNone(delegation_readiness(compact["issues"][0], "flaky-test"))
+        self.assertEqual([], [row for row in proposals["proposals"] if row["operation"] == "assign-copilot"])
+        recommendation = judgments["issues"][0]["recommendations"][0]
+        self.assertEqual("investigate", recommendation["disposition"])
+        self.assertIn("bounded repair targets", recommendation["summary"])
+        self.assertIn("do not delegate the umbrella", recommendation["reassessWhen"])
+
     def test_unquarantined_csharp_recurrence_reaches_selection_and_assignment(self):
         prepared, compact, judgments, proposals = assess(repair_snapshot())
         self.assertEqual(2, prepared["issues"][0]["repairEvidence"]["independentRunCount"])
@@ -250,7 +285,7 @@ class RepairRoutingTests(unittest.TestCase):
         self.assertIn("delegate-copilot", build_review_selection(compact)["selected"][0]["allowedDispositions"])
         assignment, = proposals["proposals"]
         self.assertTrue(assignment["executionEligibility"]["eligible"])
-        self.assertEqual("unquarantined-test-instability", assignment["repairPriority"]["kind"])
+        self.assertEqual("current-ci-workflow-break", assignment["repairPriority"]["kind"])
         policy = _policy_document(created_at_utc=NOW, enabled_classes=frozenset({"delegate-copilot"}))
         policy["repository"] = proposals["repository"]
         selected = build_policy_selection(
@@ -297,7 +332,7 @@ class RepairRoutingTests(unittest.TestCase):
         self.assertEqual("unknown", compact["issues"][0]["defaultJudgment"]["category"])
         self.assertEqual("blocking-build", judgments["issues"][0]["category"])
         self.assertEqual("assign-copilot", proposals["proposals"][0]["operation"])
-        self.assertEqual("current-workflow-break", proposals["proposals"][0]["repairPriority"]["kind"])
+        self.assertEqual("current-ci-workflow-break", proposals["proposals"][0]["repairPriority"]["kind"])
         for mutation in ("missing-failure", "owner", "human"):
             blocked = copy.deepcopy(value)
             if mutation == "missing-failure":
@@ -589,7 +624,11 @@ class RepairRoutingTests(unittest.TestCase):
     def test_quarantine_priority_changes_only_with_observed_ordinary_ci_impact(self):
         issue = prepare_assessment(quarantined_snapshot())["issues"][0]
         self.assertEqual("quarantined-test-repair", repair_priority(issue)["kind"])
-        issue["repairEvidence"] = prepare_assessment(repair_snapshot())["issues"][0]["repairEvidence"]
+        ordinary = repair_snapshot()
+        for record in ordinary["evidence"].values():
+            if record["kind"] == "workflow-run":
+                record["payload"]["workflowPath"] = ".github/workflows/tests.yml"
+        issue["repairEvidence"] = prepare_assessment(ordinary)["issues"][0]["repairEvidence"]
         self.assertEqual("unquarantined-test-instability", repair_priority(issue)["kind"])
         issue["repairEvidence"]["broaderImpact"] = False
         self.assertEqual("quarantined-test-repair", repair_priority(issue)["kind"])

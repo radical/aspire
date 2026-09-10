@@ -10,6 +10,61 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 
+# These templates are both the worker contract and the validator's routes.
+# Numeric placeholders are positive IDs, never arbitrary path fragments.
+_GET_PATHS = (
+    "issues/{issueNumber}", "issues/{issueNumber}/comments",
+    "pulls/{pull}", "pulls/{pull}/files", "pulls/{pull}/reviews", "pulls/{pull}/commits",
+    "pull/{pull}", "pull/{pull}/files",
+    "actions/runs/{run}", "actions/runs/{run}/jobs", "actions/runs/{run}/logs",
+    "actions/runs/{run}/artifacts", "actions/runs/{run}/job/{job}",
+    "actions/runs/{run}/attempts/{attempt}/jobs",
+    "actions/jobs/{job}", "actions/jobs/{job}/logs",
+    "actions/artifacts/{artifact}", "actions/artifacts/{artifact}/zip",
+)
+
+
+def diagnostic_get_contract(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe only GET routes accepted by validate_diagnostic_get."""
+    repository, issue = request["repository"], request["issueNumber"]
+    if not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ValueError("Diagnostic GET contract requires an owner/repository.")
+    if type(issue) is not int or issue < 1:
+        raise ValueError("Diagnostic GET contract requires a positive issue number.")
+    return {
+        "method": "GET",
+        "bases": [f"https://api.github.com/repos/{repository}/", f"https://github.com/{repository}/"],
+        "paths": [path.replace("{issueNumber}", str(issue)) for path in _GET_PATHS],
+        "parameters": "Replace {pull}, {run}, {job}, {attempt}, and {artifact} with positive numeric IDs from relevant evidence.",
+        "query": "Query strings such as ?per_page=100&page=2 are allowed; fragments are not.",
+        "sourceHistory": "Read pinned source/history locally with git; blob, contents, commits, compare, and search URLs are not diagnostic GET routes.",
+    }
+
+
+def validate_diagnostic_get(request: Mapping[str, Any], url: object) -> str:
+    """Check a real URL before fetching it and again when validating its receipt."""
+    if not isinstance(url, str) or len(url) > 2048:
+        raise ValueError("workLog GET URL is invalid.")
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https" or parsed.netloc not in {"api.github.com", "github.com"}
+        or parsed.fragment
+    ):
+        raise ValueError("workLog GETs must use direct HTTPS GitHub URLs.")
+    contract = diagnostic_get_contract(request)
+    base = contract["bases"][0 if parsed.netloc == "api.github.com" else 1]
+    prefix = urlsplit(base).path
+    if not parsed.path.startswith(prefix):
+        raise ValueError("workLog GET is outside the investigation repository.")
+    suffix = parsed.path[len(prefix):]
+    for template in contract["paths"]:
+        pattern = re.escape(template)
+        pattern = re.sub(r"\\\{[a-z]+\\\}", lambda _: r"[1-9]\d*", pattern)
+        if re.fullmatch(pattern, suffix):
+            return url
+    raise ValueError("workLog GET is outside the bounded diagnostic endpoint scope.")
+
+
 def validate_scoped_result(result: Mapping[str, Any]) -> None:
     fields = {"outcome", "summary", "evidenceIds", "reassessWhen", "missingEvidence", "fixHandoff", "workLog"}
     if set(result) != fields:
@@ -114,30 +169,7 @@ def validate_work_log(
             source_paths.add(path)
         elif kind == "github-get":
             fields = {"kind", "url", "finding"}
-            url = item.get("url")
-            if not isinstance(url, str) or len(url) > 2048:
-                raise ValueError("workLog GET URL is invalid.")
-            parsed = urlsplit(url)
-            if (
-                parsed.scheme != "https" or parsed.netloc not in {"api.github.com", "github.com"}
-                or parsed.fragment
-            ):
-                raise ValueError("workLog GETs must use direct HTTPS GitHub URLs.")
-            prefix = ("/repos/" if parsed.netloc == "api.github.com" else "/") + request["repository"] + "/"
-            if not parsed.path.startswith(prefix):
-                raise ValueError("workLog GET is outside the investigation repository.")
-            suffix = parsed.path[len(prefix):]
-            patterns = (
-                rf"issues/{request['issueNumber']}(?:/comments)?",
-                r"pulls/[1-9]\d*(?:/(?:files|reviews|commits))?",
-                r"pull/[1-9]\d*(?:/files)?",
-                r"actions/runs/[1-9]\d*(?:/(?:jobs|logs|artifacts|job/[1-9]\d*))?",
-                r"actions/runs/[1-9]\d*/attempts/[1-9]\d*/jobs",
-                r"actions/jobs/[1-9]\d*(?:/logs)?",
-                r"actions/artifacts/[1-9]\d*(?:/zip)?",
-            )
-            if not any(re.fullmatch(pattern, suffix) for pattern in patterns):
-                raise ValueError("workLog GET is outside the bounded diagnostic endpoint scope.")
+            validate_diagnostic_get(request, item.get("url"))
             read_count += 1
         elif kind == "command":
             fields = {"kind", "argv", "exitCode", "output", "finding"}

@@ -23,7 +23,7 @@ from ci_shepherd.investigation_worktrees import (
 )
 from ci_shepherd.lifecycle import prepare_assessment
 from test_production_decisions import recovery_snapshot
-from ci_shepherd.investigation_scope import validate_scoped_result, validate_work_log
+from ci_shepherd.investigation_scope import diagnostic_get_contract, validate_diagnostic_get, validate_scoped_result, validate_work_log
 
 
 def _source_checkout(root: Path) -> Path:
@@ -75,6 +75,54 @@ def _evidence_result() -> dict:
 
 
 class InvestigationScopeTests(unittest.TestCase):
+    def test_generated_contract_and_receipt_validator_accept_the_same_routes(self) -> None:
+        request = {
+            "repository": "owner/repo", "issueNumber": 307, "evidenceIds": ["issue:307"],
+            "investigationScope": {"maxSourceFiles": 40, "maxReadOnlyRequests": 12},
+        }
+        contract = diagnostic_get_contract(request)
+        self.assertEqual("GET", contract["method"])
+        for base in contract["bases"]:
+            for template in contract["paths"]:
+                url = base + template.format(pull=12, run=34, job=56, attempt=2, artifact=78) + "?per_page=100"
+                with self.subTest(url=url):
+                    self.assertEqual(url, validate_diagnostic_get(request, url))
+                    entry = {"kind": "github-get", "url": url, "finding": "Observed a diagnostic response."}
+                    self.assertEqual([entry], validate_work_log(request, [entry], Path.cwd(), []))
+        for suffix in (
+            "issues/21", "commits/abc", "contents/tests/a.cs", "blob/main/a.cs",
+            "compare/main...branch", "actions/runs/34/attempts/0/jobs",
+            "actions/runs/34/attempts/2/rerun", "actions/runs/34/../../secrets",
+        ):
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "endpoint scope"):
+                validate_diagnostic_get(request, contract["bases"][0] + suffix)
+        for url in (
+            "http://api.github.com/repos/owner/repo/issues/307",
+            "https://api.github.com.evil/repos/owner/repo/issues/307",
+            "https://api.github.com/repos/owner/repo/issues/307#fragment",
+            "https://api.github.com/repos/other/repo/issues/307",
+        ):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                validate_diagnostic_get(request, url)
+
+    def test_get_helper_is_offline_and_does_not_claim_execution(self) -> None:
+        script = Path("scripts/investigation_get.py").resolve()
+        command = [
+            sys.executable, str(script), "--repository", "owner/repo", "--issue-number", "307",
+            "--url", "https://api.github.com/repos/owner/repo/issues/307",
+        ]
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        self.assertEqual({
+            "method": "GET", "url": command[-1], "executed": False,
+        }, json.loads(result.stdout))
+        invalid = subprocess.run(
+            [*command[:-1], "https://api.github.com/repos/owner/repo/commits/main"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(2, invalid.returncode)
+        self.assertEqual("", invalid.stdout)
+        self.assertIn("bounded diagnostic endpoint scope", invalid.stderr)
+
     def test_work_log_accepts_attempt_scoped_jobs_without_widening_other_routes(self) -> None:
         with TemporaryDirectory() as directory:
             checkout = _source_checkout(Path(directory))

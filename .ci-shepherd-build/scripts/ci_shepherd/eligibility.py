@@ -211,32 +211,72 @@ def repair_priority(issue: Mapping[str, object]) -> dict[str, object]:
     repair = issue.get("repairEvidence", {})
     health = issue.get("workflowHealth", {})
     maintenance = issue.get("testMaintenance", {})
-    current = repair.get("current") is True or health.get("current") is True
+    observed = repair.get("observedFailure", {})
+    current_failures = [
+        context for context in (repair, health, observed) if context.get("current") is True
+    ]
+
+    def workflow_break(context: Mapping[str, object]) -> bool:
+        path = context.get("workflowPath")
+        category = context.get("category")
+        return context.get("current") is True and path != ".github/workflows/tests-quarantine.yml" and (
+            category == "blocking-build"
+            or context is repair and repair.get("reportingOutage") is True
+            or context is health and category != "flaky-test"
+            or bool(path) and path != ".github/workflows/tests.yml" and category != "flaky-test"
+            or path == ".github/workflows/tests.yml" and category not in {None, "unknown", "flaky-test"}
+        )
+
+    failure = min(
+        current_failures,
+        key=lambda context: (
+            context.get("workflowPath") != ".github/workflows/ci.yml",
+            not workflow_break(context),
+            context.get("quarantinedCoverage") is True,
+            -parse_aware_iso8601(context["lastFailureAt"], "lastFailureAt").timestamp()
+            if context.get("lastFailureAt") else float("inf"),
+        ),
+        default={},
+    )
+    current = failure.get("current") is True
+    workflow_path = failure.get("workflowPath")
     quarantined = (
         maintenance.get("state") == "quarantined" or issue.get("alreadyQuarantined") is True
         or repair.get("quarantinedCoverage") is True
-        or health.get("workflowPath") == ".github/workflows/tests-quarantine.yml"
+        or workflow_path == ".github/workflows/tests-quarantine.yml"
     )
-    category = repair.get("category", health.get("category"))
+    category = failure.get("category")
     recurrent = repair.get("recurrent") is True or health.get("recurrent") is True
+    # A verified failed execution can need diagnosis before it has a repair
+    # identity. Scheduling that work must not make it eligible for assignment.
+    ordinary_impact = current and (
+        repair.get("broaderImpact") is True
+        or (
+            failure is not repair
+            and workflow_path in {".github/workflows/ci.yml", ".github/workflows/tests.yml"}
+        )
+    )
     kind = (
-        "quarantined-test-repair" if quarantined and repair.get("broaderImpact") is not True
-        else "current-workflow-break" if current and repair.get("reportingOutage") is True
-        else "current-workflow-break" if current and category == "blocking-build"
-        else "unquarantined-test-instability" if current and category == "flaky-test"
-        else "recurrent-ci-failure" if current and recurrent
+        "current-ci-workflow-break" if current and workflow_path == ".github/workflows/ci.yml"
+        else "current-workflow-break" if workflow_break(failure)
+        else "quarantined-test-repair" if quarantined and not ordinary_impact
+        else "unquarantined-test-instability" if current and (
+            category == "flaky-test"
+            or category in {None, "unknown"} and workflow_path == ".github/workflows/tests.yml"
+        )
+        else "current-workflow-break" if current and workflow_path
         else "automation-defect" if issue.get("producer") in {"gh-aw-failure-issue", "tracking-issue", "ci-health-dashboard"}
-        else "recurrent-ci-failure"
+        else "unclassified-issue"
     )
     return {
         "kind": kind,
         "rank": {
-            "current-workflow-break": 0, "recurrent-ci-failure": 1,
-            "unquarantined-test-instability": 2, "automation-defect": 3,
-            "quarantined-test-repair": 4,
+            "current-ci-workflow-break": 0, "current-workflow-break": 1,
+            "unquarantined-test-instability": 2, "quarantined-test-repair": 3,
+            "automation-defect": 4, "unclassified-issue": 5,
         }[kind],
         "recurrent": recurrent,
-        "lastFailureAt": repair.get("lastFailureAt", health.get("lastFailureAt")) if current else None,
+        "lastFailureAt": failure.get("lastFailureAt") if current else None,
     }
 
 
@@ -257,6 +297,10 @@ def delegation_readiness(issue: Mapping[str, object], category: str) -> dict[str
     if issue.get("actionCluster", {}).get("role") == "superseded":
         return None
     explicit = issue.get("delegationRequest") == {"origin": "operator"}
+    # A tracker may contain several unrelated failures. Its latest sample can
+    # prioritize classification, but cannot turn the umbrella into one repair.
+    if issue.get("producer") == "tracking-issue" and not explicit:
+        return None
     if not explicit and issue.get("investigationResults"):
         return None
     health = issue.get("workflowHealth")

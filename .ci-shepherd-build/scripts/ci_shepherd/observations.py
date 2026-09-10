@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any, Mapping, NamedTuple
 from urllib.parse import quote
 
+from ci_shepherd.eligibility import repair_priority_key
 from ci_shepherd.naming import normalize_component
 from ci_shepherd.models import (
     WORKFLOW_LOG_FACT_LIMIT, WORKFLOW_LOG_TEXT_LIMIT, stable_json, validate_workflow_log_payload,
@@ -74,7 +75,7 @@ _BUILD_BREAK_DIAGNOSTIC_RE = re.compile(r"(?i)\b(?:error|warning)\s+(?P<code>(?:
 # A raw log line only counts as diagnostic evidence when it carries a failure marker.
 # Without this, expected/actual text inside a test assertion would be mined for causes.
 _DIAGNOSTIC_LINE_RE = re.compile(
-    r"(?i)(?:##\[error\]|\berror\b|\bfailed\b|\bfailure\b|\bfatal\b|\btimed out\b|\btimeout\b"
+    r"(?i)(?:##\[error\]|\berror\b|\bfailed\b|\bfailure\b|\bfatal\b|\btimed out\b|(?<![-\w])timeout(?![-\w])"
     r"|\bexception\b|\bunable to\b|\brefused\b|\breset by peer\b)"
 )
 # Assertion/diff lines emitted by test frameworks, e.g.
@@ -83,6 +84,17 @@ _DIAGNOSTIC_LINE_RE = re.compile(
 #   "  Assert.Equal() Failure: Strings differ"
 # These describe the test's own expectations, never the infrastructure that ran it.
 _ASSERTION_LINE_RE = re.compile(r"(?i)^\s*(?:expected|actual|assert[a-z.]*)\b")
+# Runner echoes include "##[command]dotnet test --timeout 5m", "Run ...",
+# "+ dotnet test ...", and indented "--hangdump-timeout <time>" options.
+# These configure a timeout; they do not report that it expired.
+_COMMAND_ECHO_RE = re.compile(
+    r"(?i)^(?:##\[(?:command|group)\]|\+\s+|"
+    r"(?:command(?: line)?|arguments|options)\s*:|--[\w-]+(?:[=\s]|$))"
+)
+_COMMAND_OPTIONS_RE = re.compile(
+    r"(?i)^(?:Run\s+)?[\"']?(?:\S*[/\\])?(?:dotnet|pwsh|powershell|bash|sh|node|npm|npx|python3?|curl|wget)"
+    r"[\"']?\s+(?:.*\s)?--[\w-]+"
+)
 # `dotnet test` console output for a passing test, e.g. "  Passed Alpha.Tests.One [42 ms]".
 _PASSED_TEST_RE = re.compile(r"(?m)^\s*Passed\s+(?P<test>.+?)\s+\[[^\]\r\n]+\]\s*$")
 # `dotnet test` console output for a failing test, e.g. "  Failed Alpha.Tests.One [42 ms]".
@@ -185,6 +197,11 @@ def build_repair_evidence(
     groups: dict[tuple[object, ...], list[Mapping[str, Any]]] = defaultdict(list)
     gaps: set[str] = set()
     unverified_pr_scopes: set[tuple[object, ...]] = set()
+    observed_failure: dict[str, Any] = {
+        "current": False, "workflowPath": None, "category": "unknown",
+        "lastFailureAt": None, "quarantinedCoverage": False, "evidenceIds": [],
+    }
+    observed_failure_order: tuple[object, ...] | None = None
     for occurrence in observations.get("occurrences", []):
         if occurrence["issueNumber"] != issue_number:
             continue
@@ -203,6 +220,17 @@ def build_repair_evidence(
         observed_at = parse_aware_iso8601(occurrence["observedAt"], "occurrence.observedAt")
         if not now - timedelta(days=14) <= observed_at <= now:
             continue
+        observed = _observed_failure_for(snapshot, occurrence)
+        if observed is not None:
+            # Use the same scheduling policy as the final work queue. A later
+            # covered failure must not hide unresolved work from any tier.
+            order = (
+                not observed["current"],
+                repair_priority_key({"issueNumber": issue_number, "repairEvidence": {"observedFailure": observed}}),
+                -observed_at.timestamp(), -occurrence["runId"], -occurrence["jobId"],
+            )
+            if observed_failure_order is None or order < observed_failure_order:
+                observed_failure, observed_failure_order = observed, order
         if occurrence.get("incompleteDiagnosticEvidenceIds"):
             gaps.add("Read the complete failing diagnostic to identify the repair subject.")
             continue
@@ -287,6 +315,8 @@ def build_repair_evidence(
         candidates.append({
             "current": current, "ready": current and (deterministic or recurrent), "category": category,
             "subjectKey": stable_json(signature),
+            "workflowPath": evidence[f"run:{latest['runId']}"]["payload"]["workflowPath"],
+            "observedFailure": observed_failure,
             # These repository workflows exercise ordinary CI, unlike the
             # dedicated quarantine workflow, which can also run on a PR.
             "broaderImpact": evidence[f"run:{latest['runId']}"]["payload"]["workflowPath"] in {
@@ -312,8 +342,50 @@ def build_repair_evidence(
     return {
         "current": False, "ready": False, "category": "unknown", "allowedCategories": [],
         "recurrent": False, "independentRunCount": 0, "lastFailureAt": None,
-        "runIds": [], "evidenceIds": [],
+        "runIds": [], "evidenceIds": [], "workflowPath": None, "observedFailure": observed_failure,
         "missingFacts": sorted(gaps) or ["Identify a current failed execution and its exact repair subject."],
+    }
+
+
+def _observed_failure_for(
+    snapshot: Mapping[str, Any], occurrence: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Project execution-only scheduling facts, never repair readiness."""
+    evidence = snapshot["evidence"]
+    run_id = f"run:{occurrence['runId']}"
+    job_id = f"{run_id}:attempt:{occurrence.get('attempt')}:job:{occurrence.get('jobId')}"
+    run_record, job_record = evidence.get(run_id, {}), evidence.get(job_id, {})
+    run, job = run_record.get("payload", {}), job_record.get("payload", {})
+    if (
+        occurrence.get("scopeConflict") is True
+        or run_record.get("availability") != "available"
+        or job_record.get("kind") != "workflow-job" or job_record.get("availability") != "available"
+        or run.get("status") != "completed" or run.get("conclusion") not in _FAILED_JOB_CONCLUSIONS
+        or job.get("status") != "completed" or job.get("conclusion") not in _FAILED_JOB_CONCLUSIONS
+        or job.get("runId") != occurrence["runId"] or job.get("attempt") != run.get("attempt")
+        or job.get("targetRepository") != snapshot["repository"]
+        or run.get("workflowId", 0) <= 0
+    ):
+        return None
+    # A tracker title can supply a reported test name, but cannot establish
+    # that test actually failed. Missing diagnostics stay unclassified.
+    execution_test = (
+        is_quarantine_test_method_name(occurrence.get("testName") or "")
+        and evidence.get(occurrence.get("testNameEvidenceId"), {}).get("kind")
+        in {"workflow-log", "workflow-job", "workflow-test-results"}
+    )
+    category = (
+        "blocking-build" if "toolchain-build-break" in occurrence["allowedCauses"]
+        else "flaky-test" if execution_test
+        else "transient-infrastructure" if "infra-transient" in occurrence["allowedCauses"]
+        else "unknown"
+    )
+    return {
+        "current": occurrence.get("coverageState") != "covered",
+        "workflowPath": run["workflowPath"], "category": category,
+        "lastFailureAt": occurrence["observedAt"],
+        "quarantinedCoverage": run["workflowPath"] == ".github/workflows/tests-quarantine.yml",
+        "evidenceIds": [run_id, job_id],
     }
 
 
@@ -1813,8 +1885,11 @@ def _diagnostic_lines(text: str) -> list[str]:
     """
     return [
         line
-        for line in text.splitlines()
-        if not _ASSERTION_LINE_RE.match(line) and _DIAGNOSTIC_LINE_RE.search(line) is not None
+        for line in normalize_log_text(text).splitlines()
+        if not _COMMAND_ECHO_RE.match(line)
+        and not _COMMAND_OPTIONS_RE.match(line)
+        and not _ASSERTION_LINE_RE.match(line.removeprefix("##[error]").strip())
+        and _DIAGNOSTIC_LINE_RE.search(line) is not None
     ]
 
 
@@ -1857,9 +1932,8 @@ def workflow_log_preview(text: str, limit: int) -> str:
 
 
 def _repair_diagnostic_lines(text: str) -> list[str]:
-    normalized = normalize_log_text(text)
     diagnostics: set[str] = set()
-    for line in _diagnostic_lines(normalized):
+    for line in _diagnostic_lines(text):
         line = line.removeprefix("##[error]").strip()
         if _ASSERTION_LINE_RE.match(line) or _GENERIC_FAILURE_RE.fullmatch(line):
             continue

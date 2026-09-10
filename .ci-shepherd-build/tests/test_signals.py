@@ -36,6 +36,49 @@ def occurrence_table(rows: tuple[tuple[str, int, str, int], ...]) -> str:
 
 
 class IssueSignalTests(unittest.TestCase):
+    def test_dated_comment_runs_take_the_newest_unique_reference_slots(self) -> None:
+        references = tuple(
+            {
+                **dict(extract_issue_signals(
+                    ISSUE_NUMBER, f"{SOURCE_EVIDENCE_ID}:comment:{day}",
+                    f"{SOURCE_URL}#issuecomment-{day}", f"<!-- run:{1000 - day} -->",
+                    REPOSITORY,
+                ).references[0]),
+                "sourceCreatedAt": f"2026-08-{day:02d}T00:00:00Z",
+            }
+            for day in range(1, 15)
+        )
+        duplicate = {**references[-1], "sourceEvidenceId": f"{SOURCE_EVIDENCE_ID}:comment:99"}
+        original = tuple(dict(ref) for ref in references)
+        for order in (references, tuple(reversed(references))):
+            selection = select_references(
+                (*order, duplicate), (),
+                max_run_refs_per_issue=12,
+                max_issue_refs_per_issue=5,
+                max_commit_refs_per_issue=3,
+            )
+            self.assertEqual(list(range(986, 998)), list(dict.fromkeys(ref["runId"] for ref in selection.selected)))
+            self.assertEqual([998, 999], [ref["runId"] for ref in selection.excluded])
+            self.assertEqual(2, sum(ref["runId"] == 986 for ref in selection.selected))
+            self.assertTrue(all(ref["sourceEvidenceId"].startswith(f"{SOURCE_EVIDENCE_ID}:comment:")
+                                for ref in selection.selected))
+        self.assertEqual(original, references)
+
+    def test_comment_reference_dates_require_real_timezone_aware_metadata(self) -> None:
+        refs = [dict(ref) for ref in extract(
+            "https://github.com/microsoft/aspire/actions/runs/100\n"
+            "https://github.com/microsoft/aspire/actions/runs/200"
+        ).references]
+        for invalid in ("", "newest", "2026-08-19", "2026-08-19T23:59:00"):
+            with self.subTest(created_at=invalid):
+                refs[0]["sourceCreatedAt"] = invalid
+                refs[1]["sourceCreatedAt"] = "2026-08-19T00:00:00Z"
+                selection = select_references(
+                    tuple(refs), (), max_run_refs_per_issue=1,
+                    max_issue_refs_per_issue=5, max_commit_refs_per_issue=3,
+                )
+                self.assertEqual([200], [ref["runId"] for ref in selection.selected])
+
     def test_key_run_labels_are_not_treated_as_issue_references(self) -> None:
         signals = extract(
             "#### Key runs\n"
