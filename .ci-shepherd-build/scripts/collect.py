@@ -224,10 +224,18 @@ def observe_delegation_status(
         if start.task_id is not None
         and start.task_id not in active_task_ids
     )
+    # Retirement releases active work, not observation of a retained task/PR
+    # history. Capacity and outcome derivation still consume those bindings;
+    # omitting their detail makes unchanged terminal work appear unavailable.
+    observed_task_ids = active_task_ids | {
+        record["taskId"] for record in known_records
+        if isinstance(record.get("taskId"), str) and record["taskId"]
+        and record.get("pullRequests")
+    }
     observation = observe_delegations(
         client,
         repository,
-        owned_task_ids=active_task_ids,
+        owned_task_ids=observed_task_ids,
         owned_issue_numbers={
             start.issue_number
             for start in starts

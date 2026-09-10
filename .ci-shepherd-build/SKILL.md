@@ -1486,6 +1486,12 @@ tracking of the same attempt, not a new assignment. Unknown PR state cannot
 release capacity, and a still-running task consumes its slot even after a PR
 merges.
 
+Retained task/PR bindings continue to receive exact task observations after
+retirement. Dropping those reads would change an unchanged terminal outcome to
+`not-requested` and make its retained PR binding spuriously block capacity as a
+missing owned task. Retirement is not permission to replace current observation
+with an unlabelled stale value.
+
 All issues with durable assignment history remain monitored, including issues
 outside normal CI inventory. An open issue after a terminal attempt is shown as
 awaiting a new decision. Another attempt needs a fresh nomination and exact

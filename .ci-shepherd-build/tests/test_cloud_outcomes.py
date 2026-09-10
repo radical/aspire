@@ -42,6 +42,54 @@ def outcome_snapshot(*, task_state="completed", files=3, body="Fix proposed; blo
 
 
 class CloudOutcomeTests(unittest.TestCase):
+    def test_retirement_keeps_retained_task_observation_and_capacity_stable(self):
+        collect = load_script("collect")
+        detail = "/agents/repos/owner/repo/tasks/task-1"
+        client = ScriptedClient({
+            ("/agents/repos/owner/repo/tasks?state=queued%2Cin_progress&is_archived=false&per_page=100", "tasks"): [],
+        }, {
+            detail: {
+                "id": "task-1", "state": "cancelled", "created_at": "2026-09-02T18:00:00Z",
+                "artifacts": [{"type": "pull", "provider": "github", "data": {"id": 101, "global_id": "PR_101"}}],
+            },
+            "/repos/owner/repo/pulls/201": {
+                "id": 101, "number": 201, "node_id": "PR_101", "state": "closed", "draft": True,
+                "changed_files": 0, "head": {"sha": "a" * 40}, "comments": 0,
+                "merged": False, "merged_at": None,
+                "html_url": "https://github.com/owner/repo/pull/201", "body": "Stopped fixture.",
+                "user": {"login": "Copilot"}, "updated_at": "2026-09-02T18:59:00Z",
+            },
+            "/repos/owner/repo/issues/1": {
+                "number": 1, "state": "open",
+                "assignees": [{"login": "maintainer", "type": "User"}],
+            },
+        })
+        events = [
+            {"eventType": "delegation-baseline", "actionId": "assignment:1", "recordedAt": "2026-09-02T18:00:00Z",
+             "operation": "assign-copilot", "repository": "owner/repo", "target": {"kind": "issue", "number": 1}, "taskIdsBefore": []},
+            {"eventType": "terminal", "actionId": "assignment:1", "outcome": "executed", "result": {"taskId": "task-1"}},
+            {"eventType": "delegation-observed", "actionId": "assignment:1", "record": outcome_snapshot()["delegationStatus"]["records"][0]},
+        ]
+        now = datetime(2026, 9, 2, 19, tzinfo=UTC)
+        first, _ = collect.observe_delegation_status(client, "owner/repo", events=events, now=now)
+        record, = first["records"]
+        self.assertTrue(record["retired"])
+        events.extend([
+            {"eventType": "delegation-observed", "actionId": "assignment:1", "record": record},
+            {"eventType": "delegation-retired", "actionId": "assignment:1", "taskId": "task-1"},
+        ])
+        client.calls.clear()
+        second, _ = collect.observe_delegation_status(client, "owner/repo", events=events, now=now)
+        self.assertIn((detail, None), client.calls)
+        self.assertEqual("available", second["records"][0]["taskObservation"])
+        self.assertEqual(first["capacity"], second["capacity"])
+        self.assertEqual(record["outcomeEvidence"]["fingerprint"],
+                         second["records"][0]["outcomeEvidence"]["fingerprint"])
+        del client.records[detail]
+        unavailable, _ = collect.observe_delegation_status(client, "owner/repo", events=events, now=now)
+        self.assertEqual("unavailable", unavailable["records"][0]["taskObservation"])
+        self.assertFalse(unavailable["capacity"]["complete"])
+
     def attach(self, value, previous=None, client=None):
         delegation_observer.attach_cloud_outcomes(value, previous, client or ScriptedClient({}))
         validate_snapshot(value)

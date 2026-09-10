@@ -288,10 +288,11 @@ class DelegationHistoryTests(unittest.TestCase):
         record = again["records"][0]
         self.assertEqual("merged", record["attemptOutcome"])
         self.assertEqual("failed", record["taskState"])
-        self.assertEqual("not-requested", record["taskObservation"])
+        self.assertEqual("unavailable", record["taskObservation"])
         self.assertTrue(record["requiresNewDecision"])
         self.assertTrue(record["issueOpen"])
         self.assertEqual(201, record["pullRequests"][0]["number"])
         self.assertIn(("/repos/owner/repo/pulls/201", None), client.calls)
+        self.assertIn(("/agents/repos/owner/repo/tasks/task-1", None), client.calls)
         self.assertIn(("/repos/owner/repo/issues/42", None), client.calls)
         self.assertEqual(0, again["capacity"]["openDelegatedPullRequests"])
