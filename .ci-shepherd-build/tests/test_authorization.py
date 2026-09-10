@@ -1844,8 +1844,8 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
 
     The fixture reuses the same two-step comment/close dependency chain as
     `GenerateAuthorizationGrantTests`, pre-switched to the production
-    repository microsoft/aspire (the only repository autonomous policy
-    grants are valid for), backed by a real `CoordinatorStateStore` rooted
+    repository microsoft/aspire by default, with explicit fork coverage,
+    backed by a real `CoordinatorStateStore` rooted
     at the same `state_dir` the grant itself is bound to. Selections are
     built through the real `build_policy_selection` selector -- never a
     hand-rolled stand-in -- so these tests stay honest about the selection
@@ -2098,6 +2098,37 @@ class AutonomousPolicyGrantTests(unittest.TestCase):
         )
 
     # -- generation-time validation ---------------------------------------
+
+    def test_fork_policy_grant_is_repository_bound_without_production_pilot_flags(self) -> None:
+        original_repository = self.repository
+        self.repository = "owner/fork"
+        self.proposals = json.loads(json.dumps(self.proposals).replace(original_repository, self.repository))
+        self.comment_action_id = self.comment_action_id.replace(original_repository, self.repository)
+        self.close_action_id = self.close_action_id.replace(original_repository, self.repository)
+        self._write_proposals()
+        self._append_policy(revision=1, enabled_classes=frozenset({"edit-comment"}))
+        self._build_and_write_selection()
+
+        grant = self._mint(self.comment_action_id)
+        execution = self._load(self.comment_action_id)
+
+        self.assertEqual(self.repository, execution.grant.repository)
+        self.assertTrue(execution.grant.autonomous_policy)
+        self.assertFalse(execution.grant.production_comment_pilot)
+        with self.assertRaisesRegex(AuthorizationError, "only valid for microsoft/aspire"):
+            self._generate(action_ids=[self.comment_action_id], allow_production_comment_pilot=True)
+        self.output_path.write_text(
+            json.dumps({**grant, "repository": "owner/another"}), encoding="utf-8",
+        )
+        with self.assertRaisesRegex(AuthorizationError, "repository"):
+            self._load(self.comment_action_id)
+        self.output_path.write_text(json.dumps(grant), encoding="utf-8")
+        self._append_policy(
+            revision=2, replaces="policy:1", status="paused",
+            enabled_classes=frozenset({"edit-comment"}),
+        )
+        with self.assertRaises(AuthorizationError):
+            self._load(self.comment_action_id)
 
     def test_requires_exactly_one_action_id(self) -> None:
         with self.assertRaisesRegex(AuthorizationError, "exactly one actionId"):

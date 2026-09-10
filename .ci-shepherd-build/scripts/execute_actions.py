@@ -10,7 +10,7 @@ import time
 from typing import Sequence
 
 from ci_shepherd.actor import build_dry_run, execute_action, reconcile_action
-from ci_shepherd.authorization import load_authorized_execution
+from ci_shepherd.authorization import PRODUCTION_REPOSITORY, load_authorized_execution
 from ci_shepherd.coordinator_state import (
     CoordinatorStateStore,
     make_lock_free_durable_intent_reader,
@@ -84,8 +84,8 @@ def _parser() -> argparse.ArgumentParser:
         "--autonomous-policy",
         action="store_true",
         help=(
-            "Permit an authorized one-action grant bound to a coordinator "
-            "policy selection on microsoft/aspire."
+            "Permit an authorized one-action grant bound to a repository's "
+            "coordinator policy selection."
         ),
     )
     parser.add_argument(
@@ -227,20 +227,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             if authorized.grant.autonomous_policy and autonomous_license is not None
             else None
         )
+        is_production = authorized.grant.repository.casefold() == PRODUCTION_REPOSITORY
         production_comment_overrides = (
             {authorized.grant.repository}
-            if authorized.grant.production_comment_pilot
-            or autonomous_operation_class in {"create-comment", "edit-comment"}
+            if is_production and (
+                authorized.grant.production_comment_pilot
+                or autonomous_operation_class in {"create-comment", "edit-comment"}
+            )
             else set()
         )
         production_closure_overrides = (
             {authorized.grant.repository}
-            if autonomous_operation_class == "close-issue"
+            if is_production and autonomous_operation_class == "close-issue"
             else set()
         )
         production_delegation_overrides = (
             {authorized.grant.repository}
-            if (
+            if is_production and (
                 authorized.grant.production_delegation_pilot
                 or authorized.grant.production_delegation_steady_state
                 or autonomous_operation_class == "delegate-copilot"

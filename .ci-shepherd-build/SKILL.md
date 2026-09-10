@@ -181,6 +181,20 @@ not its rolling-day start. An unavailable task, even with a readable PR, or an
 unassociated older start remains an unknown-capacity blocker until reconciled.
 Do not automatically retry an unsuccessful attempt.
 
+For tighter invocation limits, pass the corresponding capacity options on
+every `coordinator.py grant-next` call. For example, a one-task pilot uses
+`--max-running-copilot-tasks 1 --max-copilot-starts-per-rolling-24h 1
+--max-open-delegated-prs 1`.
+
+The optional `--max-repository-running-copilot-tasks` narrows the repository-wide ceiling.
+These values are signed into the grant and cannot exceed the checked-in
+capacity policy; operation-class start budgets do not substitute for them.
+
+Repository-bound autonomous grants support the configured fork as well as the
+protected production repository. Their policy/decision, selection, expiry,
+capacity, and target bindings remain mandatory. Legacy production-pilot flags
+remain production-only; a fork grant never acquires a production override.
+
 After `cycle.py finish`, treat `policy-selection.json` and
 `coordinator-projection.json` as authoritative. `comment-selection.json` is a
 migration artifact only and never authorizes an autonomous action.

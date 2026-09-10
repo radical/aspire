@@ -35,6 +35,10 @@ from typing import Any, Mapping, Sequence
 
 from ci_shepherd.authorization import (
     AuthorizationError,
+    DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H,
+    DEFAULT_MAX_OPEN_DELEGATED_PRS,
+    DEFAULT_MAX_REPOSITORY_RUNNING_COPILOT_TASKS,
+    DEFAULT_MAX_RUNNING_COPILOT_TASKS,
     generate_authorization_grant,
     write_authorization_grant,
 )
@@ -682,6 +686,10 @@ def _cmd_grant_next(args: argparse.Namespace) -> dict[str, object]:
         allow_autonomous_policy=True,
         policy_selection_path=args.selection,
         policy_action_id=chosen,
+        max_running_copilot_tasks=args.max_running_copilot_tasks,
+        max_copilot_starts_per_rolling_24h=args.max_copilot_starts_per_rolling_24h,
+        max_open_delegated_prs=args.max_open_delegated_prs,
+        max_repository_running_copilot_tasks=args.max_repository_running_copilot_tasks,
         now=now,
     )
     write_authorization_grant(grant, args.output)
@@ -815,6 +823,18 @@ def _build_parser() -> _CoordinatorArgumentParser:
     grant_next.add_argument("--selection", required=True, type=Path)
     grant_next.add_argument("--output", required=True, type=Path)
     grant_next.add_argument("--now", required=True, type=_now_type)
+    grant_next.add_argument(
+        "--max-running-copilot-tasks", type=int, default=DEFAULT_MAX_RUNNING_COPILOT_TASKS,
+    )
+    grant_next.add_argument(
+        "--max-copilot-starts-per-rolling-24h", type=int,
+        default=DEFAULT_MAX_COPILOT_STARTS_PER_ROLLING_24H,
+    )
+    grant_next.add_argument("--max-open-delegated-prs", type=int, default=DEFAULT_MAX_OPEN_DELEGATED_PRS)
+    grant_next.add_argument(
+        "--max-repository-running-copilot-tasks", type=int,
+        default=DEFAULT_MAX_REPOSITORY_RUNNING_COPILOT_TASKS,
+    )
     grant_next.set_defaults(handler=_cmd_grant_next)
 
     return parser

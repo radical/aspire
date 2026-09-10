@@ -340,9 +340,8 @@ def load_authorized_execution(
         allow_production_comment_pilot
         or allow_production_delegation_pilot
         or allow_production_delegation_steady_state
-        or allow_autonomous_policy
     )
-    if is_production and not production_pilot_enabled:
+    if is_production and not (production_pilot_enabled or allow_autonomous_policy):
         raise AuthorizationError(
             "Mutation repository is protected during remediation: "
             "microsoft/aspire"
@@ -473,7 +472,9 @@ def load_authorized_execution(
             raise AuthorizationError(
                 "Authorization grant chain roots must also be allowedActionIds."
             )
-    if is_production:
+    # A repository-bound policy needs the same checks on a fork. It is not a
+    # legacy production-pilot switch, whose repository restriction remains above.
+    if is_production or allow_autonomous_policy:
         if allow_production_comment_pilot:
             _validate_production_comment_grant(
                 grant,
@@ -975,9 +976,8 @@ def generate_authorization_grant(
         allow_production_comment_pilot
         or allow_production_delegation_pilot
         or allow_production_delegation_steady_state
-        or allow_autonomous_policy
     )
-    if is_production and not production_pilot_enabled:
+    if is_production and not (production_pilot_enabled or allow_autonomous_policy):
         raise AuthorizationError(
             "Mutation repository is protected during remediation: "
             "microsoft/aspire"
@@ -1147,7 +1147,7 @@ def generate_authorization_grant(
     autonomous_policy_license: AutonomousPolicyLicense | None = None
     autonomous_proposal_expiry: datetime | None = None
     autonomous_license_deadline: datetime | None = None
-    if is_production:
+    if is_production or allow_autonomous_policy:
         if allow_production_comment_pilot:
             _validate_production_comment_selection(
                 selected_proposals,
@@ -1649,9 +1649,9 @@ def _validate_autonomous_policy_grant(
     capability: object,
     now: datetime,
 ) -> None:
-    if grant.repository.casefold() != PRODUCTION_REPOSITORY:
+    if grant.repository != repository:
         raise AuthorizationError(
-            "Autonomous policy grant repository must be microsoft/aspire."
+            "Autonomous policy grant repository must match its proposal."
         )
     if not grant.autonomous_policy or grant.autonomous_policy_license is None:
         raise AuthorizationError(

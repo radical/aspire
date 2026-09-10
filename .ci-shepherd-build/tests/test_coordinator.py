@@ -151,11 +151,9 @@ class CoordinatorCliTestCase(unittest.TestCase):
         # check (independent of, and in addition to, autonomous policy)
         # requires every proposals document for microsoft/aspire to carry a
         # snapshotId of the form "snapshot:<repository>:<collected-at>[:r1]"
-        # plus a matching productionPilotCapability. Every coordinator test
-        # exercises the production repository (autonomous policy grants are
-        # only ever allowed there), so this fixture bakes in a
-        # comfortably-fresh snapshot by default instead of every call site
-        # re-deriving one.
+        # plus a matching productionPilotCapability. Policy-backed fork grants
+        # retain that finalized/fresh snapshot requirement, so the default fixture
+        # supplies it rather than having each call site re-derive one.
         collected_at = self.now - timedelta(minutes=5)
         snapshot_id = f"snapshot:{self.repository}:{_rfc3339(collected_at)}"
         if evidence_round == 1:
@@ -1263,6 +1261,103 @@ class SelectCommandTests(CoordinatorCliTestCase):
 
 
 class GrantNextCommandTests(CoordinatorCliTestCase):
+    def test_fork_policy_execution_uses_no_protected_override_and_replays_once(self) -> None:
+        from unittest.mock import patch
+        import execute_actions as execute_script
+        from ci_shepherd.github_actor import GitHubActorClient
+        from tests.test_actor import ScriptedActorClient
+
+        self.repository = "owner/fork"
+        self.now = datetime.now(UTC).replace(microsecond=0)
+        proposal = _comment_proposal(action_id="action:fork-comment", issue_number=1)
+        proposal["issueUrl"] = f"https://github.com/{self.repository}/issues/1"
+        document = self._write_proposals([proposal], unchanged_issue_numbers=[])
+        document.update(repository=self.repository, shepherdAuthor="ankj", generatedAtUtc=self._now_arg())
+        self._write_json(self.proposals_path, document)
+        self._activate_policy()
+        selection = self._select()
+        grant = self.scratch / "fork-grant.json"
+        code, _, stderr = self._run([
+            "grant-next", "--repository", self.repository, "--state-dir", str(self.state_dir),
+            "--proposals", str(self.proposals_path), "--selection", str(selection),
+            "--output", str(grant), "--now", self._now_arg(),
+        ])
+        self.assertEqual(0, code, stderr)
+        issue = {
+            "number": 1, "state": "open", "updated_at": proposal["sourceEvidenceFingerprint"]["issueUpdatedAt"],
+            "labels": [{"name": "ci-failure-cause"}], "assignees": [],
+        }
+        comment = {"id": 900, "body": proposal["body"], "user": {"login": "ankj"}}
+        client = ScriptedActorClient(
+            issues=[issue, issue], comments=[[], [comment]], single_comments=[comment],
+        )
+
+        def make_client(**options):
+            GitHubActorClient(**options)
+            return client
+
+        args = [
+            "--proposals", str(self.proposals_path), "--authorization", str(grant),
+            "--state-dir", str(self.state_dir), "--action-id", proposal["actionId"],
+            "--policy-selection", str(selection), "--autonomous-policy", "--execute",
+        ]
+        first = io.StringIO()
+        with patch.object(execute_script, "GitHubActorClient", side_effect=make_client) as factory:
+            with contextlib.redirect_stdout(first):
+                self.assertEqual(0, execute_script.main(args))
+            calls = list(client.calls)
+            replay = io.StringIO()
+            with contextlib.redirect_stdout(replay):
+                self.assertEqual(0, execute_script.main(args))
+        self.assertEqual("executed", json.loads(first.getvalue())["outcome"])
+        self.assertEqual(first.getvalue(), replay.getvalue())
+        self.assertEqual(calls, client.calls)
+        factory.assert_called_once()
+        self.assertEqual(set(), factory.call_args.kwargs["protected_comment_repositories"])
+        self.assertEqual(set(), factory.call_args.kwargs["protected_closure_repositories"])
+        self.assertEqual(set(), factory.call_args.kwargs["protected_delegation_repositories"])
+
+    def test_fork_grant_next_preserves_explicit_narrow_task_capacity(self) -> None:
+        from ci_shepherd.authorization import load_authorized_execution
+        from tests.test_actor import _assignment_proposals
+
+        self.repository = "owner/repo"
+        proposal = _assignment_proposals()["proposals"][0]
+        document = self._write_proposals([proposal], unchanged_issue_numbers=[])
+        document["repository"] = self.repository
+        self._write_json(self.proposals_path, document)
+        self._activate_policy(enabled_classes=frozenset({"delegate-copilot"}))
+        selection_path = self._select()
+        output_path = self.scratch / "fork-grant.json"
+        args = [
+            "grant-next", "--repository", self.repository,
+            "--state-dir", str(self.state_dir), "--proposals", str(self.proposals_path),
+            "--selection", str(selection_path), "--output", str(output_path),
+            "--now", self._now_arg(),
+            "--max-running-copilot-tasks", "1",
+            "--max-copilot-starts-per-rolling-24h", "1",
+            "--max-open-delegated-prs", "1",
+        ]
+        code, stdout, stderr = self._run(args)
+        self.assertEqual(0, code, stderr)
+        self.assertTrue(json.loads(stdout)["granted"])
+        execution = load_authorized_execution(
+            self.proposals_path, output_path, state_dir=self.state_dir,
+            action_id=proposal["actionId"], allow_autonomous_policy=True,
+            policy_selection_path=selection_path, now=self.now,
+        )
+        budget = execution.grant.budget
+        self.assertEqual((1, 1, 1), (
+            budget.max_running_copilot_tasks, budget.max_copilot_starts_per_rolling_24h,
+            budget.max_open_delegated_prs,
+        ))
+        invalid_path = self.scratch / "over-cap-grant.json"
+        invalid = list(args)
+        invalid[invalid.index("--output") + 1] = str(invalid_path)
+        invalid[invalid.index("--max-running-copilot-tasks") + 1] = "4"
+        self.assertNotEqual(0, self._run(invalid)[0])
+        self.assertFalse(invalid_path.exists())
+
     def test_prefers_first_exact_action_over_automatic_deterministically(
         self,
     ) -> None:
