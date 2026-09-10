@@ -527,8 +527,17 @@ def observe_capacity_task_records(
         if not isinstance(task_id, str) or not task_id:
             raise ValueError(f"running_tasks[{index}].id must be nonempty.")
         previous = records_by_id.get(task_id)
-        if previous is not None and previous != record:
-            raise ValueError(f"Agent Task {task_id!r} changed across observations.")
+        if previous is not None:
+            previous_mapping = _mapping(previous, f"tasks[{task_id}]")
+            # Detail GETs include an expanded "sessions": [...] array that task
+            # inventories omit. Compare the shared task record, keeping state,
+            # timestamps, repository and artifact conflicts fail-closed.
+            if (
+                {key: value for key, value in previous_mapping.items() if key != "sessions"}
+                != {key: value for key, value in mapping.items() if key != "sessions"}
+            ):
+                raise ValueError(f"Agent Task {task_id!r} changed across observations.")
+            continue
         records_by_id[task_id] = record
 
     return [records_by_id[task_id] for task_id in sorted(records_by_id)]

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ci_shepherd.delegation_observer import _human_identity, observe_commit_comparison, observe_delegations
+from ci_shepherd.delegation_observer import _human_identity, observe_capacity_task_records, observe_commit_comparison, observe_delegations
 from ci_shepherd.delegations import PullRequestState, TaskState
 from ci_shepherd.github import GitHubApiError
 from ci_shepherd.models import validate_commit_comparison
@@ -36,6 +36,27 @@ class ScriptedClient:
 
 
 class DelegationObserverTests(unittest.TestCase):
+    def test_capacity_task_detail_can_expand_sessions_without_conflicting_with_inventory(self) -> None:
+        endpoint = "/agents/repos/owner/repo/tasks/task-1"
+        running = "/agents/repos/owner/repo/tasks?state=queued%2Cin_progress&is_archived=false&per_page=100"
+        summary = {
+            "id": "task-1", "state": "queued", "session_count": 1,
+            "created_at": "2026-09-01T12:00:00Z", "updated_at": "2026-09-01T12:00:01Z",
+            "repository": {"id": 7}, "artifacts": [],
+        }
+        detail = {**summary, "sessions": [{"id": "session-1", "state": "queued"}]}
+        client = ScriptedClient({(running, "tasks"): [summary]}, {endpoint: detail})
+        self.assertEqual(
+            [detail], observe_capacity_task_records(client, "owner/repo", owned_task_ids={"task-1"}),
+        )
+        for changed in (
+            {"state": "in_progress"}, {"repository": {"id": 8}},
+            {"updated_at": "2026-09-01T12:01:00Z"}, {"artifacts": [{"type": "different"}]},
+        ):
+            client = ScriptedClient({(running, "tasks"): [{**summary, **changed}]}, {endpoint: detail})
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "changed across observations"):
+                observe_capacity_task_records(client, "owner/repo", owned_task_ids={"task-1"})
+
     def test_observed_comparisons_always_satisfy_the_frozen_proof_contract(self) -> None:
         base = "b" * 40
         for status, head, merge_base, behind, expected in (

@@ -1436,6 +1436,11 @@ queued/running tasks applies to shepherd-owned work, with ten owned starts per
 rolling 24 hours and at most three starts per cycle. A missing owned-task
 observation blocks admission even when its PR remains readable.
 
+Task-detail responses may include an expanded `sessions` array omitted by the
+running-task inventory. That transport difference is not a task-state conflict.
+All shared task fields still have to agree, including state, timestamps,
+repository, and artifacts; a real disagreement remains fail-closed.
+
 The snapshot keeps active delegated issues and pull requests out of general
 assessment lanes while preserving `delegationStatus` records linking each
 shepherd action to its issue, Agent Task, and known pull requests. Failed or
@@ -2023,6 +2028,8 @@ issue-updated-after-fix disagreement. Current task/PR evidence is still derived
 afresh, and independent issue changes invalidate that baseline.
 Re-observing identical workflow discovery does not mark every associated issue
 as source-updated merely because its collection clock or request usage changed.
+Another issue's retired anchors or issue-scoped gaps likewise do not wake
+unaffected trackers, and diagnostic cache-hit bookkeeping is not new evidence.
 Evidence rediscovered after a provisional retirement is reported as refreshed,
 not retired from the final snapshot. Genuine coverage and derived-context changes
 still trigger their normal reassessment.

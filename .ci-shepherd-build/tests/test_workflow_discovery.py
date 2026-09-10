@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import copy
 from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from dataclasses import replace
@@ -14,7 +15,7 @@ from unittest.mock import patch
 
 import collect as collect_script
 
-from ci_shepherd.collector import Collector, InventoryResult, enrich_workflow_discovery
+from ci_shepherd.collector import Collector, InventoryResult, enrich_workflow_discovery, mark_workflow_issues_changed
 from ci_shepherd.actions import build_action_proposals
 from ci_shepherd.actor import validate_action_proposals
 from ci_shepherd.github import GitHubApiError, GitHubTextResponse
@@ -645,6 +646,39 @@ class WorkflowDiscoveryTests(unittest.TestCase):
             REPOSITORY, NOW, previous_discovery=prior,
         )
         self.assertEqual((), refreshed.refresh_plan.changed_issues)
+
+    def test_retiring_another_issue_anchor_does_not_reselect_unchanged_tracker(self) -> None:
+        prior = enrich_workflow_discovery(
+            issue_inventory(), DiscoveryClient(responses_for([run(3), run(1)])), REPOSITORY, NOW,
+        ).workflow_discovery
+        prior = copy.deepcopy(prior)
+        original = prior["issueAssociations"][0]
+        prior["issueAssociations"].append({
+            **original, "issueNumber": 43, "sourceEvidenceId": "issue:43",
+        })
+        prior["issueAssociations"][0]["sourceRunId"] = 3
+        prior["sourceRuns"].append(copy.deepcopy(prior["runs"][0]))
+        current = copy.deepcopy(prior)
+        current["issueAssociations"] = [
+            row for row in current["issueAssociations"] if row["issueNumber"] == 43
+        ]
+        current["sourceRuns"] = [row for row in current["sourceRuns"] if row["runId"] != 3]
+        current["gaps"].append({
+            "scope": "issue", "issueNumber": 42, "code": "source-job-ambiguous",
+            "kind": "coverage", "message": "No unique affected source job.", "endpoint": "",
+        })
+        for diagnostic in current["diagnostics"]:
+            diagnostic["fromCache"] = not diagnostic.get("fromCache", False)
+        inventory = replace(
+            issue_inventory(), open_issues=[{"number": 43}],
+            refresh_plan=RefreshPlan(reuse=("issue:43",)), workflow_discovery=current,
+        )
+        self.assertEqual((), mark_workflow_issues_changed(inventory, prior).refresh_plan.changed_issues)
+        current["gaps"].append({
+            "scope": "issue", "issueNumber": 43, "code": "source-job-ambiguous",
+            "kind": "coverage", "message": "This issue lost source coverage.", "endpoint": "",
+        })
+        self.assertEqual((43,), mark_workflow_issues_changed(inventory, prior).refresh_plan.changed_issues)
 
     def test_unverified_issue_anchor_does_not_invalidate_an_independently_complete_window(self) -> None:
         responses = responses_for([run(3), run(1)])

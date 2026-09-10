@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 import hashlib
+import json
 import re
 import subprocess
 from typing import TYPE_CHECKING, Any, Iterable
@@ -398,31 +399,59 @@ def _retain_repair_evidence(
     return replace(inventory, evidence=evidence)
 
 
+def _issue_discovery_facts(
+    discovery: Mapping[str, Any] | None, issue_number: int,
+) -> dict[str, Any] | None:
+    if discovery is None:
+        return None
+    associations = [
+        row for row in discovery.get("issueAssociations", [])
+        if row["issueNumber"] == issue_number
+    ]
+    source_runs = {row["sourceRunId"] for row in associations}
+    scoped_fields = {"collectedAt", "usage", "issueAssociations", "sourceRuns", "diagnostics", "gaps"}
+    facts = {key: value for key, value in discovery.items() if key not in scoped_fields}
+    # Assigning or closing one tracker changes its anchors, not every other
+    # tracker's source. Cache hits and request accounting are not new evidence.
+    facts.update(
+        issueAssociations=sorted(associations, key=lambda row: json.dumps(row, sort_keys=True)),
+        sourceRuns=sorted(
+            (row for row in discovery.get("sourceRuns", []) if row["runId"] in source_runs),
+            key=lambda row: json.dumps(row, sort_keys=True),
+        ),
+        diagnostics=sorted(
+            ({key: value for key, value in row.items() if key != "fromCache"}
+             for row in discovery.get("diagnostics", [])),
+            key=lambda row: json.dumps(row, sort_keys=True),
+        ),
+        gaps=sorted(
+            (row for row in discovery.get("gaps", [])
+             if row.get("scope") != "issue" or row.get("issueNumber") == issue_number),
+            key=lambda row: json.dumps(row, sort_keys=True),
+        ),
+    )
+    return facts
+
+
 def mark_workflow_issues_changed(
     inventory: InventoryResult, previous_discovery: Mapping[str, Any] | None,
 ) -> InventoryResult:
-    current_discovery = inventory.workflow_discovery
-    if previous_discovery is not None and current_discovery is not None:
-        # Refreshing the same window is not new source evidence. Clock/GET usage
-        # changes must not reselect every associated tracker on each cycle.
-        # Derived time-dependent health changes are compared by the cycle.
-        operational_fields = {"collectedAt", "usage"}
-        if (
-            {key: value for key, value in previous_discovery.items() if key not in operational_fields}
-            == {key: value for key, value in current_discovery.items() if key not in operational_fields}
-        ):
-            return inventory
     plan = inventory.refresh_plan
     if plan is not None:
         managed = {issue["number"] for issue in inventory.open_issues}
         previous_associations = previous_discovery.get("issueAssociations", []) if previous_discovery is not None else []
         current_associations = inventory.workflow_discovery["issueAssociations"] if inventory.workflow_discovery is not None else []
-        # Renew these decisions even when GitHub did not edit the tracker. Losing
-        # coverage must also invalidate a previously retained workflow judgment.
-        affected = {
+        associated = {
             association["issueNumber"]
             for association in [*previous_associations, *current_associations]
             if association["issueNumber"] in managed
+        }
+        # Losing real coverage still invalidates retained judgments. The cycle
+        # separately compares derived time-dependent health and local outcomes.
+        affected = {
+            number for number in associated
+            if _issue_discovery_facts(previous_discovery, number)
+            != _issue_discovery_facts(inventory.workflow_discovery, number)
         }
         plan = replace(plan, changed_issues=tuple(sorted(set(plan.changed_issues) | affected)))
     return replace(inventory, refresh_plan=plan)
