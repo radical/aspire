@@ -353,6 +353,8 @@ def discover_workflows(
     if len(source_requests) > BOUNDS["sourceRequests"]:
         reader.gap("source-request-budget", {"scope": "repository"}, "Additional issue associations were not probed.")
     source_requests = source_requests[:BOUNDS["sourceRequests"]]
+    anchor_identities = {}
+    canonical_anchors = {}
     for request in source_requests:
         key = (request["sourceRunId"], request["sourceAttempt"])
         if key in anchors:
@@ -374,6 +376,24 @@ def discover_workflows(
             anchor = None
         anchors[key] = anchor
         if anchor is not None:
+            identity = (anchor["runId"], anchor["attempt"])
+            anchor_identities[key] = identity
+            if identity not in canonical_anchors:
+                canonical_anchors[identity] = anchor
+            elif canonical_anchors[identity] is not None and any(
+                canonical_anchors[identity][field] != anchor[field]
+                for field in (
+                    "workflowId", "workflowPath", "runNumber", "event", "branch", "headSha",
+                    "targetRepository", "repositoryId", "headRepositoryId", "headRepository",
+                    "headRepositoryFork", "createdAt", "subjectPullRequests",
+                )
+            ):
+                reader.gap(
+                    "source-identity-conflict", context,
+                    "Source aliases resolved to the same run attempt with conflicting immutable metadata.",
+                    endpoint,
+                )
+                canonical_anchors[identity] = None
             keys.setdefault((anchor["workflowId"], anchor["workflowPath"], anchor["event"]), anchor)
     for workflow_id, path, event in list(keys)[BOUNDS["workflowWindows"]:]:
         reader.gap(
@@ -478,21 +498,23 @@ def discover_workflows(
         item["gaps"].append(document["gaps"][-1])
     document["runs"] = sorted(sampled.values(), key=lambda row: (_timestamp(row["createdAt"]), row["runId"]), reverse=True)
     observed = {(item["runId"], item["attempt"]): item for item in document["runs"]}
-    for key, anchor in anchors.items():
+    resolved_anchors = {}
+    for identity, anchor in canonical_anchors.items():
         if anchor is None:
             continue
-        identity = (anchor["runId"], anchor["attempt"])
         if identity in observed and not any(
             gap["code"] in {"outside-job-window", "newer-attempt-observed"} for gap in observed[identity]["gaps"]
         ):
-            anchors[key] = observed[identity]
+            resolved_anchors[identity] = observed[identity]
         else:
             _collect_jobs(
                 reader, anchor, repository, normalize_job,
                 {"scope": "source-run", "runId": anchor["runId"], "attempt": anchor["attempt"]},
             )
-        if anchors[key] not in document["sourceRuns"]:
-            document["sourceRuns"].append(anchors[key])
+            resolved_anchors[identity] = anchor
+        document["sourceRuns"].append(resolved_anchors[identity])
+    for key, identity in anchor_identities.items():
+        anchors[key] = resolved_anchors.get(identity)
     complete_run_ids = {
         run_id for window in document["workflows"] if window["windowComplete"] for run_id in window["runIds"]
     }

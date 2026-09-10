@@ -25,7 +25,7 @@ from ci_shepherd.lifecycle import prepare_assessment
 from ci_shepherd.poc import build_compact_poc_input
 from ci_shepherd.run_report import render_run_markdown
 from ci_shepherd.refresh import RefreshPlan, plan_refresh
-from ci_shepherd.workflow_discovery import BOUNDS
+from ci_shepherd.workflow_discovery import BOUNDS, discover_workflows, validate_workflow_discovery
 from tests.test_collector import ScriptedClient, make_issue
 from tests.test_refresh import current_history
 
@@ -489,6 +489,222 @@ class WorkflowDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             "failure", result.evidence["run:3:attempt:1:job:300"]["payload"]["conclusion"],
         )
+
+    def test_same_source_run_with_unknown_and_explicit_attempt_is_collected_once_when_job_read_differs(self) -> None:
+        source = run(1, conclusion="success")
+        job_reads = 0
+
+        def jobs_response(_: dict) -> dict:
+            nonlocal job_reads
+            job_reads += 1
+            if job_reads > 1:
+                raise api_error(f"/repos/{REPOSITORY}/actions/runs/1/attempts/1/jobs", 503)
+            return {"total_count": 1, "jobs": [job(1, conclusion="success")]}
+
+        responses = {
+            f"/repos/{REPOSITORY}": REPOSITORY_INFO,
+            f"/repos/{REPOSITORY}/actions/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1": source,
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1": source,
+            f"/repos/{REPOSITORY}/actions/workflows/10/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1/jobs": jobs_response,
+        }
+        client = DiscoveryClient(responses)
+        normalizer = Collector(client, REPOSITORY, NOW)
+
+        result = discover_workflows(
+            client, REPOSITORY, NOW,
+            normalize_job=normalizer._normalize_workflow_job,
+            source_requests=[
+                {
+                    "issueNumber": 42, "sourceRunId": 1, "sourceAttempt": None,
+                    "sourceEvidenceId": "issue:42", "jobNames": ["Tests (linux, net10.0)"], "testTracker": False,
+                },
+                {
+                    "issueNumber": 43, "sourceRunId": 1, "sourceAttempt": 1,
+                    "sourceEvidenceId": "issue:43", "jobNames": ["Tests (linux, net10.0)"], "testTracker": False,
+                },
+            ],
+            extract_log_facts=normalizer._extract_facts,
+            existing_evidence={},
+        )
+
+        source_job = result.document["sourceRuns"][0]["jobs"][0]
+        evidence = {
+            "issue:42": {"payload": {"labels": [], "facts": []}},
+            "issue:43": {"payload": {"labels": [], "facts": []}},
+            "run:1": {"kind": "workflow-run", "payload": {}},
+            "run:1:attempt:1:job:100": {"kind": "workflow-job", "payload": source_job},
+        }
+        validate_workflow_discovery(result.document, REPOSITORY, evidence)
+        self.assertEqual([(1, 1)], [
+            (item["runId"], item["attempt"]) for item in result.document["sourceRuns"]
+        ])
+        self.assertEqual([42, 43], [
+            association["issueNumber"] for association in result.document["issueAssociations"]
+        ])
+        self.assertEqual(1, job_reads)
+        self.assertEqual(1, result.document["usage"]["jobs"])
+
+    def test_source_aliases_that_resolve_to_different_attempts_remain_independent(self) -> None:
+        first = run(1, conclusion="success")
+        second = {**first, "run_attempt": 2}
+        second_job = {**job(1, conclusion="success", number=101), "run_attempt": 2}
+        responses = {
+            f"/repos/{REPOSITORY}": REPOSITORY_INFO,
+            f"/repos/{REPOSITORY}/actions/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1": second,
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1": first,
+            f"/repos/{REPOSITORY}/actions/workflows/10/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1/jobs": {
+                "total_count": 1, "jobs": [job(1, conclusion="success")],
+            },
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/2/jobs": {
+                "total_count": 1, "jobs": [second_job],
+            },
+        }
+        client = DiscoveryClient(responses)
+        normalizer = Collector(client, REPOSITORY, NOW)
+
+        result = discover_workflows(
+            client, REPOSITORY, NOW,
+            normalize_job=normalizer._normalize_workflow_job,
+            source_requests=[
+                {
+                    "issueNumber": 42, "sourceRunId": 1, "sourceAttempt": None,
+                    "sourceEvidenceId": "issue:42", "jobNames": [], "testTracker": False,
+                },
+                {
+                    "issueNumber": 43, "sourceRunId": 1, "sourceAttempt": 1,
+                    "sourceEvidenceId": "issue:43", "jobNames": [], "testTracker": False,
+                },
+            ],
+            extract_log_facts=normalizer._extract_facts,
+            existing_evidence={},
+        )
+
+        self.assertEqual([(1, 1), (1, 2)], sorted(
+            (item["runId"], item["attempt"]) for item in result.document["sourceRuns"]
+        ))
+        self.assertEqual(2, result.document["usage"]["jobs"])
+
+    def test_source_alias_metadata_failure_is_not_healed_by_another_alias(self) -> None:
+        source = run(1, conclusion="success")
+        explicit_endpoint = f"/repos/{REPOSITORY}/actions/runs/1/attempts/1"
+        responses = {
+            f"/repos/{REPOSITORY}": REPOSITORY_INFO,
+            f"/repos/{REPOSITORY}/actions/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1": source,
+            explicit_endpoint: api_error(explicit_endpoint, 503),
+            f"/repos/{REPOSITORY}/actions/workflows/10/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1/jobs": {
+                "total_count": 1, "jobs": [job(1, conclusion="success")],
+            },
+        }
+        client = DiscoveryClient(responses)
+        normalizer = Collector(client, REPOSITORY, NOW)
+
+        result = discover_workflows(
+            client, REPOSITORY, NOW,
+            normalize_job=normalizer._normalize_workflow_job,
+            source_requests=[
+                {
+                    "issueNumber": 42, "sourceRunId": 1, "sourceAttempt": None,
+                    "sourceEvidenceId": "issue:42", "jobNames": [], "testTracker": False,
+                },
+                {
+                    "issueNumber": 43, "sourceRunId": 1, "sourceAttempt": 1,
+                    "sourceEvidenceId": "issue:43", "jobNames": [], "testTracker": False,
+                },
+            ],
+            extract_log_facts=normalizer._extract_facts,
+            existing_evidence={},
+        )
+
+        self.assertEqual([(1, 1)], [
+            (item["runId"], item["attempt"]) for item in result.document["sourceRuns"]
+        ])
+        self.assertTrue(any(
+            gap["code"] == "source-job-coverage-incomplete" and gap.get("issueNumber") == 43
+            for gap in result.document["gaps"]
+        ))
+
+    def test_shared_source_job_read_failure_is_recorded_for_every_alias(self) -> None:
+        source = run(1, conclusion="success")
+        jobs_endpoint = f"/repos/{REPOSITORY}/actions/runs/1/attempts/1/jobs"
+        responses = {
+            f"/repos/{REPOSITORY}": REPOSITORY_INFO,
+            f"/repos/{REPOSITORY}/actions/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1": source,
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1": source,
+            f"/repos/{REPOSITORY}/actions/workflows/10/runs": {"total_count": 0, "workflow_runs": []},
+            jobs_endpoint: api_error(jobs_endpoint, 503),
+        }
+        client = DiscoveryClient(responses)
+        normalizer = Collector(client, REPOSITORY, NOW)
+
+        result = discover_workflows(
+            client, REPOSITORY, NOW,
+            normalize_job=normalizer._normalize_workflow_job,
+            source_requests=[
+                {
+                    "issueNumber": 42, "sourceRunId": 1, "sourceAttempt": None,
+                    "sourceEvidenceId": "issue:42", "jobNames": [], "testTracker": False,
+                },
+                {
+                    "issueNumber": 43, "sourceRunId": 1, "sourceAttempt": 1,
+                    "sourceEvidenceId": "issue:43", "jobNames": [], "testTracker": False,
+                },
+            ],
+            extract_log_facts=normalizer._extract_facts,
+            existing_evidence={},
+        )
+
+        self.assertEqual(1, sum(
+            endpoint.startswith(jobs_endpoint)
+            for method, endpoint in client.calls
+            if method == "get_text"
+        ))
+        self.assertEqual([42, 43], sorted(
+            gap["issueNumber"] for gap in result.document["gaps"]
+            if gap["code"] == "source-job-coverage-incomplete"
+        ))
+
+    def test_source_aliases_with_conflicting_stable_metadata_fail_closed(self) -> None:
+        first = run(1, conclusion="success")
+        conflicting = {**first, "head_sha": "f" * 40}
+        responses = {
+            f"/repos/{REPOSITORY}": REPOSITORY_INFO,
+            f"/repos/{REPOSITORY}/actions/runs": {"total_count": 0, "workflow_runs": []},
+            f"/repos/{REPOSITORY}/actions/runs/1": first,
+            f"/repos/{REPOSITORY}/actions/runs/1/attempts/1": conflicting,
+            f"/repos/{REPOSITORY}/actions/workflows/10/runs": {"total_count": 0, "workflow_runs": []},
+        }
+        client = DiscoveryClient(responses)
+        normalizer = Collector(client, REPOSITORY, NOW)
+
+        result = discover_workflows(
+            client, REPOSITORY, NOW,
+            normalize_job=normalizer._normalize_workflow_job,
+            source_requests=[
+                {
+                    "issueNumber": 42, "sourceRunId": 1, "sourceAttempt": None,
+                    "sourceEvidenceId": "issue:42", "jobNames": [], "testTracker": False,
+                },
+                {
+                    "issueNumber": 43, "sourceRunId": 1, "sourceAttempt": 1,
+                    "sourceEvidenceId": "issue:43", "jobNames": [], "testTracker": False,
+                },
+            ],
+            extract_log_facts=normalizer._extract_facts,
+            existing_evidence={},
+        )
+
+        self.assertEqual([], result.document["sourceRuns"])
+        self.assertTrue(any(
+            gap["code"] == "source-identity-conflict"
+            for gap in result.document["gaps"]
+        ))
 
     def test_discovered_failure_reuses_normalized_log_evidence_and_fact_extraction(self) -> None:
         responses = responses_for([run(3), run(1)])
