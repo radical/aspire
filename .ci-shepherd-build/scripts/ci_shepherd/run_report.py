@@ -768,6 +768,12 @@ def render_run_markdown(
             for row in recommendations if isinstance(row.get("humanEscalation"), Mapping)
         ]
         state = _text(assessment.get("issueState", item.get("state")))
+        lifecycle_authority = assessment.get("lifecycleAuthority")
+        if isinstance(lifecycle_authority, Mapping) and lifecycle_authority:
+            state += "; lifecycle authority: " + ", ".join(
+                f"{operation}={owner}"
+                for operation, owner in sorted(lifecycle_authority.items())
+            )
         routes = {
             "delegate-copilot": "cloud investigate-and-fix",
             "investigate": "local classification",

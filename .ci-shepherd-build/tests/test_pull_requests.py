@@ -600,15 +600,16 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual("incomplete", task["evidenceStatus"])
         self.assertEqual(["watch"], task["allowedDispositions"])
 
-    def test_copilot_assigned_pull_requests_are_excluded_from_the_handoff(self) -> None:
+    def test_copilot_assigned_pull_requests_remain_in_the_read_only_handoff(self) -> None:
         handoff = build_pull_request_handoff(
             snapshot(current_state=green_state(), assignees=["Copilot"])
         )
 
-        self.assertEqual([], handoff["tasks"])
         self.assertEqual(
-            [{"number": 23, "reason": "assigned-to-copilot"}], handoff["excluded"]
+            [23],
+            [task["target"]["number"] for task in handoff["tasks"]],
         )
+        self.assertEqual([], handoff["excluded"])
 
     def test_changes_requested_reports_a_human_decision_and_allows_ping_human(self) -> None:
         state = build_pull_request_current_state(

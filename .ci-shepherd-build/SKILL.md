@@ -396,8 +396,9 @@ see moving:
 - every issue and pull request carrying a target label, whoever opened it;
 - every issue and pull request opened by **any** bot, not only the logins
   configured in `BOT_AUTHORS`;
-- minus anything currently assigned to Copilot, which is rejected and recorded
-  in `rejectedCandidates`.
+- including items currently assigned to Copilot for read-only assessment.
+  Copilot ownership suppresses conflicting proposals and execution, not
+  evidence collection or reporting.
 
 The "any bot" half cannot use search: GitHub rejects an app-author wildcard
 (`author:app/*` returns HTTP 422) and `creator=` takes exactly one login. The
@@ -2536,9 +2537,11 @@ defaults and avoid contradicting safe queues:
    can answer. Do not turn a generic ownership gap into `ping-human`.
    When `delegationReadiness.origin` is `workflow-health`, Copilot can perform
    that investigation itself. Do not invent a prerequisite local handoff.
-4. For automation trackers, `autoclose: true` with no blockers may be no-action.
-   Recurrent actionable trackers without autoclose need investigation. Missing
-   or unrecognized producer ledgers need human review.
+4. For automation trackers, `autoclose: true` grants the producer authority
+   over close/reopen lifecycle only. It does not establish diagnosis or
+   remediation coverage. An unresolved tracker still needs investigation;
+   verified recovery may be no-action while the producer performs closure.
+   Missing or unrecognized producer ledgers need investigation or human review.
 5. Do not ping a human solely because an issue is old. For an old single
    occurrence, investigate positive execution coverage; silence is not
    recovery. A complete one-off record with citable later positive execution

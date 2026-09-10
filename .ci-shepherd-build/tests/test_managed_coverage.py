@@ -309,6 +309,58 @@ class ManagedCoverageTests(unittest.TestCase):
             ],
         )
 
+    def test_zero_file_unresolved_pull_request_is_not_remediation_coverage(self) -> None:
+        policy = replace(
+            load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),
+            managed_issue_producers=frozenset({"ci-failure-cause"}),
+            managed_automation_explicit=True,
+        )
+        coverage = build_managed_item_coverage(
+            {
+                "repository": "owner/repo",
+                "openIssues": [2],
+                "delegatedIssues": [2],
+                "evidence": {
+                    "issue:2": {
+                        "availability": "available",
+                        "payload": {
+                            "number": 2,
+                            "state": "open",
+                            "producer": "ci-failure-cause",
+                        },
+                    },
+                },
+                "delegationStatus": {
+                    "records": [
+                        {
+                            "issueNumber": 2,
+                            "lifecycle": "handoff_required",
+                            "requiresNewDecision": True,
+                            "pullRequests": [
+                                {
+                                    "number": 10,
+                                    "state": "open",
+                                    "changedFiles": 0,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+            policy=policy,
+            proposals={"snapshotId": "snapshot:current", "proposals": []},
+            investigation_plan={
+                "repository": "owner/repo",
+                "snapshotId": "snapshot:current",
+                "requests": [],
+                "deferredRequests": [],
+            },
+            review_schedule={"issues": {}, "pullRequests": {}},
+            observations={"occurrences": []},
+        )
+
+        self.assertEqual("awaiting-new-decision", coverage["items"][0]["coverageReason"])
+
     def test_uncovered_item_is_reported_without_globally_revoking_selection(self) -> None:
         policy = replace(
             load_repository_policy(ASPIRE_REPOSITORY_POLICY_PATH),

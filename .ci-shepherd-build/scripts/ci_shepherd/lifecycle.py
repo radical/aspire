@@ -600,6 +600,19 @@ def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[s
     ]
     if not records:
         return None
+    remediation_active = any(
+        (
+            record.get("taskObservation") == "available"
+            and record.get("taskState") in {"queued", "in_progress"}
+        )
+        or any(
+            pull_request.get("state") in {"open", "unknown"}
+            and pull_request.get("changedFiles") != 0
+            for pull_request in record.get("pullRequests", [])
+            if isinstance(pull_request, Mapping)
+        )
+        for record in records
+    )
     decision = False
     reason = "delegation-evidence-incomplete"
     if status.get("status") == "complete":
@@ -635,6 +648,7 @@ def delegation_context(snapshot: Mapping[str, Any], issue_number: int) -> dict[s
             )
     context = {
         "status": status.get("status"), "records": records,
+        "remediationActive": remediation_active,
         "decisionRequired": decision, "decisionReason": reason,
         # Activity is contextual, not verified ownership. In particular, a
         # comment must never suppress the pending unowned handoff.
@@ -1006,13 +1020,32 @@ def _lifecycle_decision(
 
     if producer == "tracking-issue":
         if autoclose is True:
-            blockers.append("existing-watchdog-owns-closure")
+            lifecycle_authority = {
+                "closeIssue": "external-watchdog",
+                "reopenIssue": "external-watchdog",
+            }
+            if recovery_verified:
+                return _decision(
+                    state="observing",
+                    action="wait",
+                    allowed_decisions=(("observing", "wait"),),
+                    blockers=blockers,
+                    missing_prerequisites=(),
+                    lifecycle_authority=lifecycle_authority,
+                )
+            if ledger.get("complete") is not True:
+                missing_prerequisites.append("complete-comment-run-ledger")
             return _decision(
-                state="observing",
-                action="wait",
-                allowed_decisions=(("observing", "wait"),),
+                state="actionable",
+                action="investigate",
+                allowed_decisions=(
+                    ("actionable", "investigate"),
+                    ("needs-human", "ping-human"),
+                    ("observing", "wait"),
+                ),
                 blockers=blockers,
-                missing_prerequisites=(),
+                missing_prerequisites=missing_prerequisites,
+                lifecycle_authority=lifecycle_authority,
             )
         if autoclose is False:
             blockers.append("autoclose-false-requires-human-closure")
@@ -1117,12 +1150,13 @@ def _decision(
     missing_prerequisites: tuple[str, ...] | list[str],
     resolution_evidence: Mapping[str, Any] | None = None,
     approval_required: bool = False,
+    lifecycle_authority: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     decisions = [
         {"state": allowed_state, "action": allowed_action}
         for allowed_state, allowed_action in allowed_decisions
     ]
-    return {
+    decision = {
         "candidateState": state,
         "candidateAction": action,
         "allowedActions": list(dict.fromkeys(item["action"] for item in decisions)),
@@ -1133,6 +1167,9 @@ def _decision(
         "missingPrerequisites": sorted(set(missing_prerequisites)),
         "resolutionEvidence": dict(resolution_evidence or {}),
     }
+    if lifecycle_authority:
+        decision["lifecycleAuthority"] = dict(lifecycle_authority)
+    return decision
 
 
 def _commit_anchored_recovery(

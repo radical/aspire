@@ -337,7 +337,7 @@ defect reproductions.
 | J3 | Pull request judged `no-action`, equal to the default, then replayed unchanged | none | No judgment is retained and no review is requested, but the item remains accounted for as excluded | The report says "0 selected; 1 excluded (unchanged-stable: 1)" and `pullRequestReviewCount` is `0` | none | Reporting continuity loss that makes a stable reviewed pull request indistinguishable from an item outside the inventory | L |
 | J4 | Pull request whose current-state fetch fails | none | Only `watch` is permitted | The disposition set is exactly `{watch}` | none | Acting on incomplete pull-request evidence | L |
 | J5 | Pull request with an empty or cancelled check set | none | Not treated as green | No `no-action` justified by green checks | none | Cancelled checks read as success | L |
-| J6 | Pull request assigned to Copilot | Assign | Rejected at inventory, proposal, and execution | It appears in `rejectedCandidates` at all three layers | Unassign | Mutating a Copilot-assigned pull request | L+E |
+| J6 | Pull request assigned to Copilot | Assign | Included in read-only assessment; rejected at proposal and execution | It appears in `pull-request-review.json`, while conflicting proposals and execution remain suppressed as `assigned-to-copilot` | Unassign | Either hiding Copilot-owned work from assessment or mutating it | L+E |
 | J7 | Active `ping-human` escalation | Human approves the pull request | A terminal status edit replaces the escalation | Exactly one edit; the live body is terminal | Delete comment | An escalation that never clears | E |
 
 ### 4.11 Suite K — State recovery and append-only history (P0)

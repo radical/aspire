@@ -294,7 +294,7 @@ class LifecycleAssessmentTests(unittest.TestCase):
         self.assertIn("unknown-producer", candidate["blockers"])
         self.assertFalse(candidate["automationEligible"])
 
-    def test_autoclose_tracker_waits_for_existing_watchdog(self) -> None:
+    def test_autoclose_tracker_remains_diagnostically_actionable(self) -> None:
         payload = issue_payload(
             11,
             producer="tracking-issue",
@@ -316,10 +316,17 @@ class LifecycleAssessmentTests(unittest.TestCase):
 
         candidate = candidate_for(prepare_assessment(snapshot(payload)), 11)
 
-        self.assertEqual("observing", candidate["candidateState"])
-        self.assertEqual("wait", candidate["candidateAction"])
-        self.assertEqual(["wait"], candidate["allowedActions"])
-        self.assertIn("existing-watchdog-owns-closure", candidate["blockers"])
+        self.assertEqual("actionable", candidate["candidateState"])
+        self.assertEqual("investigate", candidate["candidateAction"])
+        self.assertEqual(["investigate", "ping-human", "wait"], candidate["allowedActions"])
+        self.assertEqual([], candidate["blockers"])
+        self.assertEqual(
+            {
+                "closeIssue": "external-watchdog",
+                "reopenIssue": "external-watchdog",
+            },
+            candidate["lifecycleAuthority"],
+        )
 
     def test_recurrent_cause_is_actionable(self) -> None:
         payload = issue_payload(
@@ -377,6 +384,57 @@ class LifecycleAssessmentTests(unittest.TestCase):
         self.assertFalse(candidate["automationEligible"])
         self.assertIn("recommend-close", candidate["allowedActions"])
         self.assertIn("autoclose-policy-does-not-permit-shepherd", candidate["blockers"])
+
+    def test_autoclose_tracker_defers_verified_recovery_to_external_watchdog(self) -> None:
+        issue_number = 13
+        payload = issue_payload(
+            issue_number,
+            producer="tracking-issue",
+            autoclose=True,
+            ledger=complete_ledger(100),
+            updated_at="2026-08-09T00:00:00Z",
+        )
+        referenced_by = [{"sourceIssueNumber": issue_number}]
+        pull_request = evidence(
+            "pr:20",
+            "pull-request",
+            {
+                "number": 20,
+                "state": "closed",
+                "mergedAt": "2026-08-10T10:00:00Z",
+                "mergeCommitSha": "a" * 40,
+                "referencedBy": referenced_by,
+            },
+        )
+        run = evidence(
+            "run:200",
+            "workflow-run",
+            {
+                "runId": 200,
+                "conclusion": "success",
+                "headSha": "a" * 40,
+                "runStartedAt": "2026-08-10T10:01:00Z",
+                "referencedBy": referenced_by,
+            },
+        )
+
+        candidate = candidate_for(
+            prepare_assessment(
+                with_exact_coverage(snapshot(payload, pull_request, run))
+            ),
+            issue_number,
+        )
+
+        self.assertEqual("observing", candidate["candidateState"])
+        self.assertEqual("wait", candidate["candidateAction"])
+        self.assertEqual(["wait"], candidate["allowedActions"])
+        self.assertEqual(
+            {
+                "closeIssue": "external-watchdog",
+                "reopenIssue": "external-watchdog",
+            },
+            candidate["lifecycleAuthority"],
+        )
 
     def test_main_scoped_failure_is_not_retired_by_a_named_merged_pull_request(self) -> None:
         issue_number = 13

@@ -66,6 +66,25 @@ class RunReportTests(unittest.TestCase):
                 self.assertIn(f"route: {route}; scheduling priority: current-workflow-break", report)
                 self.assertIn("matching recurrence: True", report)
 
+    def test_report_separates_external_lifecycle_authority_from_diagnosis(self) -> None:
+        self.prepared["issues"][0]["lifecycleAuthority"] = {
+            "closeIssue": "external-watchdog",
+            "reopenIssue": "external-watchdog",
+        }
+        self.judgments["issues"][0]["recommendations"][0].update(
+            disposition="investigate",
+            summary="Identify the current failed execution and repair subject.",
+        )
+
+        report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
+
+        self.assertIn(
+            "lifecycle authority: closeIssue=external-watchdog, "
+            "reopenIssue=external-watchdog",
+            report,
+        )
+        self.assertIn("Identify the current failed execution and repair subject.", report)
+
     def test_assessment_workload_uses_packet_manifest_not_receipt_or_token_counts(self) -> None:
         manifest, _ = build_assessment_batches(
             [issue_case(1)], snapshot_id=self.prepared["snapshotId"], source_fingerprints={},

@@ -179,8 +179,55 @@ class QuarantinedRemediationPipelineTests(unittest.TestCase):
         context = compact["issues"][0]["delegationContext"]
         self.assertEqual("task-21", context["records"][0]["taskId"])
         self.assertEqual(22, context["records"][0]["pullRequests"][0]["number"])
+        self.assertTrue(context["remediationActive"])
         self.assertEqual("no-action", judgments["issues"][0]["recommendations"][0]["disposition"])
         self.assertEqual([], build_investigation_plan(prepared, judgments, [])["requests"])
+        self.assertEqual([], proposals["proposals"])
+
+    def test_unresolved_zero_file_quarantine_delegation_requires_investigation(self) -> None:
+        value = quarantined_snapshot()
+        value["delegationStatus"] = handoff_snapshot(changed_files=0)["delegationStatus"]
+
+        prepared, compact, judgments, proposals = assess(value)
+
+        context = compact["issues"][0]["delegationContext"]
+        self.assertEqual("completed-task-empty-pull-request", context["decisionReason"])
+        self.assertFalse(context["remediationActive"])
+        self.assertEqual(
+            "investigate",
+            judgments["issues"][0]["recommendations"][0]["disposition"],
+        )
+        requests = build_investigation_plan(prepared, judgments, [])["requests"]
+        self.assertEqual([21], [request["issueNumber"] for request in requests])
+        self.assertEqual([], proposals["proposals"])
+
+    def test_terminal_delegation_without_active_repair_resumes_investigation(self) -> None:
+        value = quarantined_snapshot()
+        status = handoff_snapshot(changed_files=0)["delegationStatus"]
+        record = status["records"][0]
+        record.update(
+            lifecycle="completed",
+            taskState="failed",
+            attemptOutcome="unresolved",
+            requiresNewDecision=True,
+            pullRequests=[],
+        )
+        value["delegationStatus"] = status
+
+        prepared, compact, judgments, proposals = assess(value)
+
+        self.assertFalse(compact["issues"][0]["delegationContext"]["remediationActive"])
+        self.assertEqual(
+            "investigate",
+            judgments["issues"][0]["recommendations"][0]["disposition"],
+        )
+        self.assertEqual(
+            [21],
+            [
+                request["issueNumber"]
+                for request in build_investigation_plan(prepared, judgments, [])["requests"]
+            ],
+        )
         self.assertEqual([], proposals["proposals"])
 
     def test_collection_freezes_quarantine_before_canonical_assessment(self) -> None:

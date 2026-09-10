@@ -1006,8 +1006,8 @@ class PocValidationTests(unittest.TestCase):
                     producer="tracking-issue",
                     autoclose=True,
                     tier2_test_name=None,
-                    candidate_state="observing",
-                    candidate_action="wait",
+                    candidate_state="actionable",
+                    candidate_action="investigate",
                 ),
                 _compact_issue(
                     307,
@@ -1097,7 +1097,7 @@ class PocValidationTests(unittest.TestCase):
         self.assertIn("renewed", escalation["question"])
         self.assertEqual("area-deployment", escalation["routingHint"])
         self.assertEqual(3, len(escalation["suggestedNextSteps"]))
-        self.assertEqual(("automation-tracker", "no-action"), _category_and_disposition(defaults[306]))
+        self.assertEqual(("automation-tracker", "investigate"), _category_and_disposition(defaults[306]))
         # Issue 307 is a blocking-build issue with no reported humanContext
         # (no dashboard-style body, no decisionRequired signal). With no
         # explicit human decision requirement and no directly referenced

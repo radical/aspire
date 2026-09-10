@@ -613,10 +613,6 @@ def build_pull_request_handoff(
     tasks: list[dict[str, object]] = []
     excluded: list[dict[str, object]] = []
     for number, pull_request in sorted(pull_requests_by_number.items()):
-        if pull_request_assigned_to_copilot(pull_request):
-            # Copilot owns the change; commenting would interrupt its own loop.
-            excluded.append({"number": number, "reason": "assigned-to-copilot"})
-            continue
         previous = previous_by_number.get(number)
         unchanged = (
             previous is not None

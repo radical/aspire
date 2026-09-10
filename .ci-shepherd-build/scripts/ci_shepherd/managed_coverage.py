@@ -460,6 +460,9 @@ def _has_open_pull_request(delegation: Mapping[str, Any]) -> bool:
     return isinstance(pull_requests, list) and any(
         isinstance(pull_request, Mapping)
         and pull_request.get("state") == "open"
+        # A completed delegation can leave behind a draft PR with no diff.
+        # That is a handoff artifact, not active remediation coverage.
+        and pull_request.get("changedFiles") != 0
         for pull_request in pull_requests
     )
 

@@ -761,6 +761,7 @@ def _build_compact_issue(
             "kind": "delegation",
             "decisionRequired": delegation.get("decisionRequired") is True,
             "decisionReason": delegation.get("decisionReason"),
+            "remediationActive": delegation.get("remediationActive") is True,
         }
     automation_context = _build_automation_context(issue_number, evidence_bundle)
 
@@ -1030,6 +1031,8 @@ def _build_compact_issue(
         "allowedEvidence": allowed_evidence,
         "defaultJudgment": default_judgment,
     }
+    if isinstance(issue.get("lifecycleAuthority"), Mapping):
+        compact_issue["lifecycleAuthority"] = copy.deepcopy(issue["lifecycleAuthority"])
     if action_context is not None:
         compact_issue["actionCluster"] = action_context
     if isinstance(delegation, Mapping):
@@ -2522,6 +2525,11 @@ def _default_disposition(
     has_blockers: bool = False,
     has_exact_test_name: bool = False,
 ) -> str:
+    if already_quarantined:
+        if human_context is not None and human_context.get("kind") == "delegation":
+            return "no-action" if human_context.get("remediationActive") is True else "investigate"
+        return "investigate"
+
     if (
         human_context is not None
         and human_context.get("kind") == "delegation"
@@ -2530,10 +2538,6 @@ def _default_disposition(
         and recovered_run_evidence_id is None
     ):
         return "ping-human"
-    if already_quarantined:
-        if human_context is not None and human_context.get("kind") == "delegation":
-            return "no-action"
-        return "investigate"
 
     if (
         candidate_state == "resolved"
@@ -2557,7 +2561,7 @@ def _default_disposition(
         return "review-close"
 
     if category == "automation-tracker":
-        if autoclose is True:
+        if autoclose is True and candidate_action == "wait":
             return "no-action"
         if producer == "ci-health-dashboard":
             return (
