@@ -712,6 +712,23 @@ def select_investigation_request(
     return persisted_request
 
 
+def select_recorded_investigation_session(
+    state_directory: Path,
+    session_id: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Select one exact resumable reservation and its persisted request."""
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValueError("sessionId must be nonempty.")
+    history = read_investigation_session_events(state_directory)
+    registration, selected, _ = _recorded_resumable_session(history, session_id)
+    request = registration.get("request")
+    if not isinstance(request, dict):
+        raise ValueError(
+            f"Session {session_id} has no recoverable recorded request."
+        )
+    return copy.deepcopy(request), copy.deepcopy(dict(selected))
+
+
 def _investigation_identity(
     request: Mapping[str, Any],
 ) -> tuple[str, str]:
@@ -804,6 +821,117 @@ def _latest_session_event(
     )
 
 
+def _validate_unique_recorded_session(
+    history: list[Mapping[str, Any]],
+    *,
+    repository: str,
+    investigation_id: str,
+    session_id: str,
+) -> None:
+    _, _, identity = _recorded_resumable_session(history, session_id)
+    if identity != (repository.casefold(), investigation_id):
+        raise ValueError(
+            f"Session {session_id} does not identify one exact recoverable investigation reservation."
+        )
+
+
+def _recorded_resumable_session(
+    history: list[Mapping[str, Any]],
+    session_id: str,
+) -> tuple[Mapping[str, Any], Mapping[str, Any], tuple[str, str]]:
+    matching = [event for event in history if event.get("sessionId") == session_id]
+    identities: set[tuple[str, str]] = set()
+    for event in matching:
+        repository = event.get("repository")
+        investigation_id = event.get("investigationId")
+        if (
+            not isinstance(repository, str)
+            or not repository
+            or not isinstance(investigation_id, str)
+            or not investigation_id
+        ):
+            raise ValueError("Recorded investigation session has an invalid identity.")
+        identities.add((repository.casefold(), investigation_id))
+    registrations = [event for event in matching if event.get("status") == "started"]
+    statuses = [event.get("status") for event in matching]
+    terminal_statuses = {
+        status for status in statuses if status in {"completed", "failed", "abandoned"}
+    }
+    if (
+        len(identities) != 1
+        or len(registrations) != 1
+        or not matching
+        or matching[0] is not registrations[0]
+        or any(status not in {"started", "completed", "failed", "abandoned"} for status in statuses)
+        or "completed" in terminal_statuses
+        or len(terminal_statuses) > 1
+    ):
+        raise ValueError(
+            f"Session {session_id} does not identify one exact recoverable investigation reservation."
+        )
+    stopped = False
+    for event in matching[1:]:
+        if stopped and event.get("workerStopped") is not True:
+            raise ValueError(
+                f"Session {session_id} does not identify one exact recoverable investigation reservation."
+            )
+        stopped = event.get("workerStopped") is True
+    return registrations[0], matching[-1], next(iter(identities))
+
+
+def _reconcile_recorded_legacy_terminal_session(
+    state_directory: Path,
+    request: Mapping[str, Any],
+    *,
+    status: str,
+    recorded_at: str,
+    session_id: str,
+    failure_reason: str | None,
+    failure_category: str | None,
+) -> dict[str, object] | None:
+    """Confirm a stopped legacy worker without revalidating its disposable checkout."""
+    parse_aware_iso8601(recorded_at, "recordedAt")
+    investigation_id, repository = _investigation_identity(request)
+    path = _sessions_path(state_directory)
+    with exclusive_jsonl_lock(path):
+        history = read_jsonl_rows(path)
+        _validate_unique_recorded_session(
+            history,
+            repository=repository,
+            investigation_id=investigation_id,
+            session_id=session_id,
+        )
+        previous = _latest_session_event(
+            history,
+            repository=repository,
+            investigation_id=investigation_id,
+        )
+        if previous is None or previous.get("status") not in {"failed", "abandoned"}:
+            return None
+        if previous.get("status") != status:
+            raise ValueError("Stopped-worker reconciliation cannot change the recorded terminal status.")
+        registration = next(
+            event for event in history
+            if event.get("sessionId") == session_id and event.get("status") == "started"
+        )
+        if registration.get("request") != dict(request):
+            raise ValueError("Stopped-worker reconciliation changed the recorded request.")
+        if (
+            failure_reason != previous.get("failureReason")
+            or failure_category != previous.get("failureCategory")
+        ):
+            raise ValueError("Stopped-worker reconciliation changed the recorded failure.")
+        if previous.get("workerStopped") is True:
+            return dict(previous)
+        reconciled = {
+            **dict(previous),
+            "recordedAt": recorded_at,
+            "workerStopped": True,
+        }
+        append_jsonl_rows(path, [reconciled])
+        return reconciled
+
+
 def _validate_session_transition(
     previous: Mapping[str, Any] | None,
     event: Mapping[str, Any],
@@ -854,11 +982,14 @@ def record_investigation_session_event(
     result_path: Path | None = None,
     execution_state: str | None = None,
     execution_evidence: str | None = None,
+    require_unique_session_identity: bool = False,
 ) -> dict[str, object]:
     if launch_mode not in {"resumable", "one-shot"}:
         raise ValueError("Unsupported investigation launch mode.")
     if type(confirm_worker_stopped) is not bool:
         raise ValueError("Stopped-worker confirmation must be an explicit boolean.")
+    if type(require_unique_session_identity) is not bool:
+        raise ValueError("Unique-session enforcement must be an explicit boolean.")
     if launch_mode == "one-shot" or attempt_id is not None:
         if session_id is not None:
             raise ValueError("One-shot attempts cannot claim an unverified runtime sessionId.")
@@ -883,7 +1014,24 @@ def record_investigation_session_event(
             session_id=session_id, checkout=checkout, failure_reason=failure_reason,
             failure_category=failure_category, confirm_worker_stopped=confirm_worker_stopped,
             reproduction_commands=reproduction_commands,
+            require_unique_session_identity=require_unique_session_identity,
         )
+    if (
+        require_unique_session_identity
+        and confirm_worker_stopped
+        and status in {"failed", "abandoned"}
+    ):
+        reconciled = _reconcile_recorded_legacy_terminal_session(
+            state_directory,
+            request,
+            status=status,
+            recorded_at=recorded_at,
+            session_id=str(session_id),
+            failure_reason=failure_reason,
+            failure_category=failure_category,
+        )
+        if reconciled is not None:
+            return reconciled
     if status == "started" and checkout is not None:
         _require_clean_checkout(checkout)
     event = _session_event(
@@ -905,12 +1053,19 @@ def record_investigation_session_event(
             repository=repository,
             investigation_id=investigation_id,
         )
-        if status == "failed" and confirm_worker_stopped is True:
+        if require_unique_session_identity:
+            _validate_unique_recorded_session(
+                history,
+                repository=repository,
+                investigation_id=investigation_id,
+                session_id=str(session_id),
+            )
+        if status in {"failed", "abandoned"} and confirm_worker_stopped is True:
             owned_previous = _latest_session_event(
                 [row for row in history if row.get("sessionId") == session_id],
                 repository=repository, investigation_id=investigation_id,
             )
-            if owned_previous is not None and owned_previous.get("status") == "failed":
+            if owned_previous is not None and owned_previous.get("status") == status:
                 # A stopped older worker must remain addressable even if its
                 # replacement has since registered under the same investigation.
                 if not _same_record(
@@ -1380,6 +1535,7 @@ def _record_scoped_session_event(
     failure_category: str | None,
     confirm_worker_stopped: bool,
     reproduction_commands: list[list[str]] | None,
+    require_unique_session_identity: bool,
 ) -> dict[str, object]:
     if status == "completed":
         raise ValueError("Complete a scoped investigation by recording its validated result.")
@@ -1403,6 +1559,13 @@ def _record_scoped_session_event(
             history, repository=str(event["repository"]),
             investigation_id=str(event["investigationId"]),
         )
+        if require_unique_session_identity:
+            _validate_unique_recorded_session(
+                history,
+                repository=str(event["repository"]),
+                investigation_id=str(event["investigationId"]),
+                session_id=session_id,
+            )
         if status == "started":
             commands = validate_reproduction_commands(reproduction_commands or [])
             replay = previous is not None and previous.get("status") == "started" and previous.get("sessionId") == session_id
@@ -1438,9 +1601,25 @@ def _record_scoped_session_event(
         event["reproductionCommands"] = validate_reproduction_commands(previous.get("reproductionCommands"))
         event["workerStopped"] = confirm_worker_stopped
         if previous.get("status") == status:
-            if not _same_record(previous, event):
+            stopping_existing_fault = (
+                status in {"failed", "abandoned"}
+                and confirm_worker_stopped
+                and previous.get("workerStopped") is not True
+            )
+            previous_comparison = (
+                {key: value for key, value in previous.items() if key != "workerStopped"}
+                if stopping_existing_fault else previous
+            )
+            event_comparison = (
+                {key: value for key, value in event.items() if key != "workerStopped"}
+                if stopping_existing_fault else event
+            )
+            if not _same_record(previous_comparison, event_comparison):
                 raise ValueError("Investigation terminal replay changed its recorded failure.")
-            event = dict(previous)
+            if stopping_existing_fault:
+                append_jsonl_rows(path, [event])
+            else:
+                event = dict(previous)
         else:
             _validate_session_transition(previous, event)
             if status == "abandoned":

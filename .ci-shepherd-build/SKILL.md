@@ -880,10 +880,46 @@ changed identity, and missing launch evidence. No ledger event alone proves
 that no worker exists. An idle worker that was already launched requires the
 ordinary observed-stop protocol, not this shortcut.
 
-For existing reservations, perform one explicitly authorized recovery pass:
-inspect the exact owner and attempt, reconcile only independently confirmed
-stopped work, and leave unknown owners blocked. Do not clear the ledger or treat
-a changed source pin as permission to reclaim a live worker.
+Before admitting any new investigation, reconcile every existing reservation.
+In action-free mode this is inspection-only. In live mode, the caller's request
+to run with actions enabled authorizes this local append-only lifecycle
+bookkeeping; do not ask for a second approval.
+
+For an addressable resumable worker, query the session manager by the exact
+recorded `sessionId`. A worker reported running, idle, awaiting input, or
+otherwise live keeps its slot. An authoritative archived, deleted, failed, or
+stopped result permits terminal reconciliation. Omission from a bulk session
+list, elapsed time, or a missing checkout alone is not stop evidence.
+
+Recover a confirmed-stopped recorded session without locating its historical
+run plan:
+
+```bash
+python3 "$CI_SHEPHERD_ROOT/scripts/investigation_session.py" \
+  --state-dir "$STATE" \
+  --recover-recorded \
+  --status failed \
+  --recorded-at "$CURRENT_TIMESTAMP" \
+  --session-id "<exact-recorded-session-id>" \
+  --failure-reason "<specific authoritative session-manager observation>" \
+  --failure-category worker-unavailable \
+  --confirm-worker-stopped
+```
+
+The command selects exactly one persisted registration. It rejects unknown or
+reused ambiguous session IDs across the full ledger, including earlier
+completed registrations. It preserves an existing failed/abandoned outcome and
+appends stop confirmation rather than rewriting history. An exact replay
+returns the existing observation without another append; a completed session
+is never a recovery target. Use `abandoned` only after the one-hour limit when
+that is the accurate existing-session outcome; use `failed` when the observed
+stopped worker ended without a valid result. Re-run the inventory and require
+the slot to be durably released before provisioning a replacement.
+
+For owned one-shot attempts, first inspect the exact result path and launcher
+evidence, then use the existing result or terminal-recording path. Leave any
+unknown owner blocked. Never clear the ledger, infer termination from age, or
+treat a changed source pin as permission to reclaim a live worker.
 
 ### Resumable worker launch
 

@@ -4,7 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import copy
+import json
 import subprocess
+import sys
 import unittest
 
 from ci_shepherd.investigations import (
@@ -15,6 +17,11 @@ from ci_shepherd.investigations import (
     record_investigation_result,
     record_investigation_session_event,
     select_investigation_request,
+)
+from ci_shepherd.investigation_worktrees import (
+    investigation_capacity_inventory,
+    list_investigation_worktrees,
+    provision_investigation_worktree,
 )
 from ci_shepherd.ci_failure_triage import (
     attach_ci_failure_triage,
@@ -985,6 +992,433 @@ class InvestigationLifecycleTests(unittest.TestCase):
 
             self.assertEqual("worker-unavailable", abandoned["failureCategory"])
             self.assertEqual(2, retry["requests"][0]["attempt"])
+
+    def test_cli_recovers_stopped_recorded_session_without_historical_plan(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            command = [
+                sys.executable,
+                str(Path("scripts/investigation_session.py").resolve()),
+                "--state-dir",
+                str(state),
+                "--recover-recorded",
+                "--status",
+                "failed",
+                "--recorded-at",
+                "2026-08-28T20:30:00Z",
+                "--session-id",
+                "investigation-session-1",
+                "--failure-reason",
+                "The session manager reports that the exact worker session is stopped.",
+                "--failure-category",
+                "worker-unavailable",
+                "--confirm-worker-stopped",
+            ]
+
+            unconfirmed = subprocess.run(command[:-1], capture_output=True, text=True, check=False)
+            recovered = subprocess.run(command, capture_output=True, text=True, check=False)
+
+            self.assertEqual(2, unconfirmed.returncode)
+            self.assertIn("--confirm-worker-stopped", unconfirmed.stderr)
+            self.assertEqual(0, recovered.returncode, recovered.stderr)
+            event = json.loads(recovered.stdout)
+            self.assertEqual("failed", event["status"])
+            self.assertTrue(event["workerStopped"])
+            self.assertEqual("investigation-session-1", event["sessionId"])
+            self.assertEqual(0, investigation_capacity_inventory(state, request["repository"])["occupiedSlots"])
+            before = (state / "ledgers/investigation-sessions.jsonl").read_bytes()
+            replay = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertEqual(0, replay.returncode, replay.stderr)
+            self.assertEqual(event, json.loads(replay.stdout))
+            self.assertEqual(before, (state / "ledgers/investigation-sessions.jsonl").read_bytes())
+
+    def test_cli_recovery_preserves_recorded_failure_and_requires_exact_session(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            failed = record_investigation_session_event(
+                state,
+                request,
+                status="failed",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+                failure_reason="The launcher returned before the worker could investigate.",
+                failure_category="worker-error",
+            )
+            base = [
+                sys.executable,
+                str(Path("scripts/investigation_session.py").resolve()),
+                "--state-dir",
+                str(state),
+                "--recover-recorded",
+                "--status",
+                "failed",
+                "--recorded-at",
+                "2026-08-28T21:20:00Z",
+                "--confirm-worker-stopped",
+            ]
+
+            unknown = subprocess.run(
+                [*base, "--session-id", "not-the-recorded-session"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            recovered = subprocess.run(
+                [*base, "--session-id", "investigation-session-1"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(2, unknown.returncode)
+            self.assertIn("exact recoverable", unknown.stderr)
+            self.assertEqual(0, recovered.returncode, recovered.stderr)
+            event = json.loads(recovered.stdout)
+            self.assertEqual(failed["failureReason"], event["failureReason"])
+            self.assertEqual(failed["failureCategory"], event["failureCategory"])
+            self.assertTrue(event["workerStopped"])
+
+    def test_cli_recovery_replays_recorded_abandonment_without_rewriting_history(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            abandoned = record_investigation_session_event(
+                state,
+                request,
+                status="abandoned",
+                recorded_at="2026-08-28T21:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+                failure_reason="The worker could not be reached after the session limit.",
+                confirm_worker_stopped=True,
+            )
+            ledger = state / "ledgers/investigation-sessions.jsonl"
+            before = ledger.read_bytes()
+
+            replay = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path("scripts/investigation_session.py").resolve()),
+                    "--state-dir",
+                    str(state),
+                    "--recover-recorded",
+                    "--status",
+                    "abandoned",
+                    "--recorded-at",
+                    "2026-08-28T21:30:00Z",
+                    "--session-id",
+                    "investigation-session-1",
+                    "--confirm-worker-stopped",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, replay.returncode, replay.stderr)
+            self.assertEqual(abandoned, json.loads(replay.stdout))
+            self.assertEqual(before, ledger.read_bytes())
+
+    def test_cli_recovery_rejects_completed_nonreserving_session(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            record_investigation_session_event(
+                state,
+                request,
+                status="completed",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            ledger = state / "ledgers/investigation-sessions.jsonl"
+            before = ledger.read_bytes()
+
+            recovered = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path("scripts/investigation_session.py").resolve()),
+                    "--state-dir",
+                    str(state),
+                    "--recover-recorded",
+                    "--status",
+                    "failed",
+                    "--recorded-at",
+                    "2026-08-28T20:40:00Z",
+                    "--session-id",
+                    "investigation-session-1",
+                    "--failure-reason",
+                    "The session manager reports that the exact worker session is stopped.",
+                    "--confirm-worker-stopped",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(2, recovered.returncode)
+            self.assertIn("one exact recoverable", recovered.stderr)
+            self.assertEqual(before, ledger.read_bytes())
+            self.assertEqual(0, investigation_capacity_inventory(state, request["repository"])["occupiedSlots"])
+
+    def test_cli_recovery_confirms_stopped_owned_worker_and_releases_capacity(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        with TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            source = _clean_checkout(root)
+            subprocess.run(
+                ["git", "--no-pager", "-C", str(source), "remote", "add", "origin", "https://github.com/owner/repo.git"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            revision = subprocess.run(
+                ["git", "--no-pager", "-C", str(source), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            prepared["sourceRevision"] = revision
+            prepared["issues"][0]["sourceRevision"] = revision
+            request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+            state = root / "state"
+            allocation = provision_investigation_worktree(
+                state,
+                request,
+                source_checkout=source,
+                attempt=1,
+                recorded_at="2026-08-28T20:10:00Z",
+                managed_root=root / "workers",
+            )
+            checkout = Path(allocation["checkoutPath"])
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="investigation-session-1",
+                checkout=checkout,
+            )
+            failed = record_investigation_session_event(
+                state,
+                request,
+                status="failed",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="investigation-session-1",
+                failure_reason="The launcher returned before the worker could investigate.",
+                failure_category="worker-error",
+            )
+            self.assertFalse(failed["workerStopped"])
+            self.assertEqual(1, investigation_capacity_inventory(state, request["repository"])["occupiedSlots"])
+
+            recovered = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path("scripts/investigation_session.py").resolve()),
+                    "--state-dir",
+                    str(state),
+                    "--recover-recorded",
+                    "--status",
+                    "failed",
+                    "--recorded-at",
+                    "2026-08-28T20:40:00Z",
+                    "--session-id",
+                    "investigation-session-1",
+                    "--confirm-worker-stopped",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, recovered.returncode, recovered.stderr)
+            event = json.loads(recovered.stdout)
+            self.assertEqual(failed["failureReason"], event["failureReason"])
+            self.assertEqual(failed["failureCategory"], event["failureCategory"])
+            self.assertTrue(event["workerStopped"])
+            self.assertEqual(0, investigation_capacity_inventory(state, request["repository"])["occupiedSlots"])
+            self.assertTrue(list_investigation_worktrees(state)[0]["workerStopped"])
+            sessions_before = (state / "ledgers/investigation-sessions.jsonl").read_bytes()
+            worktrees_before = (state / "ledgers/investigation-worktrees.jsonl").read_bytes()
+            replay = subprocess.run(
+                recovered.args,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, replay.returncode, replay.stderr)
+            self.assertEqual(event, json.loads(replay.stdout))
+            self.assertEqual(sessions_before, (state / "ledgers/investigation-sessions.jsonl").read_bytes())
+            self.assertEqual(worktrees_before, (state / "ledgers/investigation-worktrees.jsonl").read_bytes())
+
+    def test_cli_recovery_rejects_session_reused_after_completed_investigation(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        replacement = {
+            **request,
+            "repository": "other/repo",
+            "investigationId": f"{request['investigationId']}:replacement",
+        }
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:10:00Z",
+                session_id="reused-session",
+                checkout=checkout,
+            )
+            record_investigation_session_event(
+                state,
+                request,
+                status="completed",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="reused-session",
+                checkout=checkout,
+            )
+            record_investigation_session_event(
+                state,
+                replacement,
+                status="started",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="reused-session",
+                checkout=checkout,
+            )
+
+            recovered = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path("scripts/investigation_session.py").resolve()),
+                    "--state-dir",
+                    str(state),
+                    "--recover-recorded",
+                    "--status",
+                    "failed",
+                    "--recorded-at",
+                    "2026-08-28T20:40:00Z",
+                    "--session-id",
+                    "reused-session",
+                    "--failure-reason",
+                    "The session manager reports that the exact worker session is stopped.",
+                    "--confirm-worker-stopped",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(2, recovered.returncode)
+            self.assertIn("one exact", recovered.stderr)
+            self.assertEqual(1, investigation_capacity_inventory(state, replacement["repository"])["occupiedSlots"])
+
+    def test_cli_recovery_leaves_ambiguous_reused_session_reserved(self) -> None:
+        prepared = _prepared()
+        judgments = _judgments()
+        request = build_investigation_plan(prepared, judgments, [])["requests"][0]
+        replacement = {**request, "investigationId": f"{request['investigationId']}:replacement"}
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            checkout = _clean_checkout(state)
+            record_investigation_session_event(
+                state,
+                request,
+                status="started",
+                recorded_at="2026-08-28T20:20:00Z",
+                session_id="reused-session",
+                checkout=checkout,
+            )
+            record_investigation_session_event(
+                state,
+                request,
+                status="failed",
+                recorded_at="2026-08-28T20:30:00Z",
+                session_id="reused-session",
+                failure_reason="The first investigation failed without stop confirmation.",
+            )
+            record_investigation_session_event(
+                state,
+                replacement,
+                status="started",
+                recorded_at="2026-08-28T20:40:00Z",
+                session_id="reused-session",
+                checkout=checkout,
+            )
+
+            recovered = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path("scripts/investigation_session.py").resolve()),
+                    "--state-dir",
+                    str(state),
+                    "--recover-recorded",
+                    "--status",
+                    "failed",
+                    "--recorded-at",
+                    "2026-08-28T20:50:00Z",
+                    "--session-id",
+                    "reused-session",
+                    "--failure-reason",
+                    "The session manager reports that the exact worker session is stopped.",
+                    "--confirm-worker-stopped",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(2, recovered.returncode)
+            self.assertIn("one exact recoverable", recovered.stderr)
+            self.assertEqual(2, investigation_capacity_inventory(state, request["repository"])["occupiedSlots"])
 
 
 if __name__ == "__main__":
