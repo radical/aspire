@@ -259,6 +259,7 @@ class RetrospectiveContextTests(unittest.TestCase):
         self.write(self.work / "assessment-completion.json", previous_completion)
         for name in (
             "assessment-batches.json", "assessment-batch-0001.json",
+            "assessment-group-0001.json",
             "assessment-receipts.json", "assessment-completion.json", "input.json",
         ):
             path = self.work / name

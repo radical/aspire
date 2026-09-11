@@ -5,7 +5,8 @@ import json
 import unittest
 
 from ci_shepherd.assessment_batches import (
-    build_assessment_batches, merge_worker_responses, validate_assessment_receipts,
+    build_assessment_batches, build_worker_input, merge_worker_responses,
+    serialize_worker_input, validate_assessment_receipts,
 )
 from ci_shepherd.models import stable_json
 
@@ -92,8 +93,15 @@ class AssessmentBatchTests(unittest.TestCase):
         self.assertEqual("ready", group["status"])
         self.assertEqual(256_000, manifest["maxWorkerInputBytes"])
         self.assertEqual(["issue:1"], group["caseIds"])
+        self.assertEqual("assessment-group-0001.json", group["inputFile"])
         self.assertGreater(group["byteCount"], 64_000)
         self.assertLessEqual(group["byteCount"], 256_000)
+        worker_input = build_worker_input(manifest, packets, group)
+        self.assertEqual([case], worker_input["cases"])
+        self.assertEqual(
+            len(serialize_worker_input(worker_input).encode("utf-8")),
+            group["byteCount"],
+        )
         self.assertTrue(all(
             len(stable_json(packet).encode("utf-8")) <= 16_000
             for packet in packets.values()
@@ -186,6 +194,27 @@ class AssessmentBatchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "worker.*incomplete"):
             validate_assessment_receipts(manifest, packets, receipts)
 
+    def test_json_fragment_escaping_does_not_consume_worker_budget(self) -> None:
+        case = issue_case(1)
+        case["input"]["evidenceBundle"][0]["payload"]["body"] = (
+            '{"nested":"quoted value","items":["a","b","c"]}\n' * 4_000
+        )
+        manifest, packets = build_assessment_batches(
+            [case], snapshot_id="snapshot:owner/repo:now", source_fingerprints={},
+        )
+
+        group, = manifest["workerGroups"]
+        packet_bytes = sum(
+            len(stable_json(packets[name]).encode("utf-8"))
+            for name in group["packetFiles"]
+        )
+        worker_input = build_worker_input(manifest, packets, group)
+
+        self.assertGreater(packet_bytes, manifest["maxWorkerInputBytes"])
+        self.assertLessEqual(group["byteCount"], manifest["maxWorkerInputBytes"])
+        self.assertEqual("ready", group["status"])
+        self.assertEqual([case], worker_input["cases"])
+
     def test_worker_groups_keep_all_case_parts_together_with_bounded_total_input(self) -> None:
         cases = [issue_case(number) for number in range(1, 24)]
         cases[0]["input"]["evidenceBundle"][0]["payload"]["body"] = "x" * 40_000
@@ -200,6 +229,12 @@ class AssessmentBatchTests(unittest.TestCase):
             self.assertLessEqual(group["byteCount"], manifest["maxWorkerInputBytes"])
             self.assertEqual(
                 sum(len(stable_json(packets[name]).encode("utf-8")) for name in group["packetFiles"]),
+                group["packetByteCount"],
+            )
+            self.assertEqual(
+                len(serialize_worker_input(
+                    build_worker_input(manifest, packets, group)
+                ).encode("utf-8")),
                 group["byteCount"],
             )
             for filename in group["packetFiles"]:

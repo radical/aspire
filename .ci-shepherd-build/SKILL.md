@@ -28,6 +28,14 @@ export INVOCATION_DIR="$HOME/.copilot/ci-shepherd/runs/manual-$(date -u +%Y%m%dT
 export SCRATCH="$INVOCATION_DIR/primary"
 install -d -m 700 "$STATE" "$INVOCATION_DIR" "$SCRATCH"
 
+# Launch this as one attached background process through the runtime's async
+# process facility. Do not use shell `&`, detach it, or poll it from the
+# coordinator conversation.
+python3 "$CI_SHEPHERD_ROOT/scripts/live_status.py" watch \
+  --invocation-dir "$INVOCATION_DIR" \
+  --work-dir "$SCRATCH" \
+  --state-dir "$STATE"
+
 python3 "$CI_SHEPHERD_ROOT/scripts/cycle.py" start \
   --repository microsoft/aspire \
   --checkout "$CHECKOUT" \
@@ -50,8 +58,8 @@ assign manageable case groups to fresh assessment workers:
 
 ```text
 $SCRATCH/assessment-batches.json
-$SCRATCH/assessment-batch-0001.json
-$SCRATCH/assessment-batch-0002.json
+$SCRATCH/assessment-group-0001.json
+$SCRATCH/assessment-group-0002.json
 ```
 
 Launch one fresh worker for each ready `workerGroups` entry in the manifest.
@@ -60,14 +68,18 @@ synchronous workers cannot receive a correction turn. Verify the launcher's
 actual capability; some nested runtimes execute synchronously despite the
 requested mode. Keep worker handles until validation completes, and use the
 running time for independent coordinator work or other ready groups.
-Use exactly its `packetFiles` and `responseFile`; never have workers share a
-response path. Read only those packets, not the full source handoffs.
-Packets contain at most ten entries and 16,000 serialized bytes.
+Use exactly its `inputFile` and `responseFile`; never have workers share a
+response path. Read only that canonical worker input, not the full source
+handoffs or integrity packets. `packetFiles` remain bounded receipt-validation
+artifacts and contain at most ten entries and 16,000 serialized bytes.
 
 `scripts/ci_shepherd/assessment_batches.py` also caps each worker at ten
-logical cases and the manifest's `maxWorkerInputBytes`. All parts of a split case stay in the
-same group. A case exceeding that worker budget remains explicitly incomplete;
-do not sample it, split its assessment across workers, or claim completion.
+logical cases and the manifest's `maxWorkerInputBytes`, measured from the
+canonical reconstructed `assessment-group-*.json` input rather than the
+larger escaped fragment representation. All integrity fragments of a split
+case stay in the same group. A canonical case exceeding that worker budget
+remains explicitly incomplete; do not sample it, split its assessment across
+workers, or claim completion.
 
 Each issue case contains its full prepared evidence in `input`, the actual
 default judgment in `defaultJudgment`, and compact-only routing context in
@@ -76,8 +88,19 @@ default judgment in `defaultJudgment`, and compact-only routing context in
 fields, including `ciFailureTriage` and `repairEvidence`, appear only in `input`
 when their compact value is identical. Different compact values remain in
 `decisionContext`. Large cases use
-byte-bounded JSON fragments; read them in `partIndex` order and reconstruct the
-whole case before assessing it. Every part still requires its own receipt.
+byte-bounded JSON fragments for packet integrity. The coordinator
+deterministically reconstructs and fingerprints the complete case in the
+worker input before launch. Every part still requires its own receipt.
+
+The watcher writes bounded `live-status.json`, `live-status.md`, and
+`live-status.html` files in `$INVOCATION_DIR`. The coordinator is the sole
+writer. Updates are coalesced to meaningful changes or a 30-second heartbeat;
+the HTML page refreshes every five seconds. The projection labels launcher,
+artifact, and ledger observations explicitly, never contains prompts, raw
+logs, credentials, grants, or executable commands, and is advisory only:
+assessment, selection, authorization, execution, sealing, and retrospective
+logic must never consume it. Watcher or rendering failures do not abort or
+roll back the run.
 
 Workers fill their pre-created `assessment-response-*.json` file, retaining its
 identities and editing only the sparse `issues` and `pullRequests` overrides.
@@ -2086,6 +2109,7 @@ review-selection.json
 pull-request-review.json
 assessment-batches.json
 assessment-batch-0001.json
+assessment-group-0001.json
 assessment-response-0001.json
 assessment-receipts.json
 assessment-completion.json
@@ -2102,6 +2126,9 @@ action-proposals.json
 comment-selection.json
 actor-dry-run.json
 progress.json
+live-status.json
+live-status.md
+live-status.html
 api-calls.jsonl
 cycle.json
 run-completion.json
@@ -2133,11 +2160,18 @@ $STATE/
 is the coordinator-owned prepared assessment. `assessment-defaults.json`
 contains the complete deterministic compact assessment used when sparse
 overrides are merged; `agent-input.json` stages the selected issues used to
-materialize worker packets. Workers read the bounded `assessment-batch-*.json`
-files instead of loading the entire staging document. `related-issues.json` is an
+materialize worker inputs and integrity packets. Workers read the bounded
+`assessment-group-*.json` projection instead of loading the entire staging
+document or escaped packet fragments. `related-issues.json` is an
 optional frozen canonical-test search result used only for offline tracker and
 history matching. The compact handoff is generated by `compact.py` from
 `assessment-input.json`. It produces `agent-input.json`.
+`assessment-group-*.json` is the canonical worker-facing projection. It
+reconstructs complete logical cases without the extra JSON-string escaping
+needed by the 16 KiB integrity packets. Workers read the group input; packet
+fingerprints and per-part receipts remain the fail-closed completion proof.
+`live-status.*` is a bounded advisory projection generated outside the
+canonical decision pipeline.
 `fingerprints.jsonl` is the append-only exact-fingerprint occurrence ledger
 under `$STATE/ledgers`, so recurrence survives scratch cleanup.
 `case-events.jsonl` records bootstrap and material disposition transitions.
@@ -2465,17 +2499,17 @@ judgment or action proposal.
 ## Fresh assessment-agent contract
 
 A fresh assessment worker reads only its assigned materialized
-`assessment-batch-*.json` packets. It fills its generated group response;
+`assessment-group-*.json` canonical input. It fills its generated group response;
 `merge-assessments` produces `agent-assessment.json` with exactly
 `schemaVersion`, `snapshotId`, `issues`, and `pullRequests`. Write only
 evidence-supported overrides for selected issue and pull-request entries.
 Deterministic defaults already apply the safe recurrence rubric; omitting a
 selected item means "keep the default." Do not return unselected items or copy
-all defaults. Read every assigned packet completely; numbered JSON fragments
-must all be read in order to reconstruct their complete case. Use bounded
-displays rather than concatenating a whole group into one oversized tool result.
+all defaults. Read every assigned logical case completely from the canonical
+group input. Use bounded displays rather than loading the whole group into one
+oversized tool result.
 If a display truncates, recover the unseen contents with smaller reads from the
-same frozen packets. Display truncation is not proof that the evidence file is
+same frozen group input. Display truncation is not proof that the evidence file is
 truncated, and it does not permit acknowledging unread contents.
 Do not write `agent-judgments.json` or
 `agent-pull-request-judgments.json`; `cycle.py` derives them after validating
@@ -2541,7 +2575,7 @@ using the checkout that contains this skill. The workflow prompt must:
 
 1. keep `$HOME/.copilot/ci-shepherd/state` across runs;
 2. create a new timestamped scratch directory for each run;
-3. run `cycle.py start`;
+3. start the advisory `live_status.py watch` process and run `cycle.py start`;
 4. if the manifest says `awaiting-review`, assess its bounded worker groups,
    run `cycle.py merge-assessments`, then run `cycle.py finish`;
 5. provision owned worktrees for selected requests in `investigation-plan.json`
@@ -2556,7 +2590,8 @@ using the checkout that contains this skill. The workflow prompt must:
    `quarantine-session.json` without the required approval;
 9. update the final report with investigation and action outcomes, proposals
    still needing approval, and structurally incomplete evidence; and
-10. run the completed-cycle retrospective described below as the last phase.
+10. run the completed-cycle retrospective described below as the last phase,
+    then ensure one final live-status render completed.
 
 Run daily initially. Do not overlap cycles against the same state directory;
 the append-only ledgers and `current.json` have a single-writer contract.
@@ -2569,7 +2604,11 @@ The retrospective is the final phase of the run. Run it only after all
 investigations, authorized effects, reconciliation, ledger updates, and report
 rendering are complete. A retrospective failure does not roll back completed
 actions; record the failure in the operator output and preserve the completed
-run artifacts for later review.
+run artifacts for later review. Also write
+`$INVOCATION_DIR/retrospective-error.txt` with one bounded, non-sensitive error
+summary so the advisory watcher records a terminal failure and exits. Do not
+copy prompts, raw logs, environment variables, credentials, or grants into the
+marker.
 
 Always supply the invocation context to a new retrospective: action-free/live
 mode, action prohibitions, each worker launch blocker, state provenance, timing

@@ -356,7 +356,12 @@ class AssessmentCompletionTests(unittest.TestCase):
             self.assertIn("121 issues / 27 PRs with assessment acknowledgements", (work / "report.md").read_text())
 
     def test_changed_packets_inputs_and_legacy_cycles_cannot_reuse_receipts(self) -> None:
-        for changed in ("assessment-input.json", "assessment-batch-0001.json", "legacy-cycle"):
+        for changed in (
+            "assessment-input.json",
+            "assessment-batch-0001.json",
+            "assessment-group-0001.json",
+            "legacy-cycle",
+        ):
             with self.subTest(changed=changed), TemporaryDirectory() as directory:
                 root = Path(directory)
                 source = root / "source.json"

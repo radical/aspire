@@ -36,18 +36,33 @@ def build_assessment_batches(
     selected_packets: dict[str, dict[str, Any]] = {}
 
     def emit_group() -> None:
-        byte_count = sum(len(stable_json(packet).encode("utf-8")) for packet in selected_packets.values())
         group_id = f"group:{len(groups) + 1}"
+        worker_input = _worker_input(
+            selected_cases, assessment_id=assessment_id,
+            snapshot_id=snapshot_id, group_id=group_id,
+        )
+        byte_count = len(serialize_worker_input(worker_input).encode("utf-8"))
+        packet_byte_count = sum(
+            len(stable_json(packet).encode("utf-8"))
+            for packet in selected_packets.values()
+        )
         groups.append({
             "groupId": group_id,
             "caseIds": [case["caseId"] for case in selected_cases],
+            "inputFile": f"assessment-group-{len(groups) + 1:04d}.json",
+            "inputFingerprint": _fingerprint(worker_input),
             "packetFiles": list(selected_packets),
             "batchIds": [packet["batchId"] for packet in selected_packets.values()],
             "responseFile": f"assessment-response-{len(groups) + 1:04d}.json",
             "byteCount": byte_count,
+            "packetByteCount": packet_byte_count,
             "status": "ready" if byte_count <= MAX_ASSESSMENT_WORKER_BYTES else "incomplete",
             "reason": None if byte_count <= MAX_ASSESSMENT_WORKER_BYTES else "worker-input-limit",
-            "instructions": "Use one fresh worker for this whole group. Read every packet and every case part before claiming complete.",
+            "instructions": (
+                "Use one fresh worker for this whole group. Read the complete canonical "
+                "input file before claiming complete. Packet files are integrity artifacts "
+                "for receipt validation and are not worker inputs."
+            ),
         })
         for filename, packet in selected_packets.items():
             packets[filename] = packet
@@ -60,24 +75,37 @@ def build_assessment_batches(
 
     for case in cases:
         parts = _split_case(case, assessment_id, snapshot_id)
+        group_id = f"group:{len(groups) + 1}"
         candidate = _pack_group(
             [*selected_parts, *parts], assessment_id, snapshot_id,
-            f"group:{len(groups) + 1}", len(batches),
+            group_id, len(batches),
+        )
+        candidate_input = _worker_input(
+            [*selected_cases, case],
+            assessment_id=assessment_id,
+            snapshot_id=snapshot_id,
+            group_id=group_id,
         )
         if selected_cases and (
             len(selected_cases) == MAX_ASSESSMENT_CASES
-            or sum(len(stable_json(packet).encode("utf-8")) for packet in candidate.values())
-            > MAX_ASSESSMENT_WORKER_BYTES
+            or len(serialize_worker_input(candidate_input).encode("utf-8")) > MAX_ASSESSMENT_WORKER_BYTES
         ):
             emit_group()
             selected_cases, selected_parts = [], []
+            group_id = f"group:{len(groups) + 1}"
             candidate = _pack_group(
-                parts, assessment_id, snapshot_id, f"group:{len(groups) + 1}", len(batches),
+                parts, assessment_id, snapshot_id, group_id, len(batches),
             )
         selected_cases.append(case)
         selected_parts.extend(parts)
         selected_packets = candidate
-        if sum(len(stable_json(packet).encode("utf-8")) for packet in candidate.values()) > MAX_ASSESSMENT_WORKER_BYTES:
+        worker_input = _worker_input(
+            selected_cases,
+            assessment_id=assessment_id,
+            snapshot_id=snapshot_id,
+            group_id=group_id,
+        )
+        if len(serialize_worker_input(worker_input).encode("utf-8")) > MAX_ASSESSMENT_WORKER_BYTES:
             emit_group()
             selected_cases, selected_parts, selected_packets = [], [], {}
     if selected_cases:
@@ -94,6 +122,97 @@ def build_assessment_batches(
         "batches": batches,
         "workerGroups": groups,
     }, packets)
+
+
+def _worker_input(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    assessment_id: str,
+    snapshot_id: str,
+    group_id: str,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "assessmentId": assessment_id,
+        "snapshotId": snapshot_id,
+        "groupId": group_id,
+        "cases": list(cases),
+    }
+
+
+def serialize_worker_input(worker_input: Mapping[str, Any]) -> str:
+    # Indent level zero keeps each JSON token on a separate readable line
+    # without spending most of the worker budget on nested indentation.
+    return json.dumps(
+        worker_input,
+        indent=0,
+        sort_keys=True,
+        ensure_ascii=False,
+    ) + "\n"
+
+
+def build_worker_input(
+    manifest: Mapping[str, Any],
+    packets: Mapping[str, Mapping[str, Any]],
+    group: Mapping[str, Any],
+) -> dict[str, Any]:
+    parts_by_case: dict[str, list[Mapping[str, Any]]] = {}
+    cases: list[Mapping[str, Any]] = []
+    order: list[str] = []
+    for filename in group["packetFiles"]:
+        packet = packets.get(filename)
+        if packet is None or packet.get("groupId") != group["groupId"]:
+            raise ValueError("Assessment worker input references a missing or foreign packet.")
+        for part in packet["cases"]:
+            parent = part.get("parentCaseId")
+            if parent is None:
+                case_id = part["caseId"]
+                if case_id in parts_by_case:
+                    raise ValueError(f"Assessment worker input repeats logical case {case_id}.")
+                parts_by_case[case_id] = [part]
+                order.append(case_id)
+                continue
+            if parent not in parts_by_case:
+                parts_by_case[parent] = []
+                order.append(parent)
+            parts_by_case[parent].append(part)
+    for case_id in order:
+        parts = parts_by_case[case_id]
+        if len(parts) == 1 and parts[0].get("parentCaseId") is None:
+            cases.append(parts[0])
+            continue
+        ordered = sorted(parts, key=lambda part: part["input"]["partIndex"])
+        expected_indexes = list(range(1, len(ordered) + 1))
+        if (
+            [part["input"]["partIndex"] for part in ordered] != expected_indexes
+            or any(part["input"]["partCount"] != len(ordered) for part in ordered)
+        ):
+            raise ValueError(f"Assessment worker input has incomplete fragments for {case_id}.")
+        try:
+            case = json.loads("".join(part["input"]["content"] for part in ordered))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Assessment worker input cannot reconstruct {case_id}.") from error
+        if (
+            not isinstance(case, dict)
+            or case.get("caseId") != case_id
+            or case.get("evidenceIds") != ordered[0].get("evidenceIds")
+        ):
+            raise ValueError(f"Assessment worker input reconstructed a mismatched case {case_id}.")
+        cases.append(case)
+    if order != group["caseIds"]:
+        raise ValueError("Assessment worker input case order does not match its group.")
+    worker_input = _worker_input(
+        cases,
+        assessment_id=manifest["assessmentId"],
+        snapshot_id=manifest["snapshotId"],
+        group_id=group["groupId"],
+    )
+    if (
+        len(serialize_worker_input(worker_input).encode("utf-8")) != group["byteCount"]
+        or _fingerprint(worker_input) != group["inputFingerprint"]
+    ):
+        raise ValueError("Assessment worker input does not match its manifest.")
+    return worker_input
 
 
 def _pack_group(
@@ -369,6 +488,10 @@ def materialize_assessment(work_dir: Path) -> dict[str, Any]:
                 raise ValueError("Assessment packet path is invalid.")
             previous_paths.append(work_dir / filename)
         for index, group in enumerate(previous_manifest.get("workerGroups", []), start=1):
+            input_filename = f"assessment-group-{index:04d}.json"
+            if group.get("inputFile") != input_filename:
+                raise ValueError("Assessment worker input path is invalid.")
+            previous_paths.append(work_dir / input_filename)
             filename = f"assessment-response-{index:04d}.json"
             if group["responseFile"] != filename:
                 raise ValueError("Assessment response path is invalid.")
@@ -425,8 +548,17 @@ def materialize_assessment(work_dir: Path) -> dict[str, Any]:
         )
     for name, packet in packets.items():
         _write_json(work_dir / name, packet)
+    for group in manifest["workerGroups"]:
+        _write_text(
+            work_dir / group["inputFile"],
+            serialize_worker_input(build_worker_input(manifest, packets, group)),
+        )
     for path in previous_paths:
-        if path.name not in packets:
+        if (
+            path.name not in packets
+            and path.name not in {group["inputFile"] for group in manifest["workerGroups"]}
+            and path.name not in {group["responseFile"] for group in manifest["workerGroups"]}
+        ):
             path.unlink(missing_ok=True)
     _write_json(work_dir / "assessment-batches.json", manifest)
     for group in manifest["workerGroups"]:
@@ -488,6 +620,20 @@ def load_assessment_packets(
         if batch["file"] != filename:
             raise ValueError("Assessment packet path is invalid.")
         packets[filename] = _read_json(work_dir / f"assessment-batch-{index:04d}{suffix}.json")
+    for index, group in enumerate(manifest["workerGroups"], start=1):
+        filename = f"assessment-group-{index:04d}.json"
+        if group.get("inputFile") != filename:
+            raise ValueError("Assessment worker input path is invalid.")
+        expected = build_worker_input(manifest, packets, group)
+        input_path = work_dir / f"assessment-group-{index:04d}{suffix}.json"
+        try:
+            actual_content = input_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise ValueError(
+                f"Cannot read assessment artifact {input_path.name}: {error}"
+            ) from error
+        if actual_content != serialize_worker_input(expected):
+            raise ValueError(f"Assessment worker input {filename} is missing or changed.")
     return manifest, packets
 
 
@@ -523,6 +669,7 @@ def assessment_artifacts(work_dir: Path) -> list[Path]:
         work_dir / "assessment-receipts.json",
         work_dir / "assessment-completion.json",
         *[work_dir / batch["file"] for batch in manifest["batches"]],
+        *[work_dir / group["inputFile"] for group in manifest.get("workerGroups", [])],
         *[work_dir / group["responseFile"] for group in manifest.get("workerGroups", [])],
     ]
 
@@ -545,9 +692,13 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, document: object) -> None:
+    _write_text(path, stable_json(document))
+
+
+def _write_text(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        temporary.write_text(stable_json(document), encoding="utf-8", newline="\n")
+        temporary.write_text(content, encoding="utf-8", newline="\n")
         temporary.chmod(0o600)
         os.replace(temporary, path)
     finally:

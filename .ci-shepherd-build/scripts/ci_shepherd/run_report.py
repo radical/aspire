@@ -1242,6 +1242,11 @@ def _append_assessment_workload(
             or type(count) is not int or count < 0
             or any(not isinstance(row, Mapping) for row in [*batches, *groups])
             or any(type(row.get("byteCount")) is not int or row["byteCount"] < 0 for row in [*batches, *groups])
+            or any(
+                type(group.get("packetByteCount")) is not int
+                or group["packetByteCount"] < 0
+                for group in groups
+            )
         ):
             raise ValueError("Assessment workload requires case, packet, group, and byte counts.")
         if (
@@ -1266,9 +1271,26 @@ def _append_assessment_workload(
             raise ValueError("Assessment workload logical case or packet membership disagrees.")
         for group in groups:
             member_batches = [batches_by_id[batch_id] for batch_id in group["batchIds"]]
+            worker_limit = manifest.get("maxWorkerInputBytes")
+            status = group.get("status")
+            reason = group.get("reason")
             if (
                 group["packetFiles"] != [batch["file"] for batch in member_batches]
-                or group["byteCount"] != sum(batch["byteCount"] for batch in member_batches)
+                or group["packetByteCount"] != sum(batch["byteCount"] for batch in member_batches)
+                or type(worker_limit) is not int
+                or worker_limit <= 0
+                or (
+                    status == "ready"
+                    and (reason is not None or group["byteCount"] > worker_limit)
+                )
+                or (
+                    status == "incomplete"
+                    and (
+                        reason != "worker-input-limit"
+                        or group["byteCount"] <= worker_limit
+                    )
+                )
+                or status not in {"ready", "incomplete"}
             ):
                 raise ValueError("Assessment workload packet and worker membership or byte counts disagree.")
         byte_count = sum(group["byteCount"] for group in groups)

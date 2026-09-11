@@ -153,7 +153,7 @@ class RunReportTests(unittest.TestCase):
             if change == "snapshot":
                 manifest["snapshotId"] = "snapshot:other"
             elif change == "bytes":
-                manifest["workerGroups"][0]["byteCount"] += 1
+                manifest["workerGroups"][0]["packetByteCount"] += 1
             elif change == "cases":
                 manifest["caseCount"] = 999
             elif change == "duplicate-case":
@@ -166,6 +166,20 @@ class RunReportTests(unittest.TestCase):
                 render_run_markdown(
                     self.snapshot, self.prepared, self.judgments, assessment_manifest=manifest,
                 )
+
+    def test_assessment_workload_reports_fail_closed_oversized_group(self) -> None:
+        case = issue_case(1)
+        case["input"]["evidenceBundle"][0]["payload"]["body"] = "x" * 270_000
+        manifest, _ = build_assessment_batches(
+            [case], snapshot_id=self.prepared["snapshotId"], source_fingerprints={},
+        )
+
+        report = render_run_markdown(
+            self.snapshot, self.prepared, self.judgments, assessment_manifest=manifest,
+        )
+
+        self.assertEqual("incomplete", manifest["workerGroups"][0]["status"])
+        self.assertIn("| Current | 1 |", report)
 
     def test_missing_assessment_workload_is_unknown_not_zero(self) -> None:
         report = render_run_markdown(self.snapshot, self.prepared, self.judgments)
