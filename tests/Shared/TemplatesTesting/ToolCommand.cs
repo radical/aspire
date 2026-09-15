@@ -220,7 +220,9 @@ public class ToolCommand : IDisposable
         psi.Environment["DOTNET_MULTILEVEL_LOOKUP"] = "0";
         psi.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
 
-        // runtime repo sets this, which interferes with the tests
+        // Repository builds set these to the active SDK. Template tests launch isolated SDKs,
+        // so inheriting either path makes nested template restores load targets from the wrong SDK.
+        psi.EnvironmentVariables.Remove("MSBuildExtensionsPath");
         psi.EnvironmentVariables.Remove("MSBuildSDKsPath");
 
         AddEnvironmentVariablesTo(psi);
