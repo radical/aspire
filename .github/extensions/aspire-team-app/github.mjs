@@ -44,7 +44,7 @@ export const DEFAULT_REPOS = [
 // a different default watch set. See accounts.isEmuAccountId for how an account is
 // classified and state.defaultReposForId for how this default is applied.
 export const DEFAULT_EMU_REPOS = [
-  "devdiv-microsoft/aspire-1p",
+  "dotnet/aspire.1p",
 ];
 
 const GRAPHQL = "https://api.github.com/graphql";

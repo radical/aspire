@@ -264,7 +264,7 @@ export function isEmuAccountId(id) {
   // account's host. A host-scoped id ("acct:<host>/<login>") therefore has to name github.com
   // to be treated as EMU — otherwise a GHES account whose login happens to end in an org-alias
   // suffix (e.g. "acct:ghe.example.com/alice_microsoft") would be misclassified and handed the
-  // dotcom-only devdiv-microsoft/aspire-1p default it cannot read. Legacy hostless ids
+  // dotcom-only dotnet/aspire.1p default it cannot read. Legacy hostless ids
   // ("acct:<login>") predate host scoping and are github.com by definition, so they keep the
   // login-only classification.
   const host = hostFromAccountId(id);
