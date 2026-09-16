@@ -12,7 +12,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_REPOS, DEFAULT_EMU_REPOS, CURRENT_RELEASE } from "./github.mjs";
-import { isEmuAccountId } from "./accounts.mjs";
+import { isEmuAccountId, isProximaAccountId } from "./accounts.mjs";
 
 const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), ".copilot");
 const ARTIFACT_DIR = join(COPILOT_HOME, "extensions", "aspire-team-app", "artifacts");
@@ -118,12 +118,12 @@ export function updatePrefs(mutator) {
 // Per-account helpers
 // ---------------------------------------------------------------------------
 
-// The default repo watch set for an account that the user has not configured. EMU
-// accounts default to the private first-party repos; everyone else gets the public
-// Aspire repos. This only fills in the fallback — it never overrides repos a user
-// has explicitly configured (see accountConfig/setAccountRepos below).
+// The default repo watch set for an account that the user has not configured. First-party
+// accounts default to the Proxima repository; everyone else gets the public Aspire repos.
+// This only fills in the fallback — it never overrides repos a user has explicitly
+// configured (see accountConfig/setAccountRepos below).
 function defaultReposForId(id) {
-  return isEmuAccountId(id) ? DEFAULT_EMU_REPOS : DEFAULT_REPOS;
+  return isEmuAccountId(id) || isProximaAccountId(id) ? DEFAULT_EMU_REPOS : DEFAULT_REPOS;
 }
 
 export function accountConfig(prefs, id, legacyId = legacyIdFor(id)) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { accountId, isEmuAccountId, isEmuLogin } from "./accounts.mjs";
+import { accountId, isEmuAccountId, isEmuLogin, isProximaAccountId } from "./accounts.mjs";
 import { accountConfig } from "./state.mjs";
 
 const originalEnv = { ...process.env };
@@ -36,6 +36,12 @@ test("isEmuAccountId classifies host-scoped and legacy ids by their login", () =
   // cannot read. EMU aliases only exist on github.com.
   assert.equal(isEmuAccountId("acct:ghe.example.com/alice_microsoft"), false);
   assert.equal(isEmuAccountId("acct:ghe.example.com/octo"), false);
+});
+
+test("isProximaAccountId recognizes the configured enterprise host", () => {
+  assert.equal(isProximaAccountId("acct:msft.ghe.com/ankj"), true);
+  assert.equal(isProximaAccountId("acct:ghe.example.com/ankj"), false);
+  assert.equal(isProximaAccountId("acct:github.com/ankj"), false);
 });
 
 test("resolveAccounts keys accounts by normalized host and login", async () => {
