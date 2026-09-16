@@ -57,16 +57,26 @@ public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) 
     [Trait("category", "basic-build")]
     public async Task ChildDotNetProcessesDoNotInheritParentSdkPaths()
     {
-        const string msbuildExtensionsPath = "MSBUILDEXTENSIONSPATH";
-        const string msbuildSdksPath = "MSBUILDSDKSPATH";
-        string? originalExtensionsPath = Environment.GetEnvironmentVariable(msbuildExtensionsPath);
-        string? originalSdksPath = Environment.GetEnvironmentVariable(msbuildSdksPath);
+        string[] sdkPathVariableNames =
+        [
+            "MSBuildExtensionsPath",
+            "MSBuildSDKsPath",
+            "MSBUILDEXTENSIONSPATH",
+            "MSBUILDSDKSPATH"
+        ];
+        var originalValues = sdkPathVariableNames.ToDictionary(
+            name => name,
+            Environment.GetEnvironmentVariable,
+            StringComparer.Ordinal);
         DirectoryInfo projectDirectory = Directory.CreateTempSubdirectory("aspire-dotnet-command-");
 
         try
         {
-            Environment.SetEnvironmentVariable(msbuildExtensionsPath, "parent-sdk");
-            Environment.SetEnvironmentVariable(msbuildSdksPath, "parent-sdks");
+            foreach (string variableName in sdkPathVariableNames)
+            {
+                Environment.SetEnvironmentVariable(variableName, "parent-sdk");
+            }
+
             string projectPath = Path.Combine(projectDirectory.FullName, "Empty.proj");
             File.WriteAllText(projectPath, "<Project />");
 
@@ -87,11 +97,17 @@ public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) 
             Assert.Equal(
                 NormalizePath(Path.Combine(selectedSdkPath, "Sdks")),
                 NormalizePath(propertyValues.GetProperty("MSBuildSDKsPath").GetString()!));
+            Assert.DoesNotContain(
+                result.StartInfo.Environment.Keys,
+                key => sdkPathVariableNames.Contains(key, StringComparer.OrdinalIgnoreCase));
         }
         finally
         {
-            Environment.SetEnvironmentVariable(msbuildExtensionsPath, originalExtensionsPath);
-            Environment.SetEnvironmentVariable(msbuildSdksPath, originalSdksPath);
+            foreach ((string variableName, string? originalValue) in originalValues)
+            {
+                Environment.SetEnvironmentVariable(variableName, originalValue);
+            }
+
             projectDirectory.Delete(recursive: true);
         }
     }
