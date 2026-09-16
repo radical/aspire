@@ -189,6 +189,7 @@ public partial class AspireProject : IAsyncDisposable
             WorkingDirectory = AppHostProjectDirectory
         };
 
+        ToolCommand.RemoveInheritedSdkEnvironmentVariables(AppHostProcess.StartInfo);
         foreach (var item in _buildEnv.EnvVars)
         {
             AppHostProcess.StartInfo.Environment[item.Key] = item.Value;

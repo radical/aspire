@@ -222,8 +222,7 @@ public class ToolCommand : IDisposable
 
         // Repository builds set these to the active SDK. Template tests launch isolated SDKs,
         // so inheriting either path makes nested template restores load targets from the wrong SDK.
-        psi.EnvironmentVariables.Remove("MSBuildExtensionsPath");
-        psi.EnvironmentVariables.Remove("MSBuildSDKsPath");
+        RemoveInheritedSdkEnvironmentVariables(psi);
 
         AddEnvironmentVariablesTo(psi);
         AddWorkingDirectoryTo(psi);
@@ -250,6 +249,16 @@ public class ToolCommand : IDisposable
         {
             _testOutput.WriteLine($"{_msgPrefix}\t[{item.Key}] = {item.Value}");
             psi.Environment[item.Key] = item.Value;
+        }
+    }
+
+    internal static void RemoveInheritedSdkEnvironmentVariables(ProcessStartInfo processStartInfo)
+    {
+        foreach (string key in processStartInfo.Environment.Keys.Where(
+            key => key.Equals("MSBuildExtensionsPath", StringComparison.OrdinalIgnoreCase) ||
+                   key.Equals("MSBuildSDKsPath", StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            processStartInfo.Environment.Remove(key);
         }
     }
 
