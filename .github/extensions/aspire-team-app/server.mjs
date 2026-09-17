@@ -30,7 +30,9 @@ import {
   setAccountActive,
   setHealthOrder,
   activeIds,
+  activateNewProximaAccounts,
 } from "./state.mjs";
+import { isProximaAccountId } from "./accounts.mjs";
 
 const servers = new Map(); // instanceId -> { server, url }
 const sseClients = new Set();
@@ -101,6 +103,21 @@ async function resolveAuth(prefs, { reprobe = false } = {}) {
   const reposForId = (id) => accountConfig(prefs, id).repos;
   const isActive = (id) => accountConfig(prefs, id).active;
   const { accounts, tokenById } = await resolveAccounts(reposForId, isActive);
+
+  const hasNewProximaAccount = accounts.some((account) =>
+    isProximaAccountId(account.id) &&
+    account.status !== "failed" &&
+    account.accessible > 0 &&
+    !Object.prototype.hasOwnProperty.call(prefs.accounts || {}, account.id));
+  if (activeIds(prefs).length === 0 && Object.keys(prefs.accounts || {}).length > 0 && hasNewProximaAccount) {
+    const saved = await updatePrefs((next) => {
+      activateNewProximaAccounts(next, accounts);
+    });
+    Object.assign(prefs, saved);
+  }
+  for (const account of accounts) {
+    account.active = accountConfig(prefs, account.id).active;
+  }
 
   // First-run convenience: if the user has never configured accounts and none are
   // active, auto-enable the strongest usable account so the canvas works out of the

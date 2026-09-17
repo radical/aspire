@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   accountConfig,
+  activateNewProximaAccounts,
   addAzurePipeline,
   DEFAULT_PREFS,
   normalizeHealthOrder,
@@ -70,6 +71,29 @@ test("setAccountRepos falls back to the public default when cleared for an EMU a
   setAccountRepos(prefs, "acct:github.com/dapine_microsoft", []);
 
   assert.deepEqual(prefs.accounts["acct:github.com/dapine_microsoft"].repos, DEFAULT_REPOS);
+});
+
+test("activateNewProximaAccounts activates only usable accounts without saved preferences", () => {
+  const prefs = {
+    accounts: {
+      "acct:github.com/octo": { repos: ["microsoft/aspire"], active: false },
+      "acct:msft.ghe.com/disabled": { repos: ["coreai/aspire-1p"], active: false },
+    },
+  };
+
+  activateNewProximaAccounts(prefs, [
+    { id: "acct:msft.ghe.com/ankj", status: "ok", accessible: 1 },
+    { id: "acct:msft.ghe.com/failed", status: "failed", accessible: 1 },
+    { id: "acct:msft.ghe.com/inaccessible", status: "ok", accessible: 0 },
+    { id: "acct:github.com/new", status: "ok", accessible: 1 },
+    { id: "acct:msft.ghe.com/disabled", status: "ok", accessible: 1 },
+  ]);
+
+  assert.deepEqual(prefs.accounts, {
+    "acct:github.com/octo": { repos: ["microsoft/aspire"], active: false },
+    "acct:msft.ghe.com/disabled": { repos: ["coreai/aspire-1p"], active: false },
+    "acct:msft.ghe.com/ankj": { repos: ["coreai/aspire-1p"], active: true },
+  });
 });
 
 test("setAccountActive preserves legacy login-only repos when writing the host-scoped id", () => {

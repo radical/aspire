@@ -162,6 +162,16 @@ export function activeIds(prefs) {
     .map(([id]) => id);
 }
 
+export function activateNewProximaAccounts(prefs, accounts) {
+  if (activeIds(prefs).length > 0 || Object.keys(prefs.accounts || {}).length === 0) return prefs;
+  for (const account of Array.isArray(accounts) ? accounts : []) {
+    if (!isProximaAccountId(account?.id) || account.status === "failed" || account.accessible <= 0) continue;
+    if (Object.prototype.hasOwnProperty.call(prefs.accounts || {}, account.id)) continue;
+    setAccountActive(prefs, account.id, true);
+  }
+  return prefs;
+}
+
 export function normalizeAzurePipelines(value) {
   const out = [];
   const seen = new Set();
