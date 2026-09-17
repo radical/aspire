@@ -2,18 +2,14 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using System.Xml.Linq;
 using Xunit;
 
 namespace Aspire.Templates.Tests;
 
-public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) : TemplateTestsBase(testOutput)
+public abstract class NewUpAndBuildStandaloneTemplateTestsBase(ITestOutputHelper testOutput) : TemplateTestsBase(testOutput)
 {
-    [Theory]
-    [MemberData(nameof(TestDataForNewAndBuildTemplateTests), arguments: ["aspire", ""])]
-    [MemberData(nameof(TestDataForNewAndBuildTemplateTests), arguments: ["aspire-starter", ""])]
-    [MemberData(nameof(TestDataForNewAndBuildTemplateTests), arguments: ["aspire-ts-cs-starter", ""])]
-    [Trait("category", "basic-build")]
-    public async Task CanNewAndBuild(string templateName, string extraArgs, TestSdk sdk, TestTargetFramework tfm, string? error)
+    protected async Task CanNewAndBuildActual(string templateName, string extraArgs, TestSdk sdk, TestTargetFramework tfm, string? error)
     {
         var id = GetNewProjectId(prefix: $"new_build_{templateName}_{tfm.ToTFMString()}");
 
@@ -42,6 +38,10 @@ public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) 
             if (templateName == "aspire-starter")
             {
                 await AssertStarterAspNetCoreTemplateContentAsync(project, tfm);
+                if (!string.IsNullOrEmpty(extraArgs))
+                {
+                    AssertStarterTestFrameworkPackages(project.TestsProjectDirectory, extraArgs);
+                }
             }
 
             await project.BuildAsync(extraBuildArgs: [$"-c Debug"]);
@@ -112,6 +112,59 @@ public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) 
         }
     }
 
+    private static void AssertStarterTestFrameworkPackages(string testProjectDir, string extraArgs)
+    {
+        var projectPath = Directory.EnumerateFiles(testProjectDir, "*.csproj").Single();
+        var project = XDocument.Load(projectPath);
+        var packageReferences = project
+            .Descendants("PackageReference")
+            .Where(element => element.Attribute("Include")?.Value != "Aspire.Hosting.Testing")
+            .Select(element => $"{element.Attribute("Include")?.Value}/{element.Attribute("Version")?.Value}")
+            .OrderBy(packageReference => packageReference)
+            .ToArray();
+
+        string[] expectedPackageReferences = extraArgs switch
+        {
+            "--test-framework MSTest" =>
+            [
+                "MSTest/4.4.0",
+            ],
+            "--test-framework NUnit" =>
+            [
+                "Microsoft.NET.Test.Sdk/18.10.0",
+                "NUnit/4.6.1",
+                "NUnit.Analyzers/4.14.0",
+                "NUnit3TestAdapter/6.3.0",
+            ],
+            "--test-framework xUnit.net --xunit-version v3mtp" =>
+            [
+                "xunit.v3/4.0.0",
+            ],
+            "--test-framework xUnit.net --xunit-version v3" =>
+            [
+                "coverlet.collector/10.0.1",
+                "Microsoft.NET.Test.Sdk/18.10.0",
+                "xunit.runner.visualstudio/4.0.0",
+                "xunit.v3.mtp-off/4.0.0",
+            ],
+            "--test-framework xUnit.net" or "--test-framework xUnit.net --xunit-version v2" =>
+            [
+                "coverlet.collector/10.0.1",
+                "Microsoft.NET.Test.Sdk/18.10.0",
+                "xunit/2.9.3",
+                "xunit.runner.visualstudio/4.0.0",
+            ],
+            _ => throw new InvalidOperationException($"Unexpected starter test arguments '{extraArgs}'."),
+        };
+
+        Assert.Equal(expectedPackageReferences.OrderBy(packageReference => packageReference), packageReferences);
+
+        if (extraArgs is "--test-framework xUnit.net --xunit-version v3" or "--test-framework xUnit.net --xunit-version v3mtp")
+        {
+            Assert.Equal("Exe", project.Descendants("OutputType").Single().Value);
+        }
+    }
+
     private static async Task AssertStarterAspNetCoreTemplateContentAsync(AspireProject project, TestTargetFramework tfm)
     {
         var webProjectDirectory = Path.Combine(project.RootDir, $"{project.Id}.Web");
@@ -138,4 +191,17 @@ public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) 
 
     private static string NormalizePath(string path)
         => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+}
+
+public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) : NewUpAndBuildStandaloneTemplateTestsBase(testOutput)
+{
+    [Theory]
+    [MemberData(nameof(TestDataForNewAndBuildTemplateTests), arguments: ["aspire", ""])]
+    [MemberData(nameof(TestDataForNewAndBuildTemplateTests), arguments: ["aspire-starter", ""])]
+    [MemberData(nameof(TestDataForNewAndBuildTemplateTests), arguments: ["aspire-ts-cs-starter", ""])]
+    [Trait("category", "basic-build")]
+    public Task CanNewAndBuild(string templateName, string extraArgs, TestSdk sdk, TestTargetFramework tfm, string? error)
+    {
+        return CanNewAndBuildActual(templateName, extraArgs, sdk, tfm, error);
+    }
 }
