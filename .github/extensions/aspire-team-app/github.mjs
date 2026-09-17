@@ -39,12 +39,12 @@ export const DEFAULT_REPOS = [
   "CommunityToolkit/Aspire",
 ];
 
-// Enterprise Managed User (EMU) accounts (e.g. "dapine_microsoft") work against
-// the private first-party mirror rather than the public Aspire repos, so they get
-// a different default watch set. See accounts.isEmuAccountId for how an account is
-// classified and state.defaultReposForId for how this default is applied.
+// Aspire first-party accounts (including EMU accounts and the msft.ghe.com enterprise
+// account) work against the Proxima repository rather than the public Aspire repos.
+// See accounts.isEmuAccountId/isProximaAccountId for classification and
+// state.defaultReposForId for how this default is applied.
 export const DEFAULT_EMU_REPOS = [
-  "dotnet/aspire.1p",
+  "coreai/aspire-1p",
 ];
 
 const GRAPHQL = "https://api.github.com/graphql";

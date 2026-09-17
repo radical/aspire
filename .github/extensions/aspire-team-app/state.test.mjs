@@ -28,6 +28,13 @@ test("accountConfig defaults unconfigured EMU accounts to the first-party repos"
   assert.equal(normal.configured, false);
 });
 
+test("accountConfig defaults the Proxima enterprise account to the first-party repo", () => {
+  const proxima = accountConfig({ accounts: {} }, "acct:msft.ghe.com/ankj");
+
+  assert.deepEqual(proxima.repos, DEFAULT_EMU_REPOS);
+  assert.equal(proxima.configured, false);
+});
+
 test("accountConfig does not override an EMU account's explicitly configured repos", () => {
   const prefs = {
     accounts: {
