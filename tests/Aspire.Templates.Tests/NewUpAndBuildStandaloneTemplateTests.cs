@@ -53,65 +53,6 @@ public abstract class NewUpAndBuildStandaloneTemplateTestsBase(ITestOutputHelper
         }
     }
 
-    [Fact]
-    [Trait("category", "basic-build")]
-    public async Task ChildDotNetProcessesDoNotInheritParentSdkPaths()
-    {
-        string[] sdkPathVariableNames =
-        [
-            "MSBuildExtensionsPath",
-            "MSBuildSDKsPath",
-            "MSBUILDEXTENSIONSPATH",
-            "MSBUILDSDKSPATH"
-        ];
-        var originalValues = sdkPathVariableNames.ToDictionary(
-            name => name,
-            Environment.GetEnvironmentVariable,
-            StringComparer.Ordinal);
-        DirectoryInfo projectDirectory = Directory.CreateTempSubdirectory("aspire-dotnet-command-");
-
-        try
-        {
-            foreach (string variableName in sdkPathVariableNames)
-            {
-                Environment.SetEnvironmentVariable(variableName, "parent-sdk");
-            }
-
-            string projectPath = Path.Combine(projectDirectory.FullName, "Empty.proj");
-            File.WriteAllText(projectPath, "<Project />");
-
-            var buildEnvironment = BuildEnvironment.ForNet10SdkOnly;
-            using var command = new DotNetCommand(_testOutput, buildEnv: buildEnvironment);
-            command.WithWorkingDirectory(projectDirectory.FullName);
-            var result = await command.ExecuteAsync(
-                $"msbuild \"{projectPath}\" -getProperty:MSBuildExtensionsPath,MSBuildSDKsPath");
-
-            result.EnsureSuccessful();
-            using var properties = JsonDocument.Parse(result.Output);
-            JsonElement propertyValues = properties.RootElement.GetProperty("Properties");
-            string dotnetRoot = Path.GetDirectoryName(buildEnvironment.DotNet)!;
-            string selectedSdkPath = Assert.Single(Directory.GetDirectories(Path.Combine(dotnetRoot, "sdk")));
-            Assert.Equal(
-                NormalizePath(selectedSdkPath),
-                NormalizePath(propertyValues.GetProperty("MSBuildExtensionsPath").GetString()!));
-            Assert.Equal(
-                NormalizePath(Path.Combine(selectedSdkPath, "Sdks")),
-                NormalizePath(propertyValues.GetProperty("MSBuildSDKsPath").GetString()!));
-            Assert.DoesNotContain(
-                result.StartInfo.Environment.Keys,
-                key => sdkPathVariableNames.Contains(key, StringComparer.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            foreach ((string variableName, string? originalValue) in originalValues)
-            {
-                Environment.SetEnvironmentVariable(variableName, originalValue);
-            }
-
-            projectDirectory.Delete(recursive: true);
-        }
-    }
-
     private static void AssertStarterTestFrameworkPackages(string testProjectDir, string extraArgs)
     {
         var projectPath = Directory.EnumerateFiles(testProjectDir, "*.csproj").Single();
@@ -189,8 +130,6 @@ public abstract class NewUpAndBuildStandaloneTemplateTestsBase(ITestOutputHelper
         Assert.True(File.Exists(Path.Combine(webProjectDirectory, "Components", "Layout", "NavMenu.razor.js")));
     }
 
-    private static string NormalizePath(string path)
-        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 }
 
 public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) : NewUpAndBuildStandaloneTemplateTestsBase(testOutput)
@@ -203,5 +142,86 @@ public class NewUpAndBuildStandaloneTemplateTests(ITestOutputHelper testOutput) 
     public Task CanNewAndBuild(string templateName, string extraArgs, TestSdk sdk, TestTargetFramework tfm, string? error)
     {
         return CanNewAndBuildActual(templateName, extraArgs, sdk, tfm, error);
+    }
+
+    [Fact]
+    [Trait("category", "basic-build")]
+    public async Task ChildDotNetProcessesDoNotInheritParentSdkPaths()
+    {
+        string[] sdkPathVariableNames =
+        [
+            "MSBuildExtensionsPath",
+            "MSBuildSDKsPath",
+            "MSBUILDEXTENSIONSPATH",
+            "MSBUILDSDKSPATH"
+        ];
+        var originalValues = sdkPathVariableNames.ToDictionary(
+            name => name,
+            Environment.GetEnvironmentVariable,
+            StringComparer.Ordinal);
+        DirectoryInfo projectDirectory = Directory.CreateTempSubdirectory("aspire-dotnet-command-");
+
+        try
+        {
+            foreach (string variableName in sdkPathVariableNames)
+            {
+                Environment.SetEnvironmentVariable(variableName, "parent-sdk");
+            }
+
+            string projectPath = Path.Combine(projectDirectory.FullName, "Empty.proj");
+            File.WriteAllText(projectPath, "<Project />");
+
+            var buildEnvironment = BuildEnvironment.ForNet10SdkOnly;
+            using var command = new DotNetCommand(_testOutput, buildEnv: buildEnvironment);
+            command.WithWorkingDirectory(projectDirectory.FullName);
+            var result = await command.ExecuteAsync(
+                $"msbuild \"{projectPath}\" -getProperty:MSBuildExtensionsPath,MSBuildSDKsPath");
+
+            result.EnsureSuccessful();
+            using var properties = JsonDocument.Parse(result.Output);
+            JsonElement propertyValues = properties.RootElement.GetProperty("Properties");
+            string dotnetRoot = Path.GetDirectoryName(buildEnvironment.DotNet)!;
+            string selectedSdkPath = Assert.Single(Directory.GetDirectories(Path.Combine(dotnetRoot, "sdk")));
+            Assert.Equal(
+                NormalizePath(selectedSdkPath),
+                NormalizePath(propertyValues.GetProperty("MSBuildExtensionsPath").GetString()!));
+            Assert.Equal(
+                NormalizePath(Path.Combine(selectedSdkPath, "Sdks")),
+                NormalizePath(propertyValues.GetProperty("MSBuildSDKsPath").GetString()!));
+            AssertDoesNotContainSdkPaths(result.StartInfo);
+
+            var project = new AspireProject("app", projectDirectory.FullName, _testOutput, buildEnvironment);
+            System.Diagnostics.ProcessStartInfo? appHostStartInfo = null;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => project.StartAppHostAsync(
+                configureProcess: startInfo =>
+                {
+                    appHostStartInfo = startInfo;
+                    throw new InvalidOperationException("Stop before launching the AppHost.");
+                }));
+            project.AppHostProcess!.Dispose();
+
+            Assert.NotNull(appHostStartInfo);
+            AssertDoesNotContainSdkPaths(appHostStartInfo);
+        }
+        finally
+        {
+            foreach ((string variableName, string? originalValue) in originalValues)
+            {
+                Environment.SetEnvironmentVariable(variableName, originalValue);
+            }
+
+            projectDirectory.Delete(recursive: true);
+        }
+    }
+
+    private static string NormalizePath(string path)
+        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static void AssertDoesNotContainSdkPaths(System.Diagnostics.ProcessStartInfo startInfo)
+    {
+        Assert.DoesNotContain(
+            startInfo.Environment.Keys,
+            key => key.Equals("MSBuildExtensionsPath", StringComparison.OrdinalIgnoreCase) ||
+                   key.Equals("MSBuildSDKsPath", StringComparison.OrdinalIgnoreCase));
     }
 }
