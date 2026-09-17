@@ -11,7 +11,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_REPOS, DEFAULT_EMU_REPOS, CURRENT_RELEASE } from "./github.mjs";
+import { DEFAULT_PROXIMA_REPOS, DEFAULT_REPOS, DEFAULT_EMU_REPOS, CURRENT_RELEASE } from "./github.mjs";
 import { isEmuAccountId, isProximaAccountId } from "./accounts.mjs";
 
 const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), ".copilot");
@@ -119,11 +119,13 @@ export function updatePrefs(mutator) {
 // ---------------------------------------------------------------------------
 
 // The default repo watch set for an account that the user has not configured. First-party
-// accounts default to the Proxima repository; everyone else gets the public Aspire repos.
-// This only fills in the fallback — it never overrides repos a user has explicitly
-// configured (see accountConfig/setAccountRepos below).
+// accounts receive the repository hosted by their GitHub host; everyone else gets the
+// public Aspire repos. This only fills in the fallback — it never overrides repos a user
+// has explicitly configured (see accountConfig/setAccountRepos below).
 function defaultReposForId(id) {
-  return isEmuAccountId(id) || isProximaAccountId(id) ? DEFAULT_EMU_REPOS : DEFAULT_REPOS;
+  if (isEmuAccountId(id)) return DEFAULT_EMU_REPOS;
+  if (isProximaAccountId(id)) return DEFAULT_PROXIMA_REPOS;
+  return DEFAULT_REPOS;
 }
 
 export function accountConfig(prefs, id, legacyId = legacyIdFor(id)) {

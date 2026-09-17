@@ -76,9 +76,9 @@ card shows are driven by its lane and its signal pills:
 - **Enterprise aware** — accounts on a GitHub Enterprise Server host are badged and
   their API calls are routed to that host's GraphQL/REST endpoints.
 - **Editable watched repos** — per account; defaults to the public Aspire team set,
-  except Aspire first-party accounts (including EMU aliases such as
-  `dapine_microsoft` and the `msft.ghe.com` enterprise account), which default to
-  the Proxima `coreai/aspire-1p` repo. Defaults only fill
+  except first-party accounts: github.com EMU aliases (such as `dapine_microsoft`)
+  default to `devdiv-microsoft/aspire-1p`, while the `msft.ghe.com` enterprise
+  account defaults to the Proxima `coreai/aspire-1p` repo. Defaults only fill
   in accounts you haven't configured — they never overwrite an explicit repo list.
 
 ## Health mode

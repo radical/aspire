@@ -384,19 +384,21 @@ test("visibleCheckState and isChecksFailing honor non-blocking check rules", () 
   assert.equal(visibleCheckState(normalFailure), "failure");
   assert.equal(isChecksFailing(normalFailure), true);
 
-  // aspire-1p reports a bare aggregate "failure" before per-check detail is fetched. With a
-  // non-blocking rule for that repo and zero per-check detail, it is indeterminate, not red.
-  const aggregateFailure = makePr({ repository: "coreai/aspire-1p", checks: { state: "failure" } });
-  assert.equal(visibleCheckState(aggregateFailure), "unknown");
-  assert.equal(isChecksFailing(aggregateFailure), false);
+  for (const repository of ["devdiv-microsoft/aspire-1p", "coreai/aspire-1p"]) {
+    // aspire-1p reports a bare aggregate "failure" before per-check detail is fetched. With a
+    // non-blocking rule for that repo and zero per-check detail, it is indeterminate, not red.
+    const aggregateFailure = makePr({ repository, checks: { state: "failure" } });
+    assert.equal(visibleCheckState(aggregateFailure), "unknown", repository);
+    assert.equal(isChecksFailing(aggregateFailure), false, repository);
 
-  // A failure whose only failing check matches the rule downgrades to success (nothing pending).
-  const nonBlockingOnly = makePr({
-    repository: "coreai/aspire-1p",
-    checks: { state: "failure", totalCount: 1, failureCount: 1, failingChecks: [{ name: "GitOps/GitHubPop" }] },
-  });
-  assert.equal(visibleCheckState(nonBlockingOnly), "success");
-  assert.equal(isChecksFailing(nonBlockingOnly), false);
+    // A failure whose only failing check matches the rule downgrades to success (nothing pending).
+    const nonBlockingOnly = makePr({
+      repository,
+      checks: { state: "failure", totalCount: 1, failureCount: 1, failingChecks: [{ name: "GitOps/GitHubPop" }] },
+    });
+    assert.equal(visibleCheckState(nonBlockingOnly), "success", repository);
+    assert.equal(isChecksFailing(nonBlockingOnly), false, repository);
+  }
 });
 
 test("filterCheckFailureRules drops rules missing a repository, label, or concrete matcher", () => {

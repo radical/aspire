@@ -12,7 +12,7 @@ import {
   setAccountRepos,
   setHealthOrder,
 } from "./state.mjs";
-import { DEFAULT_REPOS, DEFAULT_EMU_REPOS } from "./github.mjs";
+import { DEFAULT_PROXIMA_REPOS, DEFAULT_REPOS, DEFAULT_EMU_REPOS } from "./github.mjs";
 
 test("background updates apply automatically by default", () => {
   assert.equal(DEFAULT_PREFS.autoApplyUpdates, true);
@@ -31,8 +31,23 @@ test("accountConfig defaults unconfigured EMU accounts to the first-party repos"
 test("accountConfig defaults the Proxima enterprise account to the first-party repo", () => {
   const proxima = accountConfig({ accounts: {} }, "acct:msft.ghe.com/ankj");
 
-  assert.deepEqual(proxima.repos, DEFAULT_EMU_REPOS);
+  assert.deepEqual(proxima.repos, DEFAULT_PROXIMA_REPOS);
   assert.equal(proxima.configured, false);
+});
+
+test("accountConfig pins first-party defaults to their hosts", () => {
+  assert.deepEqual(
+    accountConfig({ accounts: {} }, "acct:github.com/dapine_microsoft").repos,
+    ["devdiv-microsoft/aspire-1p"],
+  );
+  assert.deepEqual(
+    accountConfig({ accounts: {} }, "acct:dapine_microsoft").repos,
+    ["devdiv-microsoft/aspire-1p"],
+  );
+  assert.deepEqual(
+    accountConfig({ accounts: {} }, "acct:msft.ghe.com/ankj").repos,
+    ["coreai/aspire-1p"],
+  );
 });
 
 test("accountConfig does not override an EMU account's explicitly configured repos", () => {
