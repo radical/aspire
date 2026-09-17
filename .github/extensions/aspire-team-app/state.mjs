@@ -118,10 +118,10 @@ export function updatePrefs(mutator) {
 // Per-account helpers
 // ---------------------------------------------------------------------------
 
-// The default repo watch set for an account that the user has not configured. First-party
-// accounts receive the repository hosted by their GitHub host; everyone else gets the
-// public Aspire repos. This only fills in the fallback — it never overrides repos a user
-// has explicitly configured (see accountConfig/setAccountRepos below).
+// The default repo watch set for an account that the user has not configured. The Proxima host
+// receives its first-party repository; all other accounts get the public Aspire repos. This only
+// fills in the fallback — it never overrides repos a user has explicitly configured
+// (see accountConfig/setAccountRepos below).
 function defaultReposForId(id) {
   if (isProximaAccountId(id)) return DEFAULT_PROXIMA_REPOS;
   return DEFAULT_REPOS;

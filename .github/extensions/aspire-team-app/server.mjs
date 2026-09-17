@@ -677,7 +677,7 @@ async function handle(req, res, log, instanceId) {
       const { id, repos } = await readBody(req);
       if (typeof id === "string" && id) {
         // Pass an empty fallback so a cleared submission resets to the account's own
-        // default (public vs EMU) inside setAccountRepos, rather than parseRepos
+        // default (public vs Proxima) inside setAccountRepos, rather than parseRepos
         // pre-filling the public default here.
         await updatePrefs((prefs) => { setAccountRepos(prefs, id, parseRepos(repos, [])); });
         invalidateAuth();
@@ -937,7 +937,7 @@ export async function toggleAccount(id, active) {
 
 export async function setReposFor(id, repos) {
   // Empty fallback: a cleared list resets to the account's own default in
-  // setAccountRepos (public vs EMU) instead of parseRepos forcing the public one.
+  // setAccountRepos (public vs Proxima) instead of parseRepos forcing the public one.
   await updatePrefs((prefs) => { setAccountRepos(prefs, id, parseRepos(repos, [])); });
   invalidateAuth();
   return getDashboard(true);
