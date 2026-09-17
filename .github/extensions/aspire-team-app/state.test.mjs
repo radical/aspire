@@ -12,15 +12,15 @@ import {
   setAccountRepos,
   setHealthOrder,
 } from "./state.mjs";
-import { DEFAULT_PROXIMA_REPOS, DEFAULT_REPOS, DEFAULT_EMU_REPOS } from "./github.mjs";
+import { DEFAULT_PROXIMA_REPOS, DEFAULT_REPOS } from "./github.mjs";
 
 test("background updates apply automatically by default", () => {
   assert.equal(DEFAULT_PREFS.autoApplyUpdates, true);
 });
 
-test("accountConfig defaults unconfigured EMU accounts to the first-party repos", () => {
+test("accountConfig defaults unconfigured accounts to the public repos", () => {
   const emu = accountConfig({ accounts: {} }, "acct:github.com/dapine_microsoft");
-  assert.deepEqual(emu.repos, DEFAULT_EMU_REPOS);
+  assert.deepEqual(emu.repos, DEFAULT_REPOS);
   assert.equal(emu.configured, false);
 
   const normal = accountConfig({ accounts: {} }, "acct:github.com/octo");
@@ -35,14 +35,14 @@ test("accountConfig defaults the Proxima enterprise account to the first-party r
   assert.equal(proxima.configured, false);
 });
 
-test("accountConfig pins first-party defaults to their hosts", () => {
+test("accountConfig keeps Proxima defaults on its host", () => {
   assert.deepEqual(
     accountConfig({ accounts: {} }, "acct:github.com/dapine_microsoft").repos,
-    ["devdiv-microsoft/aspire-1p"],
+    DEFAULT_REPOS,
   );
   assert.deepEqual(
     accountConfig({ accounts: {} }, "acct:dapine_microsoft").repos,
-    ["devdiv-microsoft/aspire-1p"],
+    DEFAULT_REPOS,
   );
   assert.deepEqual(
     accountConfig({ accounts: {} }, "acct:msft.ghe.com/ankj").repos,
@@ -64,12 +64,12 @@ test("accountConfig does not override an EMU account's explicitly configured rep
   });
 });
 
-test("setAccountRepos falls back to the EMU default when cleared for an EMU account", () => {
+test("setAccountRepos falls back to the public default when cleared for an EMU account", () => {
   const prefs = { accounts: {} };
 
   setAccountRepos(prefs, "acct:github.com/dapine_microsoft", []);
 
-  assert.deepEqual(prefs.accounts["acct:github.com/dapine_microsoft"].repos, DEFAULT_EMU_REPOS);
+  assert.deepEqual(prefs.accounts["acct:github.com/dapine_microsoft"].repos, DEFAULT_REPOS);
 });
 
 test("setAccountActive preserves legacy login-only repos when writing the host-scoped id", () => {

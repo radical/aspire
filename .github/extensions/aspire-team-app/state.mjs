@@ -11,8 +11,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_PROXIMA_REPOS, DEFAULT_REPOS, DEFAULT_EMU_REPOS, CURRENT_RELEASE } from "./github.mjs";
-import { isEmuAccountId, isProximaAccountId } from "./accounts.mjs";
+import { DEFAULT_PROXIMA_REPOS, DEFAULT_REPOS, CURRENT_RELEASE } from "./github.mjs";
+import { isProximaAccountId } from "./accounts.mjs";
 
 const COPILOT_HOME = process.env.COPILOT_HOME || join(homedir(), ".copilot");
 const ARTIFACT_DIR = join(COPILOT_HOME, "extensions", "aspire-team-app", "artifacts");
@@ -123,7 +123,6 @@ export function updatePrefs(mutator) {
 // public Aspire repos. This only fills in the fallback — it never overrides repos a user
 // has explicitly configured (see accountConfig/setAccountRepos below).
 function defaultReposForId(id) {
-  if (isEmuAccountId(id)) return DEFAULT_EMU_REPOS;
   if (isProximaAccountId(id)) return DEFAULT_PROXIMA_REPOS;
   return DEFAULT_REPOS;
 }
