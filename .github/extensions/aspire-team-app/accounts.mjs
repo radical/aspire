@@ -20,8 +20,8 @@ const GRAPHQL = `${API}/graphql`;
 const UA = "aspire-team-app-canvas";
 
 // REST + GraphQL endpoints for a given host. github.com uses the public API
-// origin; GitHub Enterprise Server (GHES) exposes /api/v3 and /api/graphql on the
-// instance host itself.
+// origin; GHE.com data-residency hosts use an api.<host> origin; GitHub Enterprise
+// Server (GHES) exposes /api/v3 and /api/graphql on the instance host itself.
 function normalizeHost(host) {
   const h = String(host ?? "")
     .trim()
@@ -31,10 +31,13 @@ function normalizeHost(host) {
   return !h || h === "github.com" || h === "api.github.com" ? "github.com" : h;
 }
 
-function endpoints(host) {
+export function endpoints(host) {
   const h = normalizeHost(host);
   if (h === "github.com") {
     return { rest: "https://api.github.com", graphql: "https://api.github.com/graphql" };
+  }
+  if (h.endsWith(".ghe.com")) {
+    return { rest: `https://api.${h}`, graphql: `https://api.${h}/graphql` };
   }
   return { rest: `https://${h}/api/v3`, graphql: `https://${h}/api/graphql` };
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { accountId, isEmuAccountId, isEmuLogin, isProximaAccountId } from "./accounts.mjs";
+import { accountId, endpoints, isEmuAccountId, isEmuLogin, isProximaAccountId } from "./accounts.mjs";
 import { accountConfig } from "./state.mjs";
 
 const originalEnv = { ...process.env };
@@ -43,10 +43,26 @@ test("isProximaAccountId recognizes the configured enterprise host", () => {
   assert.equal(isProximaAccountId("acct:github.com/ankj"), false);
 });
 
+test("endpoints use the API origin for GHE.com and GHES paths for server hosts", () => {
+  assert.deepEqual(endpoints("github.com"), {
+    rest: "https://api.github.com",
+    graphql: "https://api.github.com/graphql",
+  });
+  assert.deepEqual(endpoints("msft.ghe.com"), {
+    rest: "https://api.msft.ghe.com",
+    graphql: "https://api.msft.ghe.com/graphql",
+  });
+  assert.deepEqual(endpoints("ghe.example.com"), {
+    rest: "https://ghe.example.com/api/v3",
+    graphql: "https://ghe.example.com/api/graphql",
+  });
+});
+
 test("resolveAccounts keys accounts by normalized host and login", async () => {
   resetAccountEnv({
     COPILOT_GH_ACCOUNT_github_2E_com_octo: "token-dotcom",
     COPILOT_GH_ACCOUNT_ghe_2E_example_2E_com_octo: "token-ghe",
+    COPILOT_GH_ACCOUNT_msft_2E_ghe_2E_com_octo: "token-proxima",
   });
   globalThis.fetch = accountFetch();
   const { resolveAccounts } = await import(`./accounts.mjs?test=host-login-${Date.now()}`);
@@ -56,8 +72,9 @@ test("resolveAccounts keys accounts by normalized host and login", async () => {
   assert.deepEqual(accounts.map((a) => a.id).sort(), [
     "acct:ghe.example.com/octo",
     "acct:github.com/octo",
+    "acct:msft.ghe.com/octo",
   ]);
-  assert.equal(new Set(accounts.map((a) => a.host)).size, 2);
+  assert.equal(new Set(accounts.map((a) => a.host)).size, 3);
 });
 
 test("resolveAccounts reads legacy login-only preferences for github.com accounts", async () => {
@@ -96,7 +113,11 @@ function accountFetch() {
     const requestUrl = String(url);
     const body = options.body ? JSON.parse(options.body) : {};
     const query = body.query ?? "";
-    if (requestUrl.endsWith("/api/v3/") || requestUrl === "https://api.github.com/") {
+    if (
+      requestUrl.endsWith("/api/v3/") ||
+      requestUrl === "https://api.github.com/" ||
+      requestUrl === "https://api.msft.ghe.com/"
+    ) {
       return jsonResponse({}, { headers: { "x-oauth-scopes": "read:org" } });
     }
     if (query.includes("viewer { login")) {
