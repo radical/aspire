@@ -109,7 +109,7 @@ async function resolveAuth(prefs, { reprobe = false } = {}) {
     account.status !== "failed" &&
     account.accessible > 0 &&
     !Object.prototype.hasOwnProperty.call(prefs.accounts || {}, account.id));
-  if (activeIds(prefs).length === 0 && Object.keys(prefs.accounts || {}).length > 0 && hasNewProximaAccount) {
+  if (hasNewProximaAccount) {
     const saved = await updatePrefs((next) => {
       activateNewProximaAccounts(next, accounts);
     });

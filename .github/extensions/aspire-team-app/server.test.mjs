@@ -159,6 +159,12 @@ test("an in-flight Health refresh preserves the saved order and complete card se
   process.env.GH_TOKEN = "test-token";
   delete process.env.GITHUB_TOKEN;
   process.env.PATH = "";
+  const copilotAccountEnv = Object.entries(process.env)
+    .filter(([key]) => key.startsWith("COPILOT_GH_ACCOUNT_"));
+  for (const [key] of copilotAccountEnv) delete process.env[key];
+  t.after(() => {
+    for (const [key, value] of copilotAccountEnv) process.env[key] = value;
+  });
 
   let gateArmed = false;
   let releaseTwo;

@@ -76,7 +76,7 @@ test("setAccountRepos falls back to the public default when cleared for an EMU a
 test("activateNewProximaAccounts activates only usable accounts without saved preferences", () => {
   const prefs = {
     accounts: {
-      "acct:github.com/octo": { repos: ["microsoft/aspire"], active: false },
+      "acct:github.com/octo": { repos: ["microsoft/aspire"], active: true },
       "acct:msft.ghe.com/disabled": { repos: ["coreai/aspire-1p"], active: false },
     },
   };
@@ -90,8 +90,21 @@ test("activateNewProximaAccounts activates only usable accounts without saved pr
   ]);
 
   assert.deepEqual(prefs.accounts, {
-    "acct:github.com/octo": { repos: ["microsoft/aspire"], active: false },
+    "acct:github.com/octo": { repos: ["microsoft/aspire"], active: true },
     "acct:msft.ghe.com/disabled": { repos: ["coreai/aspire-1p"], active: false },
+    "acct:msft.ghe.com/ankj": { repos: ["coreai/aspire-1p"], active: true },
+  });
+});
+
+test("activateNewProximaAccounts also handles a fresh preferences file", () => {
+  const prefs = { accounts: {} };
+
+  activateNewProximaAccounts(prefs, [
+    { id: "acct:github.com/octo", status: "ok", accessible: 5 },
+    { id: "acct:msft.ghe.com/ankj", status: "ok", accessible: 1 },
+  ]);
+
+  assert.deepEqual(prefs.accounts, {
     "acct:msft.ghe.com/ankj": { repos: ["coreai/aspire-1p"], active: true },
   });
 });
