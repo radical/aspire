@@ -178,6 +178,21 @@ class WorkflowLoopModelTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 parse_judgment_result(self.leaf_result(**changes), request)
 
+    def test_leaf_result_rejects_identity_and_unknown_fields(self) -> None:
+        request = self.leaf_request()
+        for key, value in (
+            ("leafIdentity", request.leaf_case_key),
+            ("causeGroupId", "cause-group-v1:example"),
+            ("unknown", True),
+        ):
+            document = json.loads(self.leaf_result())
+            document[key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(
+                ValueError,
+                rf"missing=\[\], unknown=\['{key}'\]",
+            ):
+                parse_judgment_result(json.dumps(document), request)
+
     def test_leaf_classification_not_model_decision_authorizes_response(self) -> None:
         cases = (
             ("deterministic_test", "repair", JudgmentDecision.ASSIGN),

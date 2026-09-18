@@ -241,7 +241,9 @@ an unchanged restart does not retry; meaningful target changes may be assessed
 again.
 
 The local Copilot judgment worker receives only the `view` tool and cannot
-mutate GitHub.
+mutate GitHub. Its prompt renders the exact allowed top-level result keys from
+the same schema helper enforced by the strict parser and prohibits trusted leaf
+identity evidence from being copied into extra output fields.
 `--model` and `--reasoning-effort` select that local runtime explicitly; they
 do not configure the later cloud task.
 

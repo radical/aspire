@@ -714,6 +714,17 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             worker_id="leaf-worker", session_id="leaf-session", judgment_round=0,
         )
         self.assertEqual(item.case_key, request.leaf_case_key)
+        self.assertIn(
+            "The output object MUST contain exactly these keys: "
+            '["schemaVersion","itemId","episode","evidenceFingerprint",'
+            '"decision","summary","evidenceIds","inScopeJobIds",'
+            '"copilotRequest","classification","recommendedResponse"].',
+            request.prompt,
+        )
+        self.assertIn(
+            "It MUST NOT contain leafIdentity, causeGroupId, or any other field.",
+            request.prompt,
+        )
         self.assertNotIn("defer_ordinary_test", request.prompt)
         for expected in (
             "classification", "recommendedResponse", "deterministic_test",
@@ -725,6 +736,27 @@ class WorkflowLoopManagerTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, request.prompt)
+
+    def test_workflow_prompt_requires_only_untyped_parser_keys(self) -> None:
+        from test_workflow_loop_reducer import _item, _refresh, _failure_run
+
+        item = _item()
+        request = build_judgment_request(
+            item, _refresh(item=item, failure_run=_failure_run()),
+            worker_id="workflow-worker", session_id="workflow-session", judgment_round=0,
+        )
+
+        self.assertIsNone(request.leaf_case_key)
+        self.assertIn(
+            "The output object MUST contain exactly these keys: "
+            '["schemaVersion","itemId","episode","evidenceFingerprint",'
+            '"decision","summary","evidenceIds","inScopeJobIds","copilotRequest"].',
+            request.prompt,
+        )
+        self.assertIn(
+            "It MUST NOT contain leafIdentity, causeGroupId, or any other field.",
+            request.prompt,
+        )
 
     def test_migrated_legacy_issue_is_not_adopted_by_rediscovered_leaves(self) -> None:
         from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario

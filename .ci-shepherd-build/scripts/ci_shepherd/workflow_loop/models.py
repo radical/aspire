@@ -14,19 +14,18 @@ _FINGERPRINT_PATTERN = re.compile(r"fnv1a64:[0-9a-f]{16}")
 _RFC3339_UTC_PATTERN = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"
 )
-_RESULT_KEYS = frozenset(
-    {
-        "schemaVersion",
-        "itemId",
-        "episode",
-        "evidenceFingerprint",
-        "decision",
-        "summary",
-        "evidenceIds",
-        "inScopeJobIds",
-        "copilotRequest",
-    }
+_RESULT_KEYS = (
+    "schemaVersion",
+    "itemId",
+    "episode",
+    "evidenceFingerprint",
+    "decision",
+    "summary",
+    "evidenceIds",
+    "inScopeJobIds",
+    "copilotRequest",
 )
+_TYPED_RESULT_KEYS = ("classification", "recommendedResponse")
 _REQUEST_KEYS = frozenset(
     {
         "workerId",
@@ -53,6 +52,10 @@ _REQUEST_KEYS = frozenset(
         "prompt",
     }
 )
+
+
+def judgment_result_keys(*, typed: bool) -> tuple[str, ...]:
+    return _RESULT_KEYS + (_TYPED_RESULT_KEYS if typed else ())
 
 
 class ItemPhase(StrEnum):
@@ -1445,7 +1448,7 @@ def parse_judgment_result(
     )
     _exact_keys(
         document,
-        _RESULT_KEYS | ({"classification", "recommendedResponse"} if typed else set()),
+        frozenset(judgment_result_keys(typed=typed)),
         "Judgment result",
     )
     classification = None

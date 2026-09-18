@@ -20,6 +20,7 @@ from ..models import (
     TaskState,
     WorkflowItem,
     WorkState,
+    judgment_result_keys,
     leaf_case_key,
 )
 from ..reader import (
@@ -1045,10 +1046,15 @@ def build_judgment_prompt(
         errors=issue_context_errors,
     )
     failed_job_ids = [job.job_id for job in failure.jobs if (job.conclusion or "").casefold() in {"failure", "timed_out"}]
+    result_keys = judgment_result_keys(typed=item.leaf_job is not None)
     schema = (
         "\n\n"
         "Return exactly one compact JSON object with no Markdown or surrounding "
-        "text. Copy these identity values exactly and preserve their JSON types:\n"
+        "text. "
+        "The output object MUST contain exactly these keys: "
+        f"{json.dumps(result_keys, separators=(',', ':'))}.\n"
+        "It MUST NOT contain leafIdentity, causeGroupId, or any other field.\n"
+        "Copy these identity values exactly and preserve their JSON types:\n"
         f'- "schemaVersion": 1\n'
         f'- "itemId": {item.id}\n'
         f'- "episode": {item.episode}\n'
