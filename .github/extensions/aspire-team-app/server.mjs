@@ -119,6 +119,13 @@ async function resolveAuth(prefs, { reprobe = false } = {}) {
     account.active = accountConfig(prefs, account.id).active;
   }
 
+  // A concurrent account mutation can update the preferences while credential probing is
+  // in flight. Do not publish accounts probed from the old configuration under the new
+  // cache key; re-probe against the latest repository selections instead.
+  if (accountsKey(prefs) !== key) {
+    return resolveAuth(prefs, { reprobe: true });
+  }
+
   // First-run convenience: if the user has never configured accounts and none are
   // active, auto-enable the strongest usable account so the canvas works out of the
   // box (preserves the old single-account behavior without being disruptive).
