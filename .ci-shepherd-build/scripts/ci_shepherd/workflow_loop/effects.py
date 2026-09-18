@@ -15,6 +15,7 @@ from .state import WorkflowLoopStore
 
 
 EffectStatus = Literal[
+    "proposed",
     "confirmed",
     "capacity_wait",
     "superseded",
@@ -55,7 +56,34 @@ class GitHubEffectExecutor:
         guard: Callable[[], EffectResult | None],
         call: Callable[[], object],
         validate: Callable[[object], Any],
+        propose_only: bool = False,
     ) -> EffectResult:
+        if propose_only:
+            guarded = guard()
+            if guarded is not None:
+                return guarded
+            # A proposal is not a prepared invocation and owns no capacity.
+            # Retain the complete intent rather than reconstructing its payload.
+            self._store.record_history(
+                intent.item_id,
+                recorded_at=self._clock(),
+                event="proposed",
+                summary="PROPOSED: external effect was not invoked.",
+                detail={
+                    "status": "PROPOSED",
+                    "actionId": intent.action_id,
+                    "itemId": intent.item_id,
+                    "episode": intent.episode,
+                    "kind": intent.kind.value,
+                    "ordinal": intent.ordinal,
+                    "payload": dict(intent.payload),
+                },
+            )
+            return EffectResult(
+                "proposed",
+                "External effect retained as a proposal; no invocation occurred.",
+                intent.action_id,
+            )
         existing = self._action(intent.action_id)
         if existing is not None:
             if (

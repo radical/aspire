@@ -8,6 +8,7 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
 
 from ci_shepherd.github import GitHubClient
 from ci_shepherd.github_actor import GitHubActorClient
@@ -15,6 +16,7 @@ from ci_shepherd.github_actor import GitHubActorClient
 from .manager import EffectMode, PassResult, WorkflowLoopManager
 from .reader import WorkflowReader
 from .report import render_status
+from .shadow import prepare_shadow, read_shadow_metadata
 from .state import WorkflowLoopStore
 from .worker import JudgmentWorkerLauncher
 from .writer import WorkflowWriter
@@ -56,8 +58,23 @@ def main(
 
     factory = manager_factory or _build_manager
     try:
+        state_directory = arguments.state_dir
+        if mode is EffectMode.READ_ONLY:
+            shadow = arguments.shadow_state_dir or (
+                state_directory.parent
+                / f"{state_directory.name}.read-only-{uuid.uuid4().hex}"
+            )
+            state_directory = prepare_shadow(
+                state_directory,
+                shadow,
+                repository=arguments.repository,
+                branch=arguments.branch,
+                workflow_ids=arguments.workflow_id or None,
+            )
+            output(f"Canonical source state: {arguments.state_dir}")
+            output(f"Read-only shadow state: {state_directory}")
         manager = factory(
-            state_directory=arguments.state_dir,
+            state_directory=state_directory,
             repository=arguments.repository,
             branch=arguments.branch,
             workflow_ids=arguments.workflow_id,
@@ -122,8 +139,6 @@ def main(
 def _effect_mode(arguments: argparse.Namespace) -> EffectMode:
     if arguments.live:
         return EffectMode.LIVE
-    if arguments.local_judgment:
-        return EffectMode.LOCAL_JUDGMENT
     return EffectMode.READ_ONLY
 
 
@@ -133,12 +148,19 @@ def _validate_effect_scope(
 ) -> None:
     if not arguments.state_dir.is_absolute():
         raise ValueError("--state-dir must be an absolute path.")
+    if arguments.shadow_state_dir is not None:
+        if not arguments.shadow_state_dir.is_absolute():
+            raise ValueError("--shadow-state-dir must be an absolute path.")
+        if arguments.command == "status" or mode is EffectMode.LIVE:
+            raise ValueError("--shadow-state-dir is only valid for read-only pass/watch.")
     if any(workflow_id < 1 for workflow_id in arguments.workflow_id):
         raise ValueError("--workflow-id values must be positive integers.")
     allowed = tuple(arguments.allow_write_repository)
     if arguments.command == "status" and mode is not EffectMode.READ_ONLY:
         raise ValueError("status does not accept effect-mode flags.")
     if mode is EffectMode.LIVE:
+        if read_shadow_metadata(arguments.state_dir) is not None:
+            raise ValueError("Live mode cannot use read-only shadow state.")
         if allowed != (arguments.repository,):
             raise ValueError(
                 "Live mode --allow-write-repository must exactly match "
@@ -166,6 +188,8 @@ def _build_manager(
     mode: EffectMode,
     write_repositories: tuple[str, ...],
 ) -> WorkflowLoopManager:
+    if mode is EffectMode.LIVE and read_shadow_metadata(state_directory) is not None:
+        raise ValueError("Live mode cannot use read-only shadow state.")
     store = WorkflowLoopStore(
         state_directory,
         repository=repository,
@@ -205,7 +229,7 @@ def _build_manager(
         model=model,
         reasoning_effort=reasoning_effort,
     )
-    writer = None
+    actor = None
     if mode is EffectMode.LIVE:
         actor = GitHubActorClient(
             allowed_repositories=write_repositories,
@@ -216,15 +240,15 @@ def _build_manager(
             ),
             audit_path=state_directory / "github-writes.jsonl",
         )
-        writer = WorkflowWriter(
-            store=store,
-            reader=reader,
-            actor=actor,
-            repository=repository,
-            branch=branch,
-            clock=lambda: datetime.now(UTC),
-            active_item_limit=2,
-        )
+    writer = WorkflowWriter(
+        store=store,
+        reader=reader,
+        actor=actor,
+        repository=repository,
+        branch=branch,
+        clock=lambda: datetime.now(UTC),
+        active_item_limit=2,
+    )
     return WorkflowLoopManager(
         state_directory=state_directory,
         repository=repository,
@@ -261,15 +285,14 @@ def _parser() -> argparse.ArgumentParser:
         subparser.add_argument("--repository", required=True)
         subparser.add_argument("--branch", default="main")
         subparser.add_argument("--state-dir", required=True, type=Path)
+        subparser.add_argument("--shadow-state-dir", type=Path)
         subparser.add_argument(
             "--workflow-id",
             action="append",
             type=int,
             default=[],
         )
-        effects = subparser.add_mutually_exclusive_group()
-        effects.add_argument("--local-judgment", action="store_true")
-        effects.add_argument("--live", action="store_true")
+        subparser.add_argument("--live", action="store_true")
         subparser.add_argument(
             "--allow-write-repository",
             action="append",

@@ -1282,6 +1282,24 @@ class WorkflowLoopStore:
             for row in rows
         )
 
+    def list_proposals(self) -> tuple[HistoryEntry, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT sequence, item_id, recorded_at, event, summary, detail_json "
+                "FROM item_history WHERE event = 'proposed' ORDER BY sequence"
+            ).fetchall()
+        return tuple(
+            HistoryEntry(
+                sequence=row["sequence"],
+                item_id=row["item_id"],
+                recorded_at=row["recorded_at"],
+                event=row["event"],
+                summary=row["summary"],
+                detail=_json_object(row["detail_json"], "detail_json"),
+            )
+            for row in rows
+        )
+
     def record_history(
         self,
         item_id: int,
@@ -1689,8 +1707,8 @@ FROM workers
             (item_id, recorded_at, event, summary, detail_json),
         )
 
-    @staticmethod
     def _active_item_ids(
+        self,
         connection: sqlite3.Connection,
     ) -> frozenset[int]:
         rows = connection.execute(
@@ -1712,7 +1730,13 @@ FROM workers
                 ItemPhase.COPILOT_ACTIVE.value,
             ),
         ).fetchall()
-        return frozenset(row["item_id"] for row in rows)
+        # Snapshot provenance freezes canonical operations without pretending
+        # they completed. They are not processes/invocations owned by the shadow.
+        from .shadow import read_shadow_metadata
+
+        shadow = read_shadow_metadata(self._state_directory)
+        frozen = frozenset(shadow["frozen_item_ids"]) if shadow is not None else frozenset()
+        return frozenset(row["item_id"] for row in rows) - frozen
 
 
 def _nonempty(value: object, name: str) -> str:

@@ -32,9 +32,11 @@ from test_workflow_loop_reader import (
     REPOSITORY,
     WORKFLOW_ID,
     base_responses,
+    job,
     run,
 )
-from workflow_loop_fakes import EndpointClient
+from test_workflow_loop_manager import _Launcher, _issue_search_endpoint
+from workflow_loop_fakes import EndpointClient, PagedResponse
 
 
 class _NoopLauncher:
@@ -156,33 +158,6 @@ class _TestScenario:
         raise AssertionError("This scenario does not request judgment.")
 
 
-class _WouldDoScenario(_TestScenario):
-    def assess(
-        self,
-        item,
-        refresh,
-        *,
-        now,
-        request,
-        judgment,
-        confirmed_issue,
-        worker_state,
-        action_state,
-        capacity_available,
-    ) -> ItemTransition:
-        return ItemTransition(
-            item=replace(
-                item,
-                phase=ItemPhase.JUDGMENT_QUEUED,
-                last_checked_at=now,
-            ),
-            next_step=NextStep.QUEUE_JUDGMENT,
-            history_event="would-queue",
-            summary="Judgment is eligible.",
-            judgment_round=0,
-        )
-
-
 class _CapacityScenario(_TestScenario):
     def __init__(self, *args, completes_task: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -245,6 +220,11 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
             client = EndpointClient({
                 **base_responses(observed_run),
                 f"/repos/{REPOSITORY}/actions/runs/101": observed_run,
+                _issue_search_endpoint(WORKFLOW_ID): {"total_count": 0, "items": []},
+                f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": (
+                    PagedResponse((job(101, 1001, "Build"),))
+                ),
+                f"/repos/{REPOSITORY}/actions/jobs/1001/logs": "error CS1002: ; expected",
             })
             reader = WorkflowReader(
                 client=client,
@@ -265,14 +245,14 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
                 branch=BRANCH,
             )
             store.initialize()
-            pass_ids = iter(("combined-scenario-pass-1", "combined-scenario-pass-2"))
+            pass_ids = iter(("pass-1", "worker-1", "pass-2"))
             coordinator = CiCoordinator(
                 state_directory=state_directory,
                 repository=REPOSITORY,
                 branch=BRANCH,
                 store=store,
                 scenarios=(workflow_scenario, test_scenario),
-                launcher=_NoopLauncher(),
+                launcher=_Launcher(state_directory, store),
                 writer=None,
                 clock=lambda: datetime(2026, 9, 18, 4, tzinfo=UTC),
                 id_factory=pass_ids.__next__,
@@ -348,8 +328,8 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
                 [WORKFLOW_ID, WORKFLOW_ID],
                 test_scenario.assessed,
             )
-            self.assertEqual(frozenset({test_item.id}), store.active_item_ids())
-            self.assertEqual((), store.list_workers())
+            self.assertEqual(frozenset(item.id for item in items), store.active_item_ids())
+            self.assertEqual(1, len(store.list_workers()))
             self.assertEqual(
                 {
                     ("workflow-failure", f"workflow:{WORKFLOW_ID}"),
@@ -393,7 +373,7 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
             self.assertEqual(2, len(store.list_items()))
             self.assertEqual(frozenset(), store.active_item_ids())
 
-    def test_read_only_records_would_do_without_reservation(self) -> None:
+    def test_generic_effect_proposal_retains_payload_without_invocation(self) -> None:
         with TemporaryDirectory() as scratch:
             state_directory = Path(scratch) / "state"
             store = WorkflowLoopStore(
@@ -402,36 +382,45 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
                 branch="main",
             )
             store.initialize()
-            scenario = _WouldDoScenario(
+            scenario = _TestScenario(
                 "would-do",
                 workflow_id=903,
                 priority=1,
             )
-            coordinator = CiCoordinator(
-                state_directory=state_directory,
-                repository="owner/repo",
-                branch="main",
+            item = scenario.discover(store, scenario.observe(), ())[0].item
+            effects = GitHubEffectExecutor(
                 store=store,
-                scenarios=(scenario,),
-                launcher=_NoopLauncher(),
-                writer=None,
-                clock=lambda: datetime(2026, 9, 18, 4, tzinfo=UTC),
-                id_factory=lambda: "would-do-pass",
-                workflow_ids=None,
+                clock=lambda: "2026-09-18T04:00:00Z",
+                active_item_limit=2,
             )
-
-            result = coordinator.run_pass(mode=EffectMode.READ_ONLY)
-
-            self.assertEqual(
-                ("would-do:1:queue_judgment:0",),
-                result.would_do,
+            intent = ActionIntent(
+                action_id="synthetic-action",
+                item_id=item.id,
+                episode=item.episode,
+                kind=ActionKind.CREATE_ISSUE,
+                ordinal=1,
+                payload={
+                    "repository": "owner/repo",
+                    "title": "Exact title",
+                    "body": "Exact body",
+                },
+                prepared_at="2026-09-18T04:00:00Z",
             )
+            for _ in range(2):
+                result = effects.execute(
+                    intent,
+                    pass_id="pass",
+                    owner_id="owner",
+                    guard=lambda: None,
+                    call=lambda: self.fail("A proposed effect must not invoke GitHub."),
+                    validate=lambda value: value,
+                    propose_only=True,
+                )
+                self.assertEqual("proposed", result.status)
             self.assertEqual((), store.list_workers())
             self.assertEqual((), store.list_actions())
-            self.assertEqual(
-                "would-do",
-                store.recent_history(1)[0].event,
-            )
+            self.assertEqual(1, len(store.list_proposals()))
+            self.assertEqual(dict(intent.payload), store.list_proposals()[0].detail["payload"])
             report = render_status(
                 state_directory,
                 repository="owner/repo",
@@ -439,9 +428,10 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
                 now=datetime(2026, 9, 18, 4, tzinfo=UTC),
             )
             self.assertIn(
-                "would do: would-do:1:queue_judgment:0",
+                "PROPOSED create_issue",
                 report,
             )
+            self.assertIn('"body": "Exact body"', report)
 
     def test_all_ownership_refreshes_precede_priority_assessment(self) -> None:
         with TemporaryDirectory() as scratch:

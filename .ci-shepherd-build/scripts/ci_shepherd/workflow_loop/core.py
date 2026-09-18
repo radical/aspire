@@ -33,6 +33,7 @@ from .scenario import (
     ScenarioObservation,
 )
 from .state import WorkflowLoopStore
+from .shadow import read_shadow_metadata
 from .worker import (
     JudgmentWorkerLauncher,
     WorkerLaunchStatus,
@@ -42,7 +43,6 @@ from .worker import (
 
 class EffectMode(StrEnum):
     READ_ONLY = "read-only"
-    LOCAL_JUDGMENT = "local-judgment"
     LIVE = "live"
 
 
@@ -101,6 +101,13 @@ class CiCoordinator:
         if len(set(names)) != len(names):
             raise ValueError("CI scenario names must be unique.")
         self._state_directory = state_directory
+        self._shadow = read_shadow_metadata(state_directory)
+        self._frozen_item_ids = frozenset(
+            self._shadow["frozen_item_ids"] if self._shadow is not None else ()
+        )
+        self._inherited_worker_ids = frozenset(
+            self._shadow["inherited_worker_ids"] if self._shadow is not None else ()
+        )
         self._repository = repository
         self._branch = branch
         self._store = store
@@ -124,6 +131,8 @@ class CiCoordinator:
     def run_pass(self, *, mode: EffectMode = EffectMode.READ_ONLY) -> PassResult:
         if not isinstance(mode, EffectMode):
             mode = EffectMode(mode)
+        if mode is EffectMode.LIVE and self._shadow is not None:
+            raise ValueError("Live mode cannot use read-only shadow state.")
         lock_path = self._state_directory / "workflow-loop.pass.lock"
         with exclusive_file_lock(lock_path):
             return self._run_locked(mode)
@@ -146,16 +155,17 @@ class CiCoordinator:
         observations: list[tuple[CiScenario, ScenarioObservation]] = []
         refreshes: dict[int, object] = {}
         try:
-            self._store.classify_orphaned_action_invocations(
-                current_pass_id=pass_id,
-                current_owner_id=self._owner_id,
-                classified_at=started_at,
-                error=(
-                    "A prior process ended while the remote invocation "
-                    "outcome was unknown."
-                ),
-            )
-            worker_observations = self._observe_workers(mode)
+            if mode is EffectMode.LIVE:
+                self._store.classify_orphaned_action_invocations(
+                    current_pass_id=pass_id,
+                    current_owner_id=self._owner_id,
+                    classified_at=started_at,
+                    error=(
+                        "A prior process ended while the remote invocation "
+                        "outcome was unknown."
+                    ),
+                )
+            worker_observations = self._observe_workers()
             launched_workers += sum(
                 observation is None
                 for observation in worker_observations.values()
@@ -228,6 +238,8 @@ class CiCoordinator:
 
             normalized_items: list[WorkflowItem] = []
             for persisted in items:
+                if persisted.id in self._frozen_item_ids:
+                    continue
                 scenario = self._scenario_for_item(persisted)
                 refresh = refreshes[persisted.id]
                 item = scenario.normalize_item(
@@ -366,11 +378,7 @@ class CiCoordinator:
                     ),
                 )
 
-                dry_queue = (
-                    transition.next_step is NextStep.QUEUE_JUDGMENT
-                    and mode is EffectMode.READ_ONLY
-                )
-                if not dry_queue and _meaningful_item_change(
+                if _meaningful_item_change(
                     item,
                     transition.item,
                 ):
@@ -385,27 +393,12 @@ class CiCoordinator:
                         != item.last_progressed_at
                     ):
                         progressed_items += 1
-                elif not dry_queue:
+                else:
                     self._store.update_item_check(
                         item.id,
                         checked_at=transition.item.last_checked_at,
                         read_status=transition.item.read_status,
                     )
-
-                if dry_queue:
-                    note = (
-                        f"{scenario.name}:{item.id}:"
-                        f"queue_judgment:{transition.judgment_round}"
-                    )
-                    would_do.append(note)
-                    self._store.record_history(
-                        item.id,
-                        recorded_at=started_at,
-                        event="would-do",
-                        summary="Read-only mode would queue judgment.",
-                        detail={"effect": note},
-                    )
-                    continue
 
                 if (
                     worker is not None
@@ -437,33 +430,20 @@ class CiCoordinator:
                     and request is not None
                     and judgment is not None
                 ):
-                    if mode is not EffectMode.LIVE:
-                        note = (
-                            f"{scenario.name}:{item.id}:"
-                            f"{transition.action_kind.value}"
-                        )
-                        would_do.append(note)
-                        self._store.record_history(
-                            item.id,
-                            recorded_at=started_at,
-                            event="would-do",
-                            summary=(
-                                "No-effect mode retained a proposed action."
-                            ),
-                            detail={"effect": note},
-                        )
-                        continue
                     if self._writer is None:
                         raise RuntimeError(
-                            "Live mode requires a configured writer."
+                            "Action preparation requires a configured effect writer."
                         )
                     write = self._writer.execute(
                         request,
                         judgment,
                         pass_id=pass_id,
                         owner_id=self._owner_id,
+                        propose_only=mode is EffectMode.READ_ONLY,
                     )
-                    if (
+                    if write.status == "proposed":
+                        would_do.extend(write.action_ids)
+                    elif (
                         write.status == "confirmed"
                         and write.task_id is not None
                     ):
@@ -662,16 +642,16 @@ class CiCoordinator:
 
     def _observe_workers(
         self,
-        mode: EffectMode,
     ) -> dict[str, WorkerObservation | None]:
         observations: dict[str, WorkerObservation | None] = {}
         for worker in self._store.list_workers():
+            if worker.worker_id in self._inherited_worker_ids:
+                continue
             if worker.consumed_at is not None:
                 continue
             if (
                 worker.state is WorkState.QUEUED
                 and worker.launch_attempted_at is None
-                and mode is not EffectMode.READ_ONLY
             ):
                 launch = self._launcher.launch(worker)
                 observations[worker.worker_id] = None

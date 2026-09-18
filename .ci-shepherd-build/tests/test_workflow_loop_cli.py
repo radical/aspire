@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import sqlite3
 import unittest
 from unittest.mock import patch
 
 from ci_shepherd.workflow_loop.cli import _build_manager, main
 from ci_shepherd.workflow_loop.manager import EffectMode, PassResult
+from ci_shepherd.workflow_loop.state import WorkflowLoopStore
+from ci_shepherd.workflow_loop.shadow import prepare_shadow
 
 
 class _Manager:
@@ -55,6 +59,151 @@ class _SignalApi:
 
 
 class WorkflowLoopCliTests(unittest.TestCase):
+    def test_read_only_reuses_private_shadow_without_changing_canonical(self) -> None:
+        with TemporaryDirectory() as scratch:
+            canonical = Path(scratch) / "canonical"
+            shadow = Path(scratch) / "shadow"
+            store = WorkflowLoopStore(
+                canonical, repository="microsoft/aspire", branch="main",
+            )
+            store.initialize()
+            database = canonical / "workflow-loop.sqlite3"
+
+            def logical_state():
+                with closing(sqlite3.connect(database)) as connection:
+                    return tuple(connection.iterdump())
+
+            before = logical_state()
+            observed_paths = []
+
+            def factory(**kwargs):
+                path = kwargs["state_directory"]
+                observed_paths.append(path)
+                shadow_store = WorkflowLoopStore(
+                    path, repository="microsoft/aspire", branch="main",
+                )
+                shadow_store.initialize()
+                shadow_store.start_pass(
+                    f"shadow-{len(observed_paths)}", "2026-09-18T00:00:00Z",
+                )
+                return _Manager()
+
+            arguments = [
+                "pass", "--repository", "microsoft/aspire",
+                "--state-dir", str(canonical),
+                "--shadow-state-dir", str(shadow),
+            ]
+            output = []
+            for _ in range(2):
+                self.assertEqual(
+                    0, main(arguments, manager_factory=factory, output=output.append),
+                )
+                self.assertEqual(before, logical_state())
+            self.assertEqual([shadow, shadow], observed_paths)
+            with closing(sqlite3.connect(shadow / "workflow-loop.sqlite3")) as connection:
+                self.assertEqual(2, connection.execute(
+                    "SELECT COUNT(*) FROM passes"
+                ).fetchone()[0])
+            self.assertTrue(any(str(canonical) in line for line in output))
+            self.assertTrue(any(str(shadow) in line for line in output))
+
+    def test_removed_local_judgment_flag_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit) as error:
+            main([
+                "pass", "--repository", "microsoft/aspire",
+                "--state-dir", "/unused", "--local-judgment",
+            ])
+        self.assertEqual(2, error.exception.code)
+
+    def test_live_uses_canonical_and_rejects_shadow_state_or_arguments(self) -> None:
+        with TemporaryDirectory() as scratch:
+            canonical = Path(scratch) / "canonical"
+            shadow = Path(scratch) / "shadow"
+            observed = []
+
+            def factory(**kwargs):
+                observed.append(kwargs["state_directory"])
+                return _Manager()
+
+            common = ["pass", "--repository", "microsoft/aspire"]
+            self.assertEqual(0, main(
+                common + ["--state-dir", str(canonical), "--shadow-state-dir", str(shadow)],
+                manager_factory=factory, output=lambda line: None,
+            ))
+            live = ["--live", "--allow-write-repository", "microsoft/aspire"]
+            self.assertEqual(0, main(
+                common + ["--state-dir", str(canonical)] + live,
+                manager_factory=factory, output=lambda line: None,
+            ))
+            self.assertEqual([shadow, canonical], observed)
+            for arguments in (
+                ["--state-dir", str(shadow)],
+                ["--state-dir", str(canonical), "--shadow-state-dir", str(shadow)],
+            ):
+                with self.subTest(arguments=arguments):
+                    errors = []
+                    self.assertEqual(2, main(
+                        common + arguments + live,
+                        manager_factory=factory, error_output=errors.append,
+                    ))
+                    self.assertTrue(errors)
+            self.assertEqual([shadow, canonical], observed)
+
+    def test_read_only_builds_no_github_actor(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch) / "shadow"
+            with patch("ci_shepherd.workflow_loop.cli.GitHubActorClient") as actor:
+                manager = _build_manager(
+                    state_directory=state,
+                    repository="microsoft/aspire",
+                    branch="main",
+                    workflow_ids=(),
+                    model="gpt-5.6-sol",
+                    reasoning_effort="medium",
+                    mode=EffectMode.READ_ONLY,
+                    write_repositories=(),
+                )
+                actor.assert_not_called()
+                self.assertIsNotNone(manager._writer)
+                self.assertFalse((state / "github-writes.jsonl").exists())
+
+    def test_watch_snapshots_once_without_bootstrapping_canonical(self) -> None:
+        with TemporaryDirectory() as scratch:
+            canonical = Path(scratch) / "canonical"
+            shadow = Path(scratch) / "shadow"
+            signals = _SignalApi()
+            manager = _Manager()
+            factory_paths = []
+
+            def factory(**kwargs):
+                factory_paths.append(kwargs["state_directory"])
+                return manager
+
+            def sleep(_seconds):
+                if len(manager.modes) == 2:
+                    signals.send(signals.SIGTERM)
+
+            with patch(
+                "ci_shepherd.workflow_loop.cli.prepare_shadow",
+                wraps=prepare_shadow,
+            ) as snapshot:
+                self.assertEqual(0, main(
+                    [
+                        "watch", "--repository", "microsoft/aspire",
+                        "--state-dir", str(canonical),
+                        "--shadow-state-dir", str(shadow),
+                    ],
+                    manager_factory=factory,
+                    sleep=sleep,
+                    monotonic=iter((0.0, 0.0, 300.0, 300.0)).__next__,
+                    signal_api=signals,
+                    output=lambda line: None,
+                ))
+                snapshot.assert_called_once()
+            self.assertEqual([shadow], factory_paths)
+            self.assertEqual([EffectMode.READ_ONLY] * 2, manager.modes)
+            self.assertFalse(canonical.exists())
+
     def test_one_shot_degraded_pass_is_visible_and_nonzero(self) -> None:
         class DegradedManager(_Manager):
             def run_pass(self, *, mode):
@@ -79,10 +228,10 @@ class WorkflowLoopCliTests(unittest.TestCase):
             )
 
         self.assertEqual(1, result)
-        self.assertIn("status=degraded", output[0])
+        self.assertIn("status=degraded", output[2])
         self.assertEqual(
             "  error: repository:repository-unavailable:503",
-            output[1],
+            output[3],
         )
 
     def test_pass_defaults_to_read_only_and_prints_metrics(self) -> None:
@@ -111,7 +260,7 @@ class WorkflowLoopCliTests(unittest.TestCase):
                     "pass-1 duration=1.000s github_requests=3 "
                     "assignments=0 status=ok"
                 ],
-                output,
+                output[2:],
             )
 
     def test_live_requires_exact_repository_allowlist_before_factory(self) -> None:
@@ -160,7 +309,6 @@ class WorkflowLoopCliTests(unittest.TestCase):
                     "radical/aspire",
                     "--state-dir",
                     str(Path(scratch) / "state"),
-                    "--local-judgment",
                     "--interval-seconds",
                     "0.01",
                 ],
@@ -172,7 +320,7 @@ class WorkflowLoopCliTests(unittest.TestCase):
             )
 
             self.assertEqual(0, result)
-            self.assertEqual([EffectMode.LOCAL_JUDGMENT], manager.modes)
+            self.assertEqual([EffectMode.READ_ONLY], manager.modes)
             self.assertEqual([0.01], sleeps)
             self.assertEqual("previous-int", signals.handlers[signals.SIGINT])
             self.assertEqual("previous-term", signals.handlers[signals.SIGTERM])
@@ -250,8 +398,8 @@ class WorkflowLoopCliTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual(2, len(manager.modes))
-        self.assertIn("status=degraded", output[0])
-        self.assertIn("status=ok", output[2])
+        self.assertIn("status=degraded", output[2])
+        self.assertIn("status=ok", output[4])
 
     def test_keyboard_interrupt_from_run_pass_is_not_swallowed(self) -> None:
         class InterruptedManager:

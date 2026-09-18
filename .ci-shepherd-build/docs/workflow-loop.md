@@ -59,13 +59,45 @@ wait on their next pass; no state reset is required.
 
 ## Safe modes
 
-`status` reads only the local SQLite state. `pass` and `watch` default to
-read-only GitHub observation: they may update local observations, but they do
-not start local judgment workers or perform GitHub mutations.
-Eligible effects are persisted as `would-do` history and shown by `status`.
-Local-judgment proposals remain unconsumed across repeated no-effect passes, so
-a later explicitly authorized live pass can execute the original judgment.
-Identical `would-do` history entries are not duplicated.
+There are exactly two operational modes: **READ_ONLY** (the default) and
+**LIVE** (`--live`). Both refresh GitHub evidence and run restricted local
+Copilot judgments. Only LIVE can construct the GitHub actor or invoke an
+external effect. The former `--local-judgment` flag is no longer accepted.
+
+READ_ONLY snapshots the canonical `--state-dir` into a separate, owner-only
+persistent shadow using SQLite backup, including committed WAL contents.
+It never initializes, migrates, or changes logical rows in the canonical
+database. An absent canonical database starts an empty shadow.
+All observations, worker packets, results, transitions, and proposals belong
+to the shadow. This is GitHub-read-only, not filesystem-read-only.
+
+Use `--shadow-state-dir` to name and resume that read-only run. If omitted,
+the CLI allocates a unique sibling directory and prints its path together
+with the canonical source path. A `watch` creates its shadow once; subsequent
+passes reuse it. Reusing an explicit shadow also resumes its local workers
+rather than resnapshotting newer canonical state.
+
+Inherited worker rows are rehomed under the shadow and lose their PID.
+No inherited worker is launched or observed, and executable packet/manifest
+files are deliberately not copied. Provenance records why they are unavailable.
+Items with unconsumed inherited workers (including terminal results), or
+PREPARED/INVOKING/UNCERTAIN actions, stay explicitly **FROZEN**.
+They retain canonical operation history without claiming termination or taking
+over an invocation. They do not occupy shadow-owned capacity; the shadow can
+analyze unrelated items. Canonical task state and live capacity are unchanged.
+
+At the first external effect boundary, the shared effect executor records a
+structured **PROPOSED** history entry with the exact live intent and payload.
+`status` shows the exact external target and title/body/prompt, not the internal
+assessment packet. Identical proposals are deduplicated. They reserve no action
+capacity, and terminal local judgments remain available for later shadow passes.
+Unrelated items continue. A proposed issue creation cannot fabricate an issue
+number to simulate a downstream task.
+
+LIVE uses only canonical state and fresh observations. It cannot use a shadow
+as its state directory or promote a shadow proposal/judgment. Run LIVE with
+the canonical path when authorized; any needed judgments run independently.
+`status` inspects persisted local state without GitHub access.
 
 ## Repeated-pass correctness
 
@@ -110,8 +142,8 @@ preparation failures also persist the exact task/PR/check/ownership target, so
 an unchanged restart does not retry; meaningful target changes may be assessed
 again.
 
-`--local-judgment` permits the view-only local Copilot judgment process. The
-worker receives only the `view` tool and cannot mutate GitHub.
+The local Copilot judgment worker receives only the `view` tool and cannot
+mutate GitHub.
 `--model` and `--reasoning-effort` select that local runtime explicitly; they
 do not configure the later cloud task.
 
@@ -121,17 +153,12 @@ do not configure the later cloud task.
 
 ```bash
 PYTHONPATH=scripts python3 scripts/workflow_loop.py pass \
-  --repository radical/aspire \
+  --repository microsoft/aspire \
   --branch main \
-  --state-dir /absolute/path/to/fork-state \
-  --workflow-id 12345
-
-PYTHONPATH=scripts python3 scripts/workflow_loop.py pass \
-  --repository radical/aspire \
-  --branch main \
-  --state-dir /absolute/path/to/fork-state \
-  --workflow-id 12345 \
-  --local-judgment
+  --state-dir /absolute/path/to/canonical-state \
+  --shadow-state-dir /absolute/path/to/readonly-run \
+  --model gpt-5.6-sol \
+  --reasoning-effort medium
 
 PYTHONPATH=scripts python3 scripts/workflow_loop.py pass \
   --repository radical/aspire \
@@ -142,8 +169,9 @@ PYTHONPATH=scripts python3 scripts/workflow_loop.py pass \
   --allow-write-repository radical/aspire
 ```
 
-These are fork-only validation examples. Live fork execution is a separate
-operator decision and is not implied by the local test suite.
+Run these commands from `.ci-shepherd-build/`. The first is read-only against
+upstream; the live example targets a fork and requires separate operator
+authorization. Neither command is implied by running the local test suite.
 
 `watch` starts the same pass implementation every five minutes. Pass duration
 is deducted from the next sleep, so the interval is start-to-start rather than
@@ -153,9 +181,10 @@ next pass rather than delaying the current pass with transport retries.
 
 ```bash
 PYTHONPATH=scripts python3 scripts/workflow_loop.py watch \
-  --repository radical/aspire \
+  --repository microsoft/aspire \
   --branch main \
-  --state-dir /absolute/path/to/fork-state
+  --state-dir /absolute/path/to/canonical-state \
+  --shadow-state-dir /absolute/path/to/readonly-run
 ```
 
 `SIGINT` and `SIGTERM` stop future scheduling. A signal received during a pass
@@ -340,9 +369,9 @@ Use persisted status even when GitHub is unavailable:
 
 ```bash
 PYTHONPATH=scripts python3 scripts/workflow_loop.py status \
-  --repository radical/aspire \
+  --repository microsoft/aspire \
   --branch main \
-  --state-dir /absolute/path/to/fork-state
+  --state-dir /absolute/path/to/readonly-run
 ```
 
 The summary shows local activity, waits, last checked/progressed timestamps,
@@ -350,3 +379,9 @@ known run/issue/PR links, explicit task IDs, pass duration, GitHub request
 count, capacity, and time to first confirmed assignment. Detailed worker
 stdout, stderr, usage, and terminal envelopes remain in the item's private
 worker directory.
+
+The shadow's `workflow-loop.sqlite3` retains complete proposal history and
+`github-reads.jsonl` records reads. A read-only run creates no
+`github-writes.jsonl` and confirms no assignments. A successful pass is not
+evidence of repair or recovery; inspect unavailable reads, frozen inherited
+operations, and proposed external boundaries in `status`.

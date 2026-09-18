@@ -196,4 +196,5 @@ class EffectWriter(Protocol):
         *,
         pass_id: str,
         owner_id: str,
+        propose_only: bool = False,
     ) -> WriteResult: ...

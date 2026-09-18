@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Collection
 from datetime import UTC, datetime
 from pathlib import Path
+import json
 import sqlite3
 
 from .state import WorkflowLoopStore
+from .shadow import read_shadow_metadata
 
 
 def render_status(
@@ -34,6 +36,7 @@ def render_status(
     items = store.list_items()
     active_ids = store.active_item_ids()
     latest_pass = _latest_pass(database)
+    shadow = read_shadow_metadata(state_directory)
     first_assignment = min(
         (
             _parse_time(item.assignment_confirmed_at)
@@ -55,6 +58,12 @@ def render_status(
             f"{_duration(first_assignment.total_seconds())}"
         ),
     ]
+    if shadow is not None:
+        lines.extend((
+            f"Canonical source state: {_safe(shadow['canonical_state_directory'])}",
+            f"Read-only shadow state: {_safe(state_directory)}",
+            "Inherited operations are frozen, not owned or resumed by this run.",
+        ))
     for item in items:
         latest_would_do = next(
             (
@@ -114,6 +123,27 @@ def render_status(
                     f"{_safe(latest_would_do.detail.get('effect', 'unknown'))}"
                 ),
                 f"  error: {_safe(item.latest_error or 'none')}",
+            )
+        )
+        if shadow is not None and item.id in shadow["frozen_item_ids"]:
+            lines.append(
+                "  FROZEN: " + _safe(
+                    json.dumps(shadow["frozen_reasons"][str(item.id)], ensure_ascii=True)
+                )
+            )
+    for proposal in store.list_proposals():
+        detail = proposal.detail
+        payload = detail["payload"]
+        request = payload.get("request", {})
+        lines.extend(
+            (
+                "",
+                f"PROPOSED {_safe(detail['kind'])} "
+                f"item={proposal.item_id} action={_safe(detail['actionId'])}",
+                "  Would-Do only; not authorized or executed.",
+                f"  episode={detail['episode']} "
+                f"evidence={_safe(request.get('evidenceFingerprint', 'unavailable'))}",
+                json.dumps(payload.get("write", payload), indent=2, ensure_ascii=True),
             )
         )
     return "\n".join(lines)

@@ -32,6 +32,7 @@ from ci_shepherd.workflow_loop.reader import (
     TaskObservation,
 )
 from ci_shepherd.workflow_loop.state import WorkflowLoopStore
+from ci_shepherd.workflow_loop.report import render_status
 
 
 NOW = "2026-09-17T20:00:00Z"
@@ -397,6 +398,62 @@ class WorkflowWriterTests(unittest.TestCase):
             cloud_model=None,
         )
 
+    def test_proposal_preserves_exact_live_payload_without_an_actor(self) -> None:
+        request = _request(self.item, self.failure_run)
+        result = _result(request, JudgmentDecision.ASSIGN)
+        reader = FakeReader(
+            lambda item, action: _refresh(
+                item,
+                self.failure_run,
+                issue=(_issue(item.issue_number) if item.issue_number else None),
+            )
+        )
+        writer = self._writer(reader, None)
+        for pass_id in ("preview-1", "preview-2"):
+            outcome = writer.execute(
+                request,
+                result,
+                pass_id=pass_id,
+                owner_id="preview",
+                propose_only=True,
+            )
+            self.assertEqual("proposed", outcome.status)
+
+        self.assertEqual((), self.store.list_actions())
+        self.assertIsNone(self.store.list_items()[0].issue_number)
+        proposals = self.store.list_proposals()
+        self.assertEqual(1, len(proposals))
+        proposal = proposals[0].detail
+        self.assertEqual("PROPOSED", proposal["status"])
+        self.assertEqual("create_issue", proposal["kind"])
+        self.assertEqual(self.item.id, proposal["itemId"])
+        self.assertEqual(REPOSITORY, proposal["payload"]["write"]["repository"])
+        report = render_status(
+            self.state_directory,
+            repository=REPOSITORY,
+            branch=BRANCH,
+            now=datetime(2026, 9, 17, 20, 2, tzinfo=UTC),
+        )
+        self.assertIn("PROPOSED create_issue", report)
+        self.assertIn('"repository": "radical/aspire"', report)
+        self.assertIn(proposal["payload"]["write"]["title"], report)
+        self.assertNotIn(request.prompt, report)
+        self.assertNotIn('"request":', report)
+        self.assertNotIn('"result":', report)
+
+        actor = FakeActor()
+        self._writer(reader, actor).execute(
+            request, result, pass_id="live", owner_id="live",
+        )
+        self.assertEqual(
+            {
+                "repository": actor.calls[0][1],
+                "title": actor.calls[0][2],
+                "body": actor.calls[0][3],
+            },
+            proposal["payload"]["write"],
+        )
+
     def test_initial_creation_and_task_start_use_one_judgment(self) -> None:
         request = _request(self.item, self.failure_run)
         result = _result(request, JudgmentDecision.ASSIGN)
@@ -568,6 +625,18 @@ class WorkflowWriterTests(unittest.TestCase):
         )
         actor = FakeActor(task_ids=("task-follow-up",))
 
+        proposed = self._writer(reader, None).execute(
+            request, result, pass_id="preview", owner_id="preview",
+            propose_only=True,
+        )
+        self.assertEqual("proposed", proposed.status)
+        self.assertEqual((), self.store.list_actions())
+        self.assertEqual(1, self.store.list_items()[0].followup_count)
+        proposal = self.store.list_proposals()[0].detail
+        self.assertEqual("follow_up", proposal["kind"])
+        self.assertEqual(pull.number, proposal["payload"]["write"]["pull_request_number"])
+        self.assertEqual(pull.head_sha, proposal["payload"]["write"]["pull_request_head_sha"])
+        reader.refresh_calls.clear()
         outcome = self._writer(reader, actor).execute(
             request,
             result,
@@ -582,6 +651,16 @@ class WorkflowWriterTests(unittest.TestCase):
         self.assertIn(f"PR {REPOSITORY}#{pull.number}", str(call[2]))
         self.assertIn(f"Refs {REPOSITORY}#77", str(call[2]))
         self.assertEqual(pull.head_ref, call[4])
+        self.assertEqual(
+            {
+                "repository": call[1], "prompt": call[2],
+                "base_branch": call[3], "head_branch": call[4],
+                "model": call[5], "issue_number": 77,
+                "pull_request_number": pull.number,
+                "pull_request_head_sha": pull.head_sha,
+            },
+            proposal["payload"]["write"],
+        )
         self.assertEqual(
             [ActionKind.FOLLOW_UP, ActionKind.FOLLOW_UP],
             [action for _, action in reader.refresh_calls],

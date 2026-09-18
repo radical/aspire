@@ -30,6 +30,7 @@ from .state import WorkflowLoopStore
 
 
 WriterStatus = Literal[
+    "proposed",
     "confirmed",
     "capacity_wait",
     "superseded",
@@ -87,7 +88,7 @@ class WorkflowWriter:
         *,
         store: WorkflowLoopStore,
         reader: _Reader,
-        actor: _Actor,
+        actor: _Actor | None,
         repository: str,
         branch: str,
         clock: Callable[[], datetime],
@@ -116,6 +117,11 @@ class WorkflowWriter:
             active_item_limit=active_item_limit,
         )
 
+    def _require_actor(self) -> _Actor:
+        if self._actor is None:
+            raise ValueError("Live execution requires a GitHub actor.")
+        return self._actor
+
     def execute(
         self,
         request: JudgmentRequest,
@@ -123,7 +129,10 @@ class WorkflowWriter:
         *,
         pass_id: str,
         owner_id: str,
+        propose_only: bool = False,
     ) -> WorkflowWriteResult:
+        if not propose_only and self._actor is None:
+            raise ValueError("Live execution requires a GitHub actor.")
         if result.decision not in {
             JudgmentDecision.ASSIGN,
             JudgmentDecision.FOLLOW_UP,
@@ -178,12 +187,14 @@ class WorkflowWriter:
                 result,
                 pass_id=pass_id,
                 owner_id=owner_id,
+                propose_only=propose_only,
             )
         return self._execute_initial(
             request,
             result,
             pass_id=pass_id,
             owner_id=owner_id,
+            propose_only=propose_only,
         )
 
     def _execute_initial(
@@ -193,6 +204,7 @@ class WorkflowWriter:
         *,
         pass_id: str,
         owner_id: str,
+        propose_only: bool,
     ) -> WorkflowWriteResult:
         action_ids: list[str] = []
         item = self._item(request.item_id)
@@ -245,7 +257,8 @@ class WorkflowWriter:
                     write=issue_payload,
                     pass_id=pass_id,
                     owner_id=owner_id,
-                    call=lambda: self._actor.create_issue(
+                    propose_only=propose_only,
+                    call=lambda: self._require_actor().create_issue(
                         self._repository,
                         title=title,
                         body=body,
@@ -295,7 +308,8 @@ class WorkflowWriter:
             },
             pass_id=pass_id,
             owner_id=owner_id,
-            call=lambda: self._actor.create_copilot_task(
+            propose_only=propose_only,
+            call=lambda: self._require_actor().create_copilot_task(
                 self._repository,
                 prompt=prompt,
                 base_branch=self._branch,
@@ -328,6 +342,7 @@ class WorkflowWriter:
         *,
         pass_id: str,
         owner_id: str,
+        propose_only: bool,
     ) -> WorkflowWriteResult:
         assert request.issue_number is not None
         assert request.pull_request_number is not None
@@ -370,7 +385,8 @@ class WorkflowWriter:
             },
             pass_id=pass_id,
             owner_id=owner_id,
-            call=lambda: self._actor.create_copilot_task(
+            propose_only=propose_only,
+            call=lambda: self._require_actor().create_copilot_task(
                 self._repository,
                 prompt=prompt,
                 base_branch=self._branch,
@@ -402,6 +418,7 @@ class WorkflowWriter:
         write: Mapping[str, object],
         pass_id: str,
         owner_id: str,
+        propose_only: bool,
         call: Callable[[], object],
         validate: Callable[[object], Any],
         allowed_created_issue: int | None = None,
@@ -468,6 +485,7 @@ class WorkflowWriter:
             guard=guard,
             call=call,
             validate=validate,
+            propose_only=propose_only,
         )
         if outcome.status != "confirmed":
             return WorkflowWriteResult(
