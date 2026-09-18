@@ -56,6 +56,14 @@ def render_status(
         ),
     ]
     for item in items:
+        latest_would_do = next(
+            (
+                entry
+                for entry in store.recent_history(item.id)
+                if entry.event == "would-do"
+            ),
+            None,
+        )
         elapsed = max(
             0.0,
             (
@@ -98,6 +106,12 @@ def render_status(
                     "  latest action: none"
                     if item.latest_action is None
                     else f"  latest action: {item.latest_action.value}"
+                ),
+                (
+                    "  would do: none"
+                    if latest_would_do is None
+                    else f"  would do: "
+                    f"{_safe(latest_would_do.detail.get('effect', 'unknown'))}"
                 ),
                 f"  error: {_safe(item.latest_error or 'none')}",
             )

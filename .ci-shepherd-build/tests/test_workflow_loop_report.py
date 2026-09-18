@@ -75,6 +75,7 @@ class WorkflowLoopReportTests(unittest.TestCase):
                         "  pull request: https://github.com/owner/repo/pull/23",
                         "  task ID: task-123",
                         "  latest action: none",
+                        "  would do: none",
                         "  error: needs\\x07attention",
                     )
                 ),

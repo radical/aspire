@@ -13,6 +13,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from ci_shepherd.delegations import AgentTask, normalize_agent_task
 from ci_shepherd.github import GitHubApiError, GitHubClient
 from ci_shepherd.pull_requests import build_pull_request_current_state
+from ci_shepherd.observations import is_workflow_log_diagnostic_line
 
 from .models import ActionKind, JobKey, JobObservation, RunObservation, WorkflowItem, WorkflowKey
 
@@ -270,7 +271,6 @@ class WorkflowReader:
         observed_at = _format_time(self._clock())
         errors: list[ReadError] = []
         workflows: list[WorkflowObservation] = []
-        tracked_wait_runs: list[TrackedRunObservation] = []
         default_branch: str | None = None
         repository_id: int | None = None
 
@@ -413,59 +413,6 @@ class WorkflowReader:
         for observation in workflows:
             errors.extend(observation.errors)
 
-        known_runs = {
-            run.run_id
-            for workflow_observation in workflows
-            for run in workflow_observation.runs
-        }
-        for tracked in sorted(tracked_items, key=lambda item: item.id):
-            if (
-                tracked.repository.casefold() != repository.casefold()
-                or tracked.branch != branch
-                or tracked.wait_run_id is None
-            ):
-                continue
-            if tracked.wait_run_id in known_runs:
-                matching = next(
-                    run
-                    for workflow_observation in workflows
-                    for run in workflow_observation.runs
-                    if run.run_id == tracked.wait_run_id
-                )
-                tracked_wait_runs.append(
-                    TrackedRunObservation(tracked.id, matching, None)
-                )
-                continue
-            endpoint = (
-                f"/repos/{repository}/actions/runs/{tracked.wait_run_id}"
-            )
-            try:
-                raw_run = self._client.get(endpoint)
-                normalized = _normalize_run(
-                    raw_run,
-                    repository=repository,
-                    branch=branch,
-                    workflow_id=tracked.workflow_id,
-                    workflow_path=tracked.workflow_path,
-                    workflow_name=tracked.workflow_name,
-                )
-                if normalized is None:
-                    raise ValueError("The fixed wait run is not a primary repository run.")
-                tracked_wait_runs.append(
-                    TrackedRunObservation(tracked.id, normalized, None)
-                )
-            except (GitHubApiError, TypeError, ValueError) as error:
-                read_error = _error(
-                    f"item:{tracked.id}:wait-run",
-                    "wait-run-unavailable",
-                    endpoint,
-                    error,
-                )
-                errors.append(read_error)
-                tracked_wait_runs.append(
-                    TrackedRunObservation(tracked.id, None, read_error)
-                )
-
         complete = not errors and all(workflow.complete for workflow in workflows)
         return ReaderSnapshot(
             observed_at=observed_at,
@@ -474,7 +421,7 @@ class WorkflowReader:
             branch=branch,
             default_branch=default_branch,
             workflows=tuple(workflows),
-            tracked_wait_runs=tuple(tracked_wait_runs),
+            tracked_wait_runs=(),
             complete=complete,
             errors=tuple(errors),
             request_count=self._requests() - started,
@@ -518,16 +465,6 @@ class WorkflowReader:
             scope=f"item:{item.id}:failure-run",
             errors=errors,
         )
-        wait_run = (
-            self._read_exact_run(
-                item,
-                item.wait_run_id,
-                scope=f"item:{item.id}:wait-run",
-                errors=errors,
-            )
-            if item.wait_run_id is not None
-            else None
-        )
 
         if pre_write_requested and failure_run is not None:
             details = self._read_run_details(
@@ -541,8 +478,8 @@ class WorkflowReader:
 
         recovery: RecoveryStatus = "unavailable"
         recovery_run: RunObservation | None = None
-        target = wait_run
-        if target is None and failure_run is not None:
+        target = None
+        if failure_run is not None:
             candidates = [
                 candidate
                 for candidate in window.runs
@@ -557,8 +494,6 @@ class WorkflowReader:
                 target = max(completed_candidates, key=_run_order_key)
             elif failure_run.attempt > item.failure_attempt:
                 target = failure_run
-            elif candidates:
-                target = max(candidates, key=_run_order_key)
             else:
                 target = failure_run
 
@@ -592,8 +527,6 @@ class WorkflowReader:
             if details.run is not None:
                 if details.run.run_id == item.failure_run_id:
                     failure_run = details.run
-                if item.wait_run_id == details.run.run_id:
-                    wait_run = details.run
             if details.recovery == "passed":
                 recovery_run = details.run
 
@@ -675,7 +608,7 @@ class WorkflowReader:
             observed_at=_format_time(self._clock()),
             runs=window.runs,
             failure_run=failure_run,
-            wait_run=wait_run,
+            wait_run=None,
             recovery=recovery,
             recovery_run=recovery_run,
             issue=issue,
@@ -1320,9 +1253,16 @@ class WorkflowReader:
                         f"{observed_job.job_id}/logs"
                     )
                     try:
-                        response = self._client.get_text(
+                        response = self._client.get_text_head_tail(
                             log_endpoint,
-                            max_bytes=self._max_log_bytes,
+                            head_bytes=self._max_log_bytes // 8,
+                            selected_bytes=(
+                                self._max_log_bytes * 5 // 8
+                            ),
+                            tail_bytes=(
+                                self._max_log_bytes // 4
+                            ),
+                            line_selector=is_workflow_log_diagnostic_line,
                         )
                         excerpt = response.text
                         log_truncated = response.truncated
@@ -1378,7 +1318,11 @@ class WorkflowReader:
         )
         return RunDetailResult(
             run=detailed_run,
-            complete=inventory.complete,
+            complete=(
+                inventory.complete
+                and not truncated
+                and not unavailable
+            ),
             recovery=recovery,
             matched_job_ids=matched,
             missing_jobs=missing,

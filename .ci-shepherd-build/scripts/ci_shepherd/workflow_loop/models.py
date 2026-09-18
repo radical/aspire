@@ -57,6 +57,7 @@ _REQUEST_KEYS = frozenset(
 
 class ItemPhase(StrEnum):
     OBSERVING_FAILURE = "observing_failure"
+    # Retained to read older stores; the reducer clears this obsolete wait.
     WAITING_FOR_RUN = "waiting_for_run"
     JUDGMENT_QUEUED = "judgment_queued"
     JUDGMENT_RUNNING = "judgment_running"
@@ -367,6 +368,8 @@ class WorkflowItem:
     recovered_at: str | None
     latest_action: ActionKind | None
     latest_error: str | None
+    scenario_name: str = "workflow-failure"
+    case_key: str = "workflow"
 
     def __post_init__(self) -> None:
         _positive_int(self.id, "id")
@@ -431,6 +434,8 @@ class WorkflowItem:
         ):
             raise ValueError("latest_action must be an ActionKind or null.")
         _optional_nonempty_string(self.latest_error, "latest_error")
+        _nonempty_string(self.scenario_name, "scenario_name")
+        _nonempty_string(self.case_key, "case_key")
 
 
 @dataclass(frozen=True, slots=True)

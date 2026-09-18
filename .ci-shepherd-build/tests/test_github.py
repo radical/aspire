@@ -184,6 +184,100 @@ class GitHubClientTests(unittest.TestCase):
             request_observer=request_observer,
         )
 
+    def test_get_text_head_tail_streams_complete_response_with_bounded_memory(
+        self,
+    ) -> None:
+        body = (
+            "setup\n"
+            + ("x" * 200_000)
+            + "\nKeyError: 'output_dir'\n"
+            + ("cleanup\n" * 30_000)
+        )
+        process = FakeProcess(build_response(200, body).encode())
+        popen = FakePopenFactory([process])
+        client = self.make_client(FakeRunner([]), popen_factory=popen)
+
+        response = client.get_text_head_tail(
+            "/repos/owner/repo/actions/jobs/17/logs",
+            head_bytes=128,
+            tail_bytes=128,
+            selected_bytes=256,
+            line_selector=lambda line: "KeyError:" in line,
+        )
+
+        self.assertTrue(response.truncated)
+        self.assertTrue(
+            response.text.startswith(
+                "[... selected diagnostic lines retained ...]"
+            )
+        )
+        self.assertIn("setup", response.text)
+        self.assertIn("[... response head retained ...]", response.text)
+        self.assertIn("KeyError: 'output_dir'", response.text)
+        self.assertTrue(response.text.endswith("cleanup\n"))
+
+    def test_get_text_head_tail_bounds_single_line_and_reaps_process(self) -> None:
+        process = FakeProcess(
+            build_response(200, "x" * 2_000_000).encode()
+        )
+        client = self.make_client(
+            FakeRunner([]),
+            popen_factory=FakePopenFactory([process]),
+        )
+
+        with self.assertRaisesRegex(ValueError, "line longer than 1024"):
+            client.get_text_head_tail(
+                "/repos/owner/repo/actions/jobs/17/logs",
+                head_bytes=128,
+                selected_bytes=128,
+                tail_bytes=128,
+                line_selector=lambda line: "error" in line,
+                max_line_bytes=1024,
+            )
+
+        self.assertTrue(process.killed)
+        self.assertGreaterEqual(process.wait_calls, 1)
+
+    def test_get_text_head_tail_reaps_when_selector_fails(self) -> None:
+        process = FakeProcess(build_response(200, "line\n").encode())
+        client = self.make_client(
+            FakeRunner([]),
+            popen_factory=FakePopenFactory([process]),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "selector failed"):
+            client.get_text_head_tail(
+                "/repos/owner/repo/actions/jobs/17/logs",
+                head_bytes=128,
+                selected_bytes=128,
+                tail_bytes=128,
+                line_selector=lambda line: (_ for _ in ()).throw(
+                    RuntimeError("selector failed")
+                ),
+            )
+
+        self.assertTrue(process.killed)
+        self.assertGreaterEqual(process.wait_calls, 1)
+
+    def test_get_text_head_tail_selects_final_line_without_newline(self) -> None:
+        body = "setup\n" + ("noise\n" * 1_000) + "FINAL_DIAGNOSTIC"
+        process = FakeProcess(build_response(200, body).encode())
+        client = self.make_client(
+            FakeRunner([]),
+            popen_factory=FakePopenFactory([process]),
+        )
+
+        response = client.get_text_head_tail(
+            "/repos/owner/repo/actions/jobs/17/logs",
+            head_bytes=64,
+            selected_bytes=128,
+            tail_bytes=64,
+            line_selector=lambda line: "FINAL_DIAGNOSTIC" in line,
+        )
+
+        self.assertTrue(response.truncated)
+        self.assertIn("FINAL_DIAGNOSTIC", response.text)
+
     def test_get_notifies_observer_and_has_a_subprocess_timeout(self) -> None:
         runner = FakeRunner(
             [FakeCompletedProcess(0, build_response(200, {"ok": True}))]

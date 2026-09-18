@@ -84,6 +84,56 @@ class EndpointClient:
             headers={},
         )
 
+    def get_text_head_tail(
+        self,
+        endpoint: str,
+        *,
+        head_bytes: int,
+        tail_bytes: int,
+        selected_bytes: int = 0,
+        line_selector: Callable[[str], bool] | None = None,
+    ) -> GitHubTextResponse:
+        self._record(
+            "get_text_head_tail",
+            endpoint,
+            head_bytes + selected_bytes + tail_bytes,
+        )
+        value = self._resolve(endpoint)
+        if isinstance(value, GitHubTextResponse):
+            return value
+        if not isinstance(value, str):
+            raise AssertionError(
+                f"Unexpected text response for {endpoint}: {value!r}"
+            )
+        encoded = value.encode("utf-8")
+        truncated = len(encoded) > head_bytes + selected_bytes + tail_bytes
+        if truncated:
+            selected = b""
+            if line_selector is not None:
+                selected = b"".join(
+                    line.encode("utf-8")
+                    for line in value.splitlines(keepends=True)
+                    if line_selector(line)
+                )[-selected_bytes:]
+            overlap = max(0, head_bytes + tail_bytes - len(encoded))
+            tail = encoded[-tail_bytes + overlap:] if tail_bytes > overlap else b""
+            encoded = (
+                b"[... selected diagnostic lines retained ...]\n"
+                + selected
+                + b"\n[... response head retained ...]\n"
+                + encoded[:head_bytes]
+                + b"\n[... response tail retained ...]\n"
+                + tail
+            )
+        else:
+            encoded = value.encode("utf-8")
+        return GitHubTextResponse(
+            text=encoded.decode("utf-8", errors="replace"),
+            truncated=truncated,
+            status=200,
+            headers={},
+        )
+
     def set_response(self, endpoint: str, value: object) -> None:
         self._responses[endpoint] = value
         self._sequence_indexes.pop(endpoint, None)

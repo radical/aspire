@@ -120,9 +120,15 @@ class _Reader:
 
 
 class _Launcher:
-    def __init__(self, state_directory: Path, store: WorkflowLoopStore) -> None:
+    def __init__(
+        self,
+        state_directory: Path,
+        store: WorkflowLoopStore,
+        decision: JudgmentDecision = JudgmentDecision.ASSIGN,
+    ) -> None:
         self.state_directory = state_directory
         self.store = store
+        self.decision = decision
         self.request = None
         self.result_ready = False
         self.launches = 0
@@ -179,11 +185,19 @@ class _Launcher:
             item_id=self.request.item_id,
             episode=self.request.episode,
             evidence_fingerprint=self.request.evidence_fingerprint,
-            decision=JudgmentDecision.ASSIGN,
+            decision=self.decision,
             summary="The compiler job is in scope.",
             evidence_ids=self.request.evidence_ids,
-            in_scope_job_ids=(900,),
-            copilot_request="Fix the compiler failure.",
+            in_scope_job_ids=(
+                (900,)
+                if self.decision is JudgmentDecision.ASSIGN
+                else ()
+            ),
+            copilot_request=(
+                "Fix the compiler failure."
+                if self.decision is JudgmentDecision.ASSIGN
+                else None
+            ),
         )
         completion = WorkerCompletion(
             worker.worker_id,
@@ -355,6 +369,85 @@ class WorkflowLoopManagerTests(unittest.TestCase):
         self.assertIn("promptExcerpted=true", request.prompt)
         self.assertLessEqual(len(request.prompt), 20_000)
 
+    def test_transport_truncated_log_retains_late_failure_and_marks_incomplete(
+        self,
+    ) -> None:
+        full_log = (
+            "checkout setup\n"
+            + ("setup noise\n" * 20_000)
+            + "Traceback (most recent call last):\n"
+            + "  File \"resolve_config.py\", line 10, in <module>\n"
+            + "KeyError: 'output_dir'\n"
+            + "##[error]Process completed with exit code 1.\n"
+            + "Post job cleanup.\n"
+        )
+        observed_run = run(101)
+        client = EndpointClient({
+            **base_responses(observed_run),
+            f"/repos/{REPOSITORY}/actions/runs/101": observed_run,
+            (
+                f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
+            ): PagedResponse((job(101, 1001, "Build"),)),
+            f"/repos/{REPOSITORY}/actions/jobs/1001/logs": full_log,
+        })
+        reader = WorkflowReader(
+            client=client,
+            clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+        snapshot = reader.observe(
+            repository=REPOSITORY,
+            branch=BRANCH,
+            tracked_items=(),
+            workflow_ids=(WORKFLOW_ID,),
+        )
+        detail = reader.read_run_details(
+            snapshot.workflows[0].latest_completed
+        )
+        retained_job = detail.run.jobs[0]
+        self.assertFalse(detail.complete)
+        self.assertTrue(retained_job.log_truncated)
+        self.assertIn("KeyError: 'output_dir'", retained_job.log_excerpt)
+        self.assertEqual((retained_job.job_id,), detail.truncated_log_job_ids)
+
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(
+                Path(scratch) / "state",
+                repository=REPOSITORY,
+                branch=BRANCH,
+            )
+            store.initialize(workflow_ids=(WORKFLOW_ID,))
+            item = store.upsert_failure(
+                detail.run,
+                "2026-09-17T20:00:00Z",
+            )
+            request = _judgment_request(
+                item,
+                ItemRefresh(
+                    item.id,
+                    "2026-09-17T20:00:00Z",
+                    (detail.run,),
+                    detail.run,
+                    None,
+                    "failed",
+                    None,
+                    None,
+                    None,
+                    None,
+                    False,
+                    True,
+                    (),
+                    detail.request_count,
+                ),
+                worker_id="worker-large-log",
+                session_id="75ba481f-30db-4106-96d8-faf70aa899eb",
+                judgment_round=0,
+            )
+
+        self.assertIn("KeyError: 'output_dir'", request.prompt)
+        self.assertIn("logSourceTruncated=true", request.prompt)
+        self.assertLessEqual(len(request.prompt), 20_000)
+
     def test_read_failure_is_persisted_as_a_degraded_pass(self) -> None:
         class UnavailableReader:
             calls = 0
@@ -464,13 +557,18 @@ class WorkflowLoopManagerTests(unittest.TestCase):
 
             self.assertEqual(0, reader.observe_calls)
 
-    def test_all_failures_are_tracked_before_capacity_gates_detail_reads(self) -> None:
+    def test_priority_selects_rolling_then_tests_before_other_details(self) -> None:
         with TemporaryDirectory() as scratch:
             state_directory = Path(scratch) / "state"
+            paths = {
+                17: ".github/workflows/update-dependencies.yml",
+                18: ".github/workflows/tests-outerloop.yml",
+                19: ".github/workflows/ci.yml",
+            }
             workflows = tuple(
                 workflow(
                     workflow_id,
-                    path=f".github/workflows/{workflow_id}.yml",
+                    path=paths[workflow_id],
                     name=f"Workflow {workflow_id}",
                 )
                 for workflow_id in (17, 18, 19)
@@ -479,7 +577,7 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                 workflow_id: run(
                     100 + workflow_id,
                     workflow_id=workflow_id,
-                    path=f".github/workflows/{workflow_id}.yml",
+                    path=paths[workflow_id],
                     name=f"Workflow {workflow_id}",
                 )
                 for workflow_id in (17, 18, 19)
@@ -497,7 +595,7 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                     "total_count": 1,
                     "workflow_runs": [observed_run],
                 }
-            for workflow_id in (17, 18):
+            for workflow_id in (19, 18):
                 observed_run = runs[workflow_id]
                 responses[
                     f"/repos/{REPOSITORY}/actions/runs/{observed_run['id']}"
@@ -542,11 +640,19 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             self.assertEqual(3, result.discovered_items)
             self.assertEqual(3, len(store.list_items()))
             self.assertEqual(2, len(store.list_workers()))
+            items = {item.id: item for item in store.list_items()}
+            self.assertEqual(
+                [paths[19], paths[18]],
+                [
+                    items[worker.item_id].workflow_path
+                    for worker in store.list_workers()
+                ],
+            )
             self.assertEqual(
                 (0, 0),
                 tuple(worker.judgment_round for worker in store.list_workers()),
             )
-            deferred_run_id = runs[19]["id"]
+            deferred_run_id = runs[17]["id"]
             self.assertFalse(any(
                 endpoint
                 == f"/repos/{REPOSITORY}/actions/runs/{deferred_run_id}"
@@ -595,7 +701,9 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                 launcher=launcher,
                 writer=None,
                 clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
-                id_factory=iter(("pass-1", "pass-2", "worker-1")).__next__,
+                id_factory=iter(
+                    ("pass-1", "unused-worker", "pass-2", "worker-1")
+                ).__next__,
                 workflow_ids=(WORKFLOW_ID,),
                 request_count=lambda: client.request_count,
             )
@@ -614,12 +722,18 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             self.assertEqual(1, len(store.list_workers()))
             self.assertFalse(second.errors)
 
-    def test_real_components_complete_initial_assignment_in_two_passes(self) -> None:
+    def test_real_components_assign_in_two_passes_while_newer_run_is_running(self) -> None:
         with TemporaryDirectory() as scratch:
             root = Path(scratch)
             state_directory = root / "state"
             actor = _NetworkActor()
             observed_run = run(101)
+            pending_run = run(
+                102,
+                status="in_progress",
+                conclusion=None,
+                created_at="2026-09-17T18:02:00Z",
+            )
             jobs_endpoint = (
                 f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
             )
@@ -651,6 +765,10 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             client = EndpointClient(
                 {
                     **base_responses(observed_run),
+                    run_endpoint(): {
+                        "total_count": 2,
+                        "workflow_runs": [pending_run, observed_run],
+                    },
                     f"/repos/{REPOSITORY}/actions/runs/101": observed_run,
                     jobs_endpoint: PagedResponse(
                         (job(101, 1001, "Build"),)
@@ -805,6 +923,8 @@ print(json.dumps({{
                 current = store.list_items()[0]
                 self.assertEqual(actor.issue_number, current.issue_number)
                 self.assertEqual(actor.task_id, current.task_id)
+                self.assertIsNone(current.wait_run_id)
+                self.assertEqual("in_progress", pending_run["status"])
                 first_assignment_at = current.assignment_confirmed_at
 
                 third = manager.run_pass(mode=EffectMode.LIVE)
@@ -1614,6 +1734,252 @@ print(json.dumps({{
             self.assertEqual(0, third.confirmed_assignments)
             self.assertEqual(1, len(writer.calls))
             self.assertEqual(1, launcher.launches)
+
+    def test_non_action_result_is_stable_across_metadata_only_passes(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state_directory = Path(scratch) / "state"
+            store = WorkflowLoopStore(
+                state_directory,
+                repository="owner/repo",
+                branch="main",
+            )
+            store.initialize()
+            seed_paths = WorkerPacketPaths.create(state_directory, "seed")
+            failure = _request(seed_paths).failure_run
+            item = store.upsert_failure(failure, NOW)
+            reader = _Reader(
+                ItemRefresh(
+                    item_id=item.id,
+                    observed_at=NOW,
+                    runs=(failure,),
+                    failure_run=failure,
+                    wait_run=None,
+                    recovery="failed",
+                    recovery_run=None,
+                    issue=None,
+                    task=None,
+                    pull_request=None,
+                    pre_write=False,
+                    complete=True,
+                    errors=(),
+                    request_count=1,
+                )
+            )
+            launcher = _Launcher(
+                state_directory,
+                store,
+                JudgmentDecision.NEEDS_ATTENTION,
+            )
+            ids = itertools.count(1)
+            manager = WorkflowLoopManager(
+                state_directory=state_directory,
+                repository="owner/repo",
+                branch="main",
+                store=store,
+                reader=reader,
+                launcher=launcher,
+                writer=None,
+                clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+                id_factory=lambda: f"id-{next(ids)}",
+            )
+
+            manager.run_pass(mode=EffectMode.LOCAL_JUDGMENT)
+            launcher.result_ready = True
+            second = manager.run_pass(mode=EffectMode.LOCAL_JUDGMENT)
+            third = manager.run_pass(mode=EffectMode.LOCAL_JUDGMENT)
+
+            current = store.list_items()[0]
+            self.assertIs(ItemPhase.NEEDS_ATTENTION, current.phase)
+            self.assertEqual(
+                current.evidence_fingerprint,
+                current.last_judged_fingerprint,
+            )
+            self.assertEqual(1, len(store.list_workers()))
+            self.assertEqual(1, launcher.launches)
+            self.assertEqual(0, second.launched_workers)
+            self.assertEqual(0, third.launched_workers)
+
+    def test_local_would_do_survives_until_one_later_live_effect(self) -> None:
+        with TemporaryDirectory() as scratch:
+            state_directory = Path(scratch) / "state"
+            store = WorkflowLoopStore(
+                state_directory,
+                repository="owner/repo",
+                branch="main",
+            )
+            store.initialize()
+            failure = _request(
+                WorkerPacketPaths.create(state_directory, "seed")
+            ).failure_run
+            item = store.upsert_failure(failure, NOW)
+            reader = _Reader(
+                ItemRefresh(
+                    item.id,
+                    NOW,
+                    (failure,),
+                    failure,
+                    None,
+                    "failed",
+                    None,
+                    None,
+                    None,
+                    None,
+                    False,
+                    True,
+                    (),
+                    1,
+                )
+            )
+            root = Path(scratch)
+            bin_directory = root / "bin"
+            bin_directory.mkdir()
+            marker = root / "model-invocations.txt"
+            fake_copilot = bin_directory / "copilot"
+            fake_copilot.write_text(
+                f"""#!{sys.executable}
+import json
+from pathlib import Path
+import sys
+
+request = json.loads(Path("request.json").read_text(encoding="utf-8"))
+with Path({str(marker)!r}).open("a", encoding="utf-8") as stream:
+    stream.write("invoked\\n")
+usage = Path(sys.argv[sys.argv.index("--usage-output-file") + 1])
+usage.write_text('{{"requests":1}}', encoding="utf-8")
+judgment = json.dumps({{
+    "schemaVersion": 1,
+    "itemId": request["itemId"],
+    "episode": request["episode"],
+    "evidenceFingerprint": request["evidenceFingerprint"],
+    "decision": "assign",
+    "summary": "The compiler failure is in scope.",
+    "evidenceIds": request["evidenceIds"],
+    "inScopeJobIds": [request["failedJobs"][0]["jobId"]],
+    "copilotRequest": "Fix the compiler failure."
+}}, separators=(",", ":"))
+print(json.dumps({{
+    "type": "assistant.message",
+    "data": {{"phase": "final_answer", "content": judgment}}
+}}, separators=(",", ":")))
+""",
+                encoding="utf-8",
+            )
+            fake_copilot.chmod(0o700)
+            processes = []
+
+            def process_factory(argv, **kwargs):
+                process = __import__("subprocess").Popen(argv, **kwargs)
+                processes.append(process)
+                return process
+
+            launcher = JudgmentWorkerLauncher(
+                state_directory,
+                store=store,
+                clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+                model="trusted-model",
+                reasoning_effort="high",
+                process_factory=process_factory,
+            )
+            writer = _Writer()
+            ids = itertools.count(1)
+            manager = WorkflowLoopManager(
+                state_directory=state_directory,
+                repository="owner/repo",
+                branch="main",
+                store=store,
+                reader=reader,
+                launcher=launcher,
+                writer=writer,
+                clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+                id_factory=lambda: f"id-{next(ids)}",
+            )
+
+            environment_path = os.pathsep.join(
+                (str(bin_directory), os.environ.get("PATH", ""))
+            )
+            with patch.dict(os.environ, {"PATH": environment_path}):
+                manager.run_pass(mode=EffectMode.LOCAL_JUDGMENT)
+                worker = store.list_workers()[0]
+                deadline = time.monotonic() + 10
+                while True:
+                    if (
+                        Path(worker.result_path).exists()
+                        and not is_lifetime_active(
+                            Path(worker.lifetime_lock_path)
+                        )
+                    ):
+                        break
+                    if time.monotonic() >= deadline:
+                        self.fail("Timed out waiting for judgment worker.")
+                    time.sleep(0.01)
+                proposed = manager.run_pass(
+                    mode=EffectMode.LOCAL_JUDGMENT
+                )
+
+                store = WorkflowLoopStore(
+                    state_directory,
+                    repository="owner/repo",
+                    branch="main",
+                )
+                store.initialize()
+                launcher = JudgmentWorkerLauncher(
+                    state_directory,
+                    store=store,
+                    clock=lambda: datetime(
+                        2026,
+                        9,
+                        17,
+                        20,
+                        0,
+                        tzinfo=UTC,
+                    ),
+                    model="trusted-model",
+                    reasoning_effort="high",
+                    process_factory=process_factory,
+                )
+                manager = WorkflowLoopManager(
+                    state_directory=state_directory,
+                    repository="owner/repo",
+                    branch="main",
+                    store=store,
+                    reader=reader,
+                    launcher=launcher,
+                    writer=writer,
+                    clock=lambda: datetime(
+                        2026,
+                        9,
+                        17,
+                        20,
+                        0,
+                        tzinfo=UTC,
+                    ),
+                    id_factory=lambda: f"id-{next(ids)}",
+                )
+                repeated = manager.run_pass(
+                    mode=EffectMode.LOCAL_JUDGMENT
+                )
+                applied = manager.run_pass(mode=EffectMode.LIVE)
+
+            self.assertEqual(
+                ("workflow-failure:1:create_issue",),
+                proposed.would_do,
+            )
+            self.assertEqual(
+                ("workflow-failure:1:create_issue",),
+                repeated.would_do,
+            )
+            self.assertEqual(1, len([
+                entry
+                for entry in store.recent_history(item.id)
+                if entry.event == "would-do"
+            ]))
+            self.assertEqual(1, len(store.list_workers()))
+            self.assertEqual(1, len(marker.read_text().splitlines()))
+            self.assertEqual(1, len(writer.calls))
+            self.assertEqual(1, applied.confirmed_assignments)
+            self.assertIsNotNone(store.list_workers()[0].consumed_at)
+            for process in processes:
+                process.wait(timeout=5)
 
     def test_unexpected_error_records_failed_pass_and_propagates(self) -> None:
         class FailingReader:

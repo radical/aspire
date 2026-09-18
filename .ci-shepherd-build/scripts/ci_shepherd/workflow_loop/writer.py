@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 import json
 from typing import Any, Literal, Protocol
 
+from .effects import EffectResult, GitHubEffectExecutor
 from .models import (
-    ActionCompletion,
     ActionIntent,
     ActionKind,
     ActionState,
@@ -20,6 +20,7 @@ from .models import (
     judgment_request_to_json,
 )
 from .reader import IssueSearchResult, ItemRefresh
+from .scenarios.workflow_failure import validate_fresh_failure
 from .state import WorkflowLoopStore
 
 
@@ -104,6 +105,11 @@ class WorkflowWriter:
         self._clock = clock
         self._active_item_limit = active_item_limit
         self._cloud_model = cloud_model
+        self._effects = GitHubEffectExecutor(
+            store=store,
+            clock=self._now,
+            active_item_limit=active_item_limit,
+        )
 
     def execute(
         self,
@@ -392,24 +398,6 @@ class WorkflowWriter:
             "result": self._result_document(result),
             "write": dict(write),
         }
-        existing = self._action(request, kind, ordinal)
-        if existing is not None:
-            if dict(existing.payload) != payload:
-                return WorkflowWriteResult(
-                    "stale",
-                    "Prepared action payload does not match the current request.",
-                    (existing.action_id,),
-                )
-            if existing.state is ActionState.CONFIRMED:
-                value = (
-                    existing.remote_number
-                    if kind is ActionKind.CREATE_ISSUE
-                    else existing.remote_task_id
-                )
-                return existing, value
-            if existing.state is not ActionState.PREPARED:
-                return self._existing_action_result(existing)
-
         intent = ActionIntent(
             action_id=action_id,
             item_id=request.item_id,
@@ -419,124 +407,59 @@ class WorkflowWriter:
             payload=payload,
             prepared_at=self._now(),
         )
-        if existing is None:
-            if not self._store.prepare_action(
-                intent,
-                capacity_limit=self._active_item_limit,
-            ):
-                return WorkflowWriteResult(
-                    "capacity_wait",
-                    "Active-item capacity is unavailable.",
-                )
 
-        item = self._item(request.item_id)
-        fresh = self._fresh(
-            request,
-            item,
-            action=kind,
-            allowed_created_issue=allowed_created_issue,
-        )
-        if isinstance(fresh, WorkflowWriteResult):
-            if fresh.status in {"stale", "superseded"}:
-                self._store.complete_action(
-                    ActionCompletion(
-                        action_id=action_id,
-                        state=ActionState.SUPERSEDED,
-                        completed_at=self._now(),
-                        remote_number=None,
-                        remote_task_id=None,
-                        error=fresh.reason,
-                    )
-                )
-            return replace(fresh, action_ids=(action_id,))
-        target_result: WorkflowWriteResult | None = None
-        if kind is ActionKind.ASSIGN_COPILOT:
-            issue_number = write.get("issue_number")
-            if isinstance(issue_number, int):
-                target_result = self._initial_target_result(
-                    fresh,
-                    issue_number,
-                )
-        elif kind is ActionKind.FOLLOW_UP:
-            target_result = self._follow_up_target_result(
+        def guard() -> EffectResult | None:
+            item = self._item(request.item_id)
+            fresh = self._fresh(
                 request,
                 item,
-                fresh,
+                action=kind,
+                allowed_created_issue=allowed_created_issue,
             )
-        if target_result is not None:
-            if target_result.status in {"stale", "superseded"}:
-                self._store.complete_action(
-                    ActionCompletion(
-                        action_id=action_id,
-                        state=ActionState.SUPERSEDED,
-                        completed_at=self._now(),
-                        remote_number=None,
-                        remote_task_id=None,
-                        error=target_result.reason,
+            if isinstance(fresh, WorkflowWriteResult):
+                return EffectResult(fresh.status, fresh.reason)
+            target_result: WorkflowWriteResult | None = None
+            if kind is ActionKind.ASSIGN_COPILOT:
+                issue_number = write.get("issue_number")
+                if isinstance(issue_number, int):
+                    target_result = self._initial_target_result(
+                        fresh,
+                        issue_number,
                     )
+            elif kind is ActionKind.FOLLOW_UP:
+                target_result = self._follow_up_target_result(
+                    request,
+                    item,
+                    fresh,
                 )
-            return replace(target_result, action_ids=(action_id,))
-        if pre_invoke is not None:
-            guarded = pre_invoke()
-            if guarded is not None:
-                if guarded.status in {"stale", "superseded"}:
-                    self._store.complete_action(
-                        ActionCompletion(
-                            action_id=action_id,
-                            state=ActionState.SUPERSEDED,
-                            completed_at=self._now(),
-                            remote_number=None,
-                            remote_task_id=None,
-                            error=guarded.reason,
-                        )
-                    )
-                return replace(guarded, action_ids=(action_id,))
+            if target_result is not None:
+                return EffectResult(
+                    target_result.status,
+                    target_result.reason,
+                )
+            if pre_invoke is not None:
+                guarded = pre_invoke()
+                if guarded is not None:
+                    return EffectResult(guarded.status, guarded.reason)
+            return None
 
-        if not self._store.begin_action_invocation(
-            action_id,
+        outcome = self._effects.execute(
+            intent,
             pass_id=pass_id,
             owner_id=owner_id,
-            invoked_at=self._now(),
-        ):
-            action = self._action(request, kind, ordinal)
-            assert action is not None
-            return self._existing_action_result(action)
-        try:
-            value = validate(call())
-        except Exception as error:
-            message = f"{type(error).__name__}: {error}"
-            self._store.complete_action(
-                ActionCompletion(
-                    action_id=action_id,
-                    state=ActionState.UNCERTAIN,
-                    completed_at=self._now(),
-                    remote_number=None,
-                    remote_task_id=None,
-                    error=message,
-                )
-            )
-            return WorkflowWriteResult(
-                "uncertain",
-                message,
-                (action_id,),
-            )
-
-        completion = ActionCompletion(
-            action_id=action_id,
-            state=ActionState.CONFIRMED,
-            completed_at=self._now(),
-            remote_number=(
-                value if kind is ActionKind.CREATE_ISSUE else None
-            ),
-            remote_task_id=(
-                value if kind is not ActionKind.CREATE_ISSUE else None
-            ),
-            error=None,
+            guard=guard,
+            call=call,
+            validate=validate,
         )
-        self._store.complete_action(completion)
+        if outcome.status != "confirmed":
+            return WorkflowWriteResult(
+                outcome.status,
+                outcome.reason,
+                (() if outcome.action_id is None else (outcome.action_id,)),
+            )
         action = self._action(request, kind, ordinal)
         assert action is not None
-        return action, value
+        return action, outcome.value
 
     def _fresh(
         self,
@@ -553,22 +476,18 @@ class WorkflowWriter:
         )
         if stale is not None:
             return stale
-        refreshed = self._reader.refresh_item(item, action=action)
-        if not refreshed.pre_write or not refreshed.complete or refreshed.errors:
+        validated = validate_fresh_failure(
+            self._reader,
+            request,
+            item,
+            action=action,
+        )
+        if validated.refresh is None:
             return WorkflowWriteResult(
-                "unavailable",
-                "Fresh pre-write workflow evidence is unavailable or incomplete.",
+                validated.status,
+                validated.reason,
             )
-        if refreshed.recovery == "passed":
-            return WorkflowWriteResult(
-                "superseded",
-                "A positive recovery superseded the requested write.",
-            )
-        if refreshed.recovery != "failed":
-            return WorkflowWriteResult(
-                "unavailable",
-                f"Fresh recovery state is {refreshed.recovery}.",
-            )
+        refreshed = validated.refresh
         current = self._item(item.id)
         stale = self._validate_item(
             request,
@@ -577,34 +496,6 @@ class WorkflowWriter:
         )
         if stale is not None:
             return stale
-        failure = refreshed.failure_run
-        if failure is None or not failure.jobs_complete:
-            return WorkflowWriteResult(
-                "unavailable",
-                "Fresh failure evidence is incomplete.",
-            )
-        if (
-            failure.key != request.failure_run.key
-            or failure.workflow_path != request.failure_run.workflow_path
-            or failure.run_id != request.failure_run.run_id
-            or failure.attempt != request.failure_run.attempt
-            or failure.head_sha != request.failure_run.head_sha
-        ):
-            return WorkflowWriteResult(
-                "stale",
-                "Fresh failure run no longer matches the judged request.",
-            )
-        fresh_jobs = {job.job_id: job for job in failure.jobs}
-        if any(
-            fresh_jobs.get(job.job_id) is None
-            or self._job_identity(fresh_jobs[job.job_id])
-            != self._job_identity(job)
-            for job in request.failed_jobs
-        ):
-            return WorkflowWriteResult(
-                "stale",
-                "Fresh failed jobs no longer match the judged request.",
-            )
         return refreshed
 
     def _issue_creation_guard(
@@ -833,20 +724,6 @@ class WorkflowWriter:
                 f"Pull request checks are {pull.checks_state}.",
             )
         return None
-
-    @staticmethod
-    def _job_identity(job: JobObservation) -> tuple[object, ...]:
-        return (
-            job.run_id,
-            job.attempt,
-            job.job_id,
-            job.key,
-            job.status,
-            job.conclusion,
-            job.started_at,
-            job.completed_at,
-            job.url,
-        )
 
     def _bind_issue(self, item: WorkflowItem, issue_number: int) -> None:
         if item.issue_number == issue_number:

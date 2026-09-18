@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -257,6 +258,221 @@ class GitHubClient:
                 raise error
             self._sleep(delay)
 
+        raise AssertionError("Unreachable")
+
+    def get_text_head_tail(
+        self,
+        endpoint: str,
+        *,
+        head_bytes: int,
+        tail_bytes: int,
+        selected_bytes: int = 0,
+        line_selector: Callable[[str], bool] | None = None,
+        max_line_bytes: int = 262_144,
+    ) -> GitHubTextResponse:
+        """Read a complete text response while retaining bounded head and tail."""
+        if head_bytes < 1 or tail_bytes < 1:
+            raise ValueError("head_bytes and tail_bytes must be positive.")
+        if selected_bytes < 0:
+            raise ValueError("selected_bytes must be nonnegative.")
+        if max_line_bytes < 1:
+            raise ValueError("max_line_bytes must be positive.")
+        if (line_selector is None) != (selected_bytes == 0):
+            raise ValueError(
+                "line_selector and positive selected_bytes must be supplied together."
+            )
+        for attempt in range(1, self._max_attempts + 1):
+            self._notify_request(endpoint)
+            command = self._build_command(endpoint)
+            with tempfile.TemporaryFile() as stderr_file:
+                process = self._popen_factory(
+                    command,
+                    env=self._build_env(),
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                )
+                captured: list[tuple[bytes, bytes, bytes, bytes, int]] = []
+                capture_error: list[Exception] = []
+
+                def read_stdout() -> None:
+                    try:
+                        head = bytearray()
+                        tail: deque[bytes] = deque()
+                        tail_size = 0
+                        selected: deque[bytes] = deque()
+                        selected_size = 0
+                        whole = bytearray()
+                        whole_limit = (
+                            head_bytes
+                            + selected_bytes
+                            + tail_bytes
+                            + 16_384
+                            + 1
+                        )
+                        line_buffer = bytearray()
+                        total = 0
+
+                        def retain_line(line: bytes) -> None:
+                            nonlocal selected_size
+                            assert line_selector is not None
+                            matched = line_selector(
+                                line.decode("utf-8", errors="replace")
+                            )
+                            if not matched:
+                                return
+                            block = line[-selected_bytes:]
+                            selected.append(block)
+                            selected_size += len(block)
+                            while (
+                                selected
+                                and selected_size > selected_bytes
+                            ):
+                                selected_size -= len(selected.popleft())
+
+                        while chunk := process.stdout.read(64 * 1024):
+                            total += len(chunk)
+                            if len(whole) < whole_limit:
+                                whole.extend(
+                                    chunk[:whole_limit - len(whole)]
+                                )
+                            if len(head) < head_bytes:
+                                take = min(head_bytes - len(head), len(chunk))
+                                head.extend(chunk[:take])
+                            tail.append(chunk)
+                            tail_size += len(chunk)
+                            while tail and tail_size - len(tail[0]) >= tail_bytes:
+                                tail_size -= len(tail.popleft())
+                            if line_selector is not None:
+                                line_buffer.extend(chunk)
+                                if (
+                                    b"\n" not in line_buffer
+                                    and len(line_buffer) > max_line_bytes
+                                ):
+                                    raise ValueError(
+                                        "GitHub text response contains a line "
+                                        f"longer than {max_line_bytes} bytes."
+                                    )
+                                while b"\n" in line_buffer:
+                                    raw_line, _, remainder = line_buffer.partition(b"\n")
+                                    line_buffer = bytearray(remainder)
+                                    retain_line(raw_line + b"\n")
+                                if len(line_buffer) > max_line_bytes:
+                                    raise ValueError(
+                                        "GitHub text response contains a line "
+                                        f"longer than {max_line_bytes} bytes."
+                                    )
+                        if line_selector is not None and line_buffer:
+                            retain_line(bytes(line_buffer))
+                        raw_tail = b"".join(tail)
+                        if len(raw_tail) > tail_bytes:
+                            raw_tail = raw_tail[-tail_bytes:]
+                        captured.append(
+                            (
+                                bytes(head),
+                                b"".join(reversed(selected)),
+                                raw_tail,
+                                bytes(whole),
+                                total,
+                            )
+                        )
+                    except Exception as exc:
+                        capture_error.append(exc)
+
+                reader = threading.Thread(target=read_stdout, daemon=True)
+                reader.start()
+                reader.join(self._request_timeout_seconds)
+                if reader.is_alive():
+                    process.kill()
+                    reader.join(self._request_timeout_seconds)
+                    try:
+                        process.wait(timeout=self._request_timeout_seconds)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    raise self._timeout_error(endpoint, attempt)
+                if capture_error:
+                    process.kill()
+                    process.wait(timeout=self._request_timeout_seconds)
+                    raise capture_error[0]
+                try:
+                    returncode = process.wait(
+                        timeout=self._request_timeout_seconds
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    process.kill()
+                    process.wait(timeout=self._request_timeout_seconds)
+                    raise self._timeout_error(endpoint, attempt) from exc
+                stderr_file.seek(0)
+                raw_stderr = stderr_file.read()
+
+            raw_head, raw_selected, raw_tail, raw_whole, total = captured[0]
+            parsed = _parse_response(
+                raw_head.decode("utf-8", errors="replace")
+            )
+            sanitized_stderr = _sanitize_stderr(
+                raw_stderr.decode("utf-8", errors="replace")
+            )
+            self._append_audit(endpoint, parsed.status)
+            if 200 <= parsed.status < 300 and returncode == 0:
+                header_bytes = len(raw_head) - len(
+                    parsed.body.encode("utf-8", errors="replace")
+                )
+                body_total = max(0, total - header_bytes)
+                body_budget = head_bytes + selected_bytes + tail_bytes
+                if body_total <= body_budget and len(raw_whole) == total:
+                    complete = _parse_response(
+                        raw_whole.decode("utf-8", errors="replace")
+                    )
+                    return GitHubTextResponse(
+                        text=complete.body,
+                        truncated=False,
+                        status=complete.status,
+                        headers=complete.headers,
+                    )
+                retained_head_bytes = len(
+                    parsed.body.encode("utf-8", errors="replace")
+                )
+                overlap = max(
+                    0,
+                    retained_head_bytes + len(raw_tail) - body_total,
+                )
+                if overlap:
+                    raw_tail = raw_tail[overlap:]
+                truncated = (
+                    body_total > retained_head_bytes + len(raw_tail)
+                )
+                if not truncated:
+                    body = (
+                        parsed.body
+                        + raw_tail.decode("utf-8", errors="replace")
+                    )
+                else:
+                    body = (
+                        "[... selected diagnostic lines retained ...]\n"
+                        + raw_selected.decode("utf-8", errors="replace")
+                        + "\n[... response head retained ...]\n"
+                        + parsed.body
+                        + "\n[... response tail retained ...]\n"
+                        + raw_tail.decode("utf-8", errors="replace")
+                    )
+                return GitHubTextResponse(
+                    text=body,
+                    truncated=truncated,
+                    status=parsed.status,
+                    headers=parsed.headers,
+                )
+
+            error = self._classify_error(
+                endpoint=endpoint,
+                status=parsed.status,
+                headers=parsed.headers,
+                body=parsed.body,
+                attempts=attempt,
+                sanitized_stderr=sanitized_stderr,
+            )
+            delay = self._retry_delay(error)
+            if delay is None or attempt >= self._max_attempts:
+                raise error
+            self._sleep(delay)
         raise AssertionError("Unreachable")
 
     def get_bytes(self, endpoint: str, max_bytes: int) -> bytes:

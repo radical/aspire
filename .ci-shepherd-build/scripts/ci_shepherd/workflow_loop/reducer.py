@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
-from enum import StrEnum
+from dataclasses import fields, replace
 
 from .models import (
     ActionKind,
@@ -17,6 +16,7 @@ from .models import (
     WorkState,
 )
 from .reader import ItemRefresh, PullRequestObservation
+from .scenario import ConfirmedIssueCreation, ItemTransition, NextStep
 
 
 _PR_EVENTS = frozenset({"pull_request", "pull_request_target", "merge_group"})
@@ -30,80 +30,6 @@ _TERMINAL_TASK_STATES = frozenset(
         TaskState.CANCELLED,
     }
 )
-
-
-class NextStep(StrEnum):
-    WAIT_FOR_CHANGE = "wait_for_change"
-    WAIT_FOR_READ = "wait_for_read"
-    WAIT_FOR_RUN = "wait_for_run"
-    WAIT_FOR_OWNED_WORK = "wait_for_owned_work"
-    WAIT_FOR_PR = "wait_for_pr"
-    WAIT_FOR_CI = "wait_for_ci"
-    WAIT_FOR_HUMAN = "wait_for_human"
-    WAIT_FOR_CAPACITY = "wait_for_capacity"
-    QUEUE_JUDGMENT = "queue_judgment"
-    PREPARE_ACTION = "prepare_action"
-    OBSERVE_EXTERNAL = "observe_external"
-    NEEDS_ATTENTION = "needs_attention"
-
-
-@dataclass(frozen=True, slots=True)
-class ConfirmedIssueCreation:
-    worker_id: str
-    item_id: int
-    episode: int
-    evidence_fingerprint: str
-    issue_number: int
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.worker_id, str) or not self.worker_id:
-            raise ValueError("worker_id must be a nonempty string.")
-        for name, value in (
-            ("item_id", self.item_id),
-            ("episode", self.episode),
-            ("issue_number", self.issue_number),
-        ):
-            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-                raise ValueError(f"{name} must be a positive integer.")
-        if (
-            not isinstance(self.evidence_fingerprint, str)
-            or not self.evidence_fingerprint
-        ):
-            raise ValueError("evidence_fingerprint must be nonempty.")
-
-
-@dataclass(frozen=True, slots=True)
-class ItemTransition:
-    item: WorkflowItem
-    next_step: NextStep
-    history_event: str
-    summary: str
-    action_kind: ActionKind | None = None
-    judgment_round: int | None = None
-    retain_judgment: bool = False
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.item, WorkflowItem):
-            raise ValueError("item must be a WorkflowItem.")
-        if not isinstance(self.next_step, NextStep):
-            raise ValueError("next_step must be a NextStep.")
-        if not isinstance(self.history_event, str) or not self.history_event:
-            raise ValueError("history_event must be nonempty.")
-        if not isinstance(self.summary, str) or not self.summary:
-            raise ValueError("summary must be nonempty.")
-        if self.action_kind is not None and not isinstance(
-            self.action_kind,
-            ActionKind,
-        ):
-            raise ValueError("action_kind must be an ActionKind or null.")
-        if self.judgment_round is not None and (
-            not isinstance(self.judgment_round, int)
-            or isinstance(self.judgment_round, bool)
-            or self.judgment_round < 0
-        ):
-            raise ValueError("judgment_round must be nonnegative or null.")
-        if not isinstance(self.retain_judgment, bool):
-            raise ValueError("retain_judgment must be a boolean.")
 
 
 def reduce_item(
@@ -153,6 +79,18 @@ def reduce_item(
         ),
         refresh,
     )
+    if observed.wait_run_id is not None or observed.phase is ItemPhase.WAITING_FOR_RUN:
+        # Retire persisted waits from the previous policy without a state migration.
+        observed = replace(
+            observed,
+            wait_run_id=None,
+            phase=(
+                ItemPhase.OBSERVING_FAILURE
+                if observed.phase is ItemPhase.WAITING_FOR_RUN
+                else observed.phase
+            ),
+            wait_reason=None,
+        )
 
     recovery_run = _proven_recovery(item, refresh)
     if recovery_run is not None:
@@ -357,10 +295,6 @@ def reduce_item(
             "Required fresh observations are unavailable; known facts were retained.",
         )
 
-    wait_transition = _reduce_wait_run(item, observed, refresh, now)
-    if wait_transition is not None:
-        return wait_transition
-
     if item.phase in {
         ItemPhase.JUDGMENT_QUEUED,
         ItemPhase.JUDGMENT_RUNNING,
@@ -383,25 +317,6 @@ def reduce_item(
             NextStep.WAIT_FOR_CHANGE,
             "evidence-unchanged",
             "Semantic failure evidence is unchanged; no new judgment was queued.",
-        )
-
-    if (
-        refresh.recovery == "pending"
-        and any(
-            run.event not in _PR_EVENTS
-            and run.status != "completed"
-            and _is_newer_execution(run, refresh.failure_run)
-            for run in refresh.runs
-            if refresh.failure_run is not None
-        )
-    ):
-        return _finish(
-            item,
-            observed,
-            now,
-            NextStep.WAIT_FOR_CHANGE,
-            "newer-run-incomplete",
-            "A newer run is incomplete, but recovery cannot be inferred yet.",
         )
 
     queued = replace(
@@ -647,95 +562,6 @@ def _reduce_pull_request(
     )
 
 
-def _reduce_wait_run(
-    original: WorkflowItem,
-    observed: WorkflowItem,
-    refresh: ItemRefresh,
-    now: str,
-) -> ItemTransition | None:
-    if (
-        original.wait_run_id is not None
-        and original.phase is not ItemPhase.WAITING_FOR_RUN
-    ):
-        return None
-    if original.phase is ItemPhase.WAITING_FOR_RUN:
-        wait = refresh.wait_run
-        if wait is None or wait.status != "completed":
-            return _finish(
-                original,
-                observed,
-                now,
-                NextStep.WAIT_FOR_RUN,
-                "wait-run-pending",
-                "The specifically bound newer workflow run is still pending.",
-            )
-        consumed = replace(
-            observed,
-            phase=ItemPhase.OBSERVING_FAILURE,
-            wait_reason="consumed",
-        )
-        return _queue_initial_judgment(original, consumed, now)
-
-    failure = refresh.failure_run
-    if failure is None:
-        return None
-    candidates = sorted(
-        (
-            run
-            for run in refresh.runs
-            if run.event not in _PR_EVENTS and _is_newer_execution(run, failure)
-        ),
-        key=_execution_key,
-    )
-    if not candidates:
-        return None
-    bound = candidates[0]
-    updated = replace(
-        observed,
-        wait_run_id=bound.run_id,
-        wait_reason="newer-run",
-    )
-    if bound.status != "completed":
-        return _finish(
-            original,
-            replace(updated, phase=ItemPhase.WAITING_FOR_RUN),
-            now,
-            NextStep.WAIT_FOR_RUN,
-            "wait-run-bound",
-            "Bound the first specific newer main-workflow run.",
-        )
-    return _queue_initial_judgment(
-        original,
-        replace(updated, wait_reason="consumed"),
-        now,
-    )
-
-
-def _queue_initial_judgment(
-    original: WorkflowItem,
-    item: WorkflowItem,
-    now: str,
-) -> ItemTransition:
-    if original.last_judged_fingerprint == original.evidence_fingerprint:
-        return _finish(
-            original,
-            item,
-            now,
-            NextStep.WAIT_FOR_CHANGE,
-            "wait-run-consumed",
-            "The fixed wait run was consumed and evidence remains unchanged.",
-        )
-    return _finish(
-        original,
-        replace(item, phase=ItemPhase.JUDGMENT_QUEUED),
-        now,
-        NextStep.QUEUE_JUDGMENT,
-        "wait-run-consumed",
-        "The fixed wait run failed; queued initial judgment without rebinding.",
-        judgment_round=0,
-    )
-
-
 def _apply_judgment(
     original: WorkflowItem,
     item: WorkflowItem,
@@ -949,6 +775,10 @@ def _judgment_stale_reason(
         return "Judgment follow-up count is stale."
     if request.round == 0:
         failure = refresh.failure_run
+        write_grade = judgment.decision in {
+            JudgmentDecision.ASSIGN,
+            JudgmentDecision.FOLLOW_UP,
+        }
         if (
             request.repository != item.repository
             or request.branch != item.branch
@@ -957,9 +787,15 @@ def _judgment_stale_reason(
             or failure is None
             or failure.run_id != item.failure_run_id
             or failure.attempt != item.failure_attempt
-            or not _same_run_identity(request.failure_run, failure)
-            or not _same_job_inventory(request.failure_run, failure)
-            or not _request_jobs_are_fresh(request, failure)
+            or not _same_run_metadata(request.failure_run, failure)
+            or (
+                write_grade
+                and (
+                    not _same_run_identity(request.failure_run, failure)
+                    or not _same_job_inventory(request.failure_run, failure)
+                    or not _request_jobs_are_fresh(request, failure)
+                )
+            )
         ):
             return "Initial judgment request does not match the fresh failure identity."
         if any(
@@ -1033,6 +869,23 @@ def _same_run_identity(
         and request_run.status == fresh_run.status
         and request_run.conclusion == fresh_run.conclusion
         and request_run.jobs_complete == fresh_run.jobs_complete
+    )
+
+
+def _same_run_metadata(
+    request_run: RunObservation,
+    fresh_run: RunObservation,
+) -> bool:
+    return (
+        request_run.key == fresh_run.key
+        and request_run.workflow_path == fresh_run.workflow_path
+        and request_run.run_id == fresh_run.run_id
+        and request_run.run_number == fresh_run.run_number
+        and request_run.attempt == fresh_run.attempt
+        and request_run.head_sha == fresh_run.head_sha
+        and request_run.event == fresh_run.event
+        and request_run.status == fresh_run.status
+        and request_run.conclusion == fresh_run.conclusion
     )
 
 

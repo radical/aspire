@@ -135,6 +135,25 @@ def _intent(
 
 
 class WorkflowLoopStoreTests(unittest.TestCase):
+    def test_explicit_empty_case_key_is_not_replaced_by_a_default(self) -> None:
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(
+                Path(scratch),
+                repository="owner/repo",
+                branch="main",
+            )
+            store.initialize()
+
+            with self.assertRaisesRegex(ValueError, "case_key"):
+                store.upsert_failure(
+                    _run(),
+                    NOW,
+                    scenario_name="test-only",
+                    case_key="",
+                )
+
+            self.assertEqual((), store.list_items())
+
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.state_directory = Path(self.temporary.name) / "state"
@@ -252,6 +271,56 @@ class WorkflowLoopStoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "schema version 2"):
             self.store.initialize()
+
+    def test_v3_workflow_rows_migrate_with_ids_links_and_scenario(self) -> None:
+        item = self._new_item()
+        self.store.update_item(
+            replace(
+                item,
+                issue_number=17,
+                task_id="task-legacy",
+                task_state=TaskState.IN_PROGRESS,
+                pull_request_number=23,
+            ),
+            history_event="legacy-links",
+            summary="Legacy links were recorded.",
+            detail={},
+        )
+        database = self.state_directory / "workflow-loop.sqlite3"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            columns = tuple(
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(workflow_items)"
+                )
+            )[:-2]
+            names = ", ".join(columns)
+            connection.execute(
+                f"CREATE TABLE workflow_items_v3 AS "
+                f"SELECT {names} FROM workflow_items"
+            )
+            connection.execute("DROP TABLE workflow_items")
+            connection.execute(
+                "ALTER TABLE workflow_items_v3 RENAME TO workflow_items"
+            )
+            connection.execute(
+                "UPDATE meta SET value = '3' WHERE key = 'schema_version'"
+            )
+            connection.commit()
+
+        self.store.initialize()
+
+        migrated = self.store.list_items()[0]
+        self.assertEqual(item.id, migrated.id)
+        self.assertEqual(17, migrated.issue_number)
+        self.assertEqual("task-legacy", migrated.task_id)
+        self.assertEqual(23, migrated.pull_request_number)
+        self.assertEqual("workflow-failure", migrated.scenario_name)
+        self.assertEqual(
+            f"workflow:{migrated.workflow_id}",
+            migrated.case_key,
+        )
 
     def test_two_processes_see_same_items_reservations_and_history(self) -> None:
         item = self._new_item()

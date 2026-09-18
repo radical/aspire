@@ -649,7 +649,7 @@ class WorkflowReaderDetailTests(unittest.TestCase):
 
         details = reader(client, max_failed_logs=1).read_run_details(selected)
 
-        self.assertTrue(details.complete)
+        self.assertFalse(details.complete)
         self.assertEqual((1001,), details.logged_job_ids)
         self.assertEqual((1002,), details.unavailable_log_job_ids)
         self.assertFalse(any(
@@ -854,7 +854,7 @@ class WorkflowReaderDetailTests(unittest.TestCase):
 
         self.assertEqual((1001,), details.truncated_log_job_ids)
         self.assertEqual((1002,), details.unavailable_log_job_ids)
-        self.assertTrue(details.complete)
+        self.assertFalse(details.complete)
 
 
 class WorkflowReaderRefreshTests(unittest.TestCase):
@@ -937,7 +937,38 @@ class WorkflowReaderRefreshTests(unittest.TestCase):
         self.assertIsNone(refreshed.recovery_run)
         self.assertFalse(any("/runs/101/attempts" in call[1] for call in client.calls))
 
-    def test_pending_fixed_wait_run_remains_exact(self) -> None:
+    def test_pending_newer_run_does_not_block_write_grade_failure_evidence(self) -> None:
+        failure = run(101, run_number=10)
+        pending = run(
+            102,
+            run_number=11,
+            status="in_progress",
+            conclusion=None,
+            created_at="2026-09-17T18:02:00Z",
+        )
+        client = EndpointClient({
+            run_endpoint(): {
+                "total_count": 2,
+                "workflow_runs": [pending, failure],
+            },
+            f"/repos/{REPOSITORY}/actions/runs/101": failure,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": PagedResponse((
+                job(101, 1001, "Build"),
+            )),
+        })
+
+        refreshed = reader(client).refresh_item(
+            item(),
+            action=ActionKind.ASSIGN_COPILOT,
+        )
+
+        self.assertTrue(refreshed.complete)
+        self.assertTrue(refreshed.pre_write)
+        self.assertEqual("failed", refreshed.recovery)
+        self.assertEqual(101, refreshed.failure_run.run_id)
+        self.assertTrue(refreshed.failure_run.jobs_complete)
+
+    def test_persisted_wait_does_not_block_failure_evidence(self) -> None:
         failure = run(101)
         fixed_wait = run(
             102,
@@ -962,7 +993,6 @@ class WorkflowReaderRefreshTests(unittest.TestCase):
                 "workflow_runs": [newer, fixed_wait, failure],
             },
             f"/repos/{REPOSITORY}/actions/runs/101": failure,
-            f"/repos/{REPOSITORY}/actions/runs/102": fixed_wait,
             f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": PagedResponse((
                 job(101, 1001, "Build"),
             )),
@@ -971,9 +1001,14 @@ class WorkflowReaderRefreshTests(unittest.TestCase):
 
         refreshed = reader(client).refresh_item(tracked)
 
-        self.assertEqual(102, refreshed.wait_run.run_id)
-        self.assertNotEqual(103, refreshed.wait_run.run_id)
-        self.assertEqual("pending", refreshed.recovery)
+        self.assertIsNone(refreshed.wait_run)
+        self.assertEqual(101, refreshed.failure_run.run_id)
+        self.assertEqual("failed", refreshed.recovery)
+        self.assertTrue(refreshed.complete)
+        self.assertEqual(
+            [run_endpoint(), f"/repos/{REPOSITORY}/actions/runs/101"],
+            [call[1] for call in client.calls],
+        )
 
     def test_exact_owned_task_and_bound_pr_are_read_without_issue_assignee_inference(self) -> None:
         tracked = item(

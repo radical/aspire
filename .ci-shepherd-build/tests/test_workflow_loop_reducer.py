@@ -382,43 +382,24 @@ class WorkflowLoopReducerTests(unittest.TestCase):
         self.assertEqual((BUILD, TEST), transition.item.failed_jobs)
         self.assertIsNone(transition.action_kind)
 
-    def test_fixed_wait_b_is_consumed_without_resetting_to_c(self) -> None:
+    def test_completed_failure_is_eligible_while_newer_run_is_running(self) -> None:
         item = _item()
         a = _failure_run()
         b_running = _run(102, 11, status="in_progress", conclusion=None)
-        first = reduce_item(
+        transition = reduce_item(
             item,
             _refresh(item=item, runs=(a, b_running), recovery="pending"),
             now=LATER,
         )
 
         self.assert_transition(
-            first,
-            phase=ItemPhase.WAITING_FOR_RUN,
-            step=NextStep.WAIT_FOR_RUN,
-        )
-        self.assertEqual(102, first.item.wait_run_id)
-
-        b_failed = _run(102, 11)
-        c_running = _run(103, 12, status="in_progress", conclusion=None)
-        second = reduce_item(
-            first.item,
-            _refresh(
-                item=first.item,
-                runs=(a, b_failed, c_running),
-                wait_run=b_failed,
-                recovery="failed",
-            ),
-            now="2026-09-17T20:10:00Z",
-        )
-
-        self.assert_transition(
-            second,
+            transition,
             phase=ItemPhase.JUDGMENT_QUEUED,
             step=NextStep.QUEUE_JUDGMENT,
         )
-        self.assertEqual(102, second.item.wait_run_id)
-        self.assertNotEqual(103, second.item.wait_run_id)
+        self.assertEqual(0, transition.judgment_round)
+        self.assertIsNone(transition.item.wait_run_id)
+        self.assertIsNone(transition.item.wait_reason)
 
     def test_identical_semantic_evidence_does_not_queue_second_judgment(self) -> None:
         item = _item(
@@ -442,6 +423,29 @@ class WorkflowLoopReducerTests(unittest.TestCase):
         self.assertEqual(EVIDENCE, transition.item.evidence_fingerprint)
         self.assertEqual(EVIDENCE, transition.item.last_judged_fingerprint)
         self.assertEqual((BUILD, TEST), transition.item.failed_jobs)
+
+    def test_previous_run_wait_is_cleared_when_failure_becomes_eligible(self) -> None:
+        item = _item(
+            phase=ItemPhase.WAITING_FOR_RUN,
+            wait_run_id=102,
+            wait_reason="newer-run",
+        )
+        pending = _run(102, 11, status="in_progress", conclusion=None)
+
+        transition = reduce_item(
+            item,
+            _refresh(item=item, runs=(_failure_run(), pending)),
+            now=LATER,
+        )
+
+        self.assert_transition(
+            transition,
+            phase=ItemPhase.JUDGMENT_QUEUED,
+            step=NextStep.QUEUE_JUDGMENT,
+        )
+        self.assertIsNone(transition.item.wait_run_id)
+        self.assertIsNone(transition.item.wait_reason)
+        self.assertEqual(0, transition.judgment_round)
 
     def test_recovery_requires_complete_positive_in_scope_job_proof(self) -> None:
         item = _item(
@@ -506,7 +510,7 @@ class WorkflowLoopReducerTests(unittest.TestCase):
                     ),
                 ),
                 "pending",
-                ItemPhase.WAITING_FOR_RUN,
+                ItemPhase.OBSERVING_FAILURE,
             ),
             "pr-run": (
                 _run(

@@ -85,6 +85,11 @@ _DIAGNOSTIC_LINE_RE = re.compile(
 #   "  Assert.Equal() Failure: Strings differ"
 # These describe the test's own expectations, never the infrastructure that ran it.
 _ASSERTION_LINE_RE = re.compile(r"(?i)^\s*(?:expected|actual|assert[a-z.]*)\b")
+_STRONG_DIAGNOSTIC_RE = re.compile(
+    r"(?i)(?:##\[error\]|(?<![\w.])[A-Za-z_][A-Za-z0-9_.]*Error:"
+    r"|\blast error:|\bcould not be found\b|\bcouldn't find\b"
+    r"|\bcommand failed:|\bmaximum [^\r\n]{0,80} exceeded\b)"
+)
 # Runner echoes include "##[command]dotnet test --timeout 5m", "Run ...",
 # "+ dotnet test ...", and indented "--hangdump-timeout <time>" options.
 # These configure a timeout; they do not report that it expired.
@@ -1930,6 +1935,17 @@ def workflow_log_preview(text: str, limit: int) -> str:
             return text[start:start + limit]
         offset += len(line)
     return text[:limit]
+
+
+def is_workflow_log_diagnostic_line(line: str) -> bool:
+    """Return whether one raw log line carries repair-relevant diagnostics."""
+    normalized = normalize_log_text(line)
+    stripped = normalized.removeprefix("##[error]").strip()
+    return (
+        not _ASSERTION_LINE_RE.match(stripped)
+        and _STRONG_DIAGNOSTIC_RE.search(normalized) is not None
+        and not _GENERIC_FAILURE_RE.fullmatch(stripped)
+    )
 
 
 def _repair_diagnostic_lines(text: str) -> list[str]:

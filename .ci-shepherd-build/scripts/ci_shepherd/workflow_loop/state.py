@@ -28,7 +28,7 @@ from .models import (
 )
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _DATABASE_NAME = "workflow-loop.sqlite3"
 _ITEM_COLUMNS = (
     "id",
@@ -62,6 +62,8 @@ _ITEM_COLUMNS = (
     "recovered_at",
     "latest_action",
     "latest_error",
+    "scenario_name",
+    "case_key",
 )
 _WORKER_COLUMNS = (
     "worker_id",
@@ -157,7 +159,7 @@ class WorkflowLoopStore:
                     raise ValueError(
                         "Stored schema version is malformed."
                     ) from error
-                if schema_version != _SCHEMA_VERSION:
+                if schema_version not in {3, _SCHEMA_VERSION}:
                     raise ValueError(
                         f"Unsupported schema version {schema_version}."
                     )
@@ -175,6 +177,19 @@ class WorkflowLoopStore:
                         f"expected {meta.get('workflow_scope')!r}, "
                         f"received {workflow_scope!r}."
                     )
+                if schema_version == 3:
+                    connection.commit()
+                    connection.execute("PRAGMA foreign_keys = OFF")
+                    connection.execute("BEGIN IMMEDIATE")
+                    self._migrate_v3_to_v4(connection)
+                    connection.execute(
+                        "UPDATE meta SET value = ? "
+                        "WHERE key = 'schema_version'",
+                        (str(_SCHEMA_VERSION),),
+                    )
+                    connection.commit()
+                    connection.execute("PRAGMA foreign_keys = ON")
+                    connection.execute("BEGIN IMMEDIATE")
             elif meta:
                 raise ValueError("State metadata is incomplete.")
             else:
@@ -268,14 +283,38 @@ class WorkflowLoopStore:
             ).fetchall()
         return tuple(_item_from_row(row) for row in rows)
 
+    def bind_item_scenario(self, item_id: int, scenario_name: str) -> None:
+        _positive(item_id, "item_id")
+        _nonempty(scenario_name, "scenario_name")
+        with self._connect() as connection:
+            item = self._current_item(connection, item_id)
+        if item.scenario_name != scenario_name:
+            raise ValueError(
+                f"Item {item_id} is already bound to scenario "
+                f"{item.scenario_name!r}."
+            )
+
+    def item_scenario(self, item_id: int) -> str | None:
+        _positive(item_id, "item_id")
+        with self._connect() as connection:
+            item = self._current_item(connection, item_id)
+        return item.scenario_name
+
     def upsert_failure(
         self,
         observation: RunObservation,
         observed_at: str,
+        *,
+        scenario_name: str = "workflow-failure",
+        case_key: str | None = None,
     ) -> WorkflowItem:
         if not isinstance(observation, RunObservation):
             raise ValueError("observation must be a RunObservation.")
         _validate_timestamp(observed_at, "observed_at")
+        _nonempty(scenario_name, "scenario_name")
+        if case_key is None:
+            case_key = f"workflow:{observation.key.workflow_id}"
+        _nonempty(case_key, "case_key")
         self._validate_observation_binding(observation)
         failed_jobs = tuple(
             job.key
@@ -287,11 +326,13 @@ class WorkflowLoopStore:
         with self._transaction() as connection:
             row = connection.execute(
                 f"SELECT {', '.join(_ITEM_COLUMNS)} FROM workflow_items "
-                "WHERE repository = ? AND workflow_id = ? AND branch = ?",
+                "WHERE repository = ? AND branch = ? "
+                "AND scenario_name = ? AND case_key = ?",
                 (
                     self._repository,
-                    observation.key.workflow_id,
                     self._branch,
+                    scenario_name,
+                    case_key,
                 ),
             ).fetchone()
             if row is None:
@@ -301,8 +342,8 @@ class WorkflowLoopStore:
                     "branch, episode, phase, first_failure_seen_at, "
                     "last_checked_at, last_progressed_at, read_status, "
                     "failure_run_id, failure_attempt, failed_jobs_json, "
-                    "evidence_fingerprint, followup_count"
-                    ") VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                    "evidence_fingerprint, followup_count, scenario_name, case_key"
+                    ") VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
                     (
                         self._repository,
                         observation.key.workflow_id,
@@ -318,6 +359,8 @@ class WorkflowLoopStore:
                         observation.attempt,
                         _job_keys_json(failed_jobs),
                         fingerprint,
+                        scenario_name,
+                        case_key,
                     ),
                 )
                 item_id = cursor.lastrowid
@@ -1207,6 +1250,38 @@ class WorkflowLoopStore:
             for row in rows
         )
 
+    def record_history(
+        self,
+        item_id: int,
+        *,
+        recorded_at: str,
+        event: str,
+        summary: str,
+        detail: Mapping[str, object],
+    ) -> None:
+        _positive(item_id, "item_id")
+        _validate_timestamp(recorded_at, "recorded_at")
+        _nonempty(event, "event")
+        _nonempty(summary, "summary")
+        detail_json = _mapping_json(detail, "detail")
+        with self._transaction() as connection:
+            self._current_item(connection, item_id)
+            existing = connection.execute(
+                "SELECT 1 FROM item_history WHERE item_id = ? "
+                "AND event = ? AND detail_json = ? LIMIT 1",
+                (item_id, event, detail_json),
+            ).fetchone()
+            if existing is not None:
+                return
+            self._insert_history_json(
+                connection,
+                item_id,
+                recorded_at,
+                event,
+                summary,
+                detail_json,
+            )
+
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         with self._connect() as connection:
@@ -1265,7 +1340,9 @@ CREATE TABLE IF NOT EXISTS workflow_items(
     recovered_at TEXT,
     latest_action TEXT,
     latest_error TEXT,
-    UNIQUE(repository, workflow_id, branch)
+    scenario_name TEXT NOT NULL,
+    case_key TEXT NOT NULL,
+    UNIQUE(repository, branch, scenario_name, case_key)
 );
 CREATE TABLE IF NOT EXISTS workers(
     worker_id TEXT PRIMARY KEY,
@@ -1332,6 +1409,76 @@ CREATE TABLE IF NOT EXISTS passes(
         for statement in script.split(";"):
             if statement.strip():
                 connection.execute(statement)
+
+    @staticmethod
+    def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+CREATE TABLE workflow_items_v4(
+    id INTEGER PRIMARY KEY,
+    repository TEXT NOT NULL,
+    workflow_id INTEGER NOT NULL CHECK(workflow_id > 0),
+    workflow_path TEXT NOT NULL,
+    workflow_name TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    episode INTEGER NOT NULL CHECK(episode > 0),
+    phase TEXT NOT NULL,
+    first_failure_seen_at TEXT NOT NULL,
+    last_checked_at TEXT NOT NULL,
+    last_progressed_at TEXT NOT NULL,
+    read_status TEXT NOT NULL,
+    failure_run_id INTEGER NOT NULL CHECK(failure_run_id > 0),
+    failure_attempt INTEGER NOT NULL CHECK(failure_attempt > 0),
+    failed_jobs_json TEXT NOT NULL,
+    evidence_fingerprint TEXT NOT NULL,
+    last_judged_fingerprint TEXT,
+    wait_run_id INTEGER CHECK(wait_run_id > 0),
+    wait_reason TEXT,
+    issue_number INTEGER CHECK(issue_number > 0),
+    task_id TEXT,
+    task_state TEXT,
+    pull_request_number INTEGER CHECK(pull_request_number > 0),
+    external_owner TEXT,
+    followup_count INTEGER NOT NULL DEFAULT 0 CHECK(followup_count >= 0),
+    assignment_requested_at TEXT,
+    assignment_confirmed_at TEXT,
+    recovered_run_id INTEGER CHECK(recovered_run_id > 0),
+    recovered_at TEXT,
+    latest_action TEXT,
+    latest_error TEXT,
+    scenario_name TEXT NOT NULL,
+    case_key TEXT NOT NULL,
+    UNIQUE(repository, branch, scenario_name, case_key)
+)
+"""
+        )
+        has_scenario_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'item_scenarios'"
+        ).fetchone() is not None
+        if has_scenario_table:
+            connection.execute(
+                """
+INSERT INTO workflow_items_v4
+SELECT w.*, COALESCE(s.scenario_name, 'workflow-failure'),
+       'workflow:' || w.workflow_id
+FROM workflow_items AS w
+LEFT JOIN item_scenarios AS s ON s.item_id = w.id
+"""
+            )
+            connection.execute("DROP TABLE item_scenarios")
+        else:
+            connection.execute(
+                """
+INSERT INTO workflow_items_v4
+SELECT w.*, 'workflow-failure', 'workflow:' || w.workflow_id
+FROM workflow_items AS w
+"""
+            )
+        connection.execute("DROP TABLE workflow_items")
+        connection.execute(
+            "ALTER TABLE workflow_items_v4 RENAME TO workflow_items"
+        )
 
     @staticmethod
     def _validate_schema(connection: sqlite3.Connection) -> None:
@@ -1406,6 +1553,8 @@ CREATE TABLE IF NOT EXISTS passes(
             or item.repository != current.repository
             or item.workflow_id != current.workflow_id
             or item.branch != current.branch
+            or item.scenario_name != current.scenario_name
+            or item.case_key != current.case_key
         ):
             raise ValueError("Item identity does not match persisted state.")
         self._validate_episode(current, item.episode)
@@ -1694,6 +1843,8 @@ def _item_values(item: WorkflowItem) -> tuple[object, ...]:
         item.recovered_at,
         item.latest_action.value if item.latest_action is not None else None,
         item.latest_error,
+        item.scenario_name,
+        item.case_key,
     )
 
 
@@ -1754,6 +1905,8 @@ def _item_from_row(row: sqlite3.Row) -> WorkflowItem:
             recovered_at=row["recovered_at"],
             latest_action=latest_action,
             latest_error=row["latest_error"],
+            scenario_name=row["scenario_name"],
+            case_key=row["case_key"],
         )
     except ValueError as error:
         raise ValueError("Stored workflow item is invalid.") from error

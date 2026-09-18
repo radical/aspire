@@ -4,11 +4,68 @@ The workflow loop observes failed GitHub Actions workflows and coordinates at
 most two owned repair items. It does not merge pull requests, approve changes,
 rerun workflows, quarantine tests, or repair ordinary test failures.
 
+## Core and scenario boundary
+
+`CiCoordinator` is the shared GitHub CI core. It owns the periodic pass,
+scenario registration, persistent item/scenario binding, shared two-item
+capacity, worker lifetime and result consumption, durable effect invocation,
+common task/issue/PR state, and `WOULD_DO` visibility in no-effect modes.
+`GitHubEffectExecutor` owns PREPARED → INVOKING → terminal action receipts and
+uncertain-write handling.
+
+`WorkflowFailureScenario` is the only production scenario. It owns workflow
+candidate selection, exact priority, job/log evidence, judgment prompts,
+workflow assessment, and positive job-level recovery proof. It proposes
+effects through `ItemTransition`; it never calls a GitHub mutation. The
+`WorkflowLoopManager` name remains as a thin compatibility facade that wires
+this scenario into the core. Registration is explicit Python construction:
+there is no plugin loader, provider abstraction, external queue, or second
+scheduler. A test-only scenario verifies the shared boundary and capacity.
+
+Items are durably bound to their scenario in SQLite. Existing workflow-only
+schema-3 stores migrate in place with their item IDs and issue/task/PR links,
+binding each prior row to `workflow-failure`. New rows use
+`(repository, branch, scenario, case)` identity, so two scenarios can track
+distinct cases concerning the same native workflow without ownership takeover.
+A persisted binding whose scenario is not registered is rejected rather than
+reassigned.
+
+### Workflow priority
+
+The workflow scenario uses exact repository paths:
+
+1. `.github/workflows/ci.yml` — rolling build.
+2. Test workflows — `tests.yml`, daily smoke, outerloop, quarantine,
+   deployment tests, extension E2E, CLI starter, polyglot, TypeScript SDK/API
+   compatibility, flaky-test reproduction, and their reusable test runners.
+3. Every other workflow.
+
+Within a tier, item ID provides deterministic ordering. Active work is never
+preempted. All candidates are persisted before selection; tracked ownership is
+refreshed before priority admission, so a newly completed lower-priority task
+releases capacity before a rolling-build failure is considered.
+
+## Responding to a failure
+
+A completed failure is eligible for analysis immediately, even when a newer
+run of the same workflow is queued or running. Pending runs are not evidence
+of recovery and do not delay repair preparation. Capacity, existing repair
+ownership, and human approval gates still apply.
+
+Before a write, the loop checks whether a newer completed execution actually
+ran and passed the affected jobs. That positive recovery suppresses obsolete
+work. Items saved under the earlier wait-for-a-newer-run policy discard that
+wait on their next pass; no state reset is required.
+
 ## Safe modes
 
 `status` reads only the local SQLite state. `pass` and `watch` default to
 read-only GitHub observation: they may update local observations, but they do
 not start local judgment workers or perform GitHub mutations.
+Eligible effects are persisted as `would-do` history and shown by `status`.
+Local-judgment proposals remain unconsumed across repeated no-effect passes, so
+a later explicitly authorized live pass can execute the original judgment.
+Identical `would-do` history entries are not duplicated.
 
 `--local-judgment` permits the view-only local Copilot judgment process. The
 worker receives only the `view` tool and cannot mutate GitHub.
@@ -150,16 +207,25 @@ while the prompt used the first 4,000 characters and omitted the failure.
 Prompt construction now uses the existing diagnostic-aware bounded preview,
 which keeps a contiguous window containing the traceback and nearby context.
 It reports source truncation separately from prompt excerpting; API byte limits
-are unchanged. A fixture-shaped regression verifies the error and cleanup are
-present and the complete prompt remains within 20,000 characters.
+are explicit. Failed-job log reads retain at most 32 KiB in memory: a 4 KiB
+head, up to 20 KiB of strong diagnostic lines selected while streaming, and an
+8 KiB tail. Responses larger than that remain marked truncated/incomplete.
+A single log line is bounded independently; an oversized line produces an
+explicit read error, and selector failures always terminate and reap the
+reader subprocess. A final diagnostic fragment without a newline is retained.
+A fixture-shaped regression verifies the error and cleanup are present and the
+complete prompt remains within 20,000 characters. Saved 452 KiB–2.4 MiB logs
+retain the SDK, model-budget, and missing-package failures in the bounded
+prompt evidence.
 
-The complete Python suite passed 2,582 tests after this correction. The live
-fork fixture is published on a dedicated test branch, and its intentional
+The complete Python suite passed 2,593 tests after the modular extraction.
+The live fork fixture is published on a dedicated test branch, and its intentional
 configuration failure was observed through GitHub Actions. Initial publication
 required using the existing stored fork-owner credential rather than an
 injected token lacking workflow scope; no global authentication settings
-were changed. The real cloud-task and repair-PR lifecycle remains under
-validation. No upstream mutation has occurred.
+were changed. The paid fork cloud task was cancelled and must not be restarted;
+the cloud-task/PR/recovery lifecycle remains unvalidated. No upstream mutation
+has occurred.
 
 ## Persistence and ownership
 
