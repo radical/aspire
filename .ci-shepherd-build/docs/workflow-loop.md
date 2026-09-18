@@ -77,6 +77,12 @@ with the canonical source path. A `watch` creates its shadow once; subsequent
 passes reuse it. Reusing an explicit shadow also resumes its local workers
 rather than resnapshotting newer canonical state.
 
+Resume requires the shadow root and its coordinator state files (including
+the marker and SQLite database) to remain owner-only. Provider-created
+descendants may use broader modes beneath that private root; resume does not
+change their permissions. Symlinks, hardlinks, and nonregular files are still
+rejected throughout the tree.
+
 Inherited worker rows are rehomed under the shadow and lose their PID.
 No inherited worker is launched or observed, and executable packet/manifest
 files are deliberately not copied. Provenance records why they are unavailable.

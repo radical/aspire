@@ -310,7 +310,9 @@ def _validate_tree(directory: Path, *, private: bool = False) -> None:
     for child in directory.iterdir():
         _validate_path(child)
         if child.is_dir():
-            _validate_tree(child, private=private)
+            # The owner-only state root protects descendants, including provider
+            # files created with 0755/0644. Keep checking links and file types.
+            _validate_tree(child)
         else:
             _validate_regular_file(child, private=private)
 

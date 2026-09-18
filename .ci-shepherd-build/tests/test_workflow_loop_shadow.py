@@ -96,6 +96,45 @@ class WorkflowLoopShadowTests(unittest.TestCase):
                 repository="owner/repo", branch="main", workflow_ids=(17, 42),
             )
 
+    def test_resume_accepts_provider_permissions_beneath_private_shadow(self) -> None:
+        self.prepare()
+        home = self.shadow / "workers" / "worker-1" / "copilot-home"
+        for directory in (home.parent.parent, home.parent, home):
+            directory.mkdir(mode=0o700)
+        sessions = home / "session-state"
+        sessions.mkdir(mode=0o755)
+        sessions.chmod(0o755)
+        provider_file = sessions / "session.log"
+        provider_file.write_text("provider output", encoding="utf-8")
+        provider_file.chmod(0o644)
+
+        self.assertEqual(self.shadow, self.prepare())
+        self.assertEqual(0o755, sessions.stat().st_mode & 0o777)
+        self.assertEqual(0o644, provider_file.stat().st_mode & 0o777)
+        self.assertEqual("provider output", provider_file.read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "binding"):
+            self.prepare(branch="different")
+
+    def test_resume_rejects_unsafe_provider_descendants(self) -> None:
+        self.prepare()
+        sessions = self.shadow / "workers" / "worker-1" / "copilot-home" / "session-state"
+        sessions.mkdir(parents=True)
+        outside = self.root / "outside"
+        outside.write_text("untouched", encoding="utf-8")
+        provider_file = sessions / "session.log"
+        provider_file.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "Symlink"):
+            self.prepare()
+        provider_file.unlink()
+        os.link(outside, provider_file)
+        with self.assertRaisesRegex(ValueError, "safe regular file"):
+            self.prepare()
+        provider_file.unlink()
+        os.mkfifo(provider_file)
+        with self.assertRaisesRegex(ValueError, "safe regular file"):
+            self.prepare()
+        self.assertEqual("untouched", outside.read_text(encoding="utf-8"))
+
     def test_inherited_workers_and_actions_are_frozen_and_rehomed_without_ownership(self) -> None:
         store = self.store(self.canonical)
         store.initialize()
@@ -207,9 +246,18 @@ class WorkflowLoopShadowTests(unittest.TestCase):
         for path in (self.shadow, *self.shadow.rglob("*")):
             with self.subTest(path=path):
                 self.assertEqual(0o700 if path.is_dir() else 0o600, path.stat().st_mode & 0o777)
-        os.chmod(self.shadow / "shadow.json", 0o644)
-        with self.assertRaisesRegex(ValueError, "owner-only"):
-            self.prepare()
+        for path in (
+            self.shadow, self.shadow / "shadow.json",
+            self.shadow / "workflow-loop.sqlite3",
+        ):
+            with self.subTest(path=path):
+                private_mode = 0o700 if path.is_dir() else 0o600
+                os.chmod(path, 0o755 if path.is_dir() else 0o644)
+                try:
+                    with self.assertRaisesRegex(ValueError, "owner-only"):
+                        self.prepare()
+                finally:
+                    os.chmod(path, private_mode)
 
     def test_overlapping_relative_or_nonempty_shadow_is_rejected(self) -> None:
         for canonical, shadow in (
