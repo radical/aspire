@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 import json
@@ -56,6 +56,7 @@ _REQUEST_KEYS = frozenset(
 
 
 class ItemPhase(StrEnum):
+    SUPERSEDED = "superseded"
     OBSERVING_FAILURE = "observing_failure"
     # Retained to read older stores; the reducer clears this obsolete wait.
     WAITING_FOR_RUN = "waiting_for_run"
@@ -113,6 +114,24 @@ class JudgmentDecision(StrEnum):
     FOLLOW_UP = "follow_up"
     OBSERVE_EXTERNAL = "observe_external"
     DEFER_ORDINARY_TEST = "defer_ordinary_test"
+    NEEDS_ATTENTION = "needs_attention"
+    NO_ACTION = "no_action"
+
+
+class FailureClassification(StrEnum):
+    DETERMINISTIC_TEST = "deterministic_test"
+    SUSPECTED_FLAKE = "suspected_flake"
+    REPOSITORY_INFRA = "repository_infra"
+    EXTERNAL_INFRA = "external_infra"
+    PRODUCT_OR_BUILD = "product_or_build"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    AGGREGATE_ONLY = "aggregate_only"
+
+
+class RecommendedResponse(StrEnum):
+    REPAIR = "repair"
+    INVESTIGATE = "investigate"
+    OBSERVE = "observe"
     NEEDS_ATTENTION = "needs_attention"
     NO_ACTION = "no_action"
 
@@ -257,6 +276,24 @@ class JobKey:
 
 
 @dataclass(frozen=True, slots=True)
+class FailedStep:
+    number: int | None
+    name: str
+    status: str
+    conclusion: str
+    started_at: str | None
+    completed_at: str | None
+
+    def __post_init__(self) -> None:
+        _optional_positive_int(self.number, "step.number")
+        _nonempty_string(self.name, "step.name")
+        if self.status != "completed" or self.conclusion not in {"failure", "timed_out"}:
+            raise ValueError("Failed steps require a completed failure.")
+        _optional_timestamp(self.started_at, "step.started_at")
+        _optional_timestamp(self.completed_at, "step.completed_at")
+
+
+@dataclass(frozen=True, slots=True)
 class JobObservation:
     run_id: int
     attempt: int
@@ -269,6 +306,7 @@ class JobObservation:
     url: str
     log_excerpt: str | None
     log_truncated: bool
+    failed_steps: tuple[FailedStep, ...] | None = None
 
     def __post_init__(self) -> None:
         _positive_int(self.run_id, "run_id")
@@ -285,6 +323,11 @@ class JobObservation:
             raise ValueError("log_excerpt must be a string or null.")
         if not isinstance(self.log_truncated, bool):
             raise ValueError("log_truncated must be a boolean.")
+        if self.failed_steps is not None and (
+            not isinstance(self.failed_steps, tuple)
+            or any(not isinstance(step, FailedStep) for step in self.failed_steps)
+        ):
+            raise ValueError("failed_steps must be immutable FailedStep values or null.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +378,19 @@ class RunObservation:
             raise ValueError("jobs must match the run ID and attempt.")
 
 
+def leaf_case_key(run: RunObservation, job: JobKey) -> str:
+    """Stable lane identity; episode evidence must never change the case key."""
+    return "leaf-key-v1:" + json.dumps(
+        [
+            run.key.repository, run.key.branch, run.key.workflow_id,
+            run.workflow_path, " ".join(job.name.split()),
+            sorted(job.runner_labels),
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowItem:
     id: int
@@ -371,8 +427,17 @@ class WorkflowItem:
     scenario_name: str = "workflow-failure"
     case_key: str = "workflow"
     last_assessed_target: str | None = None
+    leaf_job: JobKey | None = None
+    cause_group_id: str | None = None
+    cause_leader_id: int | None = None
+    cause_evidence_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
+        if self.leaf_job is not None and not isinstance(self.leaf_job, JobKey):
+            raise ValueError("leaf_job must be a JobKey or null.")
+        _optional_nonempty_string(self.cause_group_id, "cause_group_id")
+        _optional_positive_int(self.cause_leader_id, "cause_leader_id")
+        _optional_nonempty_string(self.cause_evidence_fingerprint, "cause_evidence_fingerprint")
         _positive_int(self.id, "id")
         _nonempty_string(self.repository, "repository")
         _positive_int(self.workflow_id, "workflow_id")
@@ -444,6 +509,27 @@ class WorkflowItem:
 
 
 @dataclass(frozen=True, slots=True)
+class CauseWitness:
+    """A store-derived exact signature and its immutable source execution."""
+
+    group_id: str
+    signature: str
+    leaf_case_key: str
+    run_id: int
+    attempt: int
+    head_sha: str
+    job_id: int
+
+    def __post_init__(self) -> None:
+        for name in ("group_id", "signature", "leaf_case_key", "head_sha"):
+            _nonempty_string(getattr(self, name), name)
+        if not self.group_id.startswith("cause-group-v1:"):
+            raise ValueError("Unsupported cause grouping version.")
+        for name in ("run_id", "attempt", "job_id"):
+            _positive_int(getattr(self, name), name)
+
+
+@dataclass(frozen=True, slots=True)
 class JudgmentRequest:
     worker_id: str
     session_id: str
@@ -467,6 +553,12 @@ class JudgmentRequest:
     pull_request_observed_at: str | None
     followup_count: int
     prompt: str
+    # Generic scenarios retain their existing protocol. Workflow leaves opt in
+    # with immutable identity, never by model-supplied prose or a prompt flag.
+    leaf_case_key: str | None = None
+    cause_group_id: str | None = None
+    cause_witnesses: tuple[CauseWitness, ...] = ()
+    represented_leaf_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _nonempty_string(self.worker_id, "worker_id")
@@ -479,6 +571,24 @@ class JudgmentRequest:
         _nonempty_string(self.branch, "branch")
         _positive_int(self.workflow_id, "workflow_id")
         _nonempty_string(self.workflow_path, "workflow_path")
+        _string_tuple(self.represented_leaf_keys, "represented_leaf_keys", unique=True)
+        if self.represented_leaf_keys and (
+            self.leaf_case_key not in self.represented_leaf_keys
+            or any(not key.startswith("leaf-key-v1:") for key in self.represented_leaf_keys)
+        ):
+            raise ValueError("Represented leaf scope requires the current exact leaf.")
+        if not isinstance(self.cause_witnesses, tuple) or any(
+            not isinstance(witness, CauseWitness) for witness in self.cause_witnesses
+        ):
+            raise ValueError("cause_witnesses must be immutable CauseWitness values.")
+        if self.cause_group_id is not None and (
+            self.leaf_case_key is None or not self.cause_group_id.startswith("cause-group-v1:")
+        ):
+            raise ValueError("Cause identity requires a versioned leaf request.")
+        if any(w.group_id != self.cause_group_id for w in self.cause_witnesses):
+            raise ValueError("Cause witnesses must match the exact request group.")
+        if len({w.signature for w in self.cause_witnesses}) > 1:
+            raise ValueError("Conflicting cause signatures cannot authorize a request.")
         if not isinstance(self.failure_run, RunObservation):
             raise ValueError("failure_run must be a RunObservation.")
         if (
@@ -497,6 +607,16 @@ class JudgmentRequest:
         run_jobs = {job.job_id: job for job in self.failure_run.jobs}
         if any(run_jobs.get(job.job_id) != job for job in self.failed_jobs):
             raise ValueError("failed_jobs must be exact jobs from failure_run.")
+        if self.leaf_case_key is not None:
+            if (
+                not self.failure_run.jobs_complete
+                or len(self.failure_run.jobs) != 1
+                or len(self.failed_jobs) != 1
+                or self.leaf_case_key != leaf_case_key(
+                    self.failure_run, self.failed_jobs[0].key
+                )
+            ):
+                raise ValueError("leaf_case_key requires one exact complete leaf.")
         _string_tuple(
             self.evidence_ids,
             "evidence_ids",
@@ -559,6 +679,8 @@ class JudgmentResult:
     evidence_ids: tuple[str, ...]
     in_scope_job_ids: tuple[int, ...]
     copilot_request: str | None
+    classification: FailureClassification | None = None
+    recommended_response: RecommendedResponse | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -590,6 +712,91 @@ class JudgmentResult:
             "copilot_request",
             maximum=8_000,
         )
+        if self.classification is not None or self.recommended_response is not None:
+            if not isinstance(self.classification, FailureClassification):
+                raise ValueError("classification must be a FailureClassification.")
+            if not isinstance(self.recommended_response, RecommendedResponse):
+                raise ValueError("recommended_response must be a RecommendedResponse.")
+
+
+def apply_classification_policy(
+    request: JudgmentRequest, result: JudgmentResult,
+) -> JudgmentResult:
+    """Derive effect eligibility from typed evidence, not the worker's action prose."""
+    if request.leaf_case_key is None:
+        return result
+    if result.classification is None or result.recommended_response is None:
+        raise ValueError("Leaf judgments require classification and recommendedResponse.")
+    job, = request.failed_jobs
+    run = request.failure_run
+    required = {f"run:{run.run_id}:{run.attempt}", f"job:{job.run_id}:{job.attempt}:{job.job_id}"}
+    if (
+        result.in_scope_job_ids != (job.job_id,)
+        or not required.issubset(result.evidence_ids)
+        or not set(result.evidence_ids).issubset(request.evidence_ids)
+    ):
+        raise ValueError("Leaf judgments require exact job and run evidence citations.")
+    if job.status != "completed" or job.conclusion not in {"failure", "timed_out"}:
+        raise ValueError("Leaf judgments require a completed failed job.")
+    diagnostic = bool(
+        job.log_excerpt and job.log_excerpt.strip()
+        and f"log:{job.job_id}" in result.evidence_ids
+    )
+    classification = result.classification
+    if classification is FailureClassification.AGGREGATE_ONLY:
+        # Proven aggregates are excluded by structured manifest policy before
+        # judgment. A worker cannot suppress a retained leaf by relabeling it.
+        response = RecommendedResponse.NEEDS_ATTENTION
+    elif classification is FailureClassification.EXTERNAL_INFRA:
+        # Only store-derived exact witnesses can establish recurrence. Attempts
+        # and sibling jobs in one run are not independent occurrences. No
+        # deterministic mitigation verifier exists yet; prose is never proof.
+        current_witness = any(
+            w.leaf_case_key == request.leaf_case_key
+            and (w.run_id, w.attempt, w.head_sha, w.job_id)
+            == (run.run_id, run.attempt, run.head_sha, job.job_id)
+            for w in request.cause_witnesses
+        )
+        recurrent = current_witness and len({w.run_id for w in request.cause_witnesses}) >= 2
+        response = (
+            RecommendedResponse.INVESTIGATE
+            if diagnostic and recurrent else RecommendedResponse.OBSERVE
+        )
+    elif classification is FailureClassification.INSUFFICIENT_EVIDENCE:
+        # A runner-qualified lane and its exact run/job URL offer a bounded
+        # reproduction target even when logs or failed-step metadata are absent.
+        useful_repro = bool(job.key.runner_labels and job.url and run.head_sha)
+        response = (
+            RecommendedResponse.INVESTIGATE
+            if diagnostic or useful_repro else RecommendedResponse.NEEDS_ATTENTION
+        )
+    elif not diagnostic:
+        response = RecommendedResponse.NEEDS_ATTENTION
+    elif classification is FailureClassification.SUSPECTED_FLAKE:
+        response = RecommendedResponse.INVESTIGATE
+    else:
+        response = RecommendedResponse.REPAIR
+    decision = {
+        RecommendedResponse.REPAIR: (
+            JudgmentDecision.FOLLOW_UP if request.round else JudgmentDecision.ASSIGN
+        ),
+        RecommendedResponse.INVESTIGATE: (
+            JudgmentDecision.FOLLOW_UP if request.round else JudgmentDecision.ASSIGN
+        ),
+        RecommendedResponse.OBSERVE: JudgmentDecision.OBSERVE_EXTERNAL,
+        RecommendedResponse.NEEDS_ATTENTION: JudgmentDecision.NEEDS_ATTENTION,
+        RecommendedResponse.NO_ACTION: JudgmentDecision.NO_ACTION,
+    }[response]
+    return replace(
+        result,
+        decision=decision,
+        recommended_response=response,
+        copilot_request=(
+            result.copilot_request
+            if decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}
+            else None
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -857,6 +1064,22 @@ def canonical_fingerprint(value: object) -> str:
     return f"fnv1a64:{result:016x}"
 
 
+def workflow_case_marker(
+    repository: str, branch: str, workflow_id: int, workflow_path: str,
+    cause_group_id: str,
+) -> str:
+    """Canonical exact identity; JSON keeps branch/path delimiters unambiguous."""
+    if not cause_group_id.startswith("cause-group-v1:"):
+        raise ValueError("A versioned cause group is required for v2 issue identity.")
+    identity = json.dumps(
+        {"repository": repository, "branch": branch, "workflowId": workflow_id,
+         "workflowPath": workflow_path, "causeGroupId": cause_group_id,
+         "lookupKey": canonical_fingerprint(cause_group_id)},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"<!-- ci-shepherd-workflow-case:v2 {identity} -->"
+
+
 def _job_key_document(key: JobKey) -> dict[str, object]:
     return {"name": key.name, "runnerLabels": list(key.runner_labels)}
 
@@ -874,6 +1097,11 @@ def _job_document(job: JobObservation) -> dict[str, object]:
         "url": job.url,
         "logExcerpt": job.log_excerpt,
         "logTruncated": job.log_truncated,
+        **({"failedSteps": [
+            {"number": step.number, "name": step.name, "status": step.status,
+             "conclusion": step.conclusion, "startedAt": step.started_at,
+             "completedAt": step.completed_at} for step in job.failed_steps
+        ]} if job.failed_steps is not None else {}),
     }
 
 
@@ -928,6 +1156,17 @@ def judgment_request_to_json(request: JudgmentRequest) -> str:
             "pullRequestObservedAt": request.pull_request_observed_at,
             "followupCount": request.followup_count,
             "prompt": request.prompt,
+            **({"leafCaseKey": request.leaf_case_key} if request.leaf_case_key is not None else {}),
+            **({"representedLeafKeys": list(request.represented_leaf_keys)}
+               if request.represented_leaf_keys else {}),
+            **({
+                "causeGroupId": request.cause_group_id,
+                "causeWitnesses": [
+                    {"groupId": w.group_id, "signature": w.signature, "leafCaseKey": w.leaf_case_key,
+                     "runId": w.run_id, "attempt": w.attempt, "headSha": w.head_sha, "jobId": w.job_id}
+                    for w in request.cause_witnesses
+                ],
+            } if request.cause_group_id is not None else {}),
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -1008,7 +1247,23 @@ def _job_from_document(value: object) -> JobObservation:
             "logTruncated",
         }
     )
-    _exact_keys(value, keys, "Job observation")
+    _exact_keys(value, keys | ({"failedSteps"} if "failedSteps" in value else set()), "Job observation")
+    steps = None
+    if "failedSteps" in value:
+        if not isinstance(value["failedSteps"], list):
+            raise ValueError("failedSteps must be an array.")
+        parsed_steps = []
+        for step in value["failedSteps"]:
+            if not isinstance(step, dict):
+                raise ValueError("Failed step must be an object.")
+            _exact_keys(step, frozenset({
+                "number", "name", "status", "conclusion", "startedAt", "completedAt",
+            }), "Failed step")
+            parsed_steps.append(FailedStep(
+                step["number"], step["name"], step["status"], step["conclusion"],
+                step["startedAt"], step["completedAt"],
+            ))
+        steps = tuple(parsed_steps)
     return JobObservation(
         run_id=_positive_int(value["runId"], "runId"),
         attempt=_positive_int(value["attempt"], "attempt"),
@@ -1021,6 +1276,7 @@ def _job_from_document(value: object) -> JobObservation:
         url=_nonempty_string(value["url"], "url"),
         log_excerpt=_optional_string(value["logExcerpt"], "logExcerpt"),
         log_truncated=value["logTruncated"],
+        failed_steps=steps,
     )
 
 
@@ -1081,7 +1337,13 @@ def _run_from_document(value: object) -> RunObservation:
 
 def parse_judgment_request(text: str) -> JudgmentRequest:
     document = _strict_json_object(text, "Judgment request")
-    _exact_keys(document, _REQUEST_KEYS, "Judgment request")
+    _exact_keys(
+        document,
+        _REQUEST_KEYS | ({"leafCaseKey"} if "leafCaseKey" in document else set())
+        | ({"representedLeafKeys"} if "representedLeafKeys" in document else set())
+        | ({"causeGroupId", "causeWitnesses"} if "causeGroupId" in document else set()),
+        "Judgment request",
+    )
     failed_jobs = _sequence(document["failedJobs"], "failedJobs")
     evidence_ids = _sequence(document["evidenceIds"], "evidenceIds")
     return JudgmentRequest(
@@ -1140,6 +1402,34 @@ def parse_judgment_request(text: str) -> JudgmentRequest:
             "followupCount",
         ),
         prompt=_nonempty_string(document["prompt"], "prompt", maximum=200_000),
+        leaf_case_key=(
+            _nonempty_string(document["leafCaseKey"], "leafCaseKey")
+            if "leafCaseKey" in document else None
+        ),
+        cause_group_id=(
+            _nonempty_string(document["causeGroupId"], "causeGroupId")
+            if "causeGroupId" in document else None
+        ),
+        represented_leaf_keys=tuple(
+            _nonempty_string(key, "representedLeafKeys entry")
+            for key in _sequence(document.get("representedLeafKeys", []), "representedLeafKeys")
+        ),
+        cause_witnesses=tuple(
+            _cause_witness_from_document(w) for w in
+            _sequence(document.get("causeWitnesses", []), "causeWitnesses")
+        ),
+    )
+
+
+def _cause_witness_from_document(value: object) -> CauseWitness:
+    document = _json_mapping(value, "causeWitness")
+    _exact_keys(
+        document, {"groupId", "signature", "leafCaseKey", "runId", "attempt", "headSha", "jobId"},
+        "causeWitness",
+    )
+    return CauseWitness(
+        document["groupId"], document["signature"], document["leafCaseKey"], document["runId"],
+        document["attempt"], document["headSha"], document["jobId"],
     )
 
 
@@ -1150,7 +1440,22 @@ def parse_judgment_result(
     if not isinstance(request, JudgmentRequest):
         raise ValueError("request must be a JudgmentRequest.")
     document = _strict_json_object(text, "Judgment result")
-    _exact_keys(document, _RESULT_KEYS, "Judgment result")
+    typed = request.leaf_case_key is not None or bool(
+        {"classification", "recommendedResponse"} & document.keys()
+    )
+    _exact_keys(
+        document,
+        _RESULT_KEYS | ({"classification", "recommendedResponse"} if typed else set()),
+        "Judgment result",
+    )
+    classification = None
+    response = None
+    if typed:
+        try:
+            classification = FailureClassification(document["classification"])
+            response = RecommendedResponse(document["recommendedResponse"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("Invalid classification or recommendedResponse.") from error
     if (
         not isinstance(document["schemaVersion"], int)
         or isinstance(document["schemaVersion"], bool)
@@ -1206,6 +1511,21 @@ def parse_judgment_result(
         "copilotRequest",
         maximum=8_000,
     )
+    result = apply_classification_policy(request, JudgmentResult(
+        schema_version=1,
+        item_id=item_id,
+        episode=episode,
+        evidence_fingerprint=evidence_fingerprint,
+        decision=decision,
+        summary=summary,
+        evidence_ids=evidence_ids,
+        in_scope_job_ids=in_scope_job_ids,
+        copilot_request=copilot_request,
+        classification=classification,
+        recommended_response=response,
+    ))
+    decision = result.decision
+    copilot_request = result.copilot_request
     if decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}:
         if copilot_request is None:
             raise ValueError(
@@ -1252,14 +1572,4 @@ def parse_judgment_result(
             )
         if request.followup_count >= 2:
             raise ValueError("follow_up is limited to fewer than two follow-ups.")
-    return JudgmentResult(
-        schema_version=1,
-        item_id=item_id,
-        episode=episode,
-        evidence_fingerprint=evidence_fingerprint,
-        decision=decision,
-        summary=summary,
-        evidence_ids=evidence_ids,
-        in_scope_job_ids=in_scope_job_ids,
-        copilot_request=copilot_request,
-    )
+    return result

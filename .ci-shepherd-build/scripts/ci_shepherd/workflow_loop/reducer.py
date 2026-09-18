@@ -14,7 +14,9 @@ from .models import (
     TaskState,
     WorkflowItem,
     WorkState,
+    apply_classification_policy,
     canonical_fingerprint,
+    leaf_case_key,
 )
 from .reader import (
     ItemRefresh,
@@ -265,6 +267,22 @@ def reduce_item(
             "The prepared action is waiting for its retained judgment result.",
         )
 
+    if item.wait_reason == "cause_conflict":
+        return _finish(
+            item, replace(observed, phase=ItemPhase.NEEDS_ATTENTION, wait_reason="cause_conflict"),
+            now, NextStep.NEEDS_ATTENTION, "cause-conflict",
+            "Established cause identity is frozen pending human attention.",
+        )
+    if (
+        item.cause_leader_id is not None and item.cause_leader_id != item.id
+        and item.cause_evidence_fingerprint == item.evidence_fingerprint
+    ):
+        return _finish(
+            item, replace(observed, phase=ItemPhase.OBSERVING_FAILURE, wait_reason="cause_group_follower"),
+            now, NextStep.WAIT_FOR_CHANGE, "cause-group-follower",
+            "The exact cause leader owns issue/task effects; this leaf remains independently visible.",
+        )
+
     external = _external_owner(refresh)
     if external is not None and (
         item.task_id is None or external == "human"
@@ -325,6 +343,22 @@ def reduce_item(
                 "judgment-incomplete",
                 "The judgment request/result pair is not complete yet.",
             )
+        if item.leaf_job is not None:
+            try:
+                if request.leaf_case_key != item.case_key:
+                    raise ValueError("Judgment does not identify the exact leaf case.")
+                if request.cause_group_id is not None and request.cause_group_id != item.cause_group_id:
+                    raise ValueError("Judgment cause identity changed before action.")
+                validated = apply_classification_policy(request, judgment)
+                if validated != judgment:
+                    raise ValueError("Leaf judgment is not policy-normalized.")
+                if (
+                    judgment.decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}
+                    and judgment.copilot_request is None
+                ):
+                    raise ValueError("Action-grade leaf judgment requires a bounded request.")
+            except ValueError as error:
+                return _attention(item, observed, now, str(error))
         requires_pre_write = judgment.decision in {
             JudgmentDecision.ASSIGN,
             JudgmentDecision.FOLLOW_UP,
@@ -509,7 +543,8 @@ def _reduce_owned_task(
             original,
             updated,
             now,
-            "The owned task finished without authoritative pull request evidence.",
+            "The owned task finished without authoritative pull request evidence; "
+            "no machine-verifiable result is available.",
         )
     return _reduce_pull_request(
         original,
@@ -1046,26 +1081,39 @@ def _proven_recovery(
     candidate = refresh.recovery_run
     failure = refresh.failure_run
     if (
-        item.last_judged_fingerprint is None
+        (
+            item.last_judged_fingerprint is None
+            and refresh.recovery_basis_fingerprint is None
+            and item.leaf_job is None
+        )
         or refresh.recovery != "passed"
         or candidate is None
         or failure is None
         or candidate.event in _PR_EVENTS
         or candidate.status != "completed"
         or not candidate.jobs_complete
-        or not item.failed_jobs
-        or not (
-            candidate.run_id == item.failure_run_id
-            and candidate.attempt > item.failure_attempt
-            or candidate.run_id != item.failure_run_id
-            and _is_newer_execution(candidate, failure)
-        )
+        or not (refresh.represented_leaf_keys or item.failed_jobs)
+        or candidate.run_id == item.failure_run_id
+        or not _is_newer_execution(candidate, failure)
+        or candidate.key.repository != item.repository
+        or candidate.key.workflow_id != item.workflow_id
+        or candidate.key.branch != item.branch
+        or candidate.workflow_path != item.workflow_path
+        or failure.key.repository != item.repository
+        or failure.key.workflow_id != item.workflow_id
+        or failure.key.branch != item.branch
+        or failure.workflow_path != item.workflow_path
     ):
         return None
-    for target in item.failed_jobs:
-        matches = [job for job in candidate.jobs if job.key == target]
-        if not matches:
-            matches = [job for job in candidate.jobs if job.key.name == target.name]
+    expected_keys = (
+        refresh.represented_leaf_keys
+        or tuple(leaf_case_key(candidate, target) for target in item.failed_jobs)
+    )
+    observed_by_key: dict[str, list[JobObservation]] = {}
+    for job in candidate.jobs:
+        observed_by_key.setdefault(leaf_case_key(candidate, job.key), []).append(job)
+    for target in expected_keys:
+        matches = observed_by_key.get(target, [])
         if len(matches) != 1:
             return None
         job = matches[0]

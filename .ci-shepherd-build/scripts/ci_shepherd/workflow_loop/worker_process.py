@@ -340,6 +340,14 @@ def _judgment_result_document(result: JudgmentResult) -> dict[str, object]:
         "evidenceIds": list(result.evidence_ids),
         "inScopeJobIds": list(result.in_scope_job_ids),
         "copilotRequest": result.copilot_request,
+        **(
+            {
+                "classification": result.classification.value,
+                "recommendedResponse": result.recommended_response.value,
+            }
+            if result.classification is not None and result.recommended_response is not None
+            else {}
+        ),
     }
 
 

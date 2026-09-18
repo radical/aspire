@@ -16,6 +16,7 @@ from .models import (
     ActionCompletion,
     ActionKind,
     ActionState,
+    FailureClassification,
     ItemPhase,
     JudgmentRequest,
     TaskState,
@@ -166,6 +167,11 @@ class CiCoordinator:
                     ),
                 )
             worker_observations = self._observe_workers()
+            self._classifications = {
+                observation.judgment.item_id: observation.judgment.classification
+                for observation in worker_observations.values()
+                if observation is not None and observation.judgment is not None
+            }
             launched_workers += sum(
                 observation is None
                 for observation in worker_observations.values()
@@ -182,6 +188,7 @@ class CiCoordinator:
                 scenario_items = tuple(
                     item
                     for item in items_before
+                    if item.phase is not ItemPhase.SUPERSEDED
                     if self._scenario_for_item(item) is scenario
                 )
                 observation = scenario.observe(
@@ -198,6 +205,8 @@ class CiCoordinator:
                     observation,
                     scenario_items,
                 )
+                scenario_requests += getattr(scenario, "discovery_request_count", 0)
+                errors.extend(getattr(scenario, "discovery_errors", ()))
                 discovered_items += len(discoveries)
                 for discovery in discoveries:
                     self._store.bind_item_scenario(
@@ -212,7 +221,7 @@ class CiCoordinator:
                 )
 
             items = sorted(
-                self._store.list_items(),
+                (item for item in self._store.list_items() if item.phase is not ItemPhase.SUPERSEDED),
                 key=self._item_order,
             )
             workers = self._store.list_workers()
@@ -251,7 +260,11 @@ class CiCoordinator:
                     progressed_items += 1
                 normalized_items.append(item)
 
+            ownership_enrichments = 0
             for item in sorted(normalized_items, key=self._item_order):
+                # Earlier admission can enrich a sibling and change an unowned
+                # group's leader. Never assess the stale pre-grouping snapshot.
+                item = next(current for current in self._store.list_items() if current.id == item.id)
                 scenario = self._scenario_for_item(item)
                 refresh = refreshes[item.id]
                 workers = self._store.list_workers()
@@ -377,16 +390,74 @@ class CiCoordinator:
                         < self._capacity_limit
                     ),
                 )
+                budget_exhausted = (
+                    item.leaf_job is not None
+                    and transition.next_step in {NextStep.QUEUE_JUDGMENT, NextStep.PREPARE_ACTION}
+                    and (request is None or request.round == 0)
+                    and not self._store.episode_start_available(item.id)
+                )
+                needs_cause = item.cause_evidence_fingerprint != item.evidence_fingerprint
+                # Exact external ownership is free even after two starts. Let
+                # preparation derive/search the cause first, but admit only a
+                # bounded number of new log reads per pass. Persisted causes
+                # can be searched again without downloading their logs.
+                ownership_check = (
+                    transition.next_step is NextStep.QUEUE_JUDGMENT
+                    and (not needs_cause or ownership_enrichments < self._capacity_limit)
+                )
+                if budget_exhausted and ownership_check and needs_cause:
+                    ownership_enrichments += 1
+                if budget_exhausted and not ownership_check:
+                    transition = replace(
+                        transition,
+                        item=replace(
+                            transition.item, phase=ItemPhase.OBSERVING_FAILURE,
+                            wait_reason="deferred_by_episode_budget",
+                        ),
+                        next_step=NextStep.WAIT_FOR_CHANGE,
+                        history_event="deferred-by-episode-budget",
+                        summary="Two new cause-group starts are already reserved for this run/attempt.",
+                        retain_judgment=True,
+                    )
 
                 if _meaningful_item_change(
                     item,
                     transition.item,
                 ):
+                    detail: dict[str, object] = {
+                        "nextStep": transition.next_step.value,
+                    }
+                    if (
+                        judgment is not None
+                        and judgment.classification is not None
+                        and judgment.recommended_response is not None
+                    ):
+                        # Persist only the closed policy outcome needed for
+                        # status reporting. The full judgment evidence remains
+                        # in the private worker packet.
+                        detail["classification"] = judgment.classification.value
+                        detail["recommendedResponse"] = (
+                            judgment.recommended_response.value
+                        )
+                    if (
+                        transition.item.phase is ItemPhase.RECOVERED
+                        and refresh.recovery_witnesses
+                    ):
+                        detail["recoveryWitnesses"] = [
+                            {
+                                "leafCaseKey": witness.leaf_case_key,
+                                "runId": witness.run_id,
+                                "attempt": witness.attempt,
+                                "headSha": witness.head_sha,
+                                "jobId": witness.job_id,
+                            }
+                            for witness in refresh.recovery_witnesses
+                        ]
                     self._store.update_item(
                         transition.item,
                         history_event=transition.history_event,
                         summary=transition.summary,
-                        detail={"nextStep": transition.next_step.value},
+                        detail=detail,
                     )
                     if (
                         transition.item.last_progressed_at
@@ -644,7 +715,13 @@ class CiCoordinator:
         self,
     ) -> dict[str, WorkerObservation | None]:
         observations: dict[str, WorkerObservation | None] = {}
+        superseded = {
+            item.id for item in self._store.list_items()
+            if item.phase is ItemPhase.SUPERSEDED
+        }
         for worker in self._store.list_workers():
+            if worker.item_id in superseded:
+                continue
             if worker.worker_id in self._inherited_worker_ids:
                 continue
             if worker.consumed_at is not None:
@@ -694,12 +771,21 @@ class CiCoordinator:
         self._store.bind_item_scenario(item.id, matches[0].name)
         return matches[0]
 
-    def _item_order(self, item: WorkflowItem) -> tuple[int, int, int]:
+    def _item_order(self, item: WorkflowItem) -> tuple[int, int, int, str]:
         scenario = self._scenario_for_item(item)
+        rank = {
+            FailureClassification.REPOSITORY_INFRA: 0,
+            FailureClassification.PRODUCT_OR_BUILD: 0,
+            FailureClassification.DETERMINISTIC_TEST: 1,
+            FailureClassification.SUSPECTED_FLAKE: 2,
+            FailureClassification.INSUFFICIENT_EVIDENCE: 3,
+            FailureClassification.EXTERNAL_INFRA: 3,
+        }.get(getattr(self, "_classifications", {}).get(item.id), 4)
         return (
             scenario.priority(item),
             self._scenarios.index(scenario),
-            item.id,
+            rank,
+            item.case_key if item.leaf_job is not None else f"{item.id:020}",
         )
 
     def _validate_workflow_scope(

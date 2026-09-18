@@ -17,6 +17,7 @@ from ci_shepherd.workflow_loop.models import (
     WorkflowItem,
     WorkflowKey,
     WorkState,
+    leaf_case_key,
 )
 from ci_shepherd.workflow_loop.reader import (
     IssueObservation,
@@ -324,6 +325,100 @@ def _judgment(
 
 
 class WorkflowLoopReducerTests(unittest.TestCase):
+    def test_real_leaf_rejects_legacy_or_uncited_action_even_without_parser(self) -> None:
+        from ci_shepherd.workflow_loop.models import (
+            FailureClassification, RecommendedResponse, leaf_case_key,
+        )
+
+        failure = replace(_failure_run(), jobs=(_failure_run().jobs[0],))
+        item = _item(
+            leaf_job=BUILD, failed_jobs=(BUILD,),
+            case_key=leaf_case_key(failure, BUILD),
+        )
+        request = replace(
+            _request(item), failure_run=failure, failed_jobs=failure.jobs,
+            leaf_case_key=item.case_key,
+            evidence_ids=("run:101:1", "job:101:1:900", "log:900"),
+        )
+        cited = replace(_judgment(item), evidence_ids=request.evidence_ids)
+        typed = replace(
+            cited, classification=FailureClassification.DETERMINISTIC_TEST,
+            recommended_response=RecommendedResponse.REPAIR,
+        )
+        for name, invalid_request, invalid_result in (
+            ("untyped", request, cited),
+            ("legacy request", replace(request, leaf_case_key=None), typed),
+            ("uncited", request, replace(typed, evidence_ids=("run:101:1",))),
+            ("missing job", request, replace(typed, in_scope_job_ids=())),
+            ("missing request", request, replace(typed, copilot_request=None)),
+            ("model escalation", request, replace(typed, classification=FailureClassification.EXTERNAL_INFRA)),
+        ):
+            with self.subTest(name=name):
+                transition = reduce_item(
+                    item, _refresh(item=item, failure_run=failure), now=LATER,
+                    request=invalid_request, judgment=invalid_result,
+                )
+                self.assertIs(NextStep.NEEDS_ATTENTION, transition.next_step)
+                self.assertIsNone(transition.action_kind)
+
+    def test_completed_no_pr_retains_task_and_requires_attention_without_result_channel(self) -> None:
+        item = _item(
+            issue_number=17, task_id="task-123", task_state=TaskState.IN_PROGRESS,
+            phase=ItemPhase.COPILOT_ACTIVE, assignment_confirmed_at=NOW,
+        )
+        transition = reduce_item(
+            item, _refresh(item=item, task=_task("completed"), issue=_issue()), now=LATER,
+        )
+        self.assertIs(NextStep.NEEDS_ATTENTION, transition.next_step)
+        self.assertEqual("task-123", transition.item.task_id)
+        self.assertEqual(17, transition.item.issue_number)
+        self.assertIsNone(transition.action_kind)
+        self.assertIn("no machine-verifiable result", transition.summary)
+
+    def test_leaf_classification_mapping_survives_reducer_and_freshness_gate(self) -> None:
+        import json
+        from ci_shepherd.workflow_loop.models import leaf_case_key, parse_judgment_result
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import build_judgment_request
+
+        failure = replace(_failure_run(), jobs=(_failure_run().jobs[1],))
+        item = _item(
+            leaf_job=TEST, failed_jobs=(TEST,),
+            case_key=leaf_case_key(failure, TEST),
+        )
+        refresh = _refresh(item=item, failure_run=failure)
+        request = build_judgment_request(
+            item, refresh, worker_id="leaf", session_id="leaf", judgment_round=0,
+        )
+        for classification, step in (
+            ("deterministic_test", NextStep.PREPARE_ACTION),
+            ("repository_infra", NextStep.PREPARE_ACTION),
+            ("product_or_build", NextStep.PREPARE_ACTION),
+            ("suspected_flake", NextStep.PREPARE_ACTION),
+            ("insufficient_evidence", NextStep.PREPARE_ACTION),
+            ("external_infra", NextStep.OBSERVE_EXTERNAL),
+            ("aggregate_only", NextStep.NEEDS_ATTENTION),
+        ):
+            with self.subTest(classification=classification):
+                result = parse_judgment_result(json.dumps({
+                    "schemaVersion": 1, "itemId": item.id, "episode": item.episode,
+                    "evidenceFingerprint": item.evidence_fingerprint,
+                    "decision": "assign", "summary": "Claimed repair and recurrence.",
+                    "classification": classification, "recommendedResponse": "repair",
+                    "evidenceIds": list(request.evidence_ids), "inScopeJobIds": [901],
+                    "copilotRequest": "Investigate this exact lane.",
+                }), request)
+                transition = reduce_item(
+                    item, refresh, now=LATER, request=request, judgment=result,
+                )
+                self.assertIs(step, transition.next_step)
+                if step is NextStep.PREPARE_ACTION:
+                    self.assertIs(ActionKind.CREATE_ISSUE, transition.action_kind)
+                    stale = reduce_item(
+                        item, replace(refresh, pre_write=False), now=LATER,
+                        request=request, judgment=result,
+                    )
+                    self.assertIs(NextStep.WAIT_FOR_READ, stale.next_step)
+
     def assert_transition(
         self,
         transition: ItemTransition,
@@ -461,7 +556,7 @@ class WorkflowLoopReducerTests(unittest.TestCase):
                     jobs=(
                         _job(
                             902,
-                            JobKey(BUILD.name, ("new-runner",)),
+                            BUILD,
                             run_id=102,
                             conclusion="success",
                         ),
@@ -469,6 +564,23 @@ class WorkflowLoopReducerTests(unittest.TestCase):
                 ),
                 "passed",
                 ItemPhase.RECOVERED,
+            ),
+            "runner-label-changed": (
+                _run(
+                    102,
+                    11,
+                    conclusion="success",
+                    jobs=(
+                        _job(
+                            902,
+                            JobKey(BUILD.name, ("new-runner",)),
+                            run_id=102,
+                            conclusion="success",
+                        ),
+                    ),
+                ),
+                "passed",
+                ItemPhase.OBSERVING_FAILURE,
             ),
             "skipped": (
                 _run(
@@ -545,7 +657,7 @@ class WorkflowLoopReducerTests(unittest.TestCase):
                 )
                 self.assertIs(expected_phase, transition.item.phase)
 
-    def test_later_attempt_can_recover_but_older_retry_cannot_mask_failure(
+    def test_same_run_later_attempt_cannot_recover_or_mask_failure(
         self,
     ) -> None:
         item = _item(
@@ -567,7 +679,7 @@ class WorkflowLoopReducerTests(unittest.TestCase):
                 ),
             ),
         )
-        recovered = reduce_item(
+        same_run = reduce_item(
             item,
             _refresh(
                 item=item,
@@ -577,7 +689,7 @@ class WorkflowLoopReducerTests(unittest.TestCase):
             ),
             now=LATER,
         )
-        self.assertIs(ItemPhase.RECOVERED, recovered.item.phase)
+        self.assertIsNot(ItemPhase.RECOVERED, same_run.item.phase)
 
         older_retry = _run(
             99,
@@ -606,6 +718,64 @@ class WorkflowLoopReducerTests(unittest.TestCase):
         )
         self.assertIsNot(ItemPhase.RECOVERED, not_recovered.item.phase)
 
+    def test_group_recovery_requires_every_exact_represented_leaf(self) -> None:
+        item = _item(
+            failed_jobs=(BUILD,),
+            last_judged_fingerprint=EVIDENCE,
+        )
+        mixed = _run(
+            102,
+            11,
+            jobs=(
+                _job(902, BUILD, run_id=102, conclusion="success"),
+                _job(903, TEST, run_id=102),
+            ),
+        )
+        represented = (
+            leaf_case_key(mixed, BUILD),
+            leaf_case_key(mixed, TEST),
+        )
+
+        not_recovered = reduce_item(
+            item,
+            replace(
+                _refresh(
+                    item=item,
+                    runs=(_failure_run(), mixed),
+                    recovery="passed",
+                    recovery_run=mixed,
+                ),
+                represented_leaf_keys=represented,
+            ),
+            now=LATER,
+        )
+
+        self.assertIsNot(ItemPhase.RECOVERED, not_recovered.item.phase)
+
+        passing = replace(
+            mixed,
+            conclusion="success",
+            jobs=tuple(
+                replace(job, conclusion="success")
+                for job in mixed.jobs
+            ),
+        )
+        recovered = reduce_item(
+            item,
+            replace(
+                _refresh(
+                    item=item,
+                    runs=(_failure_run(), passing),
+                    recovery="passed",
+                    recovery_run=passing,
+                ),
+                represented_leaf_keys=represented,
+            ),
+            now=LATER,
+        )
+
+        self.assertIs(ItemPhase.RECOVERED, recovered.item.phase)
+
     def test_unjudged_item_cannot_recover_from_overall_green_alone(self) -> None:
         item = _item(failed_jobs=(BUILD,))
         green = _run(
@@ -629,6 +799,48 @@ class WorkflowLoopReducerTests(unittest.TestCase):
         )
 
         self.assertIsNot(ItemPhase.RECOVERED, transition.item.phase)
+
+    def test_unjudged_exact_leaf_recovers_after_capacity_deferral(self) -> None:
+        failure = replace(_failure_run(), jobs=(_failure_run().jobs[0],))
+        item = _item(
+            phase=ItemPhase.OBSERVING_FAILURE,
+            failed_jobs=(BUILD,),
+            wait_reason="deferred_by_episode_budget",
+            case_key=leaf_case_key(failure, BUILD),
+            leaf_job=BUILD,
+        )
+        green = _run(
+            102,
+            11,
+            conclusion="success",
+            jobs=(
+                _job(902, BUILD, run_id=102, conclusion="success"),
+            ),
+        )
+
+        transition = reduce_item(
+            item,
+            replace(
+                _refresh(
+                    item=item,
+                    failure_run=failure,
+                    runs=(failure, green),
+                    recovery="passed",
+                    recovery_run=green,
+                ),
+                represented_leaf_keys=(item.case_key,),
+            ),
+            capacity_available=True,
+            now=LATER,
+        )
+
+        self.assert_transition(
+            transition,
+            phase=ItemPhase.RECOVERED,
+            step=NextStep.WAIT_FOR_CHANGE,
+        )
+        self.assertIsNone(transition.action_kind)
+        self.assertEqual(102, transition.item.recovered_run_id)
 
     def test_newer_failure_is_not_masked_by_older_success(self) -> None:
         item = _item(

@@ -133,8 +133,207 @@ def _intent(
         prepared_at=NOW,
     )
 
+def _legacy_schema(database: Path, version: int) -> None:
+    """Rebuild actual pre-leaf tables, including old worker uniqueness."""
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        for table, removed in (
+            ("workflow_items", {
+                "leaf_job_json", "cause_group_id", "cause_leader_id", "cause_evidence_fingerprint",
+                "last_assessed_target",
+                *({"scenario_name", "case_key"} if version == 3 else set()),
+            }),
+            ("workers", {"context_fingerprint"}),
+        ):
+            schema = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE name = ?", (table,),
+            ).fetchone()[0]
+            columns = [
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+                if row[1] not in removed
+            ]
+            schema = "\n".join(
+                line for line in schema.splitlines()
+                if not any(line.strip().startswith(f"{name} ") for name in removed)
+            )
+            schema = schema.replace(
+                "UNIQUE(item_id, episode, evidence_fingerprint, judgment_round,\n           context_fingerprint)",
+                "UNIQUE(item_id, episode, evidence_fingerprint, judgment_round)",
+            )
+            if version == 3 and table == "workflow_items":
+                schema = schema.replace(
+                    "UNIQUE(repository, branch, scenario_name, case_key)",
+                    "UNIQUE(repository, workflow_id, branch)",
+                )
+            schema = schema.replace(f"CREATE TABLE {table}(", f"CREATE TABLE {table}_legacy(")
+            connection.execute(schema)
+            names = ", ".join(columns)
+            connection.execute(f"INSERT INTO {table}_legacy({names}) SELECT {names} FROM {table}")
+            connection.execute(f"DROP TABLE {table}")
+            connection.execute(f"ALTER TABLE {table}_legacy RENAME TO {table}")
+        connection.execute("DROP TABLE job_manifests")
+        connection.execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(version),),
+        )
+        connection.commit()
+
 
 class WorkflowLoopStoreTests(unittest.TestCase):
+    def test_shadow_migrates_snapshot_without_mutating_legacy_canonical_database(self) -> None:
+        from ci_shepherd.workflow_loop.shadow import prepare_shadow
+
+        for version in (3, 4):
+            with self.subTest(version=version), TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                canonical = root / "canonical"
+                store = WorkflowLoopStore(canonical, repository="owner/repo", branch="main")
+                store.initialize()
+                item = store.upsert_failure(_run(), NOW)
+                self.assertTrue(store.reserve_worker(
+                    _reservation(canonical, item.id, 1, item.evidence_fingerprint), capacity_limit=2,
+                ))
+                database = canonical / "workflow-loop.sqlite3"
+                _legacy_schema(database, version)
+                before = database.read_bytes()
+                shadow = root / "shadow"
+                prepare_shadow(canonical, shadow, repository="owner/repo", branch="main", workflow_ids=None)
+                self.assertEqual(before, database.read_bytes())
+                copied = WorkflowLoopStore(shadow, repository="owner/repo", branch="main")
+                self.assertEqual(ItemPhase.SUPERSEDED, copied.list_items()[0].phase)
+                self.assertEqual(WorkState.SUPERSEDED, copied.list_workers()[0].state)
+                self.assertEqual(frozenset(), copied.active_item_ids())
+                with closing(sqlite3.connect(shadow / "workflow-loop.sqlite3")) as connection:
+                    migrated = tuple(connection.iterdump())
+                copied.initialize()
+                with closing(sqlite3.connect(shadow / "workflow-loop.sqlite3")) as connection:
+                    self.assertEqual(migrated, tuple(connection.iterdump()))
+                self.assertEqual(before, database.read_bytes())
+
+    def test_leaf_cannot_broaden_targets_or_rebind_path_through_update(self) -> None:
+        item = self.store.upsert_leaf_failure(_run(), _job().key, NOW)
+        for changed in (
+            replace(item, failed_jobs=(_job().key, _job(901, name="Other").key)),
+            replace(item, workflow_path=".github/workflows/other.yml"),
+            replace(item, case_key="leaf-key-v2:changed"),
+        ):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "identity"):
+                self.store.update_item(
+                    changed, history_event="invalid", summary="Invalid retargeting", detail={},
+                )
+
+    def test_legacy_migration_supersedes_work_without_transferring_ownership(self) -> None:
+        for version in (3, 4, 5):
+            with self.subTest(version=version), TemporaryDirectory() as scratch:
+                store = WorkflowLoopStore(Path(scratch), repository="owner/repo", branch="main")
+                store.initialize()
+                items = []
+                for workflow_id in (42, 43):
+                    item = store.upsert_failure(
+                        replace(_run(), key=WorkflowKey("owner/repo", workflow_id, "main")), NOW,
+                    )
+                    owned = replace(item, issue_number=17, task_id=f"task-{workflow_id}",
+                                    task_state=TaskState.IN_PROGRESS, pull_request_number=23,
+                                    external_owner="copilot")
+                    reservation = _reservation(Path(scratch), item.id, 1, item.evidence_fingerprint)
+                    self.assertTrue(store.reserve_worker(reservation, capacity_limit=2))
+                    if workflow_id == 43:
+                        store.mark_worker_launch_attempt(reservation.worker_id, launch_attempted_at=NOW)
+                        store.mark_worker_launched(reservation.worker_id, pid=123, launched_at=NOW)
+                    store.update_item(owned, history_event="owned", summary="Owned", detail={})
+                    items.append(owned)
+                for ordinal, state in enumerate((ActionState.PREPARED, ActionState.CONFIRMED, ActionState.UNCERTAIN), 1):
+                    action_item = store.upsert_failure(
+                        replace(_run(), key=WorkflowKey("owner/repo", 50 + ordinal, "main")), NOW,
+                    )
+                    intent = _intent(action_item.id, 1, ordinal=ordinal)
+                    self.assertTrue(store.prepare_action(intent, capacity_limit=10))
+                    if state is not ActionState.PREPARED:
+                        store.begin_action_invocation(intent.action_id, pass_id="old", owner_id="old", invoked_at=NOW)
+                        store.complete_action(ActionCompletion(
+                            intent.action_id, state, LATER, None,
+                            "owned-task" if state is ActionState.CONFIRMED else None,
+                            "Unknown outcome" if state is ActionState.UNCERTAIN else None,
+                        ))
+                receipts = store.list_actions()[1:]
+                database = Path(scratch) / "workflow-loop.sqlite3"
+                if version in (3, 4):
+                    _legacy_schema(database, version)
+                else:
+                    with closing(sqlite3.connect(database)) as connection:
+                        for column in (
+                            "leaf_job_json", "cause_group_id", "cause_leader_id", "cause_evidence_fingerprint",
+                        ):
+                            connection.execute(f"ALTER TABLE workflow_items DROP COLUMN {column}")
+                        connection.execute("DROP TABLE job_manifests")
+                        connection.execute("UPDATE meta SET value='5' WHERE key='schema_version'")
+                        connection.commit()
+                store.initialize()
+                self.assertEqual((ItemPhase.SUPERSEDED,) * 5, tuple(item.phase for item in store.list_items()))
+                self.assertEqual((WorkState.SUPERSEDED,) * 2, tuple(worker.state for worker in store.list_workers()))
+                self.assertEqual(ActionState.SUPERSEDED, store.list_actions()[0].state)
+                self.assertEqual(receipts, store.list_actions()[1:])
+                self.assertEqual(frozenset(), store.active_item_ids())
+                with self.assertRaisesRegex(ValueError, "Superseded"):
+                    store.upsert_failure(_run(run_id=999), LATER)
+                self.assertEqual(
+                    [(17, item.task_id, 23, "copilot") for item in items],
+                    [(item.issue_number, item.task_id, item.pull_request_number, item.external_owner)
+                     for item in store.list_items()[:2]],
+                )
+                with closing(sqlite3.connect(database)) as connection:
+                    counts = json.loads(connection.execute(
+                        "SELECT value FROM meta WHERE key='workflow_failure_leaf_migration'"
+                    ).fetchone()[0])
+                    self.assertEqual({"items": 5, "workers": 2, "actions": 1}, counts)
+                    before = tuple(connection.iterdump())
+                store.initialize()
+                with closing(sqlite3.connect(database)) as connection:
+                    self.assertEqual(before, tuple(connection.iterdump()))
+                leaf = store.upsert_leaf_failure(_run(), _job().key, LATER)
+                self.assertEqual((None, None, None, None), (
+                    leaf.issue_number, leaf.task_id, leaf.pull_request_number, leaf.external_owner,
+                ))
+
+    def test_leaf_rows_remain_separate_and_immutable_as_evidence_changes(self) -> None:
+        first = self.store.upsert_leaf_failure(_run(), _job().key, NOW)
+        other_job = _job(901, name="Build / Windows")
+        second = self.store.upsert_leaf_failure(
+            _run(jobs=(other_job,)), other_job.key, NOW,
+        )
+        self.assertNotEqual(first.id, second.id)
+        later = _run(run_id=102, jobs=(replace(_job(), job_id=902), other_job))
+        updated = self.store.upsert_leaf_failure(later, _job().key, LATER)
+        self.assertEqual(first.case_key, updated.case_key)
+        self.assertEqual(first.id, updated.id)
+        self.assertEqual((_job().key,), updated.failed_jobs)
+        self.assertEqual(_job().key, updated.leaf_job)
+        self.assertIsNone(updated.cause_group_id)
+        self.assertIsNone(updated.cause_leader_id)
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.store.update_item(
+                replace(updated, leaf_job=other_job.key),
+                history_event="invalid", summary="Invalid retargeting", detail={},
+            )
+
+    def test_manifest_cache_persists_complete_inventory_and_retries_incomplete(self) -> None:
+        from ci_shepherd.workflow_loop.reader import JobManifest, ManifestJob
+
+        run = _run()
+        complete = JobManifest(run, (ManifestJob(_job(), run.head_sha, ("Build",)),), 1, True, (), 2)
+        self.store.record_job_manifest(run, complete, NOW, {900: "leaf"})
+        restarted = WorkflowLoopStore(self.state_directory, repository="owner/repo", branch="main")
+        restarted.initialize()
+        self.assertEqual(complete, restarted.read_job_manifest(run))
+        self.assertIsNone(restarted.read_job_manifest(replace(run, head_sha="changed")))
+        self.assertIsNone(restarted.read_job_manifest(replace(run, attempt=2, jobs=())))
+        incomplete_run = _run(run_id=102)
+        incomplete = JobManifest(None, (), None, False, (), 1)
+        self.store.record_job_manifest(incomplete_run, incomplete, LATER, {})
+        self.assertIsNone(self.store.read_job_manifest(incomplete_run))
+        observations = self.store.list_manifest_observations()
+        self.assertEqual(["complete", "inventory_incomplete"], [entry["read_status"] for entry in observations])
+        self.assertEqual({"900": "leaf"}, observations[0]["job_roles"])
+
     def test_explicit_empty_case_key_is_not_replaced_by_a_default(self) -> None:
         with TemporaryDirectory() as scratch:
             store = WorkflowLoopStore(
@@ -287,27 +486,7 @@ class WorkflowLoopStoreTests(unittest.TestCase):
             detail={},
         )
         database = self.state_directory / "workflow-loop.sqlite3"
-        with closing(sqlite3.connect(database)) as connection:
-            connection.execute("PRAGMA foreign_keys = OFF")
-            columns = tuple(
-                row[1]
-                for row in connection.execute(
-                    "PRAGMA table_info(workflow_items)"
-                )
-            )[:-3]
-            names = ", ".join(columns)
-            connection.execute(
-                f"CREATE TABLE workflow_items_v3 AS "
-                f"SELECT {names} FROM workflow_items"
-            )
-            connection.execute("DROP TABLE workflow_items")
-            connection.execute(
-                "ALTER TABLE workflow_items_v3 RENAME TO workflow_items"
-            )
-            connection.execute(
-                "UPDATE meta SET value = '3' WHERE key = 'schema_version'"
-            )
-            connection.commit()
+        _legacy_schema(database, 3)
 
         self.store.initialize()
 
@@ -1451,6 +1630,177 @@ print(json.dumps({
             detail={"taskId": terminal.task_id},
         )
         self.assertEqual(frozenset(), self.store.active_item_ids())
+
+    def test_new_leaf_episode_drops_terminal_task_cause_before_recording_new_cause(
+        self,
+    ) -> None:
+        cause_a = "src/App.cs(12,3): error CS1002: ; expected"
+        cause_b = "src/Other.cs(8,2): error CS0103: The name 'missing' does not exist"
+        failure_a = _run(jobs=(replace(_job(), log_excerpt=cause_a),))
+        item = self.store.upsert_leaf_failure(
+            failure_a,
+            failure_a.jobs[0].key,
+            NOW,
+        )
+        caused_a = self.store.record_cause(item.id, failure_a, observed_at=NOW)
+        group_a = caused_a.cause_group_id
+        owned = replace(
+            caused_a,
+            phase=ItemPhase.COPILOT_ACTIVE,
+            task_id="task-a",
+            task_state=TaskState.IN_PROGRESS,
+        )
+        self.store.update_item(
+            owned,
+            history_event="task-running",
+            summary="The cause A task is running.",
+            detail={},
+        )
+        recovered = replace(
+            owned,
+            phase=ItemPhase.RECOVERED,
+            recovered_run_id=102,
+            recovered_at=LATER,
+        )
+        self.store.update_item(
+            recovered,
+            history_event="recovered",
+            summary="The leaf recovered.",
+            detail={},
+        )
+        self.store.update_item(
+            replace(recovered, task_state=TaskState.COMPLETED),
+            history_event="task-completed",
+            summary="The cause A task completed.",
+            detail={},
+        )
+
+        failure_b = _run(
+            run_id=103,
+            jobs=(replace(_job(), log_excerpt=cause_b),),
+        )
+        episode_b = self.store.upsert_leaf_failure(
+            failure_b,
+            failure_b.jobs[0].key,
+            "2026-09-17T20:30:00Z",
+        )
+
+        self.assertEqual(2, episode_b.episode)
+        self.assertIsNone(episode_b.cause_group_id)
+        self.assertIsNone(episode_b.cause_leader_id)
+        self.assertIsNone(episode_b.cause_evidence_fingerprint)
+        self.assertIsNone(episode_b.task_id)
+
+        caused_b = self.store.record_cause(
+            episode_b.id,
+            failure_b,
+            observed_at="2026-09-17T20:30:00Z",
+        )
+        self.assertNotEqual(group_a, caused_b.cause_group_id)
+        self.assertIsNot(ItemPhase.NEEDS_ATTENTION, caused_b.phase)
+        self.assertEqual(
+            {103},
+            {witness.run_id for witness in self.store.cause_witnesses(caused_b.id)},
+        )
+        with closing(sqlite3.connect(self.state_directory / "workflow-loop.sqlite3")) as connection:
+            history = connection.execute(
+                "SELECT DISTINCT run_id FROM cause_witnesses "
+                "WHERE item_id = ? ORDER BY run_id",
+                (caused_b.id,),
+            ).fetchall()
+        self.assertEqual([101, 103], [row[0] for row in history])
+
+    def test_new_leaf_episode_drops_old_cause_but_keeps_live_task_capacity(
+        self,
+    ) -> None:
+        failure_a = _run(
+            jobs=(
+                replace(
+                    _job(),
+                    log_excerpt="src/App.cs(12,3): error CS1002: ; expected",
+                ),
+            ),
+        )
+        item = self.store.upsert_leaf_failure(
+            failure_a,
+            failure_a.jobs[0].key,
+            NOW,
+        )
+        caused_a = self.store.record_cause(item.id, failure_a, observed_at=NOW)
+        group_a = caused_a.cause_group_id
+        active = replace(
+            caused_a,
+            phase=ItemPhase.COPILOT_ACTIVE,
+            task_id="task-a",
+            task_state=TaskState.IN_PROGRESS,
+        )
+        self.store.update_item(
+            active,
+            history_event="task-running",
+            summary="The cause A task is running.",
+            detail={},
+        )
+        self.store.update_item(
+            replace(
+                active,
+                phase=ItemPhase.RECOVERED,
+                recovered_run_id=102,
+                recovered_at=LATER,
+            ),
+            history_event="recovered",
+            summary="The leaf recovered while its task remained active.",
+            detail={},
+        )
+
+        failure_b = _run(
+            run_id=103,
+            jobs=(
+                replace(
+                    _job(),
+                    log_excerpt=(
+                        "src/Other.cs(8,2): error CS0103: "
+                        "The name 'missing' does not exist"
+                    ),
+                ),
+            ),
+        )
+        episode_b = self.store.upsert_leaf_failure(
+            failure_b,
+            failure_b.jobs[0].key,
+            "2026-09-17T20:30:00Z",
+        )
+
+        self.assertEqual("task-a", episode_b.task_id)
+        self.assertIs(TaskState.IN_PROGRESS, episode_b.task_state)
+        self.assertIsNone(episode_b.cause_group_id)
+        self.assertIsNone(episode_b.cause_leader_id)
+        self.assertIsNone(episode_b.cause_evidence_fingerprint)
+
+        caused_b = self.store.record_cause(
+            episode_b.id,
+            failure_b,
+            observed_at="2026-09-17T20:30:00Z",
+        )
+        self.assertNotEqual(group_a, caused_b.cause_group_id)
+        self.assertEqual("task-a", caused_b.task_id)
+        self.assertEqual(frozenset({caused_b.id}), self.store.active_item_ids())
+        self.assertFalse(
+            self.store.prepare_action(
+                _intent(caused_b.id, caused_b.episode, ordinal=2),
+                capacity_limit=2,
+            )
+        )
+        self.assertFalse(
+            self.store.reserve_worker(
+                _reservation(
+                    self.state_directory,
+                    caused_b.id,
+                    caused_b.episode,
+                    caused_b.evidence_fingerprint,
+                ),
+                capacity_limit=2,
+            )
+        )
 
     def test_followup_budget_resets_per_episode_and_late_receipt_does_not_leak(
         self,

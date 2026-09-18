@@ -35,8 +35,8 @@ from test_workflow_loop_reader import (
     job,
     run,
 )
-from test_workflow_loop_manager import _Launcher, _issue_search_endpoint
-from workflow_loop_fakes import EndpointClient, PagedResponse
+from test_workflow_loop_manager import EndpointClient, _Launcher, _issue_search_endpoint, _manifest_page
+from workflow_loop_fakes import PagedResponse
 
 
 class _NoopLauncher:
@@ -224,6 +224,9 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
                 f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": (
                     PagedResponse((job(101, 1001, "Build"),))
                 ),
+                f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": (
+                    _manifest_page(job(101, 1001, "Build"))
+                ),
                 f"/repos/{REPOSITORY}/actions/jobs/1001/logs": "error CS1002: ; expected",
             })
             reader = WorkflowReader(
@@ -266,7 +269,9 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
             items = store.list_items()
             self.assertEqual(
                 {
-                    ("workflow-failure", f"workflow:{WORKFLOW_ID}"),
+                    ("workflow-failure",
+                     'leaf-key-v1:["radical/aspire","reader-fixture",17,'
+                     '".github/workflows/ci.yml","Build",["ubuntu-latest"]]'),
                     ("test-only", f"test-only:{WORKFLOW_ID}"),
                 },
                 {
@@ -332,7 +337,9 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
             self.assertEqual(1, len(store.list_workers()))
             self.assertEqual(
                 {
-                    ("workflow-failure", f"workflow:{WORKFLOW_ID}"),
+                    ("workflow-failure",
+                     'leaf-key-v1:["radical/aspire","reader-fixture",17,'
+                     '".github/workflows/ci.yml","Build",["ubuntu-latest"]]'),
                     ("test-only", f"test-only:{WORKFLOW_ID}"),
                 },
                 {

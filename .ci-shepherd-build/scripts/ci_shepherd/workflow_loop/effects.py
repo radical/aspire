@@ -12,6 +12,7 @@ from .models import (
     ActionView,
 )
 from .state import WorkflowLoopStore
+from .shadow import read_shadow_metadata
 
 
 EffectStatus = Literal[
@@ -57,11 +58,20 @@ class GitHubEffectExecutor:
         call: Callable[[], object],
         validate: Callable[[object], Any],
         propose_only: bool = False,
+        guard_before_prepare: bool = False,
     ) -> EffectResult:
         if propose_only:
             guarded = guard()
             if guarded is not None:
                 return guarded
+            if (
+                intent.kind in {ActionKind.CREATE_ISSUE, ActionKind.ASSIGN_COPILOT}
+                and read_shadow_metadata(self._store.state_directory) is not None
+                and not self._store.reserve_cause_start(
+                    intent.item_id, reserved_at=self._clock(), proposal=True,
+                )
+            ):
+                return EffectResult("capacity_wait", "Cause episode start budget is unavailable.")
             # A proposal is not a prepared invocation and owns no capacity.
             # Retain the complete intent rather than reconstructing its payload.
             self._store.record_history(
@@ -124,14 +134,19 @@ class GitHubEffectExecutor:
                     f"The action is already {existing.state.value}.",
                     existing.action_id,
                 )
-        elif not self._store.prepare_action(
-            intent,
-            capacity_limit=self._active_item_limit,
-        ):
-            return EffectResult(
-                "capacity_wait",
-                "Active-item capacity is unavailable.",
-            )
+        else:
+            if guard_before_prepare:
+                guarded = guard()
+                if guarded is not None:
+                    return guarded
+            if not self._store.prepare_action(
+                intent,
+                capacity_limit=self._active_item_limit,
+            ):
+                return EffectResult(
+                    "capacity_wait",
+                    "Active-item capacity is unavailable.",
+                )
 
         guarded = guard()
         if guarded is not None:

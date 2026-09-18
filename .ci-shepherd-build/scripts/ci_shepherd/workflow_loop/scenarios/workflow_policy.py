@@ -1,6 +1,33 @@
 from __future__ import annotations
 
 from enum import IntEnum
+from typing import Literal
+
+
+# Names and dependency-only steps from .github/workflows/ci.yml, tests.yml,
+# and specialized-test-runner.yml. Other failures in these jobs are real leaves.
+AGGREGATE_JOB_SUFFIXES = frozenset({"Final Results", "Final Test Results"})
+DEPENDENCY_SUMMARY_STEPS = frozenset({
+    "Fail if any dependency failed",
+    "Fail if any of the dependent jobs failed",
+})
+EXCLUDED_WORKFLOW_PATHS = frozenset({".github/workflows/repo-pulse.lock.yml"})
+
+
+def classify_job_role(
+    name: str,
+    failed_steps: tuple[str, ...] | None,
+) -> Literal["aggregate", "ambiguous_leaf", "leaf"]:
+    """Suppress only dependency fallout, never name-only or mixed-step failures."""
+    if not failed_steps:
+        return "ambiguous_leaf"
+    # Reusable-workflow job names have the shape "tests / Final Test Results".
+    suffix = " ".join(name.rsplit("/", 1)[-1].split())
+    if suffix not in AGGREGATE_JOB_SUFFIXES:
+        return "leaf"
+    if failed_steps and all(step in DEPENDENCY_SUMMARY_STEPS for step in failed_steps):
+        return "aggregate"
+    return "ambiguous_leaf"
 
 
 class WorkflowPriority(IntEnum):

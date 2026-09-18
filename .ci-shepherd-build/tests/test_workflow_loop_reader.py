@@ -6,6 +6,8 @@ import subprocess
 import threading
 import time
 import unittest
+import json
+from urllib.parse import urlencode
 
 from ci_shepherd.github import GitHubClient, GitHubTextResponse
 from ci_shepherd.workflow_loop.models import (
@@ -16,8 +18,12 @@ from ci_shepherd.workflow_loop.models import (
     TaskState,
     WorkflowItem,
     WorkflowKey,
+    canonical_fingerprint,
+    leaf_case_key,
+    workflow_case_marker,
 )
 from ci_shepherd.workflow_loop.reader import WorkflowReader
+from ci_shepherd.workflow_loop.scenarios.workflow_policy import classify_job_role
 from test_github import (
     FakeCompletedProcess,
     FakePopenFactory,
@@ -258,6 +264,28 @@ def reader(client: EndpointClient, **options: object) -> WorkflowReader:
 
 
 class WorkflowReaderDiscoveryTests(unittest.TestCase):
+    def test_repo_pulse_exclusion_uses_only_the_exact_validated_inventory_path(self) -> None:
+        workflows = (
+            workflow(17, path=".github/workflows/repo-pulse.lock.yml", name="Renamed pulse"),
+            workflow(18, path=".github/workflows/repo-pulse.yml", name="Repo Pulse"),
+            workflow(19, path=".github/workflows/repo-pulse-copy.lock.yml", name="Repo Pulse"),
+            workflow(20, path=".github/workflows/other.yml", name="Repo Pulse"),
+        )
+        for allowlist in (None, (17, 18, 19, 20)):
+            with self.subTest(allowlist=allowlist):
+                responses = base_responses()
+                responses[f"/repos/{REPOSITORY}/actions/workflows"] = PagedResponse(workflows)
+                for workflow_id in (18, 19, 20):
+                    responses[run_endpoint(workflow_id)] = {"total_count": 0, "workflow_runs": []}
+                client = EndpointClient(responses)
+                snapshot = reader(client).observe(
+                    repository=REPOSITORY, branch=BRANCH, tracked_items=(),
+                    workflow_ids=allowlist,
+                )
+                self.assertTrue(snapshot.complete, snapshot.errors)
+                self.assertEqual((18, 19, 20), tuple(w.key.workflow_id for w in snapshot.workflows))
+                self.assertEqual(6, snapshot.request_count)
+
     def test_workflow_metadata_reads_overlap_but_results_remain_ordered(self) -> None:
         workflows = tuple(
             workflow(
@@ -632,6 +660,236 @@ class WorkflowReaderDetailTests(unittest.TestCase):
         )
         return replace(value, **changes)
 
+    def test_manifest_reads_all_329_jobs_without_logs_or_artifacts(self) -> None:
+        jobs = [
+            job(101, 1000 + index, f"Lane {index}", conclusion="success")
+            for index in range(329)
+        ]
+        failed_indexes = (2, 90, 110, 180, 315, 320, 328)
+        for index in failed_indexes:
+            jobs[index]["conclusion"] = "failure"
+            jobs[index]["steps"] = [
+                {"name": "Run tests", "status": "completed", "conclusion": "failure"}
+            ]
+        jobs[320]["name"] = "tests / Final Test Results"
+        jobs[328]["name"] = "Final Results"
+        for index in (320, 328):
+            jobs[index]["steps"][0]["name"] = "Fail if any dependency failed"
+        endpoint = f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
+        responses = {f"/repos/{REPOSITORY}/actions/runs/101": run(101)}
+        pages = tuple(f"{endpoint}?per_page=100&page={page}" for page in range(1, 5))
+        for page, url in enumerate(pages):
+            responses[url] = {"total_count": 329, "jobs": jobs[page * 100:(page + 1) * 100]}
+        client = EndpointClient(responses)
+
+        manifest = reader(client).read_job_manifest(self.metadata())
+
+        self.assertTrue(manifest.complete, manifest.errors)
+        self.assertEqual((), manifest.errors)
+        self.assertEqual(329, manifest.total_count)
+        self.assertEqual(329, len(manifest.jobs))
+        self.assertEqual(
+            tuple(1000 + index for index in failed_indexes),
+            tuple(entry.job.job_id for entry in manifest.jobs if entry.job.conclusion == "failure"),
+        )
+        self.assertEqual(
+            {(101, 1, f"{101:040x}")},
+            {(entry.job.run_id, entry.job.attempt, entry.head_sha) for entry in manifest.jobs},
+        )
+        self.assertEqual(("Run tests",), manifest.jobs[315].failed_steps)
+        self.assertEqual(
+            {"leaf": 5, "aggregate": 2},
+            {
+                role: sum(
+                    entry.job.conclusion == "failure"
+                    and classify_job_role(entry.job.key.name, entry.failed_steps) == role
+                    for entry in manifest.jobs
+                )
+                for role in ("leaf", "aggregate")
+            },
+        )
+        self.assertEqual(5, manifest.request_count)
+        self.assertEqual(
+            (f"/repos/{REPOSITORY}/actions/runs/101", *pages),
+            tuple(call[1] for call in client.calls),
+        )
+
+    def test_manifest_rejects_inconsistent_or_truncated_page_counts(self) -> None:
+        endpoint = f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1"
+        for payload in (
+            {"total_count": 329, "jobs": [job(101, 1001, "Build")]},
+            {"total_count": 0, "jobs": [job(101, 1001, "Build")]},
+            {"total_count": 1, "jobs": []},
+            {"total_count": True, "jobs": [job(101, 1001, "Build")]},
+            {"total_count": -1, "jobs": []},
+            {"jobs": []},
+            {"total_count": 1, "jobs": {}},
+            [],
+        ):
+            with self.subTest(payload=payload):
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}/actions/runs/101": run(101),
+                    endpoint: payload,
+                })
+                manifest = reader(client).read_job_manifest(self.metadata())
+                self.assertFalse(manifest.complete)
+                self.assertEqual("inventory-incomplete", manifest.errors[0].code)
+                self.assertEqual(2, manifest.request_count)
+
+    def test_manifest_rejects_changing_counts_and_duplicate_identities_across_pages(self) -> None:
+        endpoint = f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
+        first = [job(101, 1000 + index, f"Lane {index}") for index in range(100)]
+        for last in (
+            {"total_count": 102, "jobs": [job(101, 1100, "Last"), job(101, 1101, "Extra")]},
+            {"total_count": 101, "jobs": [job(101, 1000, "Last")]},
+            {"total_count": 101, "jobs": [job(101, 1100, " Lane   0 ")]},
+            api_error(f"{endpoint}?per_page=100&page=2"),
+        ):
+            with self.subTest(last=last):
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}/actions/runs/101": run(101),
+                    f"{endpoint}?per_page=100&page=1": {"total_count": 101, "jobs": first},
+                    f"{endpoint}?per_page=100&page=2": last,
+                })
+                manifest = reader(client).read_job_manifest(self.metadata())
+                self.assertFalse(manifest.complete)
+                self.assertTrue(manifest.errors)
+                self.assertEqual(101, manifest.total_count)
+                self.assertEqual(100, len(manifest.jobs))
+                self.assertEqual(3, manifest.request_count)
+
+    def test_manifest_fetches_jobs_only_for_completed_failed_runs(self) -> None:
+        for status, conclusion in (
+            ("in_progress", None),
+            ("completed", "success"),
+            ("completed", "cancelled"),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                for selected in (self.metadata(), self.metadata(status=status, conclusion=conclusion)):
+                    client = EndpointClient({
+                        f"/repos/{REPOSITORY}/actions/runs/101": run(
+                            101, status=status, conclusion=conclusion,
+                        ),
+                    })
+                    manifest = reader(client).read_job_manifest(selected)
+                    self.assertFalse(manifest.complete)
+                    self.assertEqual((), manifest.jobs)
+                    self.assertIsNone(manifest.total_count)
+                    self.assertTrue(manifest.errors)
+                    self.assertLessEqual(manifest.request_count, 1)
+
+    def test_manifest_keeps_exact_run_and_job_binding_fail_closed(self) -> None:
+        for changed in (
+            {"id": 999}, {"workflow_id": 999}, {"path": ".github/workflows/other.yml"},
+            {"run_attempt": 2}, {"head_sha": "f" * 40}, {"head_branch": "other"},
+            {"repository": {"full_name": "other/repo"}},
+            {"head_repository": {"full_name": "other/repo"}},
+        ):
+            with self.subTest(run=changed):
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}/actions/runs/101": {**run(101), **changed},
+                })
+                manifest = reader(client).read_job_manifest(self.metadata())
+                self.assertFalse(manifest.complete)
+                self.assertIsNone(manifest.run)
+                self.assertEqual((), manifest.jobs)
+                self.assertTrue(manifest.errors)
+                self.assertEqual(1, manifest.request_count)
+        for changed in (
+            {"run_id": 999}, {"run_attempt": 2}, {"head_sha": "f" * 40},
+            {"head_branch": "other"}, {"status": "in_progress", "conclusion": None},
+        ):
+            with self.subTest(job=changed):
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}/actions/runs/101": run(101),
+                    f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": {
+                        "total_count": 1, "jobs": [{**job(101, 1001, "Build"), **changed}],
+                    },
+                })
+                manifest = reader(client).read_job_manifest(self.metadata())
+                self.assertFalse(manifest.complete)
+                self.assertFalse(manifest.run.jobs_complete)
+                self.assertEqual((), manifest.jobs)
+                self.assertTrue(manifest.errors)
+
+    def test_manifest_preserves_ambiguous_step_metadata_as_leaves(self) -> None:
+        dependency = {
+            "name": "Fail if any dependency failed",
+            "status": "completed",
+            "conclusion": "failure",
+        }
+        for steps in (
+            None, [], [dependency, {}], [dependency, None],
+            [{**dependency, "name": None}], [{**dependency, "name": ""}],
+            [dependency, {"name": "Unknown", "status": "completed"}],
+            [{**dependency, "status": "in_progress"}],
+            [dependency, {"name": "Unknown", "status": "completed", "conclusion": "cancelled"}],
+        ):
+            with self.subTest(steps=steps):
+                raw = {**job(101, 1001, "Final Results"), "steps": steps}
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}/actions/runs/101": run(101),
+                    f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": {
+                        "total_count": 1, "jobs": [raw],
+                    },
+                })
+                manifest = reader(client).read_job_manifest(self.metadata())
+                self.assertTrue(manifest.complete, manifest.errors)
+                entry = manifest.jobs[0]
+                self.assertEqual(
+                    "ambiguous_leaf",
+                    classify_job_role(entry.job.key.name, entry.failed_steps),
+                )
+                self.assertEqual(() if steps == [] else None, entry.failed_steps)
+
+    def test_outerloop_manifest_has_thirteen_leaves_and_one_visible_aggregate(self) -> None:
+        path = ".github/workflows/tests-outerloop.yml"
+        jobs = [
+            job(101, 1000 + index, f"Outerloop / Lane {index}", conclusion=(
+                "failure" if index < 13 or index == 34 else "success"
+            ))
+            for index in range(35)
+        ]
+        jobs[0]["name"] = jobs[1]["name"] = "Outerloop / Test"
+        jobs[0]["labels"] = ["self-hosted", "linux"]
+        jobs[1]["labels"] = ["windows", "self-hosted"]
+        jobs[34]["name"] = "Outerloop / Final Results"
+        for index, raw in enumerate(jobs):
+            raw["steps"] = [
+                {"name": "Checkout", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "Fail if any dependency failed" if index == 34 else "Run tests",
+                    "status": "completed",
+                    "conclusion": raw["conclusion"],
+                },
+            ]
+        client = EndpointClient({
+            f"/repos/{REPOSITORY}/actions/runs/101": run(101, path=path, name="Outerloop"),
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": {
+                "total_count": 35, "jobs": jobs,
+            },
+        })
+
+        manifest = reader(client).read_job_manifest(
+            self.metadata(workflow_path=path, workflow_name="Outerloop"),
+        )
+
+        self.assertTrue(manifest.complete, manifest.errors)
+        self.assertTrue(manifest.run.jobs_complete)
+        self.assertEqual(tuple(entry.job for entry in manifest.jobs), manifest.run.jobs)
+        self.assertEqual(35, manifest.total_count)
+        self.assertEqual(35, len(manifest.jobs))
+        self.assertEqual(
+            ("leaf",) * 13 + ("aggregate",),
+            tuple(
+                classify_job_role(entry.job.key.name, entry.failed_steps)
+                for entry in manifest.jobs if entry.job.conclusion == "failure"
+            ),
+        )
+        self.assertEqual(("linux", "self-hosted"), manifest.jobs[0].job.key.runner_labels)
+        self.assertEqual(("self-hosted", "windows"), manifest.jobs[1].job.key.runner_labels)
+        self.assertEqual(2, manifest.request_count)
+
     def test_only_selected_candidate_is_enriched_and_failed_logs_are_bounded(self) -> None:
         selected = self.metadata()
         jobs_endpoint = f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
@@ -656,6 +914,36 @@ class WorkflowReaderDetailTests(unittest.TestCase):
             "/runs/102" in call[1] or "/runs/103" in call[1]
             for call in client.calls
         ))
+
+    def test_admitted_log_keys_do_not_restrict_recovery_inventory(self) -> None:
+        selected = self.metadata()
+        jobs = (
+            job(101, 1001, "Unrelated failure"),
+            job(101, 1002, " Admitted /  Linux "),
+            job(101, 1003, "Recovered", conclusion="success"),
+        )
+        for admitted in ((), (JobKey("Admitted / Linux", ("ubuntu-latest",)),)):
+            with self.subTest(admitted=admitted):
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}/actions/runs/101": run(101),
+                    f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": PagedResponse(jobs),
+                    f"/repos/{REPOSITORY}/actions/jobs/1002/logs": "Admitted failure",
+                })
+                details = reader(client, max_failed_logs=1).read_run_details(
+                    selected,
+                    established_jobs=(JobKey("Recovered", ("ubuntu-latest",)),),
+                    selected_log_jobs=admitted,
+                )
+                self.assertTrue(details.complete)
+                self.assertEqual("passed", details.recovery)
+                self.assertEqual((1003,), details.matched_job_ids)
+                self.assertEqual((1001, 1002, 1003), tuple(job.job_id for job in details.run.jobs))
+                self.assertEqual((1002,) if admitted else (), details.logged_job_ids)
+                self.assertEqual((), details.unavailable_log_job_ids)
+                self.assertEqual(
+                    [f"/repos/{REPOSITORY}/actions/jobs/1002/logs"] if admitted else [],
+                    [call[1] for call in client.calls if call[0] == "get_text_head_tail"],
+                )
 
     def test_discovery_of_several_failures_enriches_only_the_selected_candidate(self) -> None:
         workflows = (
@@ -769,7 +1057,7 @@ class WorkflowReaderDetailTests(unittest.TestCase):
                 self.assertIsNone(details.run)
                 self.assertEqual("run-detail-unavailable", details.errors[0].code)
 
-    def test_complete_in_scope_jobs_pass_with_runner_label_change(self) -> None:
+    def test_runner_label_change_cannot_recover_exact_leaf(self) -> None:
         metadata = self.metadata(conclusion="success")
         client = EndpointClient({
             f"/repos/{REPOSITORY}/actions/runs/101": run(101, conclusion="success"),
@@ -785,10 +1073,78 @@ class WorkflowReaderDetailTests(unittest.TestCase):
             established_jobs=(JobKey("Build", ("ubuntu-latest",)),),
         )
 
-        self.assertEqual("passed", details.recovery)
-        self.assertEqual((1001,), details.matched_job_ids)
+        self.assertEqual("unavailable", details.recovery)
+        self.assertEqual((), details.matched_job_ids)
+        self.assertEqual(
+            (JobKey("Build", ("ubuntu-latest",)),),
+            details.missing_jobs,
+        )
+        self.assertEqual(
+            (leaf_case_key(metadata, JobKey("Build", ("ubuntu-latest",))),),
+            details.missing_leaf_keys,
+        )
+        self.assertEqual((), details.recovery_witnesses)
 
-    def test_skipped_missing_partial_and_duplicate_name_jobs_cannot_recover(self) -> None:
+    def test_group_recovery_exposes_exact_passing_witnesses(self) -> None:
+        metadata = self.metadata()
+        build = JobKey("Build", ("ubuntu-latest",))
+        tests = JobKey("Tests", ("ubuntu-latest",))
+        represented = (
+            leaf_case_key(metadata, build),
+            leaf_case_key(metadata, tests),
+        )
+        jobs_endpoint = f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
+        mixed_client = EndpointClient({
+            f"/repos/{REPOSITORY}/actions/runs/101": run(101),
+            jobs_endpoint: PagedResponse((
+                job(101, 1001, "Build", conclusion="success"),
+                job(101, 1002, "Tests"),
+            )),
+            f"/repos/{REPOSITORY}/actions/jobs/1002/logs": "test failure",
+        })
+
+        mixed = reader(mixed_client).read_run_details(
+            metadata,
+            established_jobs=(build,),
+            represented_leaf_keys=represented,
+        )
+
+        self.assertEqual("failed", mixed.recovery)
+        self.assertEqual(
+            ((represented[0], 101, 1, f"{101:040x}", 1001),),
+            tuple(
+                (
+                    witness.leaf_case_key,
+                    witness.run_id,
+                    witness.attempt,
+                    witness.head_sha,
+                    witness.job_id,
+                )
+                for witness in mixed.recovery_witnesses
+            ),
+        )
+
+        passing_client = EndpointClient({
+            f"/repos/{REPOSITORY}/actions/runs/101": run(101, conclusion="success"),
+            jobs_endpoint: PagedResponse((
+                job(101, 1001, "Build", conclusion="success"),
+                job(101, 1002, "Tests", conclusion="success"),
+            )),
+        })
+        passing = reader(passing_client).read_run_details(
+            self.metadata(conclusion="success"),
+            established_jobs=(build,),
+            represented_leaf_keys=represented,
+        )
+
+        self.assertEqual("passed", passing.recovery)
+        self.assertEqual(set(represented), {
+            witness.leaf_case_key for witness in passing.recovery_witnesses
+        })
+
+    def test_renamed_missing_skipped_cancelled_and_duplicate_keys_cannot_recover(
+        self,
+    ) -> None:
         metadata = self.metadata(conclusion="success")
         cases = (
             (
@@ -797,8 +1153,18 @@ class WorkflowReaderDetailTests(unittest.TestCase):
                 "unavailable",
             ),
             (
+                "cancelled",
+                PagedResponse((job(101, 1, "Build", conclusion="cancelled"),)),
+                "unavailable",
+            ),
+            (
                 "missing",
                 PagedResponse((job(101, 1, "Other", conclusion="success"),)),
+                "unavailable",
+            ),
+            (
+                "renamed",
+                PagedResponse((job(101, 1, "Build and test", conclusion="success"),)),
                 "unavailable",
             ),
             (
@@ -810,10 +1176,10 @@ class WorkflowReaderDetailTests(unittest.TestCase):
                 "unavailable",
             ),
             (
-                "ambiguous",
+                "duplicate-normalized-key",
                 PagedResponse((
-                    job(101, 1, "Build", labels=("ubuntu-latest",), conclusion="success"),
-                    job(101, 2, "Build", labels=("windows-latest",), conclusion="success"),
+                    job(101, 1, "Build", conclusion="success"),
+                    job(101, 2, " Build ", conclusion="success"),
                 )),
                 "unavailable",
             ),
@@ -858,7 +1224,9 @@ class WorkflowReaderDetailTests(unittest.TestCase):
 
 
 class WorkflowReaderRefreshTests(unittest.TestCase):
-    def test_current_run_later_successful_attempt_can_recover(self) -> None:
+    def test_current_run_later_successful_attempt_is_not_independent_recovery(
+        self,
+    ) -> None:
         current = run(101, attempt=2, conclusion="success")
         client = EndpointClient({
             run_endpoint(): {"total_count": 1, "workflow_runs": [current]},
@@ -870,9 +1238,8 @@ class WorkflowReaderRefreshTests(unittest.TestCase):
 
         refreshed = reader(client).refresh_item(item())
 
-        self.assertEqual("passed", refreshed.recovery)
-        self.assertEqual(101, refreshed.recovery_run.run_id)
-        self.assertEqual(2, refreshed.recovery_run.attempt)
+        self.assertEqual("unavailable", refreshed.recovery)
+        self.assertIsNone(refreshed.recovery_run)
 
     def test_newer_pending_run_does_not_hide_completed_recovery(self) -> None:
         failure = run(101, run_number=10)
@@ -1681,6 +2048,97 @@ class WorkflowReaderRepairEvidenceTests(unittest.TestCase):
 
 
 class WorkflowReaderIssueSearchTests(unittest.TestCase):
+    def test_leaf_search_without_trusted_cause_does_not_query_legacy_identity(self) -> None:
+        client = EndpointClient({})
+        result = reader(client).find_tracking_issue(replace(item(), leaf_job=item().failed_jobs[0]))
+        self.assertEqual("unavailable", result.status)
+        self.assertEqual([], client.calls)
+
+    def test_multiple_exact_v2_issues_are_ambiguous(self) -> None:
+        tracked = replace(item(), leaf_job=item().failed_jobs[0],
+                          cause_group_id="cause-group-v1:exact", cause_leader_id=3)
+        marker = workflow_case_marker(REPOSITORY, BRANCH, WORKFLOW_ID, WORKFLOW_PATH, tracked.cause_group_id)
+        endpoint = "/search/issues?" + urlencode({
+            "q": f'repo:{REPOSITORY} is:issue is:open "ci-shepherd-workflow-case:v2" "{canonical_fingerprint(tracked.cause_group_id)}"',
+            "per_page": 10,
+        })
+        def issue(number):
+            return {
+                "number": number, "state": "open", "title": "Exact leaf failure",
+                "body": marker, "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
+                "repository_url": f"https://api.github.com/repos/{REPOSITORY}", "assignees": [],
+            }
+        client = EndpointClient({
+            f"/repos/{REPOSITORY}": repository(),
+            endpoint: {"total_count": 2, "items": [issue(77), issue(78)]},
+            f"/repos/{REPOSITORY}/issues/77": issue(77),
+            f"/repos/{REPOSITORY}/issues/78": issue(78),
+        })
+        result = reader(client).find_tracking_issue(tracked)
+        self.assertEqual("ambiguous", result.status)
+        self.assertEqual((77, 78), result.candidate_numbers)
+        self.assertIsNone(result.issue)
+
+    def test_leaf_lookup_requires_exact_v2_identity_without_legacy_fallback(self) -> None:
+        tracked = replace(
+            item(), leaf_job=JobKey("Tests / Linux", ("ubuntu-latest",)),
+            cause_group_id="cause-group-v1:exact", cause_leader_id=1,
+        )
+        identity = {
+            "repository": REPOSITORY, "branch": BRANCH,
+            "workflowId": WORKFLOW_ID, "workflowPath": WORKFLOW_PATH,
+            "causeGroupId": tracked.cause_group_id,
+            "lookupKey": canonical_fingerprint(tracked.cause_group_id),
+        }
+        def marker(fields):
+            return "<!-- ci-shepherd-workflow-case:v2 " + json.dumps(
+                fields, sort_keys=True, separators=(",", ":")
+            ) + " -->"
+
+        endpoint = "/search/issues?" + urlencode({
+            "q": f'repo:{REPOSITORY} is:issue is:open "ci-shepherd-workflow-case:v2" "{canonical_fingerprint(tracked.cause_group_id)}"',
+            "per_page": 10,
+        })
+        for field in (None, *identity):
+            with self.subTest(field=field):
+                fields = dict(identity)
+                if field is not None:
+                    fields[field] = "different"
+                raw = {
+                    "number": 77, "state": "open", "title": "Failure",
+                    "body": marker(fields),
+                    "html_url": f"https://github.com/{REPOSITORY}/issues/77",
+                    "repository_url": f"https://api.github.com/repos/{REPOSITORY}",
+                    "assignees": [],
+                }
+                client = EndpointClient({
+                    f"/repos/{REPOSITORY}": repository(default_branch=BRANCH),
+                    endpoint: {"total_count": 1, "items": [{"number": 77}]},
+                    f"/repos/{REPOSITORY}/issues/77": raw,
+                })
+                result = reader(client).find_tracking_issue(tracked)
+                self.assertEqual("one" if field is None else "zero", result.status)
+                self.assertFalse(any("automation-broken" in str(call) for call in client.calls))
+
+    def test_leaf_bound_issue_rejects_legacy_marker(self) -> None:
+        tracked = replace(
+            item(issue_number=77), leaf_job=JobKey("Tests", ("linux",)),
+            cause_group_id="cause-group-v1:exact", cause_leader_id=1,
+        )
+        client = EndpointClient({
+            f"/repos/{REPOSITORY}": repository(default_branch=BRANCH),
+            f"/repos/{REPOSITORY}/issues/77": {
+                "number": 77, "state": "open", "title": "Old failure",
+                "body": "<!-- automation-broken:ci.yml -->",
+                "html_url": f"https://github.com/{REPOSITORY}/issues/77",
+                "repository_url": f"https://api.github.com/repos/{REPOSITORY}",
+                "assignees": [],
+            },
+        })
+        errors = []
+        self.assertIsNone(reader(client)._read_bound_issue(tracked, errors))
+        self.assertTrue(errors)
+
     def test_bound_issue_context_is_bounded_sorted_and_complete(self) -> None:
         tracked = item(issue_number=77)
         marker = (

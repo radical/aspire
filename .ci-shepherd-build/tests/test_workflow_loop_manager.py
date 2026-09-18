@@ -25,9 +25,11 @@ from ci_shepherd.workflow_loop.models import (
     ActionIntent,
     ActionKind,
     ActionState,
+    FailureClassification,
     ItemPhase,
     JudgmentDecision,
     JudgmentResult,
+    RecommendedResponse,
     TaskState,
     WorkerCompletion,
     WorkerReservation,
@@ -87,12 +89,25 @@ from test_workflow_loop_reader import (
     workflow,
 )
 from workflow_loop_fakes import (
-    EndpointClient,
+    EndpointClient as StrictEndpointClient,
     PagedResponse,
     SequenceResponse,
     StatefulWorkflowHarness,
     api_error,
 )
+
+
+class EndpointClient(StrictEndpointClient):
+    """Manager fixtures have no external v2 issues unless explicitly seeded."""
+
+    def _resolve(self, endpoint):
+        if (
+            endpoint not in self._responses
+            and endpoint.startswith("/search/issues?")
+            and "%22ci-shepherd-workflow-case%3Av2%22" in endpoint
+        ):
+            return {"total_count": 0, "items": []}
+        return super()._resolve(endpoint)
 
 
 def _issue_search_endpoint(workflow_id: int) -> str:
@@ -101,6 +116,15 @@ def _issue_search_endpoint(workflow_id: int) -> str:
         "is%3Aopen+%22ci-shepherd%3Aworkflow-repair%22+"
         f"%22workflow-id%3D{workflow_id}%22&per_page=10"
     )
+
+def _manifest_page(*jobs):
+    return {
+        "total_count": len(jobs),
+        "jobs": [
+            {**job, "steps": [{"name": "Build", "status": "completed", "conclusion": "failure"}]}
+            for job in jobs
+        ],
+    }
 
 
 class _Reader:
@@ -135,7 +159,7 @@ class _Reader:
             pre_write=action is not None,
         )
 
-    def read_run_details(self, run, *, established_jobs=()) -> RunDetailResult:
+    def read_run_details(self, run, *, established_jobs=(), selected_log_jobs=None) -> RunDetailResult:
         self.detail_calls += 1
         failure = self.refresh.failure_run
         assert failure is not None
@@ -285,6 +309,80 @@ class _Launcher:
         )
 
 
+class _MixedLauncher(_Launcher):
+    def __init__(
+        self,
+        state_directory: Path,
+        store: WorkflowLoopStore,
+        classifications: dict[
+            str, tuple[FailureClassification, RecommendedResponse]
+        ],
+    ) -> None:
+        super().__init__(state_directory, store)
+        self.classifications = classifications
+        self.requests = {}
+
+    def prepare(self, reservation, request) -> WorkerPreparationResult:
+        self.requests[reservation.worker_id] = request
+        return WorkerPreparationResult(
+            WorkerPreparationStatus.PREPARED,
+            reservation.worker_id,
+            self.packet_paths(reservation.worker_id),
+            request,
+            None,
+        )
+
+    def observe(self, worker) -> WorkerObservation:
+        paths = self.packet_paths(worker.worker_id)
+        if not self.result_ready:
+            return WorkerObservation(
+                WorkerObservationStatus.RUNNING,
+                worker.worker_id,
+                None,
+                None,
+                None,
+                paths.request,
+                paths.result,
+                paths.detail,
+                None,
+            )
+        request = self.requests[worker.worker_id]
+        failed_job, = request.failed_jobs
+        classification, response = self.classifications[failed_job.key.name]
+        result = JudgmentResult(
+            schema_version=1,
+            item_id=request.item_id,
+            episode=request.episode,
+            evidence_fingerprint=request.evidence_fingerprint,
+            decision=JudgmentDecision.ASSIGN,
+            summary=f"Classified {failed_job.key.name}.",
+            evidence_ids=request.evidence_ids,
+            in_scope_job_ids=(failed_job.job_id,),
+            copilot_request=f"Handle {failed_job.key.name}.",
+            classification=classification,
+            recommended_response=response,
+        )
+        completion = WorkerCompletion(
+            worker.worker_id,
+            WorkState.SUCCEEDED,
+            LATER,
+            0,
+            None,
+        )
+        self.store.complete_worker(completion)
+        return WorkerObservation(
+            WorkerObservationStatus.COMPLETED,
+            worker.worker_id,
+            completion,
+            request,
+            result,
+            paths.request,
+            paths.result,
+            paths.detail,
+            None,
+        )
+
+
 class _Writer:
     def __init__(self) -> None:
         self.calls = []
@@ -349,6 +447,863 @@ def _cleanup_process(process) -> None:
 
 
 class WorkflowLoopManagerTests(unittest.TestCase):
+    def test_mixed_leaf_policy_report_is_stable_and_starts_only_two_tasks(self) -> None:
+        failed_jobs = (
+            job(101, 900, "Repository infrastructure"),
+            job(101, 901, "Deterministic test"),
+            job(101, 902, "Suspected flake"),
+            job(101, 903, "External infrastructure"),
+            job(101, 904, "Insufficient evidence"),
+        )
+        aggregate = job(101, 905, "CI / Final Results")
+        manifest = {
+            "total_count": 6,
+            "jobs": [
+                {
+                    **raw_job,
+                    "steps": [
+                        {
+                            "name": "Build",
+                            "status": "completed",
+                            "conclusion": "failure",
+                        }
+                    ],
+                }
+                for raw_job in failed_jobs
+            ]
+            + [
+                {
+                    **aggregate,
+                    "steps": [
+                        {
+                            "name": "Fail if any dependency failed",
+                            "status": "completed",
+                            "conclusion": "failure",
+                        }
+                    ],
+                }
+            ],
+        }
+        raw_run = run(101)
+        responses = {
+            **base_responses(raw_run),
+            f"/repos/{REPOSITORY}/actions/runs/101": raw_run,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": manifest,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": manifest,
+        }
+        for index, raw_job in enumerate(failed_jobs):
+            responses[
+                f"/repos/{REPOSITORY}/actions/jobs/{900 + index}/logs"
+            ] = f"{raw_job['name']}: exact diagnostic {index}"
+        client = EndpointClient(responses)
+        reader = WorkflowReader(
+            client=client,
+            clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+        classifications = {
+            "Repository infrastructure": (
+                FailureClassification.REPOSITORY_INFRA,
+                RecommendedResponse.REPAIR,
+            ),
+            "Deterministic test": (
+                FailureClassification.DETERMINISTIC_TEST,
+                RecommendedResponse.REPAIR,
+            ),
+            "Suspected flake": (
+                FailureClassification.SUSPECTED_FLAKE,
+                RecommendedResponse.INVESTIGATE,
+            ),
+            "External infrastructure": (
+                FailureClassification.EXTERNAL_INFRA,
+                RecommendedResponse.OBSERVE,
+            ),
+            "Insufficient evidence": (
+                FailureClassification.INSUFFICIENT_EVIDENCE,
+                RecommendedResponse.INVESTIGATE,
+            ),
+        }
+        with TemporaryDirectory() as scratch:
+            from ci_shepherd.workflow_loop.shadow import prepare_shadow
+
+            canonical_directory = Path(scratch) / "canonical"
+            state_directory = Path(scratch) / "shadow"
+            prepare_shadow(
+                canonical_directory,
+                state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                workflow_ids=(WORKFLOW_ID,),
+            )
+            store = WorkflowLoopStore(
+                state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+            )
+            store.initialize(workflow_ids=(WORKFLOW_ID,))
+            launcher = _MixedLauncher(
+                state_directory,
+                store,
+                classifications,
+            )
+            writer = WorkflowWriter(
+                store=store,
+                reader=reader,
+                actor=None,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+                active_item_limit=8,
+            )
+            ids = itertools.count(1)
+            manager = WorkflowLoopManager(
+                state_directory=state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                store=store,
+                reader=reader,
+                launcher=launcher,
+                writer=writer,
+                clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+                id_factory=lambda: f"mixed-{next(ids)}",
+                workflow_ids=(WORKFLOW_ID,),
+                capacity_limit=8,
+            )
+
+            first = manager.run_pass(mode=EffectMode.READ_ONLY)
+            self.assertEqual(5, first.launched_workers)
+            launcher.result_ready = True
+            second = manager.run_pass(mode=EffectMode.READ_ONLY)
+            first_report = render_status(
+                state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                now=datetime(2026, 9, 17, 20, 1, tzinfo=UTC),
+                capacity_limit=8,
+                workflow_ids=(WORKFLOW_ID,),
+            )
+            repeated_report = render_status(
+                state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                now=datetime(2026, 9, 17, 20, 1, tzinfo=UTC),
+                capacity_limit=8,
+                workflow_ids=(WORKFLOW_ID,),
+            )
+
+            self.assertEqual((), second.errors)
+            self.assertEqual(5, len(store.list_items()))
+            self.assertEqual(
+                {WorkState.SUCCEEDED},
+                {worker.state for worker in store.list_workers()},
+            )
+            self.assertEqual(2, len(store.list_cause_starts()))
+            self.assertEqual(2, len(store.list_proposals()))
+            self.assertEqual((), store.list_actions())
+            self.assertEqual(first_report, repeated_report)
+            self.assertEqual(5, first_report.count("  Leaf "))
+            self.assertEqual(2, first_report.count("PROPOSED "))
+            self.assertEqual(
+                1,
+                sum(
+                    endpoint.endswith(
+                        "/attempts/1/jobs?per_page=100&page=1"
+                    )
+                    for call in client.calls
+                    for endpoint in (call[1],)
+                ),
+            )
+            self.assertFalse(
+                any(
+                    "jobs?per_page=100&page=2" in endpoint
+                    for call in client.calls
+                    for endpoint in (call[1],)
+                )
+            )
+            self.assertIn("aggregate fallout=1", first_report)
+            self.assertIn(
+                "classification=repository_infra response=repair",
+                first_report,
+            )
+            self.assertIn(
+                "classification=deterministic_test response=repair",
+                first_report,
+            )
+            self.assertIn(
+                "classification=suspected_flake response=investigate",
+                first_report,
+            )
+            self.assertIn(
+                "classification=external_infra response=observe",
+                first_report,
+            )
+            self.assertIn(
+                "classification=insufficient_evidence response=investigate",
+                first_report,
+            )
+            self.assertEqual(
+                2,
+                first_report.count("deferred=deferred_by_episode_budget"),
+            )
+            self.assertNotIn("judgmentResult", first_report)
+
+    def test_ambiguous_leaf_without_useful_context_gets_one_bounded_judgment(self) -> None:
+        from ci_shepherd.workflow_loop.models import JobKey, parse_judgment_result
+        from ci_shepherd.workflow_loop.scenario import NextStep
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+        from test_workflow_loop_reducer import _refresh, _failure_run
+
+        job = replace(
+            _failure_run().jobs[0], key=JobKey("Unknown lane", ()), log_excerpt=None,
+        )
+        failure = replace(_failure_run(), jobs=(job,))
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository="owner/repo", branch="main")
+            store.initialize()
+            item = store.upsert_leaf_failure(failure, job.key, NOW)
+            item = replace(item, read_status="ambiguous_leaf")
+            refresh = _refresh(item=item, failure_run=failure, pre_write=False)
+            reader = _Reader(refresh)
+            scenario = WorkflowFailureScenario(reader)
+            assessment = dict(
+                now=NOW, confirmed_issue=None, worker_state=None,
+                action_state=None, capacity_available=True,
+            )
+            queued = scenario.assess(
+                item, refresh, request=None, judgment=None, **assessment,
+            )
+            self.assertIs(NextStep.QUEUE_JUDGMENT, queued.next_step)
+            preparation = scenario.prepare_judgment(
+                store=store, item=queued.item, refresh=refresh, judgment_round=0,
+                worker_id="ambiguous", session_id="ambiguous",
+            )
+            self.assertEqual(1, reader.detail_calls)
+            request = preparation.request
+            self.assertIsNotNone(request)
+            result = parse_judgment_result(json.dumps({
+                "schemaVersion": 1, "itemId": item.id, "episode": item.episode,
+                "evidenceFingerprint": request.evidence_fingerprint,
+                "decision": "assign", "summary": "No runner or diagnostic available.",
+                "classification": "insufficient_evidence", "recommendedResponse": "investigate",
+                "inScopeJobIds": [900], "evidenceIds": list(request.evidence_ids),
+                "copilotRequest": "Investigate.",
+            }), request)
+            judged = scenario.assess(
+                preparation.item, refresh, request=request, judgment=result, **assessment,
+            )
+            self.assertIs(NextStep.NEEDS_ATTENTION, judged.next_step)
+            self.assertIsNone(judged.action_kind)
+            repeated = scenario.assess(
+                judged.item, refresh, request=None, judgment=None, **assessment,
+            )
+            self.assertIs(NextStep.WAIT_FOR_CHANGE, repeated.next_step)
+
+    def test_leaf_prompt_routes_tests_to_repair_or_bounded_investigation(self) -> None:
+        from test_workflow_loop_reducer import _item, _refresh, _failure_run
+        from ci_shepherd.workflow_loop.models import leaf_case_key
+
+        failure = _failure_run()
+        job = failure.jobs[1]
+        failure = replace(failure, jobs=(job,))
+        item = _item(
+            leaf_job=job.key, failed_jobs=(job.key,),
+            case_key=leaf_case_key(failure, job.key),
+        )
+        request = build_judgment_request(
+            item, _refresh(item=item, failure_run=failure),
+            worker_id="leaf-worker", session_id="leaf-session", judgment_round=0,
+        )
+        self.assertEqual(item.case_key, request.leaf_case_key)
+        self.assertNotIn("defer_ordinary_test", request.prompt)
+        for expected in (
+            "classification", "recommendedResponse", "deterministic_test",
+            "suspected_flake", "repository_infra", "external_infra",
+            "product_or_build", "insufficient_evidence", "aggregate_only",
+            "repair", "investigate", "observe", "needs_attention", "no_action",
+            "quarantine", "disable", "delete", "timeout-only",
+            "verified source", "run:101:1", "job:101:1:901", item.case_key,
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, request.prompt)
+
+    def test_migrated_legacy_issue_is_not_adopted_by_rediscovered_leaves(self) -> None:
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+        from test_workflow_loop_state import _legacy_schema
+
+        raw_run = run(101)
+        jobs = _manifest_page(job(101, 900, "Build"), job(101, 901, "Tests"))
+        marker = (
+            "<!-- ci-shepherd:workflow-repair "
+            f"repository={REPOSITORY} workflow-id={WORKFLOW_ID} branch={BRANCH} -->"
+        )
+        issue = {
+            "id": 1041, "number": 41, "state": "open", "title": "Repair CI",
+            "body": marker,
+            "html_url": f"https://github.com/{REPOSITORY}/issues/41",
+            "repository_url": f"https://api.github.com/repos/{REPOSITORY}",
+            "assignees": [{"login": "human"}],
+        }
+        client = EndpointClient({
+            **base_responses(raw_run),
+            f"/repos/{REPOSITORY}/actions/runs/101": raw_run,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": jobs,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": jobs,
+            f"/repos/{REPOSITORY}/actions/jobs/900/logs": "Build failed",
+            f"/repos/{REPOSITORY}/actions/jobs/901/logs": "Tests failed",
+            _issue_search_endpoint(WORKFLOW_ID): {"total_count": 1, "items": [issue]},
+            f"/repos/{REPOSITORY}/issues/41": issue,
+        })
+        reader = WorkflowReader(
+            client=client, clock=lambda: datetime(2026, 9, 17, 20, 14, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+        scenario = WorkflowFailureScenario(reader)
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository=REPOSITORY, branch=BRANCH)
+            store.initialize()
+            observation = scenario.observe(
+                repository=REPOSITORY, branch=BRANCH, tracked_items=(), workflow_ids=None,
+            )
+            failure = observation.value.workflows[0].latest_completed
+            legacy = store.upsert_failure(failure, NOW)
+            store.update_item(
+                replace(legacy, issue_number=41), history_event="issue-bound",
+                summary="Legacy issue ownership.", detail={},
+            )
+            self.assertEqual("one", reader.find_tracking_issue(legacy).status)
+            _legacy_schema(Path(scratch) / "workflow-loop.sqlite3", 4)
+            store.initialize()
+            legacy, = store.list_items()
+            self.assertEqual(ItemPhase.SUPERSEDED, legacy.phase)
+            self.assertEqual(41, legacy.issue_number)
+            discoveries = scenario.discover(store, observation, (legacy,))
+            self.assertEqual(2, len(discoveries))
+            for discovery in discoveries:
+                preparation = scenario.prepare_judgment(
+                    store=store, item=discovery.item, refresh=discovery.refresh,
+                    judgment_round=0, worker_id=f"leaf-{discovery.item.id}",
+                    session_id=str(uuid.uuid4()),
+                )
+                self.assertIsNone(preparation.item.issue_number)
+                self.assertIsNone(preparation.item.external_owner)
+                self.assertIsNotNone(preparation.request)
+
+    def test_migrated_work_is_never_refreshed_or_launched_by_coordinator(self) -> None:
+        from test_workflow_loop_state import _run, _reservation, _legacy_schema
+
+        class NoWork:
+            def observe(self, worker):
+                raise AssertionError("Superseded worker was observed")
+            def launch(self, worker):
+                raise AssertionError("Superseded worker was launched")
+        class HistoryReader:
+            def observe(self, **kwargs):
+                self.items = kwargs["tracked_items"]
+                return ReaderSnapshot(NOW, "owner/repo", 123, "main", "main", (), (), True, (), 0)
+            def refresh_item(self, *args, **kwargs):
+                raise AssertionError("Superseded item was refreshed")
+        with TemporaryDirectory() as scratch:
+            state = Path(scratch)
+            store = WorkflowLoopStore(state, repository="owner/repo", branch="main")
+            store.initialize()
+            item = store.upsert_failure(_run(), NOW)
+            store.reserve_worker(_reservation(state, item.id, 1, item.evidence_fingerprint), capacity_limit=2)
+            _legacy_schema(state / "workflow-loop.sqlite3", 4)
+            reader = HistoryReader()
+            result = WorkflowLoopManager(
+                state_directory=state, repository="owner/repo", branch="main",
+                store=store, reader=reader, launcher=NoWork(), writer=None,
+                clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            ).run_pass()
+            self.assertEqual((), result.errors)
+            self.assertEqual(0, result.launched_workers)
+            self.assertEqual((), reader.items)
+
+    def test_complete_manifests_discover_each_leaf_and_cache_aggregate_observations(self) -> None:
+        from ci_shepherd.workflow_loop.reader import JobManifest, ManifestJob, WorkflowObservation
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+        from ci_shepherd.workflow_loop.scenario import ScenarioObservation, NextStep
+        from test_workflow_loop_state import _run, _job
+
+        jobs = (
+            _job(900), _job(901, name="Other lane"),
+            _job(902, name="tests / Final Results"),
+            _job(903, name="Missing metadata"),
+        )
+        failure = _run(jobs=jobs)
+        entries = tuple(ManifestJob(job, failure.head_sha, steps) for job, steps in zip(
+            jobs, (("Build",), ("Tests",), ("Fail if any dependency failed",), None),
+        ))
+        class ManifestReader:
+            calls = 0
+            def read_job_manifest(self, run):
+                self.calls += 1
+                return JobManifest(failure, entries, 4, True, (), 2)
+
+        snapshot = ReaderSnapshot(
+            NOW, "owner/repo", 123, "main", "main",
+            (WorkflowObservation(failure.key, failure.workflow_path, "CI", (failure,), failure, (), True, ()),),
+            (), True, (), 1,
+        )
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository="owner/repo", branch="main")
+            store.initialize()
+            reader = ManifestReader()
+            scenario = WorkflowFailureScenario(reader)
+            observation = ScenarioObservation(snapshot, 1, ())
+            discoveries = scenario.discover(store, observation, ())
+            self.assertEqual(3, len(discoveries))
+            self.assertEqual(3, len({entry.item.case_key for entry in discoveries}))
+            self.assertTrue(all(len(entry.item.failed_jobs) == 1 for entry in discoveries))
+            ambiguous = next(entry for entry in discoveries if entry.item.leaf_job.name == "Missing metadata")
+            transition = scenario.assess(
+                ambiguous.item, ambiguous.refresh, now=NOW, request=None, judgment=None,
+                confirmed_issue=None, worker_state=None, action_state=None, capacity_available=True,
+            )
+            self.assertEqual("ambiguous_leaf", transition.item.read_status)
+            self.assertIs(NextStep.QUEUE_JUDGMENT, transition.next_step)
+            self.assertEqual((), scenario.discover(store, observation, store.list_items()))
+            self.assertEqual(1, reader.calls)
+            self.assertEqual("aggregate", store.list_manifest_observations()[0]["job_roles"]["902"])
+            restarted = WorkflowFailureScenario(reader)
+            self.assertEqual((), restarted.discover(store, observation, store.list_items()))
+            self.assertEqual(1, reader.calls)
+
+    def test_incomplete_manifest_records_inventory_without_creating_actionable_cases(self) -> None:
+        from ci_shepherd.workflow_loop.reader import JobManifest, ManifestJob, WorkflowObservation
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+        from ci_shepherd.workflow_loop.scenario import ScenarioObservation
+        from test_workflow_loop_state import _run, _job
+
+        failure = _run()
+        error = ReadError("run:101:jobs", "inventory-incomplete", "/jobs", "page unavailable")
+        class ManifestReader:
+            calls = 0
+            def read_job_manifest(self, run):
+                self.calls += 1
+                return JobManifest(failure, (ManifestJob(_job(), failure.head_sha, ("Build",)),), 329, False, (error,), 2)
+        snapshot = ReaderSnapshot(
+            NOW, "owner/repo", 123, "main", "main",
+            (WorkflowObservation(failure.key, failure.workflow_path, "CI", (failure,), failure, (), True, ()),),
+            (), True, (), 1,
+        )
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository="owner/repo", branch="main")
+            store.initialize()
+            reader = ManifestReader()
+            scenario = WorkflowFailureScenario(reader)
+            for _ in range(2):
+                self.assertEqual((), scenario.discover(store, ScenarioObservation(snapshot, 1, ()), ()))
+            self.assertEqual((), store.list_items())
+            self.assertEqual(2, reader.calls)
+            inventory, = store.list_manifest_observations()
+            self.assertEqual("inventory_incomplete", inventory["read_status"])
+            self.assertEqual("page unavailable", inventory["errors"][0]["detail"])
+            item = store.upsert_leaf_failure(failure, _job().key, NOW)
+            refresh = ItemRefresh(
+                item.id, LATER, (failure,), failure, None, "failed", None,
+                None, None, None, False, True, (), 0,
+            )
+            blocked = scenario.normalize_item(store, item, refresh)
+            self.assertEqual("inventory_incomplete", blocked.read_status)
+            transition = scenario.assess(
+                blocked, refresh, now=LATER, request=None, judgment=None,
+                confirmed_issue=None, worker_state=None, action_state=None,
+                capacity_available=True,
+            )
+            self.assertEqual("wait_for_read", transition.next_step.value)
+
+    def test_leaf_enrichment_retains_only_exact_normalized_lane(self) -> None:
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+        from ci_shepherd.workflow_loop.models import JobKey
+        from test_workflow_loop_state import _run, _job
+
+        failure = _run(jobs=(_job(), _job(901, name="Other")))
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository="owner/repo", branch="main")
+            store.initialize()
+            item = store.upsert_leaf_failure(failure, _job().key, NOW)
+            raw = replace(failure, jobs=(
+                replace(_job(), key=JobKey(" Build /  Linux ", ("ubuntu-latest",))),
+                _job(901, name="Other"),
+            ))
+            refresh = ItemRefresh(
+                item.id, NOW, (raw,), raw, None, "failed", None,
+                None, None, None, False, True, (), 0,
+            )
+            reader = _Reader(refresh)
+            scenario = WorkflowFailureScenario(reader)
+            preparation = scenario.prepare_judgment(
+                store=store, item=item, refresh=replace(refresh, failure_run=replace(raw, jobs_complete=False)),
+                judgment_round=0, worker_id="leaf-worker", session_id=str(uuid.uuid4()),
+            )
+            self.assertEqual((item.leaf_job,), tuple(job.key for job in preparation.request.failed_jobs))
+            self.assertEqual(item.case_key, preparation.request.leaf_case_key)
+            self.assertEqual((900,), tuple(job.job_id for job in preparation.request.failed_jobs))
+
+    def test_fourth_failed_leaf_fetches_only_its_admitted_log(self) -> None:
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+
+        raw_run = run(101)
+        jobs = _manifest_page(*(job(101, 900 + index, f"Lane {index}") for index in range(4)))
+        client = EndpointClient({
+            **base_responses(raw_run),
+            f"/repos/{REPOSITORY}/actions/runs/101": raw_run,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": jobs,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": jobs,
+            **{
+                f"/repos/{REPOSITORY}/actions/jobs/{900 + index}/logs": f"Failure {index}"
+                for index in range(4)
+            },
+        })
+        reader = WorkflowReader(
+            client=client, clock=lambda: datetime(2026, 9, 17, 20, 14, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+        scenario = WorkflowFailureScenario(reader)
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository=REPOSITORY, branch=BRANCH)
+            store.initialize()
+            observation = scenario.observe(
+                repository=REPOSITORY, branch=BRANCH, tracked_items=(), workflow_ids=None,
+            )
+            discoveries = scenario.discover(store, observation, ())
+            self.assertEqual([], [call[1] for call in client.calls if call[0] == "get_text_head_tail"])
+            fourth = discoveries[3]
+            preparation = scenario.prepare_judgment(
+                store=store, item=fourth.item, refresh=fourth.refresh, judgment_round=0,
+                worker_id="fourth-leaf", session_id=str(uuid.uuid4()),
+            )
+            self.assertEqual(
+                [f"/repos/{REPOSITORY}/actions/jobs/903/logs"],
+                [call[1] for call in client.calls if call[0] == "get_text_head_tail"],
+            )
+            self.assertEqual((903,), tuple(job.job_id for job in preparation.request.failed_jobs))
+            self.assertEqual("Failure 3", preparation.request.failed_jobs[0].log_excerpt)
+            self.assertEqual((), preparation.errors)
+
+    def test_passing_leaf_recovers_in_later_red_mixed_workflow(self) -> None:
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
+
+        failure = run(101)
+        later = run(102)
+        original_jobs = _manifest_page(job(101, 900, "Build"))
+        mixed_jobs = _manifest_page(
+            job(102, 1000, "Build", conclusion="success"),
+            job(102, 1001, "Tests"),
+        )
+        mixed_jobs["jobs"][0]["steps"][0]["conclusion"] = "success"
+        client = EndpointClient({
+            **base_responses(failure),
+            f"/repos/{REPOSITORY}/actions/runs/101": failure,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1": original_jobs,
+            f"/repos/{REPOSITORY}/actions/runs/102": later,
+            f"/repos/{REPOSITORY}/actions/runs/102/attempts/1/jobs?per_page=100&page=1": mixed_jobs,
+            f"/repos/{REPOSITORY}/actions/runs/102/attempts/1/jobs": mixed_jobs,
+        })
+        reader = WorkflowReader(
+            client=client, clock=lambda: datetime(2026, 9, 17, 20, 14, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+        scenario = WorkflowFailureScenario(reader)
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(Path(scratch), repository=REPOSITORY, branch=BRANCH)
+            store.initialize()
+            observation = scenario.observe(
+                repository=REPOSITORY, branch=BRANCH, tracked_items=(), workflow_ids=None,
+            )
+            original, = scenario.discover(store, observation, ())
+            tracked = replace(
+                original.item, last_judged_fingerprint=original.item.evidence_fingerprint,
+            )
+            store.update_item(
+                tracked, history_event="failure-judged",
+                summary="Established the tracked leaf failure.", detail={},
+            )
+            client.set_response(run_endpoint(), {"total_count": 2, "workflow_runs": [later, failure]})
+            observation = scenario.observe(
+                repository=REPOSITORY, branch=BRANCH,
+                tracked_items=(tracked,), workflow_ids=None,
+            )
+            scenario.discover(store, observation, store.list_items())
+            refresh = scenario.refresh(tracked, judgment=None)
+            self.assertEqual("passed", refresh.recovery)
+            self.assertEqual("failure", refresh.recovery_run.conclusion)
+            normalized = scenario.normalize_item(store, tracked, refresh)
+            transition = scenario.assess(
+                normalized, refresh, now=LATER, request=None, judgment=None,
+                confirmed_issue=None, worker_state=None, action_state=None,
+                capacity_available=True,
+            )
+            self.assertEqual(ItemPhase.RECOVERED, transition.item.phase)
+            self.assertEqual("complete", normalized.read_status)
+            self.assertEqual(102, transition.item.recovered_run_id)
+            for status in ("inventory_incomplete", "ambiguous_leaf", "aggregate"):
+                with self.subTest(status=status):
+                    transition = scenario.assess(
+                        replace(normalized, read_status=status), refresh, now=LATER,
+                        request=None, judgment=None, confirmed_issue=None,
+                        worker_state=None, action_state=None, capacity_available=True,
+                    )
+                    self.assertEqual(ItemPhase.RECOVERED, transition.item.phase)
+
+    def test_cause_group_recovers_only_after_every_original_leaf_passes(self) -> None:
+        failure_raw = run(101)
+        initial_jobs = _manifest_page(
+            job(101, 900, "Build"),
+            job(101, 901, "Tests"),
+        )
+        diagnostic = "src/Test.cs(1,1): error CS1000: Shared failure"
+        initial_client = EndpointClient({
+            f"/repos/{REPOSITORY}/actions/runs/101": failure_raw,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": initial_jobs,
+            f"/repos/{REPOSITORY}/actions/jobs/900/logs": diagnostic,
+            f"/repos/{REPOSITORY}/actions/jobs/901/logs": diagnostic,
+        })
+        initial_reader = WorkflowReader(
+            client=initial_client,
+            clock=lambda: datetime(2026, 9, 17, 20, tzinfo=UTC),
+            request_count=lambda: initial_client.request_count,
+            max_failed_logs=2,
+        )
+        from ci_shepherd.workflow_loop.reader import _normalize_run
+        failure = initial_reader.read_run_details(
+            _normalize_run(
+                failure_raw,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                workflow_id=WORKFLOW_ID,
+                workflow_path=".github/workflows/ci.yml",
+                workflow_name="CI",
+            )
+        ).run
+
+        with TemporaryDirectory() as scratch:
+            state_directory = Path(scratch) / "state"
+            store = WorkflowLoopStore(
+                state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+            )
+            store.initialize(workflow_ids=(WORKFLOW_ID,))
+            for failed_job in failure.jobs:
+                item = store.upsert_leaf_failure(failure, failed_job.key, NOW)
+                store.record_cause(
+                    item.id,
+                    replace(failure, jobs=(failed_job,)),
+                    observed_at=NOW,
+                )
+            grouped = store.list_items()
+            leader = next(item for item in grouped if item.cause_leader_id == item.id)
+            store.update_item(
+                replace(
+                    leader,
+                    last_judged_fingerprint=leader.evidence_fingerprint,
+                ),
+                history_event="group-judged",
+                summary="Established the grouped failure.",
+                detail={},
+            )
+
+            mixed = run(102)
+            mixed_jobs = _manifest_page(
+                job(102, 1000, "Build", conclusion="success"),
+                job(102, 1001, "Tests"),
+            )
+            mixed_jobs["jobs"][0]["steps"][0]["conclusion"] = "success"
+            client = EndpointClient({
+                **base_responses(mixed, failure_raw),
+                f"/repos/{REPOSITORY}/actions/runs/101": failure_raw,
+                f"/repos/{REPOSITORY}/actions/runs/102": mixed,
+                f"/repos/{REPOSITORY}/actions/runs/102/attempts/1/jobs": mixed_jobs,
+                (
+                    f"/repos/{REPOSITORY}/actions/runs/102/attempts/1/jobs"
+                    "?per_page=100&page=1"
+                ): mixed_jobs,
+                f"/repos/{REPOSITORY}/actions/jobs/1001/logs": diagnostic,
+            })
+            reader = WorkflowReader(
+                client=client,
+                clock=lambda: datetime(2026, 9, 17, 20, 5, tzinfo=UTC),
+                request_count=lambda: client.request_count,
+                max_failed_logs=2,
+            )
+            manager = WorkflowLoopManager(
+                state_directory=state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                store=store,
+                reader=reader,
+                launcher=_Launcher(state_directory, store),
+                writer=None,
+                clock=lambda: datetime(2026, 9, 17, 20, 5, tzinfo=UTC),
+                id_factory=lambda: "group-recovery",
+                workflow_ids=(WORKFLOW_ID,),
+            )
+
+            manager.run_pass(mode=EffectMode.READ_ONLY)
+
+            current = store.list_items()
+            self.assertFalse(any(item.phase is ItemPhase.RECOVERED for item in current))
+            self.assertTrue(all(item.recovered_run_id is None for item in current))
+
+            passing = run(103, conclusion="success")
+            passing_jobs = _manifest_page(
+                job(103, 1100, "Build", conclusion="success"),
+                job(103, 1101, "Tests", conclusion="success"),
+            )
+            for raw_job in passing_jobs["jobs"]:
+                raw_job["steps"][0]["conclusion"] = "success"
+            passing_client = EndpointClient({
+                **base_responses(passing, mixed, failure_raw),
+                f"/repos/{REPOSITORY}/actions/runs/101": failure_raw,
+                f"/repos/{REPOSITORY}/actions/runs/102": mixed,
+                f"/repos/{REPOSITORY}/actions/runs/103": passing,
+                f"/repos/{REPOSITORY}/actions/runs/103/attempts/1/jobs": passing_jobs,
+            })
+            passing_reader = WorkflowReader(
+                client=passing_client,
+                clock=lambda: datetime(2026, 9, 17, 20, 10, tzinfo=UTC),
+                request_count=lambda: passing_client.request_count,
+                max_failed_logs=2,
+            )
+            passing_manager = WorkflowLoopManager(
+                state_directory=state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                store=store,
+                reader=passing_reader,
+                launcher=_Launcher(state_directory, store),
+                writer=None,
+                clock=lambda: datetime(2026, 9, 17, 20, 10, tzinfo=UTC),
+                id_factory=lambda: "group-recovery-passing",
+                workflow_ids=(WORKFLOW_ID,),
+            )
+
+            passing_manager.run_pass(mode=EffectMode.READ_ONLY)
+
+            recovered = store.list_items()
+            self.assertTrue(all(item.phase is ItemPhase.RECOVERED for item in recovered))
+            self.assertEqual({103}, {item.recovered_run_id for item in recovered})
+            leader_history = store.recent_history(leader.id, limit=5)
+            recovery_event = next(
+                entry for entry in leader_history if entry.event == "recovered"
+            )
+            self.assertEqual(
+                {item.case_key for item in grouped},
+                {
+                    witness["leafCaseKey"]
+                    for witness in recovery_event.detail["recoveryWitnesses"]
+                },
+            )
+
+    def test_distinct_structured_cause_on_same_leaf_requires_attention(self) -> None:
+        cause_a = "src/App.cs(12,3): error CS1002: ; expected"
+        cause_b = "src/Other.cs(8,2): error CS0103: The name 'missing' does not exist"
+        failure101 = run(101)
+        jobs101 = _manifest_page(job(101, 900, "Build"))
+        client = EndpointClient({
+            **base_responses(failure101),
+            f"/repos/{REPOSITORY}/actions/runs/101": failure101,
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs": jobs101,
+            (
+                f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
+                "?per_page=100&page=1"
+            ): jobs101,
+            f"/repos/{REPOSITORY}/actions/jobs/900/logs": cause_a,
+        })
+        reader = WorkflowReader(
+            client=client,
+            clock=lambda: datetime(2026, 9, 17, 20, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+
+        with TemporaryDirectory() as scratch:
+            state_directory = Path(scratch) / "state"
+            store = WorkflowLoopStore(
+                state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+            )
+            store.initialize(workflow_ids=(WORKFLOW_ID,))
+            launcher = _Launcher(state_directory, store)
+            manager = WorkflowLoopManager(
+                state_directory=state_directory,
+                repository=REPOSITORY,
+                branch=BRANCH,
+                store=store,
+                reader=reader,
+                launcher=launcher,
+                writer=None,
+                clock=lambda: datetime(2026, 9, 17, 20, tzinfo=UTC),
+                id_factory=(f"cause-{index}" for index in itertools.count()).__next__,
+                workflow_ids=(WORKFLOW_ID,),
+            )
+
+            first = manager.run_pass(mode=EffectMode.READ_ONLY)
+            self.assertEqual((), first.errors)
+            established = store.list_items()[0]
+            established_group = established.cause_group_id
+            self.assertIsNotNone(established_group)
+            self.assertIsNone(established.issue_number)
+            self.assertIsNone(established.task_id)
+            self.assertIsNone(established.external_owner)
+            self.assertEqual((), store.list_cause_starts())
+            self.assertEqual({101}, {w.run_id for w in store.cause_witnesses(established.id)})
+
+            failure102 = run(102)
+            jobs102 = _manifest_page(job(102, 1000, "Build"))
+            client.set_response(
+                run_endpoint(),
+                {"total_count": 2, "workflow_runs": [failure102, failure101]},
+            )
+            client.set_response(f"/repos/{REPOSITORY}/actions/runs/102", failure102)
+            client.set_response(
+                f"/repos/{REPOSITORY}/actions/runs/102/attempts/1/jobs",
+                jobs102,
+            )
+            client.set_response(
+                (
+                    f"/repos/{REPOSITORY}/actions/runs/102/attempts/1/jobs"
+                    "?per_page=100&page=1"
+                ),
+                jobs102,
+            )
+            client.set_response(
+                f"/repos/{REPOSITORY}/actions/jobs/1000/logs",
+                cause_b,
+            )
+            launcher.result_ready = True
+
+            second = manager.run_pass(mode=EffectMode.READ_ONLY)
+            self.assertEqual((), second.errors)
+            conflicted = store.list_items()[0]
+            self.assertEqual(102, conflicted.failure_run_id)
+            self.assertEqual(established_group, conflicted.cause_group_id)
+            self.assertIs(ItemPhase.NEEDS_ATTENTION, conflicted.phase)
+            self.assertEqual("cause_conflict", conflicted.wait_reason)
+            self.assertIsNone(conflicted.recovered_run_id)
+            with closing(sqlite3.connect(state_directory / "workflow-loop.sqlite3")) as connection:
+                witnesses = connection.execute(
+                    "SELECT group_id, run_id FROM cause_witnesses "
+                    "WHERE item_id = ? ORDER BY run_id",
+                    (conflicted.id,),
+                ).fetchall()
+            self.assertEqual([101], [row[1] for row in witnesses])
+            self.assertEqual({established_group}, {row[0] for row in witnesses})
+            boundary = next(
+                entry
+                for entry in store.recent_history(conflicted.id, limit=10)
+                if entry.event == "cause-boundary"
+            )
+            self.assertEqual(established_group, boundary.detail["establishedGroupId"])
+            self.assertNotEqual(established_group, boundary.detail["observedGroupId"])
+            self.assertEqual(102, boundary.detail["runId"])
+            self.assertEqual(1, boundary.detail["attempt"])
+            self.assertEqual(1000, boundary.detail["jobId"])
+            self.assertEqual(conflicted.evidence_fingerprint, boundary.detail["evidenceFingerprint"])
+            self.assertIsNotNone(boundary.detail["signature"])
+
     def test_issue_context_is_deterministic_untrusted_evidence(self) -> None:
         with TemporaryDirectory() as scratch:
             state_directory = Path(scratch) / "state"
@@ -607,7 +1562,7 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                     pre_write=action is not None,
                 )
 
-            def read_run_details(self, run, *, established_jobs=()):
+            def read_run_details(self, run, *, established_jobs=(), selected_log_jobs=None):
                 return RunDetailResult(
                     run=next(
                         refresh.failure_run
@@ -1100,7 +2055,7 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                     "total_count": 0,
                     "items": [],
                 }
-            for workflow_id in (19, 18):
+            for workflow_id in (19, 18, 17):
                 observed_run = runs[workflow_id]
                 responses[
                     f"/repos/{REPOSITORY}/actions/runs/{observed_run['id']}"
@@ -1111,6 +2066,10 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                 ] = PagedResponse((
                     job(observed_run["id"], 1000 + workflow_id, "Build"),
                 ))
+                responses[
+                    f"/repos/{REPOSITORY}/actions/runs/{observed_run['id']}"
+                    "/attempts/1/jobs?per_page=100&page=1"
+                ] = _manifest_page(job(observed_run["id"], 1000 + workflow_id, "Build"))
                 responses[
                     f"/repos/{REPOSITORY}/actions/jobs/{1000 + workflow_id}/logs"
                 ] = "compiler failure"
@@ -1160,8 +2119,8 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             deferred_run_id = runs[17]["id"]
             self.assertFalse(any(
                 endpoint
-                == f"/repos/{REPOSITORY}/actions/runs/{deferred_run_id}"
-                or f"/runs/{deferred_run_id}/attempts/" in endpoint
+                == f"/repos/{REPOSITORY}/actions/jobs/1017/logs"
+                or endpoint == f"/repos/{REPOSITORY}/actions/runs/{deferred_run_id}/attempts/1/jobs"
                 for _, endpoint, _ in client.calls
             ))
 
@@ -1175,14 +2134,15 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             client = EndpointClient({
                 **base_responses(observed_run),
                 f"/repos/{REPOSITORY}/actions/runs/101": observed_run,
-                jobs_endpoint: SequenceResponse((
+                jobs_endpoint + "?per_page=100&page=1": SequenceResponse((
                     api_error(
                         jobs_endpoint,
                         category="server",
                         status=503,
                     ),
-                    PagedResponse((job(101, 1001, "Build"),)),
+                    _manifest_page(job(101, 1001, "Build")),
                 )),
+                jobs_endpoint: PagedResponse((job(101, 1001, "Build"),)),
                 f"/repos/{REPOSITORY}/actions/jobs/1001/logs": "failure",
                 _issue_search_endpoint(WORKFLOW_ID): {
                     "total_count": 0,
@@ -1211,18 +2171,18 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                 writer=None,
                 clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
                 id_factory=iter(
-                    ("pass-1", "unused-worker", "pass-2", "worker-1")
+                    ("pass-1", "pass-2", "worker-1")
                 ).__next__,
                 workflow_ids=(WORKFLOW_ID,),
                 request_count=lambda: client.request_count,
             )
 
             first = manager.run_pass(mode=EffectMode.READ_ONLY)
-            self.assertEqual(1, len(store.list_items()))
+            self.assertEqual(0, len(store.list_items()))
             self.assertEqual(0, len(store.list_workers()))
             self.assertEqual(
-                ItemPhase.OBSERVING_FAILURE,
-                store.list_items()[0].phase,
+                "inventory_incomplete",
+                store.list_manifest_observations()[0]["read_status"],
             )
             self.assertTrue(first.errors)
 
@@ -1282,6 +2242,7 @@ class WorkflowLoopManagerTests(unittest.TestCase):
                     jobs_endpoint: PagedResponse(
                         (job(101, 1001, "Build"),)
                     ),
+                    jobs_endpoint + "?per_page=100&page=1": _manifest_page(job(101, 1001, "Build")),
                     f"/repos/{REPOSITORY}/actions/jobs/1001/logs": (
                         "error CS1002: ; expected"
                     ),
@@ -1379,13 +2340,11 @@ judgment = json.dumps({{
     "episode": request["episode"],
     "evidenceFingerprint": request["evidenceFingerprint"],
     "decision": decision,
+    "classification": "product_or_build",
+    "recommendedResponse": "repair",
     "summary": "The compiler failure is in scope.",
     "evidenceIds": request["evidenceIds"],
-    "inScopeJobIds": (
-        [request["failedJobs"][0]["jobId"]]
-        if request["round"] == 0
-        else []
-    ),
+    "inScopeJobIds": [request["failedJobs"][0]["jobId"]],
     "copilotRequest": "Fix the compiler failure."
 }}, separators=(",", ":"))
 print(json.dumps({{
@@ -1968,6 +2927,10 @@ print(json.dumps({{
                             f"/repos/{REPOSITORY}/actions/runs/101/"
                             "attempts/1/jobs"
                         ): PagedResponse((job(101, 1001, "Build"),)),
+                        (
+                            f"/repos/{REPOSITORY}/actions/runs/101/"
+                            "attempts/1/jobs?per_page=100&page=1"
+                        ): _manifest_page(job(101, 1001, "Build")),
                         f"/repos/{REPOSITORY}/actions/jobs/1001/logs": (
                             "compiler failure"
                         ),
@@ -2619,7 +3582,7 @@ print(json.dumps({{
                         )
                     return refresh
 
-                def read_run_details(self, run, *, established_jobs=()):
+                def read_run_details(self, run, *, established_jobs=(), selected_log_jobs=None):
                     failure = self.additional_failure
                     if failure is not None and run.key == failure.key:
                         return RunDetailResult(
@@ -3913,6 +4876,9 @@ print(json.dumps({{
                 f"/repos/{REPOSITORY}/actions/runs/103/attempts/1/jobs": (
                     PagedResponse((job(103, 3001, "Build"),))
                 ),
+                f"/repos/{REPOSITORY}/actions/runs/103/attempts/1/jobs?per_page=100&page=1": (
+                    _manifest_page(job(103, 3001, "Build"))
+                ),
                 _issue_search_endpoint(WORKFLOW_ID): {
                     "total_count": 0, "items": [],
                 },
@@ -4337,7 +5303,7 @@ print(json.dumps({{
                     ]),
                 )
 
-    def test_same_run_successful_attempt_persists_recovery(self) -> None:
+    def test_same_run_successful_attempt_does_not_persist_recovery(self) -> None:
         with TemporaryDirectory() as scratch:
             state_directory = Path(scratch) / "state"
             failed_raw = run(101, attempt=1)
@@ -4420,8 +5386,8 @@ print(json.dumps({{
             manager.run_pass(mode=EffectMode.READ_ONLY)
 
             current = store.list_items()[0]
-            self.assertIs(ItemPhase.RECOVERED, current.phase)
-            self.assertEqual(101, current.recovered_run_id)
+            self.assertIsNot(ItemPhase.RECOVERED, current.phase)
+            self.assertIsNone(current.recovered_run_id)
             self.assertEqual(1, current.failure_attempt)
 
     def test_task_states_advance_across_reopened_coordinator_passes(self) -> None:

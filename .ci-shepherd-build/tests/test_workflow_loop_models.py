@@ -124,6 +124,137 @@ def _result_document(**overrides: object) -> str:
 
 
 class WorkflowLoopModelTests(unittest.TestCase):
+    def leaf_request(self, **changes):
+        from ci_shepherd.workflow_loop.models import leaf_case_key
+
+        request = replace(
+            _request(),
+            leaf_case_key=leaf_case_key(_run(), _job().key),
+            evidence_ids=("run:101:1", "job:101:1:900", "log:900"),
+        )
+        return replace(request, **changes)
+
+    def leaf_result(self, **changes):
+        return _result_document(
+            **{
+                "classification": "deterministic_test",
+                "recommendedResponse": "repair",
+                "evidenceIds": ["run:101:1", "job:101:1:900", "log:900"],
+                **changes,
+            }
+        )
+
+    def test_leaf_request_roundtrip_requires_closed_typed_result(self) -> None:
+        request = self.leaf_request()
+        self.assertEqual(
+            request, parse_judgment_request(judgment_request_to_json(request))
+        )
+        result = parse_judgment_result(self.leaf_result(), request)
+        self.assertEqual("deterministic_test", result.classification.value)
+        self.assertEqual("repair", result.recommended_response.value)
+        for changes in (
+            {"classification": "test"},
+            {"classification": None},
+            {"recommendedResponse": "quarantine"},
+            {"recommendedResponse": None},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                parse_judgment_result(self.leaf_result(**changes), request)
+        for key in ("classification", "recommendedResponse"):
+            document = json.loads(self.leaf_result())
+            del document[key]
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                parse_judgment_result(json.dumps(document), request)
+
+    def test_leaf_result_requires_exact_job_and_episode_evidence_citations(self) -> None:
+        request = self.leaf_request()
+        for changes in (
+            {"inScopeJobIds": []},
+            {"inScopeJobIds": [901]},
+            {"evidenceIds": ["run:101:1", "log:900"]},
+            {"evidenceIds": ["job:101:1:900", "log:900"]},
+            {"evidenceIds": ["run:101", "job:101:900", "log:900"]},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                parse_judgment_result(self.leaf_result(**changes), request)
+
+    def test_leaf_classification_not_model_decision_authorizes_response(self) -> None:
+        cases = (
+            ("deterministic_test", "repair", JudgmentDecision.ASSIGN),
+            ("repository_infra", "repair", JudgmentDecision.ASSIGN),
+            ("product_or_build", "repair", JudgmentDecision.ASSIGN),
+            ("suspected_flake", "investigate", JudgmentDecision.ASSIGN),
+            ("insufficient_evidence", "investigate", JudgmentDecision.ASSIGN),
+            ("external_infra", "repair", JudgmentDecision.OBSERVE_EXTERNAL),
+            ("aggregate_only", "repair", JudgmentDecision.NEEDS_ATTENTION),
+        )
+        for classification, response, expected in cases:
+            with self.subTest(classification=classification):
+                result = parse_judgment_result(
+                    self.leaf_result(
+                        classification=classification,
+                        recommendedResponse=response,
+                        decision="no_action",
+                        summary="Repair now: mitigation proven; repeated on two runs.",
+                    ),
+                    self.leaf_request(),
+                )
+                self.assertIs(expected, result.decision)
+                if expected is not JudgmentDecision.ASSIGN:
+                    self.assertIsNone(result.copilot_request)
+
+    def test_leaf_action_evidence_gate_and_insufficient_repro_context(self) -> None:
+        from ci_shepherd.workflow_loop.models import leaf_case_key
+
+        for classification in ("deterministic_test", "suspected_flake", "repository_infra", "product_or_build"):
+            with self.subTest(classification=classification):
+                result = parse_judgment_result(
+                    self.leaf_result(
+                        classification=classification,
+                        evidenceIds=["run:101:1", "job:101:1:900"],
+                    ), self.leaf_request(),
+                )
+                self.assertIs(JudgmentDecision.NEEDS_ATTENTION, result.decision)
+        job = replace(_job(), key=JobKey("unknown", ()), log_excerpt=None)
+        request = self.leaf_request(
+            failure_run=_run(job), failed_jobs=(job,),
+            leaf_case_key=leaf_case_key(_run(job), job.key),
+            evidence_ids=("run:101:1", "job:101:1:900"),
+        )
+        result = parse_judgment_result(
+            self.leaf_result(
+                classification="insufficient_evidence",
+                recommendedResponse="investigate",
+                evidenceIds=list(request.evidence_ids),
+            ), request,
+        )
+        self.assertIs(JudgmentDecision.NEEDS_ATTENTION, result.decision)
+
+    def test_leaf_key_is_versioned_runner_qualified_and_episode_independent(self) -> None:
+        from ci_shepherd.workflow_loop.models import leaf_case_key
+
+        first = _run(_job())
+        key = leaf_case_key(first, first.jobs[0].key)
+        self.assertTrue(key.startswith("leaf-key-v1:"))
+        later = replace(
+            first, run_id=202, attempt=2, head_sha="another",
+            jobs=(replace(first.jobs[0], run_id=202, attempt=2, job_id=901),),
+        )
+        self.assertEqual(key, leaf_case_key(later, later.jobs[0].key))
+        self.assertEqual(
+            leaf_case_key(first, JobKey(" Build /  Linux ", ("z", "a"))),
+            leaf_case_key(first, JobKey("Build / Linux", ("a", "z"))),
+        )
+        for changed in (
+            replace(first, key=replace(first.key, repository="other/repo")),
+            replace(first, key=replace(first.key, branch="release")),
+            replace(first, key=replace(first.key, workflow_id=43)),
+            replace(first, workflow_path=".github/workflows/other.yml"),
+        ):
+            self.assertNotEqual(key, leaf_case_key(changed, first.jobs[0].key))
+        for job_key in (JobKey("Other", ("ubuntu-latest",)), JobKey("Build / Linux", ("windows",))):
+            self.assertNotEqual(key, leaf_case_key(first, job_key))
+
     def test_canonical_fingerprint_matches_existing_fnv1a_encoding(self) -> None:
         self.assertEqual(
             "fnv1a64:8f00364b3055ed35",

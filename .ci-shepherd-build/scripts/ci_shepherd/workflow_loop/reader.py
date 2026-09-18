@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
-from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import re
 from typing import Any, Literal
@@ -15,7 +14,7 @@ from ci_shepherd.github import GitHubApiError, GitHubClient
 from ci_shepherd.pull_requests import build_pull_request_current_state
 from ci_shepherd.observations import is_workflow_log_diagnostic_line
 
-from .models import ActionKind, JobKey, JobObservation, RunObservation, WorkflowItem, WorkflowKey
+from .models import ActionKind, FailedStep, JobKey, JobObservation, RunObservation, WorkflowItem, WorkflowKey, canonical_fingerprint, leaf_case_key, workflow_case_marker
 
 
 _PR_EVENTS = frozenset({"pull_request", "pull_request_target", "merge_group"})
@@ -92,6 +91,34 @@ class RunDetailResult:
     unavailable_log_job_ids: tuple[int, ...]
     errors: tuple[ReadError, ...]
     request_count: int
+    recovery_witnesses: tuple[RecoveryWitness, ...] = ()
+    missing_leaf_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryWitness:
+    leaf_case_key: str
+    run_id: int
+    attempt: int
+    head_sha: str
+    job_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestJob:
+    job: JobObservation
+    head_sha: str
+    failed_steps: tuple[str, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class JobManifest:
+    run: RunObservation | None
+    jobs: tuple[ManifestJob, ...]
+    total_count: int | None
+    complete: bool
+    errors: tuple[ReadError, ...]
+    request_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +178,9 @@ class ItemRefresh:
     complete: bool
     errors: tuple[ReadError, ...]
     request_count: int
+    represented_leaf_keys: tuple[str, ...] = ()
+    recovery_witnesses: tuple[RecoveryWitness, ...] = ()
+    recovery_basis_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +371,9 @@ class WorkflowReader:
         tracked_items: Sequence[WorkflowItem],
         workflow_ids: Collection[int] | None = None,
     ) -> ReaderSnapshot:
+        # The scenarios package imports this reader when registering scenarios.
+        from .scenarios.workflow_policy import EXCLUDED_WORKFLOW_PATHS
+
         started = self._requests()
         observed_at = _format_time(self._clock())
         errors: list[ReadError] = []
@@ -443,7 +476,11 @@ class WorkflowReader:
                             f"Active workflow ID {workflow_id} appears more than once."
                         )
                     inventory_active_ids.add(workflow_id)
-                if active and (allowed is None or workflow_id in allowed):
+                if (
+                    active
+                    and path not in EXCLUDED_WORKFLOW_PATHS
+                    and (allowed is None or workflow_id in allowed)
+                ):
                     active_workflows.append((workflow_id, path, name))
         except (TypeError, ValueError) as error:
             errors.append(
@@ -501,18 +538,103 @@ class WorkflowReader:
             request_count=self._requests() - started,
         )
 
+    def read_job_manifest(self, run: RunObservation) -> JobManifest:
+        """Read exact-attempt metadata only; callers persist and reuse completed manifests."""
+        started = self._requests()
+        endpoint = f"/repos/{run.key.repository}/actions/runs/{run.run_id}"
+        current: RunObservation | None = None
+        jobs: list[ManifestJob] = []
+        job_ids: set[int] = set()
+        job_keys: set[JobKey] = set()
+        total_count: int | None = None
+        errors: list[ReadError] = []
+        try:
+            if run.status != "completed" or run.conclusion not in _FAILED_CONCLUSIONS:
+                raise ValueError("Job manifests require a completed failed run.")
+            current = _normalize_run(
+                self._client.get(endpoint),
+                repository=run.key.repository,
+                branch=run.key.branch,
+                workflow_id=run.key.workflow_id,
+                workflow_path=run.workflow_path,
+                workflow_name=run.workflow_name,
+            )
+            if current is None or not _same_run_identity(current, run):
+                current = None
+                raise ValueError("The exact run endpoint returned a different run identity.")
+            if current.status != "completed" or current.conclusion not in _FAILED_CONCLUSIONS:
+                raise ValueError("The selected run is no longer a completed failed run.")
+            page = 1
+            while True:
+                endpoint = (
+                    f"/repos/{run.key.repository}/actions/runs/{run.run_id}"
+                    f"/attempts/{run.attempt}/jobs?per_page=100&page={page}"
+                )
+                payload = self._client.get(endpoint)
+                if not isinstance(payload, Mapping):
+                    raise ValueError("Job page must be an object.")
+                count = payload.get("total_count")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise ValueError("Job total_count must be a nonnegative integer.")
+                if total_count is not None and count != total_count:
+                    raise ValueError("Job total_count changed between pages.")
+                total_count = count
+                raw_jobs = payload.get("jobs")
+                if not isinstance(raw_jobs, list):
+                    raise ValueError("Job page must contain a jobs array.")
+                if len(raw_jobs) != min(100, total_count - len(jobs)):
+                    raise ValueError("Job page length does not match total_count.")
+                for raw_job in raw_jobs:
+                    observed = _normalize_job(raw_job, run=current)
+                    if observed.status != "completed":
+                        raise ValueError("Completed run contains an unfinished job.")
+                    observed = replace(
+                        observed,
+                        key=JobKey(" ".join(observed.key.name.split()), observed.key.runner_labels),
+                    )
+                    if observed.job_id in job_ids or observed.key in job_keys:
+                        raise ValueError("Job inventory contains duplicate IDs or normalized keys.")
+                    jobs.append(
+                        ManifestJob(observed, current.head_sha, _failed_step_names(raw_job))
+                    )
+                    job_ids.add(observed.job_id)
+                    job_keys.add(observed.key)
+                if len(jobs) >= total_count:
+                    break
+                page += 1
+        except (GitHubApiError, TypeError, ValueError) as error:
+            errors.append(_error(f"run:{run.run_id}:jobs", "inventory-incomplete", endpoint, error))
+        if current is not None:
+            current = replace(
+                current,
+                jobs_complete=not errors,
+                jobs=tuple(entry.job for entry in jobs),
+            )
+        return JobManifest(
+            current,
+            tuple(jobs),
+            total_count,
+            not errors,
+            tuple(errors),
+            self._requests() - started,
+        )
+
     def read_run_details(
         self,
         run: RunObservation,
         *,
         established_jobs: tuple[JobKey, ...] = (),
+        represented_leaf_keys: tuple[str, ...] = (),
+        selected_log_jobs: tuple[JobKey, ...] | None = None,
     ) -> RunDetailResult:
         started = self._requests()
         return self._read_run_details(
             run,
             established_jobs=established_jobs,
+            represented_leaf_keys=represented_leaf_keys,
             started=started,
             include_logs=True,
+            selected_log_jobs=selected_log_jobs,
         )
 
     def refresh_item(
@@ -520,7 +642,10 @@ class WorkflowReader:
         item: WorkflowItem,
         *,
         action: ActionKind | None = None,
+        represented_leaf_keys: tuple[str, ...] = (),
     ) -> ItemRefresh:
+        if item.leaf_job is not None and not represented_leaf_keys:
+            represented_leaf_keys = (item.case_key,)
         pre_write_requested = action is not None
         started = self._requests()
         errors: list[ReadError] = []
@@ -544,8 +669,10 @@ class WorkflowReader:
             details = self._read_run_details(
                 failure_run,
                 established_jobs=item.failed_jobs,
+                represented_leaf_keys=represented_leaf_keys,
                 started=self._requests(),
                 include_logs=False,
+                selected_log_jobs=(),
             )
             errors.extend(details.errors)
             failure_run = details.run
@@ -577,24 +704,27 @@ class WorkflowReader:
             target is not None
             and failure_run is not None
             and target.run_id == failure_run.run_id
-            and target.attempt == item.failure_attempt
-            and target.conclusion in {
-                "failure",
-                "timed_out",
-                "action_required",
-                "startup_failure",
-            }
         ):
-            # The item's established failed jobs already bind this immutable
-            # attempt. Polling only needs fresh run metadata; logs are selected
-            # later if a judgment actually needs them.
-            recovery = "failed"
+            # A rerun attempt can invalidate write-grade evidence, but it is not
+            # an independent execution and therefore cannot prove recovery.
+            recovery = (
+                "failed"
+                if target.conclusion in {
+                    "failure",
+                    "timed_out",
+                    "action_required",
+                    "startup_failure",
+                }
+                else "unavailable"
+            )
         elif target is not None:
             details = self._read_run_details(
                 target,
                 established_jobs=item.failed_jobs,
+                represented_leaf_keys=represented_leaf_keys,
                 started=self._requests(),
                 include_logs=False,
+                selected_log_jobs=(),
             )
             errors.extend(details.errors)
             recovery = details.recovery
@@ -695,6 +825,14 @@ class WorkflowReader:
             complete=complete,
             errors=tuple(errors),
             request_count=self._requests() - started,
+            represented_leaf_keys=represented_leaf_keys,
+            recovery_witnesses=(
+                details.recovery_witnesses
+                if target is not None and target.status == "completed"
+                and target.run_id != failure_run.run_id
+                else ()
+            ),
+            recovery_basis_fingerprint=item.last_judged_fingerprint,
         )
 
     def read_repair_evidence(
@@ -1127,6 +1265,7 @@ class WorkflowReader:
         started = self._requests()
         errors: list[ReadError] = []
         try:
+            canonical_marker = _canonical_marker(item)
             repository_payload = self._client.get(f"/repos/{item.repository}")
             default_branch = _validate_repository(
                 repository_payload,
@@ -1149,7 +1288,6 @@ class WorkflowReader:
                 self._requests() - started,
             )
 
-        canonical_marker = _canonical_marker(item)
         queries = [
             (
                 canonical_marker,
@@ -1158,13 +1296,17 @@ class WorkflowReader:
                         f"repo:{item.repository}",
                         "is:issue",
                         "is:open",
-                        '"ci-shepherd:workflow-repair"',
-                        f'"workflow-id={item.workflow_id}"',
+                        ('"ci-shepherd-workflow-case:v2"' if item.leaf_job is not None
+                         else '"ci-shepherd:workflow-repair"'),
+                        # A bounded lookup token nominates candidates only. Full
+                        # marker equality below, not this hash, proves identity.
+                        (f'"{canonical_fingerprint(item.cause_group_id)}"' if item.leaf_job is not None
+                         else f'"workflow-id={item.workflow_id}"'),
                     )
                 ),
             )
         ]
-        if item.branch == default_branch:
+        if item.leaf_job is None and item.branch == default_branch:
             legacy_marker = (
                 f"<!-- automation-broken:{item.workflow_path.rsplit('/', 1)[-1]} -->"
             )
@@ -1350,8 +1492,10 @@ class WorkflowReader:
         run: RunObservation,
         *,
         established_jobs: tuple[JobKey, ...],
+        represented_leaf_keys: tuple[str, ...],
         started: int,
         include_logs: bool,
+        selected_log_jobs: tuple[JobKey, ...] | None,
     ) -> RunDetailResult:
         errors: list[ReadError] = []
         endpoint = f"/repos/{run.key.repository}/actions/runs/{run.run_id}"
@@ -1433,10 +1577,21 @@ class WorkflowReader:
         unavailable: list[int] = []
         enriched_jobs: list[JobObservation] = []
         logs_remaining = self._max_failed_logs
+        # Admission scopes log IO only; recovery still examines the full inventory.
+        selected_log_keys = (
+            {leaf_case_key(current, key) for key in selected_log_jobs}
+            if selected_log_jobs is not None else None
+        )
         for observed_job in jobs:
             excerpt: str | None = None
             log_truncated = False
-            if include_logs and observed_job.conclusion in _FAILED_CONCLUSIONS:
+            if (
+                include_logs and observed_job.conclusion in _FAILED_CONCLUSIONS
+                and (
+                    selected_log_keys is None
+                    or leaf_case_key(current, observed_job.key) in selected_log_keys
+                )
+            ):
                 if logs_remaining <= 0:
                     unavailable.append(observed_job.job_id)
                 else:
@@ -1473,16 +1628,8 @@ class WorkflowReader:
                             )
                         )
             enriched_jobs.append(
-                JobObservation(
-                    run_id=observed_job.run_id,
-                    attempt=observed_job.attempt,
-                    job_id=observed_job.job_id,
-                    key=observed_job.key,
-                    status=observed_job.status,
-                    conclusion=observed_job.conclusion,
-                    started_at=observed_job.started_at,
-                    completed_at=observed_job.completed_at,
-                    url=observed_job.url,
+                replace(
+                    observed_job,
                     log_excerpt=excerpt,
                     log_truncated=log_truncated,
                 )
@@ -1505,9 +1652,10 @@ class WorkflowReader:
             jobs_complete=inventory.complete,
             jobs=tuple(enriched_jobs),
         )
-        recovery, matched, missing = _recovery(
+        recovery, matched, missing, missing_leaf_keys, recovery_witnesses = _recovery(
             detailed_run,
             established_jobs,
+            represented_leaf_keys,
         )
         return RunDetailResult(
             run=detailed_run,
@@ -1524,6 +1672,8 @@ class WorkflowReader:
             unavailable_log_job_ids=tuple(unavailable),
             errors=tuple(errors),
             request_count=self._requests() - started,
+            recovery_witnesses=recovery_witnesses,
+            missing_leaf_keys=missing_leaf_keys,
         )
 
     def _read_exact_run(
@@ -1632,6 +1782,8 @@ class WorkflowReader:
             )
             if issue is not None and issue.number == item.issue_number:
                 return issue
+            if item.leaf_job is not None:
+                raise ValueError("The bound leaf issue does not contain its exact v2 marker.")
 
             repository_payload = self._client.get(f"/repos/{item.repository}")
             default_branch = _validate_repository(
@@ -1999,6 +2151,46 @@ def _normalize_run(
     )
 
 
+def _failed_step_names(raw: Mapping[str, Any]) -> tuple[str, ...] | None:
+    # Jobs expose steps as [{name, status, conclusion, ...}]. An absent or
+    # malformed entry must not turn a mixed failure into dependency-only fallout.
+    steps = raw.get("steps")
+    if not isinstance(steps, list):
+        return None
+    failed: list[str] = []
+    for step in steps:
+        if not isinstance(step, Mapping):
+            return None
+        name = step.get("name")
+        conclusion = step.get("conclusion")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or step.get("status") != "completed"
+            or conclusion not in ("success", "skipped", "failure", "timed_out")
+        ):
+            return None
+        if conclusion in _FAILED_CONCLUSIONS:
+            failed.append(name)
+    return tuple(failed)
+
+
+def _failed_steps(raw: Mapping[str, Any]) -> tuple[FailedStep, ...] | None:
+    if _failed_step_names(raw) is None:
+        return None
+    try:
+        return tuple(
+            FailedStep(
+                step.get("number"), step["name"], step["status"], step["conclusion"],
+                step.get("started_at"), step.get("completed_at"),
+            )
+            for step in raw["steps"] if step["conclusion"] in _FAILED_CONCLUSIONS
+        )
+    except (TypeError, ValueError):
+        # Preserve unavailable metadata rather than invent step numbers/times.
+        return None
+
+
 def _normalize_job(raw: object, *, run: RunObservation) -> JobObservation:
     if not isinstance(raw, Mapping):
         raise TypeError("Workflow job must be an object.")
@@ -2051,41 +2243,77 @@ def _normalize_job(raw: object, *, run: RunObservation) -> JobObservation:
         url=_nonempty_string(raw.get("html_url"), "job.html_url"),
         log_excerpt=None,
         log_truncated=False,
+        failed_steps=_failed_steps(raw),
     )
 
 
 def _recovery(
     run: RunObservation,
     established_jobs: tuple[JobKey, ...],
-) -> tuple[RecoveryStatus, tuple[int, ...], tuple[JobKey, ...]]:
-    if not established_jobs:
-        return "not_requested", (), ()
+    represented_leaf_keys: tuple[str, ...] = (),
+) -> tuple[
+    RecoveryStatus,
+    tuple[int, ...],
+    tuple[JobKey, ...],
+    tuple[str, ...],
+    tuple[RecoveryWitness, ...],
+]:
+    expected_keys = (
+        represented_leaf_keys
+        or tuple(leaf_case_key(run, key) for key in established_jobs)
+    )
+    if not expected_keys:
+        return "not_requested", (), (), (), ()
     if not run.jobs_complete:
-        return "unavailable", (), established_jobs
-    established_name_counts = Counter(key.name for key in established_jobs)
-    observed_by_name: dict[str, list[JobObservation]] = {}
+        return "unavailable", (), established_jobs, expected_keys, ()
+    if len(set(expected_keys)) != len(expected_keys):
+        return "unavailable", (), established_jobs, expected_keys, ()
+    observed_by_key: dict[str, list[JobObservation]] = {}
     for job in run.jobs:
-        observed_by_name.setdefault(job.key.name, []).append(job)
-    if any(count > 1 for count in established_name_counts.values()):
-        return "unavailable", (), established_jobs
+        observed_by_key.setdefault(leaf_case_key(run, job.key), []).append(job)
 
     matched: list[JobObservation] = []
-    missing: list[JobKey] = []
-    for expected in established_jobs:
-        candidates = observed_by_name.get(expected.name, [])
+    missing_keys: list[str] = []
+    for expected_key in expected_keys:
+        candidates = observed_by_key.get(expected_key, [])
         if len(candidates) != 1:
-            missing.append(expected)
+            missing_keys.append(expected_key)
             continue
         matched.append(candidates[0])
-    if missing:
-        return "unavailable", tuple(job.job_id for job in matched), tuple(missing)
+    established_by_key = {
+        leaf_case_key(run, key): key for key in established_jobs
+    }
+    missing = tuple(
+        established_by_key[key]
+        for key in missing_keys
+        if key in established_by_key
+    )
+    witnesses = tuple(
+        RecoveryWitness(
+            leaf_case_key=leaf_case_key(run, job.key),
+            run_id=run.run_id,
+            attempt=run.attempt,
+            head_sha=run.head_sha,
+            job_id=job.job_id,
+        )
+        for job in matched
+        if job.status == "completed" and job.conclusion == "success"
+    )
+    if missing_keys:
+        return (
+            "unavailable",
+            tuple(job.job_id for job in matched),
+            missing,
+            tuple(missing_keys),
+            witnesses,
+        )
     if any(job.status != "completed" for job in matched):
-        return "pending", tuple(job.job_id for job in matched), ()
+        return "pending", tuple(job.job_id for job in matched), (), (), witnesses
     if any(job.conclusion in {None, "skipped", "cancelled", "neutral", "stale"} for job in matched):
-        return "unavailable", tuple(job.job_id for job in matched), ()
+        return "unavailable", tuple(job.job_id for job in matched), (), (), witnesses
     if all(job.conclusion == "success" for job in matched):
-        return "passed", tuple(job.job_id for job in matched), ()
-    return "failed", tuple(job.job_id for job in matched), ()
+        return "passed", tuple(job.job_id for job in matched), (), (), witnesses
+    return "failed", tuple(job.job_id for job in matched), (), (), witnesses
 
 
 def _is_later_execution(
@@ -2093,12 +2321,10 @@ def _is_later_execution(
     failure: RunObservation,
     failure_attempt: int,
 ) -> bool:
-    if candidate.run_number > failure.run_number:
-        return True
+    del failure_attempt
     return (
-        candidate.run_id == failure.run_id
-        and candidate.run_number == failure.run_number
-        and candidate.attempt > failure_attempt
+        candidate.run_id != failure.run_id
+        and candidate.run_number > failure.run_number
     )
 
 
@@ -2206,6 +2432,13 @@ def _validate_pull_request(
 
 
 def _canonical_marker(item: WorkflowItem) -> str:
+    if item.leaf_job is not None:
+        if item.cause_group_id is None:
+            raise ValueError("Leaf issue lookup requires a trusted cause group.")
+        return workflow_case_marker(
+            item.repository, item.branch, item.workflow_id,
+            item.workflow_path, item.cause_group_id,
+        )
     return (
         "<!-- ci-shepherd:workflow-repair "
         f"repository={item.repository} workflow-id={item.workflow_id} "

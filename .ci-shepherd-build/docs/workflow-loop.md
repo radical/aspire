@@ -105,11 +105,75 @@ as its state directory or promote a shadow proposal/judgment. Run LIVE with
 the canonical path when authorized; any needed judgments run independently.
 `status` inspects persisted local state without GitHub access.
 
+## Status and policy reporting
+
+`status` reports each persisted workflow manifest, including complete versus
+incomplete inventory, returned and declared job counts, retained leaves,
+ambiguous leaves, and proven dependency-only aggregate fallout. Every retained
+leaf remains visible with its cause-group role and state. Group state is
+`recovered` only when every represented leaf has recovered; a recovered subset
+is `partial-recovery`. `frozen-cause-conflict` takes precedence over apparent
+recovery so contradictory ownership evidence is never hidden.
+
+The report shows the policy-normalized classification and response, not the
+worker's full judgment request, evidence, or result. The mapping is:
+
+- repository infrastructure, product/build, and deterministic test failures
+  with exact diagnostic evidence: `repair`;
+- suspected flakes: `investigate`;
+- external infrastructure: `observe` until exact independent recurrence plus
+  diagnostic evidence permits `investigate`;
+- insufficient evidence: `investigate` only when a bounded reproduction target
+  exists, otherwise `needs_attention`;
+- a retained leaf mislabeled aggregate-only: `needs_attention`.
+
+Task-start ranks use workflow priority, then repository/product-build,
+deterministic test, suspected flake, insufficient/external infrastructure, and
+unavailable classification, with the exact leaf key as the stable tie-breaker.
+Only two new cause-group starts may be reserved for one source run/attempt.
+The report distinguishes starts from
+`deferred_by_episode_budget`; completed tasks do not restore that budget.
+
+Grouping is deliberately exact and limited. It recognizes one structured
+MTP/xUnit failure with a non-generic diagnostic, one compiler diagnostic, or
+one HTTP failure tied to one failed step. Multiple candidates, generic
+timeouts, missing logs, missing or ambiguous failed-step metadata, and
+unrecognized formats remain singleton leaves. Paths, URLs, numbers, case, and
+payload whitespace are not normalized into a shared cause.
+
+Recovery requires the exact `leaf-key-v1` lane to appear exactly once and pass
+on a later independent target-branch run. A retry of the failure run, a
+different label, a duplicate lane, a skipped job, or missing inventory is not
+proof. The report includes the accepted run, attempt, head SHA, job, and leaf
+witness. Legacy workflow-wide migration reports superseded item, worker, and
+prepared-action counts; observed issue/task/PR links never transfer ownership
+to newly discovered leaves.
+
+Exact proposed issue/task payloads remain visible because they are the external
+effect boundary. Internal judgment packets remain in private worker storage.
+A terminal task without an authoritative pull request is reported as an
+unavailable machine-verifiable result and stays `needs_attention`; no public
+summary or issue comment is invented.
+
 ## Repeated-pass correctness
 
 Every successful poll persists `last_checked_at`, even when no semantic state
 changes. `last_progressed_at` and progress history change only for real
 progress.
+
+Exact cause membership is verified against the leaf's source-execution
+fingerprint (`workflow_loop/state.py`). A follower observed on a new run or
+attempt must receive another capacity-bounded detail read before it can keep
+following. Unchanged executions do not repeat enrichment or launch workers.
+Contradictory evidence freezes owned groups for attention instead of retargeting
+their issue or task. Schema-7 groups migrate without a verified fingerprint,
+so prior follower membership cannot bypass this check.
+
+When an already-owned leaf joins an unowned group, that leaf becomes the
+canonical leader without transferring ownership. Separately owned matching
+groups freeze rather than merge. Cause parsing strips transport formatting,
+but retains whitespace inside diagnostics and parameterized test identities:
+`/repo/mock  executable.sh` and `/repo/mock executable.sh` are distinct resources.
 
 Follow-up assessments are bound to the task, PR head/base, check state, draft
 state, and issue ownership they evaluated. Unchanged non-action or stale
@@ -141,6 +205,34 @@ observation, while ambiguous or unavailable searches never guess. A successful
 later attempt of the same run can prove recovery. A new completed failure after
 recovery advances the same scenario case to a new episode; any still-live task
 from the previous episode retains capacity until terminal.
+
+Leaf issue adoption runs **after trusted cause derivation and before judgment**,
+and repeats on fresh effect checks. `models.py:workflow_case_marker` defines the
+`ci-shepherd-workflow-case:v2` marker: canonical JSON binds repository, branch,
+workflow ID/path, and the versioned cause-group ID. A bounded FNV lookup token
+only nominates search candidates; full marker equality proves ownership.
+Leaves never fall back to workflow-wide or `automation-broken` markers.
+Multiple exact matches block that group, not other cases. Observed external
+ownership does not start or charge a task.
+
+`writer.py` builds leaf-specific issue titles and embeds frozen run/attempt/SHA,
+runner, exact failed-step metadata, represented leaf keys, trusted recurrence
+witnesses, typed classification, and quoted diagnostic context in both issue
+bodies and Agent Task prompts. Worker prose cannot replace scope or marker.
+The complete rendered payload is capped at 8,000 UTF-8 bytes; diagnostic-aware
+excerpting and witness omissions are explicit. Exact identity/metadata that
+cannot fit fails closed instead of silently widening or truncating scope.
+Artifact access is not assumed.
+
+Task instructions require reproduction when feasible, regression or scripted
+proof, evidence-based flake investigation, repository-native guidance, and a
+draft PR with no merge. They prohibit automatic quarantine, disablement,
+deletion, and timeout-only fixes, and require an explanation when no safe fix
+is justified. No-PR completion remains `needs_attention`; there is no fabricated
+issue-comment result channel. Read-only proposals retain the same payload used
+by the effect builder, including assignment and follow-up. `effects.py` checks
+fresh ownership before initial preparation/budget reservation and again before
+invocation; uncertain invoked effects remain non-retryable.
 
 Packet preparation failures become durable `needs_attention` state and a
 degraded pass rather than queued work without a reservation. Follow-up
@@ -178,6 +270,19 @@ PYTHONPATH=scripts python3 scripts/workflow_loop.py pass \
 Run these commands from `.ci-shepherd-build/`. The first is read-only against
 upstream; the live example targets a fork and requires separate operator
 authorization. Neither command is implied by running the local test suite.
+
+Offline validation performs no GitHub reads or writes and does not constitute
+a read-only rehearsal:
+
+```bash
+mkdir -p tests/.tmp
+TMPDIR="$PWD/tests/.tmp" PYTHONPATH=scripts:tests \
+  python3 -W error -m unittest discover -s tests -p 'test_*.py'
+```
+
+Running a READ_ONLY pass is a separate operation because it performs GitHub
+reads. Running LIVE is a further separate operation and requires an exact fork
+repository plus `--allow-write-repository`; offline validation grants neither.
 
 `watch` starts the same pass implementation every five minutes. Pass duration
 is deducted from the next sleep, so the interval is start-to-start rather than

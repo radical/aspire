@@ -38,6 +38,25 @@ from test_workflow_loop_worker import (
 
 
 class WorkerProcessTests(unittest.TestCase):
+    def test_leaf_result_envelope_retains_typed_policy_on_reparse(self) -> None:
+        from ci_shepherd.workflow_loop.models import parse_judgment_result
+        from ci_shepherd.workflow_loop.worker_process import _judgment_result_document
+        from test_workflow_loop_models import WorkflowLoopModelTests
+
+        fixtures = WorkflowLoopModelTests()
+        request = fixtures.leaf_request()
+        for classification in ("suspected_flake", "external_infra"):
+            with self.subTest(classification=classification):
+                result = parse_judgment_result(
+                    fixtures.leaf_result(classification=classification), request,
+                )
+                document = _judgment_result_document(result)
+                self.assertEqual(classification, document["classification"])
+                self.assertEqual(result.recommended_response.value, document["recommendedResponse"])
+                self.assertEqual(
+                    result, parse_judgment_result(json.dumps(document), request)
+                )
+
     def test_copilot_argv_exposes_only_view_with_trusted_runtime_options(self) -> None:
         with TemporaryDirectory() as scratch:
             paths = WorkerPacketPaths.create(Path(scratch) / "state", "worker-1")

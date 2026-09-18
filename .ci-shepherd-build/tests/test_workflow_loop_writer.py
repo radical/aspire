@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 import importlib
+import json
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -22,6 +23,12 @@ from ci_shepherd.workflow_loop.models import (
     RunObservation,
     TaskState,
     WorkflowKey,
+    FailureClassification,
+    RecommendedResponse,
+    judgment_request_to_json,
+    parse_judgment_request,
+    FailedStep,
+    workflow_case_marker,
 )
 from ci_shepherd.workflow_loop.reader import (
     IssueObservation,
@@ -33,6 +40,7 @@ from ci_shepherd.workflow_loop.reader import (
 )
 from ci_shepherd.workflow_loop.state import WorkflowLoopStore
 from ci_shepherd.workflow_loop.report import render_status
+from ci_shepherd.workflow_loop.scenarios.workflow_failure import WorkflowFailureScenario
 
 
 NOW = "2026-09-17T20:00:00Z"
@@ -397,6 +405,364 @@ class WorkflowWriterTests(unittest.TestCase):
             active_item_limit=2,
             cloud_model=None,
         )
+
+    def _leaf(self):
+        leaf = self.store.upsert_leaf_failure(self.failure_run, self.failure_run.jobs[0].key, NOW)
+        return self.store.record_cause(leaf.id, self.failure_run, observed_at=NOW)
+
+    def test_exact_issue_adoption_follows_cause_derivation_before_worker(self) -> None:
+        for owner, phase in (("human", ItemPhase.WAITING_FOR_HUMAN),
+                             ("copilot", ItemPhase.OBSERVING_EXTERNAL_REPAIR)):
+            with self.subTest(owner=owner):
+                leaf = self._leaf()
+                issue = replace(_issue(77), human_assigned=owner == "human",
+                                copilot_assigned=owner == "copilot")
+                reader = FakeReader(lambda item, action: _refresh(item, self.failure_run),
+                    issue_search=IssueSearchResult("one", issue, (77,), (), 1))
+                prepared = WorkflowFailureScenario(reader).prepare_judgment(
+                    store=self.store, item=leaf, refresh=_refresh(leaf, self.failure_run),
+                    judgment_round=0, worker_id="leaf-worker", session_id="leaf-session",
+                )
+                self.assertIsNone(prepared.request)
+                self.assertEqual(phase, prepared.item.phase)
+                self.assertEqual(77, prepared.item.issue_number)
+                self.assertEqual(leaf.cause_group_id, reader.issue_search_calls[0].cause_group_id)
+                self.assertEqual((), self.store.list_cause_starts())
+                self.store.update_item(replace(prepared.item, issue_number=None, external_owner=None),
+                    history_event="fixture-reset", summary="Reset fixture ownership.", detail={})
+
+    def test_ambiguous_leaf_adoption_blocks_only_its_group(self) -> None:
+        leaf = self._leaf()
+        reader = FakeReader(lambda item, action: _refresh(item, self.failure_run),
+            issue_search=IssueSearchResult("ambiguous", None, (77, 78), (), 1))
+        prepared = WorkflowFailureScenario(reader).prepare_judgment(
+            store=self.store, item=leaf, refresh=_refresh(leaf, self.failure_run),
+            judgment_round=0, worker_id="leaf-worker", session_id="leaf-session",
+        )
+        self.assertIsNone(prepared.request)
+        self.assertEqual(ItemPhase.NEEDS_ATTENTION, prepared.item.phase)
+        self.assertEqual(ItemPhase.READY_FOR_ACTION, self.store.list_items()[0].phase)
+        self.assertEqual((), self.store.list_cause_starts())
+
+    def test_leaf_packet_retains_exact_failed_step_metadata(self) -> None:
+        from test_workflow_loop_reader import job as raw_job, run as raw_run, reader as make_reader, repository, run_endpoint
+        from test_workflow_loop_manager import EndpointClient
+        raw = raw_job(101, 900, "Build / Linux", sha=self.failure_run.head_sha, branch=BRANCH)
+        raw["steps"] = [
+            {"number": 3, "name": "Run tests", "status": "completed",
+             "conclusion": "failure", "started_at": NOW, "completed_at": LATER},
+        ]
+        run_payload = raw_run(
+            101, workflow_id=42, sha=self.failure_run.head_sha, branch=BRANCH,
+            run_number=88, created_at=NOW)
+        client = EndpointClient({
+            f"/repos/{REPOSITORY}": repository(),
+            f"/repos/{REPOSITORY}/actions/runs/101": run_payload,
+            run_endpoint(42, BRANCH): {"total_count": 1, "workflow_runs": [run_payload]},
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs?per_page=100&page=1":
+                {"total_count": 1, "jobs": [raw]},
+            f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs":
+                {"total_count": 1, "jobs": [raw]},
+            f"/repos/{REPOSITORY}/actions/jobs/900/logs": "error CS1002: ; expected",
+        })
+        reader = make_reader(client)
+        manifest = reader.read_job_manifest(self.failure_run)
+        self.assertTrue(manifest.complete, manifest.errors)
+        run = replace(self.failure_run, jobs=tuple(entry.job for entry in manifest.jobs))
+        leaf = self.store.upsert_leaf_failure(run, run.jobs[0].key, NOW)
+        prepared = WorkflowFailureScenario(reader).prepare_judgment(
+            store=self.store, item=leaf, refresh=_refresh(leaf, run),
+            judgment_round=0, worker_id="reader-worker", session_id="reader-session",
+        )
+        self.assertEqual((), prepared.errors)
+        request = prepared.request
+        self.assertIsNotNone(request)
+        restored = parse_judgment_request(judgment_request_to_json(request))
+        step, = restored.failed_jobs[0].failed_steps
+        self.assertEqual(
+            (3, "Run tests", "completed", "failure", NOW, LATER),
+            (step.number, step.name, step.status, step.conclusion, step.started_at, step.completed_at),
+        )
+        result = replace(_result(restored, JudgmentDecision.ASSIGN),
+            classification=FailureClassification.PRODUCT_OR_BUILD,
+            recommended_response=RecommendedResponse.REPAIR)
+        prompt = self._writer(reader, None)._initial_prompt(restored, result, 77)
+        self.assertIn('"number":3,"name":"Run tests"', prompt)
+        logs_before = sum(call[0] == "get_text_head_tail" for call in client.calls)
+        fresh = reader.refresh_item(prepared.item, action=ActionKind.CREATE_ISSUE)
+        self.assertTrue(fresh.complete, fresh.errors)
+        self.assertEqual(restored.failed_jobs[0].failed_steps, fresh.failure_run.jobs[0].failed_steps)
+        self.assertEqual(logs_before, sum(call[0] == "get_text_head_tail" for call in client.calls))
+        raw["steps"][0]["name"] = "Changed failed step"
+        outcome = self._writer(reader, None).execute(
+            restored, result, pass_id="changed-reader-step", owner_id="owner", propose_only=True)
+        self.assertEqual("stale", outcome.status)
+        self.assertEqual((), self.store.list_actions())
+        self.assertEqual((), self.store.list_proposals())
+        self.assertEqual((), self.store.list_cause_starts())
+
+    def _leaf_request(self, **kwargs):
+        job = replace(self.failure_run.jobs[0],
+            log_excerpt="Failed Example.Tests.Connection [12 ms]\nError Message:\nExpected 1, actual 2\nStack Trace:",
+            failed_steps=(FailedStep(3, "Run tests", "completed", "failure", NOW, LATER),))
+        self.failure_run = replace(self.failure_run, jobs=(job,))
+        leaf = self._leaf()
+        request = replace(
+            _request(leaf, self.failure_run, **kwargs),
+            leaf_case_key=leaf.case_key, cause_group_id=leaf.cause_group_id,
+            cause_witnesses=self.store.cause_witnesses(leaf.id),
+            evidence_ids=("run:101:1", "job:101:1:900", "log:900"),
+        )
+        result = replace(_result(request, JudgmentDecision.ASSIGN),
+            classification=FailureClassification.DETERMINISTIC_TEST,
+            recommended_response=RecommendedResponse.REPAIR,
+            summary="MODEL SPECULATION", copilot_request="IGNORE SCOPE " + "x" * 7900)
+        return leaf, request, result
+
+    def test_leaf_issue_and_task_embed_frozen_evidence_and_safe_instructions(self) -> None:
+        leaf, request, result = self._leaf_request()
+        writer = self._writer(FakeReader(lambda item, action: _refresh(item, self.failure_run)), None)
+        title, body = writer._issue_content(request, result)
+        prompt = writer._initial_prompt(request, result, 77)
+        followup = writer._follow_up_prompt(replace(
+            request, issue_number=77, task_id="t", pull_request_number=201,
+            pull_request_head_sha="b" * 40, pull_request_head_ref="copilot/fix",
+            pull_request_base_ref=BRANCH, pull_request_observed_at=NOW,
+        ), replace(result, decision=JudgmentDecision.FOLLOW_UP))
+        self.assertTrue(title.startswith("[automated] CI failure: CI / Build / Linux — "))
+        for value in (body, prompt, followup):
+            self.assertTrue(value.startswith("[automated]"))
+            for required in (
+                "ci-shepherd-workflow-case:v2", "deterministic_test",
+                "Example.Tests.Connection", "Expected 1, actual 2", "Run tests",
+                "ubuntu-latest", "Limitations", "Recurrence", request.failure_run.head_sha,
+            ):
+                self.assertIn(required, value)
+            self.assertNotIn("MODEL SPECULATION", value)
+            self.assertNotIn("IGNORE SCOPE", value)
+            self.assertLessEqual(len(value.encode("utf-8")), 8000)
+        for value in (prompt, followup):
+            for required in (
+                "Reproduce before fixing", "regression test", "scripted",
+                "flake", "quarantine", "disable", "delete", "timeout-only",
+                "repository-native", "draft", "never merge", "no safe fix",
+                "artifact access", "supplemental", "representedLeafKeys",
+            ):
+                self.assertIn(required, value)
+        self.assertIn('"attempt":1', body)
+        self.assertIn('"number":3', body)
+
+    def test_leaf_task_payload_bound_keeps_scope_when_log_is_huge(self) -> None:
+        _, request, result = self._leaf_request()
+        job = replace(request.failed_jobs[0], log_excerpt="診断\n" * 40_000, log_truncated=True)
+        request = replace(request, failure_run=replace(request.failure_run, jobs=(job,)), failed_jobs=(job,))
+        writer = self._writer(FakeReader(lambda item, action: _refresh(item, self.failure_run)), None)
+        prompt = writer._initial_prompt(request, result, 77)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 8000)
+        self.assertIn("ci-shepherd-workflow-case:v2", prompt)
+        self.assertIn("logExcerpted", prompt)
+        self.assertIn("never merge", prompt)
+
+    def test_leaf_payload_requires_intact_diagnostic_block_before_any_effect(self) -> None:
+        _, request, result = self._leaf_request()
+        log = 'Traceback (most recent call last):\n  File "publish.py", line 42, in main\n    config["output_dir"]\nKeyError: \'output_dir\''
+        writer = self._writer(FakeReader(lambda item, action: _refresh(item, request.failure_run)), None)
+
+        def with_log_and_step(log_text, step):
+            job = replace(request.failed_jobs[0], log_excerpt=log_text,
+                failed_steps=(replace(request.failed_jobs[0].failed_steps[0], name=step),))
+            return replace(request, failed_jobs=(job,), failure_run=replace(request.failure_run, jobs=(job,)))
+
+        empty = writer._initial_prompt(with_log_and_step("", "x"), result, 1)
+        diagnostic_size = len(json.dumps(log, ensure_ascii=False).encode("utf-8")) - 2
+        for remaining in (0, 1, 12, diagnostic_size - 1, diagnostic_size):
+            for propose_only in (False, True):
+                with self.subTest(remaining=remaining, propose_only=propose_only):
+                    candidate = with_log_and_step(log, "x" * (8001 - len(empty.encode("utf-8")) - remaining))
+                    actor = FakeActor()
+                    reader = FakeReader(lambda item, action: _refresh(item, candidate.failure_run))
+                    candidate_writer = self._writer(reader, actor)
+                    if remaining == diagnostic_size:
+                        prompt = candidate_writer._initial_prompt(candidate, result, 1)
+                        document = json.loads(prompt.split("```json\n", 1)[1].split("\n```", 1)[0])
+                        self.assertEqual(log, document["diagnostic"])
+                        self.assertLessEqual(len(prompt.encode("utf-8")), 8000)
+                    else:
+                        outcome = candidate_writer.execute(
+                            candidate, result, pass_id="diagnostic-boundary", owner_id="owner",
+                            propose_only=propose_only,
+                        )
+                        self.assertEqual("unavailable", outcome.status)
+                        self.assertEqual([], actor.calls)
+                        self.assertEqual((), self.store.list_actions())
+                        self.assertEqual((), self.store.list_cause_starts())
+                        self.assertEqual((), self.store.list_proposals())
+
+    def test_leaf_payload_keeps_traceback_tail_after_long_context(self) -> None:
+        _, request, result = self._leaf_request()
+        log = ("Bootstrap\n" * 1000 + "Traceback (most recent call last):\n"
+               + '  File "publish.py", line 42, in main\n' * 1000 + "KeyError: 'output_dir'")
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        request = replace(request, failed_jobs=(job,), failure_run=replace(request.failure_run, jobs=(job,)))
+        writer = self._writer(FakeReader(lambda item, action: _refresh(item, request.failure_run)), None)
+        prompt = writer._initial_prompt(request, result, 1)
+        self.assertIn("KeyError: 'output_dir'", prompt)
+        self.assertIn("Traceback (most recent call last):", prompt)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 8000)
+
+    def test_insufficient_evidence_without_logs_still_proposes_bounded_investigation(self) -> None:
+        job = replace(self.failure_run.jobs[0], log_excerpt=None)
+        self.failure_run = replace(self.failure_run, jobs=(job,))
+        leaf = self._leaf()
+        leaf = replace(leaf, issue_number=77)
+        self.store.update_item(leaf, history_event="issue-bound", summary="Exact issue bound.", detail={})
+        request = replace(_request(leaf, self.failure_run, issue_number=77),
+            leaf_case_key=leaf.case_key, cause_group_id=leaf.cause_group_id,
+            evidence_ids=("run:101:1", "job:101:1:900"))
+        result = replace(_result(request, JudgmentDecision.ASSIGN),
+            classification=FailureClassification.INSUFFICIENT_EVIDENCE,
+            recommended_response=RecommendedResponse.INVESTIGATE)
+        issue = replace(_issue(77), marker=workflow_case_marker(
+            REPOSITORY, BRANCH, leaf.workflow_id, leaf.workflow_path, leaf.cause_group_id))
+        reader = FakeReader(lambda item, action: _refresh(item, self.failure_run, issue=issue),
+            issue_search=IssueSearchResult("one", issue, (77,), (), 1))
+        outcome = self._writer(reader, None).execute(
+            request, result, pass_id="missing-logs", owner_id="owner", propose_only=True)
+        self.assertEqual("proposed", outcome.status, outcome.reason)
+        proposal, = self.store.list_proposals()
+        prompt = proposal.detail["payload"]["write"]["prompt"]
+        self.assertIn('"logsUnavailable":true', prompt)
+        self.assertIn('"classification":"insufficient_evidence"', prompt)
+        self.assertIn('"response":"investigate"', prompt)
+        self.assertIn("State why no safe fix is justified", prompt)
+        self.assertEqual((), self.store.list_actions())
+        self.assertEqual((), self.store.list_cause_starts())
+
+    def test_fresh_leaf_issue_adoption_does_not_start_or_charge_task(self) -> None:
+        leaf, request, result = self._leaf_request()
+        issue = replace(_issue(77), copilot_assigned=True)
+        reader = FakeReader(
+            lambda item, action: _refresh(item, self.failure_run),
+            issue_search=IssueSearchResult("one", issue, (77,), (), 1),
+        )
+        actor = FakeActor()
+        outcome = self._writer(reader, actor).execute(
+            request, result, pass_id="fresh", owner_id="owner", propose_only=True,
+        )
+        self.assertEqual("stale", outcome.status)
+        current = next(item for item in self.store.list_items() if item.id == leaf.id)
+        self.assertEqual(77, current.issue_number)
+        self.assertEqual("copilot", current.external_owner)
+        self.assertEqual(ItemPhase.OBSERVING_EXTERNAL_REPAIR, current.phase)
+        self.assertEqual([], actor.calls)
+        self.assertEqual((), self.store.list_cause_starts())
+        self.assertEqual((), self.store.list_actions())
+
+    def test_leaf_payload_overflow_fails_closed_before_effect(self) -> None:
+        leaf, request, result = self._leaf_request()
+        job = replace(request.failed_jobs[0],
+            failed_steps=(FailedStep(3, "step " * 3000, "completed", "failure", NOW, LATER),))
+        request = replace(request, failure_run=replace(request.failure_run, jobs=(job,)), failed_jobs=(job,))
+        reader = FakeReader(lambda item, action: _refresh(item, request.failure_run))
+        actor = FakeActor()
+        outcome = self._writer(reader, actor).execute(
+            request, result, pass_id="overflow", owner_id="owner", propose_only=True,
+        )
+        self.assertEqual("unavailable", outcome.status)
+        self.assertIn("8000", outcome.reason)
+        self.assertEqual([], actor.calls)
+        self.assertEqual((), self.store.list_actions())
+
+    def test_late_external_owner_blocks_before_preparing_or_reserving_effect(self) -> None:
+        leaf, request, result = self._leaf_request()
+        class LateOwnerReader(FakeReader):
+            def find_tracking_issue(inner, item):
+                inner.issue_search_calls.append(item)
+                if len(inner.issue_search_calls) >= 3:
+                    return IssueSearchResult("one", replace(_issue(77), copilot_assigned=True), (77,), (), 1)
+                return IssueSearchResult("zero", None, (), (), 1)
+        reader = LateOwnerReader(lambda item, action: _refresh(item, self.failure_run))
+        actor = FakeActor()
+        outcome = self._writer(reader, actor).execute(request, result, pass_id="late", owner_id="owner")
+        self.assertEqual("stale", outcome.status)
+        self.assertEqual([], actor.calls)
+        self.assertEqual((), self.store.list_actions())
+        self.assertEqual((), self.store.list_cause_starts())
+
+    def test_leaf_prompt_retains_diagnostic_after_bootstrap_noise(self) -> None:
+        _, request, result = self._leaf_request()
+        log = "Setting up build environment\n" * 1000 + "src/App.cs(1): error CS1002: ; expected\n"
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        request = replace(request, failure_run=replace(request.failure_run, jobs=(job,)), failed_jobs=(job,))
+        writer = self._writer(FakeReader(lambda item, action: _refresh(item, self.failure_run)), None)
+        prompt = writer._initial_prompt(request, result, 77)
+        self.assertIn("src/App.cs(1): error CS1002: ; expected", prompt)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 8000)
+
+    def test_leaf_assignment_and_followup_proposals_equal_invoked_payloads(self) -> None:
+        for followup in (False, True):
+            with self.subTest(followup=followup):
+                leaf, request, result = self._leaf_request(issue_number=77)
+                pull = _pull_request()
+                leaf = replace(leaf, issue_number=77,
+                    task_id="existing" if followup else None,
+                    task_state=TaskState.IDLE if followup else None,
+                    pull_request_number=pull.number if followup else None)
+                self.store.update_item(leaf, history_event="fixture-owned", summary="Exact issue bound.", detail={})
+                if followup:
+                    request = replace(request, task_id="existing", round=1,
+                        pull_request_number=pull.number, pull_request_head_sha=pull.head_sha,
+                        pull_request_head_ref=pull.head_ref, pull_request_base_ref=BRANCH,
+                        pull_request_observed_at=NOW)
+                    result = replace(result, decision=JudgmentDecision.FOLLOW_UP)
+                issue = replace(_issue(77), marker=workflow_case_marker(
+                    REPOSITORY, BRANCH, leaf.workflow_id, leaf.workflow_path, leaf.cause_group_id))
+                reader = FakeReader(
+                    lambda item, action: _refresh(item, self.failure_run, issue=issue,
+                        task=_task("existing") if followup else None,
+                        pull_request=pull if followup else None),
+                    issue_search=IssueSearchResult("one", issue, (77,), (), 1),
+                )
+                proposed = self._writer(reader, None).execute(
+                    request, result, pass_id="preview", owner_id="preview", propose_only=True)
+                self.assertEqual("proposed", proposed.status)
+                proposal = self.store.list_proposals()[-1].detail["payload"]["write"]
+                actor = FakeActor()
+                outcome = self._writer(reader, actor).execute(
+                    request, result, pass_id="local-fake", owner_id="owner")
+                self.assertEqual("confirmed", outcome.status)
+                call, = actor.calls
+                expected = {
+                    "repository": call[1], "prompt": call[2], "base_branch": call[3],
+                    "head_branch": call[4], "model": call[5], "issue_number": 77,
+                }
+                if followup:
+                    expected.update(pull_request_number=pull.number, pull_request_head_sha=pull.head_sha)
+                self.assertEqual(expected, proposal)
+
+    def test_changed_failed_step_metadata_blocks_leaf_effect(self) -> None:
+        _, request, result = self._leaf_request()
+        job = replace(self.failure_run.jobs[0], failed_steps=(
+            FailedStep(4, "Different failed step", "completed", "failure", NOW, LATER),))
+        reader = FakeReader(lambda item, action: _refresh(item, replace(self.failure_run, jobs=(job,))))
+        outcome = self._writer(reader, None).execute(
+            request, result, pass_id="changed-step", owner_id="owner", propose_only=True)
+        self.assertEqual("stale", outcome.status)
+        self.assertEqual((), self.store.list_proposals())
+
+    def test_packet_cannot_replace_trusted_cause_or_leaf_scope(self) -> None:
+        _, request, result = self._leaf_request()
+        reader = FakeReader(lambda item, action: _refresh(item, self.failure_run))
+        for forged in (
+            replace(request, cause_group_id="cause-group-v1:foreign", cause_witnesses=()),
+            replace(request, represented_leaf_keys=(request.leaf_case_key, "leaf-key-v1:foreign")),
+            replace(request, cause_witnesses=(replace(request.cause_witnesses[0], job_id=999),)),
+        ):
+            outcome = self._writer(reader, None).execute(
+                forged, result, pass_id="forged", owner_id="owner", propose_only=True)
+            self.assertEqual("stale", outcome.status)
+        self.assertEqual((), self.store.list_proposals())
+        self.assertEqual((), self.store.list_cause_starts())
 
     def test_proposal_preserves_exact_live_payload_without_an_actor(self) -> None:
         request = _request(self.item, self.failure_run)

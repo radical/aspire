@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
 import sqlite3
-from typing import Any, Iterator
+from typing import Any, Iterator, TYPE_CHECKING
 
 from .models import (
     ActionCompletion,
@@ -14,6 +15,7 @@ from .models import (
     ActionKind,
     ActionState,
     ActionView,
+    CauseWitness,
     HistoryEntry,
     ItemPhase,
     JobKey,
@@ -25,10 +27,17 @@ from .models import (
     WorkflowItem,
     WorkState,
     canonical_fingerprint,
+    leaf_case_key,
+    _run_document,
+    _run_from_document,
+    _job_document,
+    _job_from_document,
 )
 
+if TYPE_CHECKING:
+    from .reader import JobManifest
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 8
 _DATABASE_NAME = "workflow-loop.sqlite3"
 _ITEM_COLUMNS = (
     "id",
@@ -65,6 +74,10 @@ _ITEM_COLUMNS = (
     "scenario_name",
     "case_key",
     "last_assessed_target",
+    "leaf_job_json",
+    "cause_group_id",
+    "cause_leader_id",
+    "cause_evidence_fingerprint",
 )
 _WORKER_COLUMNS = (
     "worker_id",
@@ -133,6 +146,10 @@ class WorkflowLoopStore:
         self._repository = repository
         self._branch = branch
 
+    @property
+    def state_directory(self) -> Path:
+        return self._state_directory
+
     def initialize(
         self,
         *,
@@ -161,7 +178,7 @@ class WorkflowLoopStore:
                     raise ValueError(
                         "Stored schema version is malformed."
                     ) from error
-                if schema_version not in {3, 4, _SCHEMA_VERSION}:
+                if schema_version not in {3, 4, 5, 6, 7, _SCHEMA_VERSION}:
                     raise ValueError(
                         f"Unsupported schema version {schema_version}."
                     )
@@ -185,6 +202,10 @@ class WorkflowLoopStore:
                     connection.execute("BEGIN IMMEDIATE")
                     self._migrate_v3_to_v4(connection)
                     self._migrate_v4_to_v5(connection)
+                    self._migrate_v5_to_v6(connection)
+                    connection.execute(
+                        "ALTER TABLE workflow_items ADD COLUMN cause_evidence_fingerprint TEXT"
+                    )
                     connection.execute(
                         "UPDATE meta SET value = ? "
                         "WHERE key = 'schema_version'",
@@ -195,9 +216,29 @@ class WorkflowLoopStore:
                     connection.execute("BEGIN IMMEDIATE")
                 elif schema_version == 4:
                     self._migrate_v4_to_v5(connection)
+                    self._migrate_v5_to_v6(connection)
+                    connection.execute(
+                        "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                        (str(_SCHEMA_VERSION),),
+                    )
+                elif schema_version == 5:
+                    self._migrate_v5_to_v6(connection)
                     connection.execute(
                         "UPDATE meta SET value = ? "
                         "WHERE key = 'schema_version'",
+                        (str(_SCHEMA_VERSION),),
+                    )
+                elif schema_version == 6:
+                    connection.execute(
+                        "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                        (str(_SCHEMA_VERSION),),
+                    )
+                if 3 < schema_version < 8:
+                    connection.execute(
+                        "ALTER TABLE workflow_items ADD COLUMN cause_evidence_fingerprint TEXT"
+                    )
+                    connection.execute(
+                        "UPDATE meta SET value = ? WHERE key = 'schema_version'",
                         (str(_SCHEMA_VERSION),),
                     )
             elif meta:
@@ -293,6 +334,390 @@ class WorkflowLoopStore:
             ).fetchall()
         return tuple(_item_from_row(row) for row in rows)
 
+    def record_cause(
+        self, item_id: int, run: RunObservation, *, observed_at: str,
+    ) -> WorkflowItem:
+        """Derive and persist exact causes from reader-frozen logs and manifests."""
+        from .cause_groups import GROUPING_VERSION, derive_cause, group_id
+
+        self._validate_observation_binding(run)
+        _validate_timestamp(observed_at, "observed_at")
+        manifest = self.read_job_manifest(run)
+        with self._transaction() as connection:
+            item = self._current_item(connection, item_id)
+            if item.leaf_job is None or not run.jobs_complete:
+                raise ValueError("Cause evidence requires a complete exact leaf.")
+            jobs = [job for job in run.jobs if leaf_case_key(run, job.key) == item.case_key]
+            if (
+                len(jobs) != 1
+                or (run.run_id, run.attempt) != (item.failure_run_id, item.failure_attempt)
+            ):
+                raise ValueError("Cause evidence does not match the current leaf execution.")
+            job = jobs[0]
+            scoped = replace(run, jobs=(replace(job, key=item.leaf_job),))
+            if _observation_fingerprint(scoped) != item.evidence_fingerprint:
+                raise ValueError("Cause witness source identity no longer matches the leaf.")
+            steps = tuple(
+                step for entry in (manifest.jobs if manifest and manifest.complete else ())
+                if entry.job.job_id == job.job_id for step in (entry.failed_steps or ())
+            )
+            signature = derive_cause(run, job, failed_steps=steps)
+            target = group_id(run, signature, item.case_key)
+            witness_values = None
+            if signature is not None:
+                source = json.dumps(
+                    {
+                        "episode": item.episode,
+                        "run": _run_document(run),
+                        "failedSteps": steps,
+                    },
+                    sort_keys=True, separators=(",", ":"),
+                )
+                witness_key = json.dumps(
+                    [target, item.case_key, run.run_id, run.attempt, run.head_sha, job.job_id],
+                    separators=(",", ":"),
+                )
+                witness_values = (
+                    witness_key, target, item.id, item.case_key, run.run_id, run.attempt,
+                    run.head_sha, job.job_id, signature.identity, source, observed_at,
+                )
+            old = item.cause_group_id
+            target_owned = self._cause_owned(connection, target)
+            incoming_owned = (
+                item.issue_number is not None or item.task_id is not None
+                or item.external_owner in {"human", "copilot"}
+                or connection.execute(
+                    "SELECT 1 FROM action_attempts WHERE item_id = ? "
+                    "AND state IN ('prepared', 'invoking', 'uncertain', 'confirmed') LIMIT 1",
+                    (item.id,),
+                ).fetchone() is not None
+            )
+            observed_cause = {
+                "observedGroupId": target,
+                "evidenceFingerprint": item.evidence_fingerprint,
+                "runId": run.run_id,
+                "attempt": run.attempt,
+                "headSha": run.head_sha,
+                "jobId": job.job_id,
+                "signature": signature.identity if signature is not None else None,
+            }
+            if old != target and incoming_owned and target_owned:
+                home = old or group_id(run, None, item.case_key)
+                connection.execute(
+                    "INSERT OR IGNORE INTO cause_groups VALUES(?, ?, ?, 0)",
+                    (home, GROUPING_VERSION, item.id),
+                )
+                if old is None:
+                    connection.execute(
+                        "UPDATE workflow_items SET cause_group_id = ?, cause_leader_id = ? WHERE id = ?",
+                        (home, item.id, item.id),
+                    )
+                connection.execute(
+                    "UPDATE cause_groups SET frozen = 1 WHERE group_id IN (?, ?)", (home, target),
+                )
+                connection.execute(
+                    "UPDATE workflow_items SET phase = ?, wait_reason = 'cause_conflict', "
+                    "latest_error = ? WHERE cause_group_id IN (?, ?)",
+                    (ItemPhase.NEEDS_ATTENTION.value,
+                     "Exact cause matches separately owned work; ownership cannot be merged.", home, target),
+                )
+                self._insert_history(
+                    connection, item.id, observed_at, "cause-ownership-conflict",
+                    "Separately owned groups frozen; rejected evidence remains history only.",
+                    {"ownedGroupId": home, **observed_cause},
+                )
+                return self._current_item(connection, item_id)
+            if old and old != target and self._cause_owned(connection, old):
+                connection.execute("UPDATE cause_groups SET frozen = 1 WHERE group_id = ?", (old,))
+                connection.execute(
+                    "UPDATE workflow_items SET phase = ?, wait_reason = 'cause_conflict', "
+                    "latest_error = ? WHERE cause_group_id = ?",
+                    (ItemPhase.NEEDS_ATTENTION.value,
+                     "Exact cause evidence conflicts with existing ownership; no retargeting.", old),
+                )
+                self._insert_history(
+                    connection, item.id, observed_at, "cause-conflict",
+                    "Owned cause group frozen; rejected evidence remains history only.",
+                    {"ownedGroupId": old, **observed_cause},
+                )
+                return self._current_item(connection, item_id)
+            if (
+                old
+                and old != target
+                and signature is not None
+                and connection.execute(
+                    "SELECT 1 FROM cause_witnesses WHERE group_id = ? LIMIT 1",
+                    (old,),
+                ).fetchone() is not None
+            ):
+                # A structured cause already established this leaf's episode.
+                # Keep that relationship explicit until a future episode model
+                # can retain both causes independently; silently retargeting the
+                # same row would make the first cause look recovered.
+                connection.execute(
+                    "UPDATE cause_groups SET frozen = 1 WHERE group_id = ?",
+                    (old,),
+                )
+                connection.execute(
+                    "UPDATE workflow_items SET phase = ?, wait_reason = 'cause_conflict', "
+                    "latest_error = ? WHERE cause_group_id = ?",
+                    (
+                        ItemPhase.NEEDS_ATTENTION.value,
+                        "A distinct structured cause was observed in the same leaf episode; "
+                        "the established cause was retained.",
+                        old,
+                    ),
+                )
+                self._insert_history(
+                    connection,
+                    item.id,
+                    observed_at,
+                    "cause-boundary",
+                    "A distinct structured cause requires a new episode or human attention.",
+                    {
+                        "establishedGroupId": old,
+                        **observed_cause,
+                    },
+                )
+                return self._current_item(connection, item_id)
+            if witness_values is not None:
+                connection.execute(
+                    "INSERT OR IGNORE INTO cause_witnesses VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    witness_values,
+                )
+            connection.execute(
+                "INSERT OR IGNORE INTO cause_groups VALUES(?, ?, ?, 0)",
+                (target, GROUPING_VERSION, item.id),
+            )
+            # Check ownership before membership makes the target appear owned.
+            # Existing work stays on the incoming leaf, never the unowned leader.
+            if incoming_owned and not target_owned:
+                connection.execute(
+                    "UPDATE cause_groups SET leader_id = ? WHERE group_id = ?", (item.id, target),
+                )
+            connection.execute(
+                "UPDATE workflow_items SET cause_group_id = ?, cause_evidence_fingerprint = ? WHERE id = ?",
+                (target, item.evidence_fingerprint, item.id),
+            )
+            for candidate in {old, target} - {None}:
+                group = connection.execute(
+                    "SELECT leader_id FROM cause_groups WHERE group_id = ?", (candidate,),
+                ).fetchone()
+                if not self._cause_owned(connection, candidate):
+                    leader = connection.execute(
+                        "SELECT id FROM workflow_items WHERE cause_group_id = ? "
+                        "ORDER BY case_key LIMIT 1", (candidate,),
+                    ).fetchone()
+                    if leader:
+                        connection.execute(
+                            "UPDATE cause_groups SET leader_id = ? WHERE group_id = ?",
+                            (leader["id"], candidate),
+                        )
+                        group = {"leader_id": leader["id"]}
+                connection.execute(
+                    "UPDATE workflow_items SET cause_leader_id = ? WHERE cause_group_id = ?",
+                    (group["leader_id"], candidate),
+                )
+            if connection.execute(
+                "SELECT frozen FROM cause_groups WHERE group_id = ?", (target,),
+            ).fetchone()["frozen"]:
+                connection.execute(
+                    "UPDATE workflow_items SET phase = ?, wait_reason = 'cause_conflict' WHERE id = ?",
+                    (ItemPhase.NEEDS_ATTENTION.value, item.id),
+                )
+            if old != target:
+                self._insert_history(
+                    connection, item.id, observed_at, "cause-group-derived",
+                    "Attached immutable leaf to an exact cause group.",
+                    {"groupId": target, "version": GROUPING_VERSION},
+                )
+            return self._current_item(connection, item_id)
+
+    def cause_witnesses(self, item_id: int) -> tuple[CauseWitness, ...]:
+        with self._connect() as connection:
+            item = self._current_item(connection, item_id)
+            rows = connection.execute(
+                "SELECT DISTINCT witness.group_id, witness.signature, witness.leaf_key, "
+                "witness.run_id, witness.attempt, witness.head_sha, witness.job_id, "
+                "witness.source_json, member.episode AS member_episode "
+                "FROM cause_witnesses AS witness "
+                "JOIN workflow_items AS member ON member.id = witness.item_id "
+                "AND member.cause_group_id = witness.group_id "
+                "WHERE witness.group_id = ? AND member.phase != ? "
+                "ORDER BY witness.run_id, witness.attempt, witness.job_id, witness.leaf_key",
+                (item.cause_group_id, ItemPhase.SUPERSEDED.value),
+            )
+            witnesses = []
+            for row in rows:
+                try:
+                    source = json.loads(row["source_json"])
+                    episode = source.get("episode", 1)
+                except (AttributeError, json.JSONDecodeError) as error:
+                    raise ValueError("Stored cause witness source is invalid.") from error
+                if (
+                    not isinstance(episode, int)
+                    or isinstance(episode, bool)
+                    or episode < 1
+                ):
+                    raise ValueError("Stored cause witness episode is invalid.")
+                if episode != row["member_episode"]:
+                    continue
+                witnesses.append(CauseWitness(
+                    row["group_id"], row["signature"], row["leaf_key"], row["run_id"],
+                    row["attempt"], row["head_sha"], row["job_id"],
+                ))
+            return tuple(witnesses)
+
+    def list_cause_starts(self) -> tuple[dict[str, object], ...]:
+        with self._connect() as connection:
+            return tuple(dict(row) for row in connection.execute(
+                "SELECT * FROM cause_starts ORDER BY reserved_at, group_id"
+            ))
+
+    def cause_start_available(self, item_id: int) -> bool:
+        with self._connect() as connection:
+            return self._cause_start_available(connection, self._current_item(connection, item_id))
+
+    def episode_start_available(self, item_id: int) -> bool:
+        with self._connect() as connection:
+            item = self._current_item(connection, item_id)
+            if item.leaf_job is None or item.task_id is not None:
+                return True
+            if item.cause_group_id is not None:
+                return self._cause_start_available(connection, item)
+            return self._episode_start_count(connection, item) < 2
+
+    def reserve_cause_start(self, item_id: int, *, reserved_at: str, proposal: bool = False) -> bool:
+        _validate_timestamp(reserved_at, "reserved_at")
+        if proposal:
+            from .shadow import read_shadow_metadata
+            if read_shadow_metadata(self._state_directory) is None:
+                raise ValueError("Proposal reservations require isolated shadow state.")
+        with self._transaction() as connection:
+            return self._reserve_cause_start(
+                connection, self._current_item(connection, item_id), reserved_at, proposal,
+            )
+
+    def _cause_start_available(self, connection: sqlite3.Connection, item: WorkflowItem) -> bool:
+        if item.leaf_job is None:
+            return True
+        group = connection.execute(
+            "SELECT leader_id, frozen FROM cause_groups WHERE group_id = ?", (item.cause_group_id,),
+        ).fetchone()
+        if group is None or group["frozen"] or group["leader_id"] != item.id:
+            return False
+        if item.task_id or connection.execute(
+            "SELECT 1 FROM cause_starts WHERE group_id = ?", (item.cause_group_id,),
+        ).fetchone():
+            return True
+        return self._episode_start_count(connection, item) < 2
+
+    @staticmethod
+    def _episode_start_count(connection: sqlite3.Connection, item: WorkflowItem) -> int:
+        return connection.execute(
+            "SELECT COUNT(*) FROM cause_starts WHERE repository = ? AND workflow_id = ? "
+            "AND run_id = ? AND attempt = ?",
+            (item.repository, item.workflow_id, item.failure_run_id, item.failure_attempt),
+        ).fetchone()[0]
+
+    def _reserve_cause_start(
+        self, connection: sqlite3.Connection, item: WorkflowItem, reserved_at: str, proposal: bool = False,
+    ) -> bool:
+        if not self._cause_start_available(connection, item):
+            return False
+        if item.leaf_job is not None and item.task_id is None:
+            # Reserve before even creating the issue. Never release a reservation:
+            # an unknown/partial remote outcome must not manufacture another slot.
+            connection.execute(
+                "INSERT OR IGNORE INTO cause_starts VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                (item.cause_group_id, item.repository, item.workflow_id, item.failure_run_id,
+                 item.failure_attempt, item.id, reserved_at, int(proposal)),
+            )
+        return True
+
+    @staticmethod
+    def _cause_owned(connection: sqlite3.Connection, group_id: str) -> bool:
+        return bool(connection.execute(
+            "SELECT 1 FROM cause_starts WHERE group_id = ? UNION ALL "
+            "SELECT 1 FROM workflow_items WHERE cause_group_id = ? AND "
+            "(issue_number IS NOT NULL OR task_id IS NOT NULL OR external_owner IN ('human', 'copilot')) UNION ALL "
+            "SELECT 1 FROM action_attempts a JOIN workflow_items i ON a.item_id = i.id "
+            "WHERE i.cause_group_id = ? AND a.state IN ('prepared', 'invoking', 'uncertain', 'confirmed') "
+            "LIMIT 1", (group_id, group_id, group_id),
+        ).fetchone())
+
+    @staticmethod
+    def _repair_cause_group_departure(
+        connection: sqlite3.Connection,
+        item: WorkflowItem,
+    ) -> None:
+        group_id = item.cause_group_id
+        if group_id is None:
+            return
+        remaining = connection.execute(
+            "SELECT i.id, i.case_key, CASE WHEN "
+            "i.issue_number IS NOT NULL OR i.task_id IS NOT NULL "
+            "OR i.external_owner IN ('human', 'copilot') "
+            "OR EXISTS(SELECT 1 FROM action_attempts a WHERE a.item_id = i.id "
+            "AND a.state IN ('prepared', 'invoking', 'uncertain', 'confirmed')) "
+            "OR EXISTS(SELECT 1 FROM cause_starts s WHERE s.group_id = ? "
+            "AND s.item_id = i.id) THEN 1 ELSE 0 END AS owned "
+            "FROM workflow_items i WHERE i.cause_group_id = ? AND i.id != ? "
+            "ORDER BY owned DESC, i.case_key, i.id",
+            (group_id, group_id, item.id),
+        ).fetchall()
+        if not remaining:
+            return
+
+        leader_id = remaining[0]["id"]
+        remaining_ids = {row["id"] for row in remaining}
+        departing_owned = (
+            item.issue_number is not None
+            or item.task_id is not None
+            or item.external_owner in {"human", "copilot"}
+            or connection.execute(
+                "SELECT 1 FROM action_attempts WHERE item_id = ? "
+                "AND state IN ('prepared', 'invoking', 'uncertain', 'confirmed') LIMIT 1",
+                (item.id,),
+            ).fetchone() is not None
+        )
+        stranded_start = connection.execute(
+            "SELECT item_id FROM cause_starts WHERE group_id = ?",
+            (group_id,),
+        ).fetchone()
+        ownership_stranded = departing_owned or (
+            stranded_start is not None
+            and stranded_start["item_id"] not in remaining_ids
+        )
+
+        connection.execute(
+            "UPDATE cause_groups SET leader_id = ?, "
+            "frozen = CASE WHEN ? THEN 1 ELSE frozen END WHERE group_id = ?",
+            (leader_id, int(ownership_stranded), group_id),
+        )
+        if ownership_stranded:
+            connection.execute(
+                "UPDATE workflow_items SET cause_leader_id = ?, phase = ?, "
+                "wait_reason = 'cause_conflict', latest_error = ? "
+                "WHERE cause_group_id = ? AND id != ?",
+                (
+                    leader_id,
+                    ItemPhase.NEEDS_ATTENTION.value,
+                    "Cause-group ownership remains attached to a departed episode; "
+                    "ownership was not transferred.",
+                    group_id,
+                    item.id,
+                ),
+            )
+        else:
+            connection.execute(
+                "UPDATE workflow_items SET cause_leader_id = ?, "
+                "wait_reason = CASE WHEN id = ? AND wait_reason = "
+                "'cause_group_follower' THEN NULL ELSE wait_reason END "
+                "WHERE cause_group_id = ? AND id != ?",
+                (leader_id, leader_id, group_id, item.id),
+            )
+
     def bind_item_scenario(self, item_id: int, scenario_name: str) -> None:
         _positive(item_id, "item_id")
         _nonempty(scenario_name, "scenario_name")
@@ -317,6 +742,7 @@ class WorkflowLoopStore:
         *,
         scenario_name: str = "workflow-failure",
         case_key: str | None = None,
+        leaf_job: JobKey | None = None,
     ) -> WorkflowItem:
         if not isinstance(observation, RunObservation):
             raise ValueError("observation must be a RunObservation.")
@@ -325,6 +751,13 @@ class WorkflowLoopStore:
         if case_key is None:
             case_key = f"workflow:{observation.key.workflow_id}"
         _nonempty(case_key, "case_key")
+        if leaf_job is not None:
+            if (
+                case_key != leaf_case_key(observation, leaf_job)
+                or len(observation.jobs) != 1
+                or observation.jobs[0].key != leaf_job
+            ):
+                raise ValueError("Leaf identity does not match the observation.")
         self._validate_observation_binding(observation)
         failed_jobs = tuple(
             job.key
@@ -352,8 +785,8 @@ class WorkflowLoopStore:
                     "branch, episode, phase, first_failure_seen_at, "
                     "last_checked_at, last_progressed_at, read_status, "
                     "failure_run_id, failure_attempt, failed_jobs_json, "
-                    "evidence_fingerprint, followup_count, scenario_name, case_key"
-                    ") VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    "evidence_fingerprint, followup_count, scenario_name, case_key, leaf_job_json"
+                    ") VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
                     (
                         self._repository,
                         observation.key.workflow_id,
@@ -371,6 +804,7 @@ class WorkflowLoopStore:
                         fingerprint,
                         scenario_name,
                         case_key,
+                        _job_keys_json((leaf_job,)) if leaf_job is not None else None,
                     ),
                 )
                 item_id = cursor.lastrowid
@@ -388,6 +822,12 @@ class WorkflowLoopStore:
                 )
             else:
                 current = _item_from_row(row)
+                if current.phase is ItemPhase.SUPERSEDED:
+                    raise ValueError("Superseded item is immutable observation history.")
+                if current.leaf_job != leaf_job or (
+                    leaf_job is not None and current.workflow_path != observation.workflow_path
+                ):
+                    raise ValueError("Leaf identity does not match persisted state.")
                 if current.phase is ItemPhase.RECOVERED:
                     live_task = (
                         current.task_id is not None
@@ -396,6 +836,7 @@ class WorkflowLoopStore:
                             or current.task_state in _ACTIVE_TASK_STATES
                         )
                     )
+                    self._repair_cause_group_departure(connection, current)
                     connection.execute(
                         "UPDATE workflow_items SET "
                         "workflow_path = ?, workflow_name = ?, episode = ?, "
@@ -410,7 +851,9 @@ class WorkflowLoopStore:
                         "assignment_requested_at = ?, "
                         "assignment_confirmed_at = ?, recovered_run_id = NULL, "
                         "recovered_at = NULL, latest_action = ?, "
-                        "latest_error = NULL, last_assessed_target = NULL "
+                        "latest_error = NULL, last_assessed_target = NULL, "
+                        "cause_group_id = NULL, cause_leader_id = NULL, "
+                        "cause_evidence_fingerprint = NULL "
                         "WHERE id = ?",
                         (
                             observation.workflow_path,
@@ -507,6 +950,114 @@ class WorkflowLoopStore:
             ).fetchone()
             assert updated is not None
             return _item_from_row(updated)
+
+    def upsert_leaf_failure(
+        self, observation: RunObservation, job: JobKey, observed_at: str,
+    ) -> WorkflowItem:
+        key = leaf_case_key(observation, job)
+        matches = tuple(
+            entry for entry in observation.jobs
+            if leaf_case_key(observation, entry.key) == key
+        )
+        if (
+            not observation.jobs_complete or len(matches) != 1
+            or matches[0].conclusion not in _FAILED_CONCLUSIONS
+        ):
+            raise ValueError("Leaf requires a complete inventory and one exact failed job.")
+        normalized = JobKey(" ".join(job.name.split()), tuple(sorted(job.runner_labels)))
+        return self.upsert_failure(
+            replace(observation, jobs=(replace(matches[0], key=normalized),)),
+            observed_at, case_key=key, leaf_job=normalized,
+        )
+
+    def record_job_manifest(
+        self, source: RunObservation, manifest: JobManifest, observed_at: str,
+        job_roles: Mapping[int, str],
+    ) -> None:
+        self._validate_observation_binding(source)
+        _validate_timestamp(observed_at, "observed_at")
+        payload = {
+            "run": _run_document(manifest.run) if manifest.run is not None else None,
+            "jobs": [
+                {"job": _job_document(entry.job), "head_sha": entry.head_sha,
+                 "failed_steps": entry.failed_steps}
+                for entry in manifest.jobs
+            ],
+            "total_count": manifest.total_count,
+            "complete": manifest.complete,
+            "errors": [
+                {"scope": error.scope, "code": error.code,
+                 "endpoint": error.endpoint, "detail": error.detail}
+                for error in manifest.errors
+            ],
+            "request_count": manifest.request_count,
+            "job_roles": {str(key): value for key, value in job_roles.items()},
+        }
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT INTO job_manifests(source_key, source_json, observed_at, read_status, manifest_json) "
+                "VALUES(?, ?, ?, ?, ?) ON CONFLICT(source_key) DO UPDATE SET "
+                "observed_at=excluded.observed_at, read_status=excluded.read_status, "
+                "manifest_json=excluded.manifest_json",
+                (_manifest_key(source), _mapping_json(_run_document(source), "source"),
+                 observed_at, "complete" if manifest.complete else "inventory_incomplete",
+                 _mapping_json(payload, "manifest")),
+            )
+
+    def read_job_manifest(self, source: RunObservation) -> JobManifest | None:
+        from .reader import JobManifest, ManifestJob, ReadError
+
+        self._validate_observation_binding(source)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT manifest_json FROM job_manifests "
+                "WHERE source_key = ? AND read_status = 'complete'",
+                (_manifest_key(source),),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["manifest_json"])
+        return JobManifest(
+            _run_from_document(payload["run"]) if payload["run"] is not None else None,
+            tuple(ManifestJob(
+                _job_from_document(entry["job"]), entry["head_sha"],
+                tuple(entry["failed_steps"]) if entry["failed_steps"] is not None else None,
+            ) for entry in payload["jobs"]),
+            payload["total_count"], payload["complete"],
+            tuple(ReadError(**entry) for entry in payload["errors"]),
+            payload["request_count"],
+        )
+
+    def list_manifest_observations(self) -> tuple[Mapping[str, object], ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT source_json, observed_at, read_status, manifest_json "
+                "FROM job_manifests ORDER BY rowid"
+            ).fetchall()
+        return tuple({
+            **json.loads(row["manifest_json"]),
+            "source": json.loads(row["source_json"]),
+            "observed_at": row["observed_at"], "read_status": row["read_status"],
+        } for row in rows)
+
+    def leaf_migration_counts(self) -> Mapping[str, int] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM meta "
+                "WHERE key = 'workflow_failure_leaf_migration'"
+            ).fetchone()
+        if row is None:
+            return None
+        value = _json_object(row["value"], "workflow_failure_leaf_migration")
+        expected = {"items", "workers", "actions"}
+        if set(value) != expected or any(
+            not isinstance(value[name], int)
+            or isinstance(value[name], bool)
+            or value[name] < 0
+            for name in expected
+        ):
+            raise ValueError("Stored workflow failure migration counts are invalid.")
+        return {name: value[name] for name in sorted(expected)}
 
     def update_item(
         self,
@@ -944,6 +1495,11 @@ class WorkflowLoopStore:
                 return False
             if len(active) >= capacity_limit:
                 return False
+            if (
+                intent.kind in {ActionKind.CREATE_ISSUE, ActionKind.ASSIGN_COPILOT}
+                and not self._reserve_cause_start(connection, item, intent.prepared_at)
+            ):
+                return False
             connection.execute(
                 "INSERT INTO action_attempts("
                 "action_id, item_id, episode, kind, ordinal, state, "
@@ -1002,6 +1558,8 @@ class WorkflowLoopStore:
                 return False
             item = self._current_item(connection, action.item_id)
             self._validate_episode(item, action.episode)
+            if item.leaf_job is not None and not self._cause_start_available(connection, item):
+                return False
             changed = connection.execute(
                 "UPDATE action_attempts SET state = ?, invoked_at = ?, "
                 "invocation_pass_id = ?, invocation_owner_id = ? "
@@ -1393,6 +1951,10 @@ CREATE TABLE IF NOT EXISTS workflow_items(
     scenario_name TEXT NOT NULL,
     case_key TEXT NOT NULL,
     last_assessed_target TEXT,
+    leaf_job_json TEXT,
+    cause_group_id TEXT,
+    cause_leader_id INTEGER REFERENCES workflow_items(id),
+    cause_evidence_fingerprint TEXT,
     UNIQUE(repository, branch, scenario_name, case_key)
 );
 CREATE TABLE IF NOT EXISTS workers(
@@ -1457,6 +2019,42 @@ CREATE TABLE IF NOT EXISTS passes(
     confirmed_assignments INTEGER NOT NULL DEFAULT 0
         CHECK(confirmed_assignments >= 0),
     error TEXT
+);
+CREATE TABLE IF NOT EXISTS job_manifests(
+    source_key TEXT PRIMARY KEY,
+    source_json TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    read_status TEXT NOT NULL,
+    manifest_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cause_groups(
+    group_id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    leader_id INTEGER NOT NULL REFERENCES workflow_items(id),
+    frozen INTEGER NOT NULL CHECK(frozen IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS cause_witnesses(
+    witness_key TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    item_id INTEGER NOT NULL REFERENCES workflow_items(id),
+    leaf_key TEXT NOT NULL,
+    run_id INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    job_id INTEGER NOT NULL,
+    signature TEXT NOT NULL,
+    source_json TEXT NOT NULL,
+    observed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cause_starts(
+    group_id TEXT PRIMARY KEY REFERENCES cause_groups(group_id),
+    repository TEXT NOT NULL,
+    workflow_id INTEGER NOT NULL,
+    run_id INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    item_id INTEGER NOT NULL REFERENCES workflow_items(id),
+    reserved_at TEXT NOT NULL,
+    proposal INTEGER NOT NULL CHECK(proposal IN (0, 1))
 );
 """
         for statement in script.split(";"):
@@ -1581,12 +2179,66 @@ FROM workers
         connection.execute("ALTER TABLE workers_v5 RENAME TO workers")
 
     @staticmethod
+    def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
+        connection.execute("ALTER TABLE workflow_items ADD COLUMN leaf_job_json TEXT")
+        connection.execute("ALTER TABLE workflow_items ADD COLUMN cause_group_id TEXT")
+        connection.execute(
+            "ALTER TABLE workflow_items ADD COLUMN cause_leader_id INTEGER REFERENCES workflow_items(id)"
+        )
+        rows = connection.execute(
+            "SELECT id, last_checked_at FROM workflow_items "
+            "WHERE scenario_name = 'workflow-failure' "
+            "AND (case_key = 'workflow' OR case_key LIKE 'workflow:%')"
+        ).fetchall()
+        counts = {"items": len(rows), "workers": 0, "actions": 0}
+        for row in rows:
+            counts["workers"] += connection.execute(
+                "UPDATE workers SET state = 'superseded', "
+                "completed_at = ?, consumed_at = ?, error = ? "
+                "WHERE item_id = ? AND state IN ('queued', 'running')",
+                (row["last_checked_at"], row["last_checked_at"],
+                 "Superseded workflow-wide case; rediscovery requires a complete leaf manifest.",
+                 row["id"]),
+            ).rowcount
+            counts["actions"] += connection.execute(
+                "UPDATE action_attempts SET state = 'superseded', completed_at = ?, error = ? "
+                "WHERE item_id = ? AND state = 'prepared' AND invoked_at IS NULL",
+                (row["last_checked_at"], "Superseded workflow-wide case.", row["id"]),
+            ).rowcount
+            # External links and invoked receipts are observation history, never
+            # ownership grants for a newly discovered leaf.
+            connection.execute(
+                "UPDATE workflow_items SET phase = 'superseded' WHERE id = ?", (row["id"],),
+            )
+            WorkflowLoopStore._insert_history(
+                connection, row["id"], row["last_checked_at"],
+                "workflow-case-superseded", "Superseded legacy workflow-wide case.",
+                {"scenarioVersion": 2},
+            )
+        connection.execute(
+            "INSERT INTO meta(key, value) VALUES('workflow_failure_leaf_migration', ?)",
+            (json.dumps(counts, sort_keys=True),),
+        )
+
+    @staticmethod
     def _validate_schema(connection: sqlite3.Connection) -> None:
         expected_columns = {
             "meta": ("key", "value"),
             "workflow_items": _ITEM_COLUMNS,
             "workers": _WORKER_COLUMNS,
             "action_attempts": _ACTION_COLUMNS,
+            "job_manifests": (
+                "source_key", "source_json", "observed_at", "read_status", "manifest_json",
+            ),
+            "cause_groups": ("group_id", "version", "leader_id", "frozen"),
+            "cause_witnesses": (
+                "witness_key", "group_id", "item_id", "leaf_key", "run_id", "attempt",
+                "head_sha", "job_id", "signature", "source_json", "observed_at",
+            ),
+            "cause_starts": (
+                "group_id", "repository", "workflow_id", "run_id", "attempt",
+                "item_id", "reserved_at", "proposal",
+            ),
             "item_history": (
                 "sequence",
                 "item_id",
@@ -1655,6 +2307,9 @@ FROM workers
             or item.branch != current.branch
             or item.scenario_name != current.scenario_name
             or item.case_key != current.case_key
+            or item.leaf_job != current.leaf_job
+            or (item.leaf_job is not None and item.workflow_path != current.workflow_path)
+            or (item.leaf_job is not None and item.failed_jobs != (item.leaf_job,))
         ):
             raise ValueError("Item identity does not match persisted state.")
         self._validate_episode(current, item.episode)
@@ -1667,6 +2322,8 @@ FROM workers
 
     @staticmethod
     def _validate_episode(item: WorkflowItem, episode: int) -> None:
+        if item.phase is ItemPhase.SUPERSEDED:
+            raise ValueError("Superseded item is immutable observation history.")
         if item.episode != episode:
             raise ValueError(
                 f"Input has stale episode {episode}; current episode is "
@@ -1736,7 +2393,12 @@ FROM workers
 
         shadow = read_shadow_metadata(self._state_directory)
         frozen = frozenset(shadow["frozen_item_ids"]) if shadow is not None else frozenset()
-        return frozenset(row["item_id"] for row in rows) - frozen
+        superseded = frozenset(
+            row["id"] for row in connection.execute(
+                "SELECT id FROM workflow_items WHERE phase = 'superseded'"
+            )
+        )
+        return frozenset(row["item_id"] for row in rows) - frozen - superseded
 
 
 def _nonempty(value: object, name: str) -> str:
@@ -1915,6 +2577,15 @@ def _observation_fingerprint(observation: RunObservation) -> str:
         }
     )
 
+def _manifest_key(run: RunObservation) -> str:
+    # Bind the cached page inventory to the observed completed episode, not
+    # merely a run ID whose attempt or SHA may have changed on the next poll.
+    return json.dumps(
+        [run.key.repository, run.key.branch, run.key.workflow_id, run.workflow_path,
+         run.run_id, run.attempt, run.head_sha, run.status, run.conclusion, run.updated_at],
+        separators=(",", ":"),
+    )
+
 
 def _item_values(item: WorkflowItem) -> tuple[object, ...]:
     return (
@@ -1952,6 +2623,10 @@ def _item_values(item: WorkflowItem) -> tuple[object, ...]:
         item.scenario_name,
         item.case_key,
         item.last_assessed_target,
+        _job_keys_json((item.leaf_job,)) if item.leaf_job is not None else None,
+        item.cause_group_id,
+        item.cause_leader_id,
+        item.cause_evidence_fingerprint,
     )
 
 
@@ -2015,6 +2690,13 @@ def _item_from_row(row: sqlite3.Row) -> WorkflowItem:
             scenario_name=row["scenario_name"],
             case_key=row["case_key"],
             last_assessed_target=row["last_assessed_target"],
+            leaf_job=(
+                _job_keys_from_json(row["leaf_job_json"])[0]
+                if row["leaf_job_json"] is not None else None
+            ),
+            cause_group_id=row["cause_group_id"],
+            cause_leader_id=row["cause_leader_id"],
+            cause_evidence_fingerprint=row["cause_evidence_fingerprint"],
         )
     except ValueError as error:
         raise ValueError("Stored workflow item is invalid.") from error
