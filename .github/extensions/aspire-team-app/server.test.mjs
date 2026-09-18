@@ -251,10 +251,16 @@ test("resolveAuth re-probes when account preferences change during credential pr
   });
   process.env.GH_TOKEN = "dotcom-token";
   delete process.env.GITHUB_TOKEN;
+  const copilotAccountEnv = Object.entries(process.env)
+    .filter(([key]) => key.startsWith("COPILOT_GH_ACCOUNT_"));
+  for (const [key] of copilotAccountEnv) delete process.env[key];
   process.env.COPILOT_GH_ACCOUNT_msft_2E_ghe_2E_com_octo = "proxima-token";
   process.env.PATH = "";
   t.after(() => {
-    delete process.env.COPILOT_GH_ACCOUNT_msft_2E_ghe_2E_com_octo;
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("COPILOT_GH_ACCOUNT_")) delete process.env[key];
+    }
+    for (const [key, value] of copilotAccountEnv) process.env[key] = value;
   });
 
   let releaseProximaProbe;
