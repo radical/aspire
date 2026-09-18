@@ -725,6 +725,37 @@ class WorkflowLoopManagerTests(unittest.TestCase):
             "It MUST NOT contain leafIdentity, causeGroupId, or any other field.",
             request.prompt,
         )
+        self.assertIn(
+            'decision="assign" requires a nonempty copilotRequest of at most '
+            "8000 characters and inScopeJobIds=[901].",
+            request.prompt,
+        )
+        self.assertIn(
+            'decision="follow_up" is invalid in round 0.',
+            request.prompt,
+        )
+        self.assertIn(
+            'decision="needs_attention" requires copilotRequest=null and '
+            "inScopeJobIds=[].",
+            request.prompt,
+        )
+        self.assertIn(
+            "recommendedResponse maps to decision exactly: repair or investigate "
+            "=> assign in round 0 and follow_up in later rounds; observe => "
+            "observe_external; needs_attention => needs_attention; no_action => "
+            "no_action.",
+            request.prompt,
+        )
+        self.assertIn(
+            "If you cannot write a useful bounded copilotRequest, choose "
+            "recommendedResponse=needs_attention and decision=needs_attention; "
+            "never return assign or follow_up with copilotRequest=null.",
+            request.prompt,
+        )
+        self.assertNotIn(
+            "For every result, cite the exact leaf job in inScopeJobIds",
+            request.prompt,
+        )
         self.assertNotIn("defer_ordinary_test", request.prompt)
         for expected in (
             "classification", "recommendedResponse", "deterministic_test",
@@ -755,6 +786,19 @@ class WorkflowLoopManagerTests(unittest.TestCase):
         )
         self.assertIn(
             "It MUST NOT contain leafIdentity, causeGroupId, or any other field.",
+            request.prompt,
+        )
+        self.assertIn(
+            "inScopeJobIds set to a nonempty subset of the allowed IDs above",
+            request.prompt,
+        )
+        self.assertIn(
+            "include a nonempty subset of the allowed failed job IDs",
+            request.prompt,
+        )
+        self.assertNotIn("recommendedResponse", request.prompt)
+        self.assertNotIn(
+            "include the exact in-scope failed job IDs",
             request.prompt,
         )
 

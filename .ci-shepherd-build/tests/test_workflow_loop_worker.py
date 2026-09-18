@@ -80,7 +80,7 @@ def _request(paths: WorkerPacketPaths) -> JudgmentRequest:
         item_id=7,
         episode=2,
         evidence_fingerprint="fnv1a64:0123456789abcdef",
-        round=0,
+        round=1,
         repository="owner/repo",
         branch="main",
         workflow_id=42,
@@ -112,6 +112,7 @@ def _reservation(paths: WorkerPacketPaths) -> WorkerReservation:
         detail_path=str(paths.detail),
         lifetime_lock_path=str(paths.lifetime_lock),
         queued_at=NOW,
+        judgment_round=1,
     )
 
 
@@ -134,6 +135,7 @@ def _worker(reservation: WorkerReservation) -> WorkerView:
         completed_at=None,
         exit_code=None,
         error=None,
+        judgment_round=reservation.judgment_round,
     )
 
 
@@ -489,6 +491,7 @@ class JudgmentWorkerLauncherTests(unittest.TestCase):
                 detail_path=str(paths.detail),
                 lifetime_lock_path=str(paths.lifetime_lock),
                 queued_at=NOW,
+                judgment_round=request.round,
             )
 
             def process_factory(
@@ -620,6 +623,7 @@ print(f"{worker.worker_id}:{worker.state.value}:{worker.launch_attempted_at}")
                 detail_path=str(paths.detail),
                 lifetime_lock_path=str(paths.lifetime_lock),
                 queued_at=NOW,
+                judgment_round=request.round,
             )
             launcher = JudgmentWorkerLauncher(
                 state_directory,

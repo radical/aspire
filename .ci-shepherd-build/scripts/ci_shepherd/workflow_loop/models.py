@@ -26,6 +26,7 @@ _RESULT_KEYS = (
     "copilotRequest",
 )
 _TYPED_RESULT_KEYS = ("classification", "recommendedResponse")
+COPILOT_REQUEST_MAX_CHARS = 8_000
 _REQUEST_KEYS = frozenset(
     {
         "workerId",
@@ -137,6 +138,20 @@ class RecommendedResponse(StrEnum):
     OBSERVE = "observe"
     NEEDS_ATTENTION = "needs_attention"
     NO_ACTION = "no_action"
+
+
+def judgment_decision_for_response(
+    response: RecommendedResponse,
+    *,
+    round: int,
+) -> JudgmentDecision:
+    if response in {RecommendedResponse.REPAIR, RecommendedResponse.INVESTIGATE}:
+        return JudgmentDecision.FOLLOW_UP if round else JudgmentDecision.ASSIGN
+    return {
+        RecommendedResponse.OBSERVE: JudgmentDecision.OBSERVE_EXTERNAL,
+        RecommendedResponse.NEEDS_ATTENTION: JudgmentDecision.NEEDS_ATTENTION,
+        RecommendedResponse.NO_ACTION: JudgmentDecision.NO_ACTION,
+    }[response]
 
 
 def _nonempty_string(value: object, name: str, *, maximum: int | None = None) -> str:
@@ -713,7 +728,7 @@ class JudgmentResult:
         _optional_nonempty_string(
             self.copilot_request,
             "copilot_request",
-            maximum=8_000,
+            maximum=COPILOT_REQUEST_MAX_CHARS,
         )
         if self.classification is not None or self.recommended_response is not None:
             if not isinstance(self.classification, FailureClassification):
@@ -734,11 +749,15 @@ def apply_classification_policy(
     run = request.failure_run
     required = {f"run:{run.run_id}:{run.attempt}", f"job:{job.run_id}:{job.attempt}:{job.job_id}"}
     if (
-        result.in_scope_job_ids != (job.job_id,)
-        or not required.issubset(result.evidence_ids)
+        not required.issubset(result.evidence_ids)
         or not set(result.evidence_ids).issubset(request.evidence_ids)
     ):
-        raise ValueError("Leaf judgments require exact job and run evidence citations.")
+        raise ValueError("Leaf judgments require exact run and job evidence citations.")
+    if (
+        result.decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}
+        and result.in_scope_job_ids != (job.job_id,)
+    ):
+        raise ValueError("Leaf action judgments require the exact failed job ID.")
     if job.status != "completed" or job.conclusion not in {"failure", "timed_out"}:
         raise ValueError("Leaf judgments require a completed failed job.")
     diagnostic = bool(
@@ -779,27 +798,79 @@ def apply_classification_policy(
         response = RecommendedResponse.INVESTIGATE
     else:
         response = RecommendedResponse.REPAIR
-    decision = {
-        RecommendedResponse.REPAIR: (
-            JudgmentDecision.FOLLOW_UP if request.round else JudgmentDecision.ASSIGN
-        ),
-        RecommendedResponse.INVESTIGATE: (
-            JudgmentDecision.FOLLOW_UP if request.round else JudgmentDecision.ASSIGN
-        ),
-        RecommendedResponse.OBSERVE: JudgmentDecision.OBSERVE_EXTERNAL,
-        RecommendedResponse.NEEDS_ATTENTION: JudgmentDecision.NEEDS_ATTENTION,
-        RecommendedResponse.NO_ACTION: JudgmentDecision.NO_ACTION,
-    }[response]
+    # A worker that cannot formulate a useful bounded request may explicitly
+    # stop at needs_attention. Classification policy can narrow an action, but
+    # must not turn that fail-closed result into an assignment.
+    if result.recommended_response is RecommendedResponse.NEEDS_ATTENTION:
+        response = RecommendedResponse.NEEDS_ATTENTION
+    decision = judgment_decision_for_response(response, round=request.round)
+    action = decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}
     return replace(
         result,
         decision=decision,
         recommended_response=response,
-        copilot_request=(
-            result.copilot_request
-            if decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}
-            else None
-        ),
+        in_scope_job_ids=result.in_scope_job_ids if action else (),
+        copilot_request=result.copilot_request if action else None,
     )
+
+
+def _validate_judgment_decision_fields(
+    request: JudgmentRequest,
+    *,
+    decision: JudgmentDecision,
+    in_scope_job_ids: tuple[int, ...],
+    copilot_request: str | None,
+) -> None:
+    if decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}:
+        if copilot_request is None:
+            raise ValueError(
+                f"copilotRequest is required for {decision.value}."
+            )
+        if not in_scope_job_ids:
+            raise ValueError(
+                f"{decision.value} requires nonempty inScopeJobIds."
+            )
+    else:
+        if in_scope_job_ids:
+            raise ValueError(
+                f"{decision.value} requires empty inScopeJobIds."
+            )
+        if copilot_request is not None:
+            raise ValueError(
+                f"{decision.value} requires copilotRequest to be null."
+            )
+    if decision is JudgmentDecision.ASSIGN:
+        if request.round != 0:
+            raise ValueError("assign is valid only in round 0.")
+        if (
+            request.task_id is not None
+            or request.pull_request_number is not None
+            or request.pull_request_head_sha is not None
+            or request.pull_request_head_ref is not None
+            or request.pull_request_base_ref is not None
+            or request.pull_request_observed_at is not None
+        ):
+            raise ValueError(
+                "Initial assign requests cannot already have a task or pull request."
+            )
+    if decision is JudgmentDecision.FOLLOW_UP:
+        if request.round == 0:
+            raise ValueError("follow_up requires a later round.")
+        if (
+            request.issue_number is None
+            or request.task_id is None
+            or request.pull_request_number is None
+            or request.pull_request_head_sha is None
+            or request.pull_request_head_ref is None
+            or request.pull_request_base_ref is None
+            or request.pull_request_observed_at is None
+        ):
+            raise ValueError(
+                "follow_up requires the exact owned issue, task, pull request, "
+                "and fresh head identity."
+            )
+        if request.followup_count >= 2:
+            raise ValueError("follow_up is limited to fewer than two follow-ups.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1512,7 +1583,22 @@ def parse_judgment_result(
     copilot_request = _optional_nonempty_string(
         document["copilotRequest"],
         "copilotRequest",
-        maximum=8_000,
+        maximum=COPILOT_REQUEST_MAX_CHARS,
+    )
+    if typed:
+        expected_decision = judgment_decision_for_response(
+            response,
+            round=request.round,
+        )
+        if decision is not expected_decision:
+            raise ValueError(
+                "decision must match recommendedResponse and the request round."
+            )
+    _validate_judgment_decision_fields(
+        request,
+        decision=decision,
+        in_scope_job_ids=in_scope_job_ids,
+        copilot_request=copilot_request,
     )
     result = apply_classification_policy(request, JudgmentResult(
         schema_version=1,
@@ -1528,51 +1614,10 @@ def parse_judgment_result(
         recommended_response=response,
     ))
     decision = result.decision
-    copilot_request = result.copilot_request
-    if decision in {JudgmentDecision.ASSIGN, JudgmentDecision.FOLLOW_UP}:
-        if copilot_request is None:
-            raise ValueError(
-                "copilotRequest is required for assign and follow_up."
-            )
-    elif copilot_request is not None:
-        raise ValueError(
-            "copilotRequest is only valid for assign and follow_up."
-        )
-    if decision is JudgmentDecision.ASSIGN:
-        if not in_scope_job_ids:
-            raise ValueError("Initial assign requires nonempty inScopeJobIds.")
-        if (
-            request.task_id is not None
-            or request.pull_request_number is not None
-            or request.pull_request_head_sha is not None
-            or request.pull_request_head_ref is not None
-            or request.pull_request_base_ref is not None
-            or request.pull_request_observed_at is not None
-        ):
-            raise ValueError(
-                "Initial assign requests cannot already have a task or pull request."
-            )
-    if (
-        decision is JudgmentDecision.DEFER_ORDINARY_TEST
-        and in_scope_job_ids
-    ):
-        raise ValueError(
-            "defer_ordinary_test requires empty inScopeJobIds."
-        )
-    if decision is JudgmentDecision.FOLLOW_UP:
-        if (
-            request.issue_number is None
-            or request.task_id is None
-            or request.pull_request_number is None
-            or request.pull_request_head_sha is None
-            or request.pull_request_head_ref is None
-            or request.pull_request_base_ref is None
-            or request.pull_request_observed_at is None
-        ):
-            raise ValueError(
-                "follow_up requires the exact owned issue, task, pull request, "
-                "and fresh head identity."
-            )
-        if request.followup_count >= 2:
-            raise ValueError("follow_up is limited to fewer than two follow-ups.")
+    _validate_judgment_decision_fields(
+        request,
+        decision=decision,
+        in_scope_job_ids=result.in_scope_job_ids,
+        copilot_request=result.copilot_request,
+    )
     return result

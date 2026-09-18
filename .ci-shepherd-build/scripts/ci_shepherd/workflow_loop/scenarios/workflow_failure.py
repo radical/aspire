@@ -10,6 +10,7 @@ from ci_shepherd.observations import workflow_log_preview
 from ..models import (
     ActionKind,
     ActionState,
+    COPILOT_REQUEST_MAX_CHARS,
     FailureClassification,
     ItemPhase,
     JobObservation,
@@ -1047,6 +1048,30 @@ def build_judgment_prompt(
     )
     failed_job_ids = [job.job_id for job in failure.jobs if (job.conclusion or "").casefold() in {"failure", "timed_out"}]
     result_keys = judgment_result_keys(typed=item.leaf_job is not None)
+    active_decision = "follow_up" if judgment_round else "assign"
+    inactive_decision = "assign" if judgment_round else "follow_up"
+    nonaction_decisions = (
+        "observe_external",
+        *(("defer_ordinary_test",) if item.leaf_job is None else ()),
+        "needs_attention",
+        "no_action",
+    )
+    action_scope_contract = (
+        f"inScopeJobIds={json.dumps(failed_job_ids, separators=(',', ':'))}"
+        if item.leaf_job is not None
+        else "inScopeJobIds set to a nonempty subset of the allowed IDs above"
+    )
+    decision_contract = (
+        f'- decision="{active_decision}" requires a nonempty copilotRequest of at '
+        f"most {COPILOT_REQUEST_MAX_CHARS} characters and "
+        f"{action_scope_contract}.\n"
+        f'- decision="{inactive_decision}" is invalid in round {judgment_round}.\n'
+        + "".join(
+            f'- decision="{decision}" requires copilotRequest=null and '
+            "inScopeJobIds=[].\n"
+            for decision in nonaction_decisions
+        )
+    )
     schema = (
         "\n\n"
         "Return exactly one compact JSON object with no Markdown or surrounding "
@@ -1063,6 +1088,7 @@ def build_judgment_prompt(
         f"{json.dumps(list(evidence_ids))}\n"
         f"- inScopeJobIds may contain only these integer IDs: "
         f"{json.dumps(failed_job_ids)}\n"
+        f"{decision_contract}"
     )
     if item.leaf_job is not None:
         schema += (
@@ -1074,30 +1100,35 @@ def build_judgment_prompt(
             "insufficient_evidence, or aggregate_only.\n"
             "recommendedResponse must be repair, investigate, observe, "
             "needs_attention, or no_action.\n"
+            "recommendedResponse maps to decision exactly: repair or investigate "
+            "=> assign in round 0 and follow_up in later rounds; observe => "
+            "observe_external; needs_attention => needs_attention; no_action => "
+            "no_action.\n"
+            "If you cannot write a useful bounded copilotRequest, choose "
+            "recommendedResponse=needs_attention and decision=needs_attention; "
+            "never return assign or follow_up with copilotRequest=null.\n"
             "deterministic_test, repository_infra, and product_or_build map to repair; "
             "suspected_flake maps to investigate. Both require cited nonempty log "
             "evidence. insufficient_evidence maps to bounded investigation only "
             "with useful exact lane/reproduction context; otherwise needs_attention. "
             "external_infra is observe-only until trusted structured recurrence "
             "or a repository mitigation witness is available; prose is not a witness. "
-            "aggregate_only maps to no_action. Deterministic policy, not decision "
+            "aggregate_only on a retained leaf maps to needs_attention. "
+            "Deterministic policy, not decision "
             "or request prose, authorizes effects.\n"
-            "For every result, cite the exact leaf job in inScopeJobIds and its "
-            "run:<run>:<attempt> and job:<run>:<attempt>:<job> evidence IDs. "
-            "For repair/flake investigation also cite log:<job>. "
-            "decision is assign for initial repair/investigation, follow_up for "
-            "owned PR repair/investigation, observe_external for observe, "
-            "needs_attention, or no_action. Include a bounded copilotRequest for "
-            "repair/investigation, otherwise null."
+            "For every result, cite the exact leaf run:<run>:<attempt> and "
+            "job:<run>:<attempt>:<job> evidence IDs. For repair or flake "
+            "investigation also cite log:<job>. Only assign or follow_up puts the "
+            "exact leaf job in inScopeJobIds; every non-action decision uses []."
         )
     else:
         schema += (
             "The remaining fields are decision, summary, and copilotRequest. "
             "decision must be assign, follow_up, observe_external, "
             "defer_ordinary_test, needs_attention, or no_action. For assign or "
-            "follow_up, include the exact in-scope failed job IDs and a bounded "
-            "string copilotRequest. For every other decision, inScopeJobIds must "
-            "be [] and copilotRequest must be null."
+            "follow_up, include a nonempty subset of the allowed failed job IDs "
+            "and a bounded string copilotRequest. For every other decision, "
+            "inScopeJobIds must be [] and copilotRequest must be null."
         )
     return f"{body[:12_000]}\n\n{issue_block}{schema}"
 

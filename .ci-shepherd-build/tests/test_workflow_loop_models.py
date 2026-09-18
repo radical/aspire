@@ -209,7 +209,6 @@ class WorkflowLoopModelTests(unittest.TestCase):
                     self.leaf_result(
                         classification=classification,
                         recommendedResponse=response,
-                        decision="no_action",
                         summary="Repair now: mitigation proven; repeated on two runs.",
                     ),
                     self.leaf_request(),
@@ -244,6 +243,86 @@ class WorkflowLoopModelTests(unittest.TestCase):
             ), request,
         )
         self.assertIs(JudgmentDecision.NEEDS_ATTENTION, result.decision)
+
+    def test_sanitized_invalid_worker_nonaction_scope_is_rejected(self) -> None:
+        request = self.leaf_request()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "needs_attention requires empty inScopeJobIds",
+        ):
+            parse_judgment_result(
+                self.leaf_result(
+                    classification="insufficient_evidence",
+                    recommendedResponse="needs_attention",
+                    decision="needs_attention",
+                    summary=(
+                        "The retained job evidence does not contain enough detail "
+                        "for a useful bounded investigation request."
+                    ),
+                    inScopeJobIds=[900],
+                    copilotRequest=None,
+                ),
+                request,
+            )
+
+    def test_leaf_needs_attention_is_not_escalated_to_assignment(self) -> None:
+        request = self.leaf_request()
+
+        result = parse_judgment_result(
+            self.leaf_result(
+                classification="insufficient_evidence",
+                recommendedResponse="needs_attention",
+                decision="needs_attention",
+                summary=(
+                    "The retained job evidence does not contain enough detail "
+                    "for a useful bounded investigation request."
+                ),
+                inScopeJobIds=[],
+                copilotRequest=None,
+            ),
+            request,
+        )
+
+        self.assertIs(JudgmentDecision.NEEDS_ATTENTION, result.decision)
+        self.assertEqual((), result.in_scope_job_ids)
+        self.assertIsNone(result.copilot_request)
+
+    def test_leaf_aggregate_nonaction_normalizes_to_needs_attention(self) -> None:
+        request = self.leaf_request()
+
+        result = parse_judgment_result(
+            self.leaf_result(
+                classification="aggregate_only",
+                recommendedResponse="no_action",
+                decision="no_action",
+                summary=(
+                    "This retained leaf was incorrectly described as aggregate-only."
+                ),
+                inScopeJobIds=[],
+                copilotRequest=None,
+            ),
+            request,
+        )
+
+        self.assertIs(JudgmentDecision.NEEDS_ATTENTION, result.decision)
+        self.assertEqual("needs_attention", result.recommended_response.value)
+        self.assertEqual((), result.in_scope_job_ids)
+        self.assertIsNone(result.copilot_request)
+
+    def test_leaf_aggregate_malformed_action_fields_are_rejected_before_policy(self) -> None:
+        request = self.leaf_request()
+
+        with self.assertRaisesRegex(ValueError, "assign requires nonempty inScopeJobIds"):
+            parse_judgment_result(
+                self.leaf_result(
+                    classification="aggregate_only",
+                    recommendedResponse="repair",
+                    decision="assign",
+                    inScopeJobIds=[],
+                ),
+                request,
+            )
 
     def test_leaf_key_is_versioned_runner_qualified_and_episode_independent(self) -> None:
         from ci_shepherd.workflow_loop.models import leaf_case_key
@@ -324,6 +403,82 @@ class WorkflowLoopModelTests(unittest.TestCase):
         self.assertEqual(0, reparsed.round)
         self.assertEqual(JudgmentDecision.ASSIGN, result.decision)
         self.assertEqual((900,), result.in_scope_job_ids)
+
+    def test_decision_field_contract_truth_table(self) -> None:
+        cases = (
+            ("assign", _request(), [900], "Investigate the exact failed job."),
+            (
+                "follow_up",
+                _request(decision_context="follow-up"),
+                [900],
+                "Update the exact owned pull request for this failed job.",
+            ),
+            ("observe_external", _request(), [], None),
+            ("defer_ordinary_test", _request(), [], None),
+            ("needs_attention", _request(), [], None),
+            ("no_action", _request(), [], None),
+        )
+        for decision, request, job_ids, copilot_request in cases:
+            with self.subTest(decision=decision):
+                result = parse_judgment_result(
+                    _result_document(
+                        decision=decision,
+                        inScopeJobIds=job_ids,
+                        copilotRequest=copilot_request,
+                    ),
+                    request,
+                )
+                self.assertEqual(decision, result.decision.value)
+                self.assertEqual(tuple(job_ids), result.in_scope_job_ids)
+                self.assertEqual(copilot_request, result.copilot_request)
+
+    def test_decision_field_contract_rejects_invalid_required_fields(self) -> None:
+        for decision in (
+            "observe_external",
+            "defer_ordinary_test",
+            "needs_attention",
+            "no_action",
+        ):
+            for field, value in (
+                ("inScopeJobIds", [900]),
+                ("copilotRequest", "Do work despite a non-action decision."),
+            ):
+                with self.subTest(decision=decision, field=field):
+                    changes = {
+                        "decision": decision,
+                        "inScopeJobIds": [],
+                        "copilotRequest": None,
+                    }
+                    changes[field] = value
+                    with self.assertRaisesRegex(ValueError, decision):
+                        parse_judgment_result(
+                            _result_document(**changes),
+                            _request(),
+                        )
+        for field, value, error in (
+            ("inScopeJobIds", [], "assign"),
+            ("copilotRequest", None, "assign"),
+            ("copilotRequest", " ", "copilotRequest"),
+            ("copilotRequest", "x" * 8_001, "copilotRequest"),
+        ):
+            with self.subTest(decision="assign", field=field):
+                with self.assertRaisesRegex(ValueError, error):
+                    parse_judgment_result(
+                        _result_document(**{field: value}),
+                        _request(),
+                    )
+
+    def test_decision_field_contract_enforces_rounds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "assign is valid only in round 0"):
+            parse_judgment_result(
+                _result_document(),
+                _request(decision_context="follow-up"),
+            )
+        with self.assertRaisesRegex(ValueError, "follow_up requires a later round"):
+            parse_judgment_result(
+                _result_document(decision="follow_up"),
+                _request(),
+            )
 
     def test_parse_judgment_result_rejects_invalid_documents_table(self) -> None:
         successful = _job(901, conclusion="success")
@@ -432,7 +587,7 @@ class WorkflowLoopModelTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     parse_judgment_result(text, request)
 
-        with self.assertRaisesRegex(ValueError, "Initial assign"):
+        with self.assertRaisesRegex(ValueError, "assign is valid only in round 0"):
             parse_judgment_result(
                 _result_document(),
                 valid_request,

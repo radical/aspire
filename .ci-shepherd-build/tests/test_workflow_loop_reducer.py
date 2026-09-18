@@ -419,6 +419,37 @@ class WorkflowLoopReducerTests(unittest.TestCase):
                     )
                     self.assertIs(NextStep.WAIT_FOR_READ, stale.next_step)
 
+    def test_retained_leaf_aggregate_nonaction_requires_attention(self) -> None:
+        import json
+        from ci_shepherd.workflow_loop.models import leaf_case_key, parse_judgment_result
+        from ci_shepherd.workflow_loop.scenarios.workflow_failure import build_judgment_request
+
+        failure = replace(_failure_run(), jobs=(_failure_run().jobs[1],))
+        item = _item(
+            leaf_job=TEST, failed_jobs=(TEST,),
+            case_key=leaf_case_key(failure, TEST),
+        )
+        refresh = _refresh(item=item, failure_run=failure)
+        request = build_judgment_request(
+            item, refresh, worker_id="leaf", session_id="leaf", judgment_round=0,
+        )
+        result = parse_judgment_result(json.dumps({
+            "schemaVersion": 1, "itemId": item.id, "episode": item.episode,
+            "evidenceFingerprint": item.evidence_fingerprint,
+            "decision": "no_action",
+            "summary": "The retained leaf was incorrectly described as aggregate-only.",
+            "classification": "aggregate_only", "recommendedResponse": "no_action",
+            "evidenceIds": list(request.evidence_ids), "inScopeJobIds": [],
+            "copilotRequest": None,
+        }), request)
+
+        transition = reduce_item(
+            item, refresh, now=LATER, request=request, judgment=result,
+        )
+
+        self.assertIs(NextStep.NEEDS_ATTENTION, transition.next_step)
+        self.assertIsNone(transition.action_kind)
+
     def assert_transition(
         self,
         transition: ItemTransition,
