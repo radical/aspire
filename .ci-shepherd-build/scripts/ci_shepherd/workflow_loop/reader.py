@@ -36,6 +36,7 @@ RecoveryStatus = Literal[
     "unavailable",
 ]
 IssueSearchStatus = Literal["zero", "one", "ambiguous", "unavailable"]
+IssueOwner = Literal["human", "copilot", "other"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +162,79 @@ class IssueObservation:
     assignees: tuple[str, ...]
     copilot_assigned: bool
     human_assigned: bool
+
+
+def classify_issue_owner(
+    issue: IssueObservation | None,
+) -> IssueOwner | None:
+    if issue is None:
+        return None
+    if issue.human_assigned:
+        return "human"
+    if issue.copilot_assigned:
+        return "copilot"
+    if issue.assignees:
+        return "other"
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class IssueCommentContext:
+    comment_id: int
+    url: str
+    author: str
+    body: str
+    body_truncated: bool
+
+    def __post_init__(self) -> None:
+        if self.comment_id < 1:
+            raise ValueError("comment_id must be positive.")
+        if not self.url or not self.author:
+            raise ValueError("Comment URL and author must be nonempty.")
+        if not isinstance(self.body, str) or len(self.body) > 8_192:
+            raise ValueError("Comment body exceeds its 8 KiB bound.")
+        if not isinstance(self.body_truncated, bool):
+            raise ValueError("body_truncated must be boolean.")
+
+
+@dataclass(frozen=True, slots=True)
+class IssueContext:
+    number: int
+    url: str
+    title: str
+    title_truncated: bool
+    body: str
+    body_truncated: bool
+    labels: tuple[str, ...]
+    comments: tuple[IssueCommentContext, ...]
+    comments_complete: bool
+
+    def __post_init__(self) -> None:
+        if self.number < 1 or not self.url:
+            raise ValueError("Issue identity must be available.")
+        if not self.title or len(self.title) > 512:
+            raise ValueError("Issue title exceeds its 512 character bound.")
+        if len(self.body) > 16_384:
+            raise ValueError("Issue body exceeds its 16 KiB bound.")
+        if not isinstance(self.title_truncated, bool) or not isinstance(
+            self.body_truncated,
+            bool,
+        ):
+            raise ValueError("Issue truncation flags must be boolean.")
+        if self.labels != tuple(sorted(set(self.labels))):
+            raise ValueError("Issue labels must be sorted and unique.")
+        if len(self.comments) > 20:
+            raise ValueError("Issue context may contain at most 20 comments.")
+        if not isinstance(self.comments_complete, bool):
+            raise ValueError("comments_complete must be boolean.")
+
+
+@dataclass(frozen=True, slots=True)
+class IssueContextResult:
+    context: IssueContext | None
+    complete: bool
+    errors: tuple[ReadError, ...]
+    request_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,7 +599,10 @@ class WorkflowReader:
             errors.extend(details.errors)
             recovery = details.recovery
             if details.run is not None:
-                if details.run.run_id == item.failure_run_id:
+                if (
+                    details.recovery == "failed"
+                    or details.run.run_id == item.failure_run_id
+                ):
                     failure_run = details.run
             if details.recovery == "passed":
                 recovery_run = details.run
@@ -928,6 +1005,122 @@ class WorkflowReader:
             limitations=tuple(limitations),
             errors=tuple(errors),
             request_count=self._requests() - started,
+        )
+
+    def read_issue_context(
+        self,
+        item: WorkflowItem,
+    ) -> IssueContextResult:
+        started = self._requests()
+        if item.issue_number is None:
+            return IssueContextResult(None, True, (), 0)
+        errors: list[ReadError] = []
+        issue_endpoint = (
+            f"/repos/{item.repository}/issues/{item.issue_number}"
+        )
+        try:
+            raw_issue = self._client.get(issue_endpoint)
+            issue = _normalize_issue(
+                raw_issue,
+                repository=item.repository,
+                marker=_canonical_marker(item),
+            )
+            if issue is None:
+                raise ValueError(
+                    "The issue is closed, repurposed, or missing its marker."
+                )
+            raw_title = _nonempty_string(
+                raw_issue.get("title"),
+                "issue.title",
+            )
+            raw_body = raw_issue.get("body")
+            if raw_body is None:
+                raw_body = ""
+            if not isinstance(raw_body, str):
+                raise TypeError("issue.body must be a string or null.")
+            raw_labels = raw_issue.get("labels", [])
+            if not isinstance(raw_labels, list):
+                raise TypeError("issue.labels must be a list.")
+            labels = tuple(sorted({
+                label["name"]
+                for label in raw_labels
+                if isinstance(label, Mapping)
+                and isinstance(label.get("name"), str)
+                and label["name"]
+            }))
+        except (GitHubApiError, TypeError, ValueError) as error:
+            errors.append(
+                _error(
+                    f"item:{item.id}:issue-context",
+                    "issue-context-unavailable",
+                    issue_endpoint,
+                    error,
+                )
+            )
+            return IssueContextResult(
+                None,
+                False,
+                tuple(errors),
+                self._requests() - started,
+            )
+
+        comments_endpoint = (
+            f"/repos/{item.repository}/issues/{item.issue_number}/comments"
+        )
+        comments_complete = False
+        selected: tuple[IssueCommentContext, ...] = ()
+        try:
+            inventory = self._client.get_paged_inventory(comments_endpoint)
+            comments = tuple(
+                _normalize_issue_comment(raw)
+                for raw in inventory.items
+            )
+            selected = tuple(
+                sorted(comments, key=lambda comment: comment.comment_id)[-20:]
+            )
+            comments_complete = inventory.complete and len(comments) <= 20
+        except (GitHubApiError, TypeError, ValueError) as error:
+            errors.append(
+                _error(
+                    f"item:{item.id}:issue-comments",
+                    "issue-comments-unavailable",
+                    comments_endpoint,
+                    error,
+                )
+            )
+
+        try:
+            context = IssueContext(
+                number=issue.number,
+                url=issue.url,
+                title=raw_title[:512],
+                title_truncated=len(raw_title) > 512,
+                body=raw_body[:16_384],
+                body_truncated=len(raw_body) > 16_384,
+                labels=labels,
+                comments=selected,
+                comments_complete=comments_complete,
+            )
+        except (TypeError, ValueError) as error:
+            errors.append(
+                _error(
+                    f"item:{item.id}:issue-context",
+                    "issue-context-unavailable",
+                    issue_endpoint,
+                    error,
+                )
+            )
+            return IssueContextResult(
+                None,
+                False,
+                tuple(errors),
+                self._requests() - started,
+            )
+        return IssueContextResult(
+            context,
+            not errors and comments_complete,
+            tuple(errors),
+            self._requests() - started,
         )
 
     def find_tracking_issue(self, item: WorkflowItem) -> IssueSearchResult:
@@ -2226,6 +2419,31 @@ def _normalize_issue(
             login.casefold() not in copilot and not login.casefold().endswith("[bot]")
             for login in assignees
         ),
+    )
+
+
+def _normalize_issue_comment(raw: object) -> IssueCommentContext:
+    if not isinstance(raw, Mapping):
+        raise TypeError("Issue comment must be an object.")
+    body = raw.get("body")
+    if not isinstance(body, str):
+        raise TypeError("Issue comment body must be a string.")
+    user = raw.get("user")
+    if not isinstance(user, Mapping):
+        raise TypeError("Issue comment user must be an object.")
+    author = _nonempty_string(
+        user.get("login"),
+        "issue_comment.user.login",
+    )
+    return IssueCommentContext(
+        comment_id=_positive_int(raw.get("id"), "issue_comment.id"),
+        url=_nonempty_string(
+            raw.get("html_url"),
+            "issue_comment.html_url",
+        ),
+        author=author,
+        body=body[:8_192],
+        body_truncated=len(body) > 8_192,
     )
 
 

@@ -370,6 +370,7 @@ class WorkflowItem:
     latest_error: str | None
     scenario_name: str = "workflow-failure"
     case_key: str = "workflow"
+    last_assessed_target: str | None = None
 
     def __post_init__(self) -> None:
         _positive_int(self.id, "id")
@@ -436,6 +437,10 @@ class WorkflowItem:
         _optional_nonempty_string(self.latest_error, "latest_error")
         _nonempty_string(self.scenario_name, "scenario_name")
         _nonempty_string(self.case_key, "case_key")
+        _optional_nonempty_string(
+            self.last_assessed_target,
+            "last_assessed_target",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -536,7 +541,11 @@ class JudgmentRequest:
                 "and observation timestamp must be supplied together."
             )
         _nonnegative_int(self.followup_count, "followup_count")
-        _nonempty_string(self.prompt, "prompt", maximum=20_000)
+        _nonempty_string(self.prompt, "prompt", maximum=200_000)
+        if len(self.prompt.encode("utf-8")) > 200_000:
+            raise ValueError(
+                "prompt must contain at most 200000 UTF-8 bytes."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -596,6 +605,7 @@ class WorkerReservation:
     lifetime_lock_path: str
     queued_at: str
     judgment_round: int = 0
+    context_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         _nonempty_string(self.worker_id, "worker_id")
@@ -609,6 +619,13 @@ class WorkerReservation:
         _nonempty_string(self.lifetime_lock_path, "lifetime_lock_path")
         _timestamp(self.queued_at, "queued_at")
         _nonnegative_int(self.judgment_round, "judgment_round")
+        if self.context_fingerprint is None:
+            object.__setattr__(
+                self,
+                "context_fingerprint",
+                self.evidence_fingerprint,
+            )
+        _fingerprint(self.context_fingerprint, "context_fingerprint")
 
 
 @dataclass(frozen=True, slots=True)
@@ -654,6 +671,7 @@ class WorkerView:
     error: str | None
     judgment_round: int = 0
     consumed_at: str | None = None
+    context_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         _nonempty_string(self.worker_id, "worker_id")
@@ -679,6 +697,13 @@ class WorkerView:
         _optional_nonempty_string(self.error, "error")
         _nonnegative_int(self.judgment_round, "judgment_round")
         _optional_timestamp(self.consumed_at, "consumed_at")
+        if self.context_fingerprint is None:
+            object.__setattr__(
+                self,
+                "context_fingerprint",
+                self.evidence_fingerprint,
+            )
+        _fingerprint(self.context_fingerprint, "context_fingerprint")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1114,7 +1139,7 @@ def parse_judgment_request(text: str) -> JudgmentRequest:
             document["followupCount"],
             "followupCount",
         ),
-        prompt=_nonempty_string(document["prompt"], "prompt", maximum=20_000),
+        prompt=_nonempty_string(document["prompt"], "prompt", maximum=200_000),
     )
 
 

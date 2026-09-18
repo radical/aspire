@@ -294,7 +294,7 @@ class WorkflowLoopStoreTests(unittest.TestCase):
                 for row in connection.execute(
                     "PRAGMA table_info(workflow_items)"
                 )
-            )[:-2]
+            )[:-3]
             names = ", ".join(columns)
             connection.execute(
                 f"CREATE TABLE workflow_items_v3 AS "

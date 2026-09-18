@@ -12,6 +12,7 @@ from .models import (
     ActionKind,
     ActionState,
     ActionView,
+    ItemPhase,
     JobObservation,
     JudgmentDecision,
     JudgmentRequest,
@@ -19,7 +20,11 @@ from .models import (
     WorkflowItem,
     judgment_request_to_json,
 )
-from .reader import IssueSearchResult, ItemRefresh
+from .reader import (
+    IssueSearchResult,
+    ItemRefresh,
+    classify_issue_owner,
+)
 from .scenarios.workflow_failure import validate_fresh_failure
 from .state import WorkflowLoopStore
 
@@ -324,21 +329,30 @@ class WorkflowWriter:
         pass_id: str,
         owner_id: str,
     ) -> WorkflowWriteResult:
+        assert request.issue_number is not None
+        assert request.pull_request_number is not None
+        assert request.pull_request_head_ref is not None
+        prompt = self._follow_up_prompt(request, result)
         item = self._item(request.item_id)
         fresh = self._fresh(
             request,
             item,
             action=ActionKind.FOLLOW_UP,
         )
-        if isinstance(fresh, WorkflowWriteResult):
-            return fresh
-        target_result = self._follow_up_target_result(request, item, fresh)
-        if target_result is not None:
-            return target_result
-        assert request.issue_number is not None
-        assert request.pull_request_number is not None
-        assert request.pull_request_head_ref is not None
-        prompt = self._follow_up_prompt(request, result)
+        preflight = (
+            fresh
+            if isinstance(fresh, WorkflowWriteResult)
+            else self._follow_up_target_result(request, item, fresh)
+        )
+        existing = self._action(
+            request,
+            ActionKind.FOLLOW_UP,
+            request.followup_count + 1,
+        )
+        if preflight is not None and (
+            existing is None or existing.state is not ActionState.PREPARED
+        ):
+            return preflight
         outcome = self._invoke(
             request,
             result,
@@ -364,6 +378,7 @@ class WorkflowWriter:
                 model=self._cloud_model,
             ),
             validate=self._task_id,
+            preflight=preflight,
         )
         if isinstance(outcome, WorkflowWriteResult):
             return outcome
@@ -391,6 +406,7 @@ class WorkflowWriter:
         validate: Callable[[object], Any],
         allowed_created_issue: int | None = None,
         pre_invoke: Callable[[], WorkflowWriteResult | None] | None = None,
+        preflight: WorkflowWriteResult | None = None,
     ) -> tuple[ActionView, Any] | WorkflowWriteResult:
         action_id = self._action_id(request, kind, ordinal)
         payload = {
@@ -409,6 +425,8 @@ class WorkflowWriter:
         )
 
         def guard() -> EffectResult | None:
+            if preflight is not None:
+                return EffectResult(preflight.status, preflight.reason)
             item = self._item(request.item_id)
             fresh = self._fresh(
                 request,
@@ -625,11 +643,7 @@ class WorkflowWriter:
                 "stale",
                 "The exact tracking issue is no longer available.",
             )
-        if (
-            refreshed.issue.human_assigned
-            or refreshed.issue.copilot_assigned
-            or refreshed.issue.assignees
-        ):
+        if classify_issue_owner(refreshed.issue) is not None:
             return WorkflowWriteResult(
                 "superseded",
                 "Tracking issue ownership changed before task creation.",
@@ -656,6 +670,22 @@ class WorkflowWriter:
             return WorkflowWriteResult(
                 "stale",
                 "The issue target changed after judgment.",
+            )
+        owner = classify_issue_owner(refreshed.issue)
+        if owner == "human":
+            self._persist_human_handoff(
+                item,
+                "A human now owns the tracking issue.",
+                external_owner="human",
+            )
+            return WorkflowWriteResult(
+                "superseded",
+                "A human now owns the tracking issue.",
+            )
+        if owner == "other":
+            return WorkflowWriteResult(
+                "superseded",
+                "Tracking issue ownership changed before follow-up.",
             )
         if request.task_id is None or refreshed.task is None:
             return WorkflowWriteResult(
@@ -693,6 +723,15 @@ class WorkflowWriter:
                 "stale",
                 "The exact pull request target is unavailable.",
             )
+        if pull.draft:
+            self._persist_human_handoff(
+                item,
+                "The pull request is draft and requires human review.",
+            )
+            return WorkflowWriteResult(
+                "superseded",
+                "The pull request is now draft and requires human review.",
+            )
         if (
             pull.number != request.pull_request_number
             or pull.state != "open"
@@ -724,6 +763,28 @@ class WorkflowWriter:
                 f"Pull request checks are {pull.checks_state}.",
             )
         return None
+
+    def _persist_human_handoff(
+        self,
+        item: WorkflowItem,
+        reason: str,
+        *,
+        external_owner: str | None = None,
+    ) -> None:
+        current = self._item(item.id)
+        self._store.update_item(
+            replace(
+                current,
+                phase=ItemPhase.WAITING_FOR_HUMAN,
+                external_owner=external_owner or current.external_owner,
+                wait_reason="human-review",
+                last_checked_at=self._now(),
+                last_progressed_at=self._now(),
+            ),
+            history_event="follow-up-human-handoff",
+            summary=reason,
+            detail={},
+        )
 
     def _bind_issue(self, item: WorkflowItem, issue_number: int) -> None:
         if item.issue_number == issue_number:

@@ -28,7 +28,7 @@ from .models import (
 )
 
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _DATABASE_NAME = "workflow-loop.sqlite3"
 _ITEM_COLUMNS = (
     "id",
@@ -64,12 +64,14 @@ _ITEM_COLUMNS = (
     "latest_error",
     "scenario_name",
     "case_key",
+    "last_assessed_target",
 )
 _WORKER_COLUMNS = (
     "worker_id",
     "item_id",
     "episode",
     "evidence_fingerprint",
+    "context_fingerprint",
     "judgment_round",
     "state",
     "session_id",
@@ -159,7 +161,7 @@ class WorkflowLoopStore:
                     raise ValueError(
                         "Stored schema version is malformed."
                     ) from error
-                if schema_version not in {3, _SCHEMA_VERSION}:
+                if schema_version not in {3, 4, _SCHEMA_VERSION}:
                     raise ValueError(
                         f"Unsupported schema version {schema_version}."
                     )
@@ -182,6 +184,7 @@ class WorkflowLoopStore:
                     connection.execute("PRAGMA foreign_keys = OFF")
                     connection.execute("BEGIN IMMEDIATE")
                     self._migrate_v3_to_v4(connection)
+                    self._migrate_v4_to_v5(connection)
                     connection.execute(
                         "UPDATE meta SET value = ? "
                         "WHERE key = 'schema_version'",
@@ -190,6 +193,13 @@ class WorkflowLoopStore:
                     connection.commit()
                     connection.execute("PRAGMA foreign_keys = ON")
                     connection.execute("BEGIN IMMEDIATE")
+                elif schema_version == 4:
+                    self._migrate_v4_to_v5(connection)
+                    connection.execute(
+                        "UPDATE meta SET value = ? "
+                        "WHERE key = 'schema_version'",
+                        (str(_SCHEMA_VERSION),),
+                    )
             elif meta:
                 raise ValueError("State metadata is incomplete.")
             else:
@@ -400,7 +410,8 @@ class WorkflowLoopStore:
                         "assignment_requested_at = ?, "
                         "assignment_confirmed_at = ?, recovered_run_id = NULL, "
                         "recovered_at = NULL, latest_action = ?, "
-                        "latest_error = NULL WHERE id = ?",
+                        "latest_error = NULL, last_assessed_target = NULL "
+                        "WHERE id = ?",
                         (
                             observation.workflow_path,
                             observation.workflow_name,
@@ -529,6 +540,24 @@ class WorkflowLoopStore:
                 detail_json,
             )
 
+    def update_item_check(
+        self,
+        item_id: int,
+        *,
+        checked_at: str,
+        read_status: str,
+    ) -> None:
+        _positive(item_id, "item_id")
+        _validate_timestamp(checked_at, "checked_at")
+        _nonempty(read_status, "read_status")
+        with self._transaction() as connection:
+            self._current_item(connection, item_id)
+            connection.execute(
+                "UPDATE workflow_items SET last_checked_at = ?, "
+                "read_status = ? WHERE id = ?",
+                (checked_at, read_status, item_id),
+            )
+
     def reserve_worker(
         self,
         reservation: WorkerReservation,
@@ -555,6 +584,7 @@ class WorkflowLoopStore:
                     item_id=reservation.item_id,
                     episode=reservation.episode,
                     evidence_fingerprint=reservation.evidence_fingerprint,
+                    context_fingerprint=reservation.context_fingerprint,
                     judgment_round=reservation.judgment_round,
                     session_id=reservation.session_id,
                     state=WorkState.QUEUED,
@@ -594,12 +624,13 @@ class WorkflowLoopStore:
             prior_round = connection.execute(
                 "SELECT worker_id FROM workers WHERE item_id = ? "
                 "AND episode = ? AND evidence_fingerprint = ? "
-                "AND judgment_round = ? LIMIT 1",
+                "AND judgment_round = ? AND context_fingerprint = ? LIMIT 1",
                 (
                     reservation.item_id,
                     reservation.episode,
                     reservation.evidence_fingerprint,
                     reservation.judgment_round,
+                    reservation.context_fingerprint,
                 ),
             ).fetchone()
             if prior_round is not None:
@@ -615,15 +646,16 @@ class WorkflowLoopStore:
             connection.execute(
                 "INSERT INTO workers("
                 "worker_id, item_id, episode, evidence_fingerprint, "
-                "judgment_round, state, "
+                "context_fingerprint, judgment_round, state, "
                 "session_id, request_path, result_path, detail_path, "
                 "lifetime_lock_path, queued_at"
-                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     reservation.worker_id,
                     reservation.item_id,
                     reservation.episode,
                     reservation.evidence_fingerprint,
+                    reservation.context_fingerprint,
                     reservation.judgment_round,
                     WorkState.QUEUED.value,
                     reservation.session_id,
@@ -1342,6 +1374,7 @@ CREATE TABLE IF NOT EXISTS workflow_items(
     latest_error TEXT,
     scenario_name TEXT NOT NULL,
     case_key TEXT NOT NULL,
+    last_assessed_target TEXT,
     UNIQUE(repository, branch, scenario_name, case_key)
 );
 CREATE TABLE IF NOT EXISTS workers(
@@ -1349,6 +1382,7 @@ CREATE TABLE IF NOT EXISTS workers(
     item_id INTEGER NOT NULL REFERENCES workflow_items(id),
     episode INTEGER NOT NULL CHECK(episode > 0),
     evidence_fingerprint TEXT NOT NULL,
+    context_fingerprint TEXT NOT NULL,
     judgment_round INTEGER NOT NULL CHECK(judgment_round >= 0),
     state TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -1364,7 +1398,8 @@ CREATE TABLE IF NOT EXISTS workers(
     consumed_at TEXT,
     exit_code INTEGER,
     error TEXT,
-    UNIQUE(item_id, episode, evidence_fingerprint, judgment_round)
+    UNIQUE(item_id, episode, evidence_fingerprint, judgment_round,
+           context_fingerprint)
 );
 CREATE TABLE IF NOT EXISTS action_attempts(
     action_id TEXT PRIMARY KEY,
@@ -1479,6 +1514,53 @@ FROM workflow_items AS w
         connection.execute(
             "ALTER TABLE workflow_items_v4 RENAME TO workflow_items"
         )
+
+    @staticmethod
+    def _migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE workflow_items ADD COLUMN last_assessed_target TEXT"
+        )
+        connection.execute(
+            """
+CREATE TABLE workers_v5(
+    worker_id TEXT PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES workflow_items(id),
+    episode INTEGER NOT NULL CHECK(episode > 0),
+    evidence_fingerprint TEXT NOT NULL,
+    context_fingerprint TEXT NOT NULL,
+    judgment_round INTEGER NOT NULL CHECK(judgment_round >= 0),
+    state TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    pid INTEGER CHECK(pid > 0),
+    request_path TEXT NOT NULL,
+    result_path TEXT NOT NULL,
+    detail_path TEXT NOT NULL,
+    lifetime_lock_path TEXT NOT NULL,
+    queued_at TEXT NOT NULL,
+    launch_attempted_at TEXT,
+    launched_at TEXT,
+    completed_at TEXT,
+    consumed_at TEXT,
+    exit_code INTEGER,
+    error TEXT,
+    UNIQUE(item_id, episode, evidence_fingerprint, judgment_round,
+           context_fingerprint)
+)
+"""
+        )
+        connection.execute(
+            """
+INSERT INTO workers_v5
+SELECT worker_id, item_id, episode, evidence_fingerprint,
+       evidence_fingerprint, judgment_round, state, session_id, pid,
+       request_path, result_path, detail_path, lifetime_lock_path, queued_at,
+       launch_attempted_at, launched_at, completed_at, consumed_at, exit_code,
+       error
+FROM workers
+"""
+        )
+        connection.execute("DROP TABLE workers")
+        connection.execute("ALTER TABLE workers_v5 RENAME TO workers")
 
     @staticmethod
     def _validate_schema(connection: sqlite3.Connection) -> None:
@@ -1845,6 +1927,7 @@ def _item_values(item: WorkflowItem) -> tuple[object, ...]:
         item.latest_error,
         item.scenario_name,
         item.case_key,
+        item.last_assessed_target,
     )
 
 
@@ -1907,6 +1990,7 @@ def _item_from_row(row: sqlite3.Row) -> WorkflowItem:
             latest_error=row["latest_error"],
             scenario_name=row["scenario_name"],
             case_key=row["case_key"],
+            last_assessed_target=row["last_assessed_target"],
         )
     except ValueError as error:
         raise ValueError("Stored workflow item is invalid.") from error
@@ -1923,6 +2007,7 @@ def _worker_from_row(
             item_id=row["item_id"],
             episode=row["episode"],
             evidence_fingerprint=row["evidence_fingerprint"],
+            context_fingerprint=row["context_fingerprint"],
             judgment_round=row["judgment_round"],
             session_id=row["session_id"],
             state=state,

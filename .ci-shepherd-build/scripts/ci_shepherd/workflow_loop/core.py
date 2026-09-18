@@ -13,8 +13,10 @@ import uuid
 from ci_shepherd.jsonl import exclusive_file_lock
 
 from .models import (
+    ActionCompletion,
     ActionKind,
     ActionState,
+    ItemPhase,
     JudgmentRequest,
     TaskState,
     WorkerReservation,
@@ -264,7 +266,86 @@ class CiCoordinator:
                     else worker.state if worker is not None else None
                 )
                 actions = self._store.list_actions()
-                action = _action_for_item(actions, item)
+                worker_is_stale = (
+                    worker is not None
+                    and (
+                        worker.episode != item.episode
+                        or worker.evidence_fingerprint
+                        != item.evidence_fingerprint
+                    )
+                )
+                action = (
+                    _action_for_worker(actions, worker)
+                    if worker_is_stale and worker is not None
+                    else _action_for_item(actions, item)
+                )
+                if (
+                    worker_is_stale
+                    and worker is not None
+                    and worker_state
+                    in {
+                        WorkState.SUCCEEDED,
+                        WorkState.FAILED,
+                        WorkState.INVALID,
+                        WorkState.SUPERSEDED,
+                    }
+                    and (
+                        action is None
+                        or action.state
+                        not in {
+                            ActionState.INVOKING,
+                            ActionState.UNCERTAIN,
+                        }
+                    )
+                ):
+                    if (
+                        action is not None
+                        and action.state is ActionState.PREPARED
+                    ):
+                        self._store.complete_action(
+                            ActionCompletion(
+                                action_id=action.action_id,
+                                state=ActionState.SUPERSEDED,
+                                completed_at=started_at,
+                                remote_number=None,
+                                remote_task_id=None,
+                                error=(
+                                    "The failure episode or evidence changed "
+                                    "before invocation."
+                                ),
+                            )
+                        )
+                    self._store.consume_worker_result(
+                        worker.worker_id,
+                        consumed_at=started_at,
+                    )
+                    item = replace(
+                        item,
+                        phase=ItemPhase.OBSERVING_FAILURE,
+                        last_progressed_at=started_at,
+                    )
+                    self._store.update_item(
+                        item,
+                        history_event="worker-evidence-superseded",
+                        summary=(
+                            "Prior judgment work finished after its failure "
+                            "evidence was superseded."
+                        ),
+                        detail={
+                            "workerId": worker.worker_id,
+                            "workerEpisode": worker.episode,
+                        },
+                    )
+                    progressed_items += 1
+                    worker = None
+                    observation = None
+                    request = None
+                    judgment = None
+                    worker_state = None
+                    action = _action_for_item(
+                        self._store.list_actions(),
+                        item,
+                    )
                 transition = scenario.assess(
                     item,
                     refresh,
@@ -304,6 +385,12 @@ class CiCoordinator:
                         != item.last_progressed_at
                     ):
                         progressed_items += 1
+                elif not dry_queue:
+                    self._store.update_item_check(
+                        item.id,
+                        checked_at=transition.item.last_checked_at,
+                        read_status=transition.item.read_status,
+                    )
 
                 if dry_queue:
                     note = (
@@ -504,6 +591,10 @@ class CiCoordinator:
             item_id=preparation.item.id,
             episode=preparation.item.episode,
             evidence_fingerprint=preparation.item.evidence_fingerprint,
+            context_fingerprint=(
+                preparation.context_fingerprint
+                or preparation.item.evidence_fingerprint
+            ),
             session_id=session_id,
             request_path=str(paths.request),
             result_path=str(paths.result),
@@ -517,10 +608,38 @@ class CiCoordinator:
             "prepared",
             "already_prepared",
         }:
+            error = prepared.error or "Worker packet preparation failed."
+            current = next(
+                candidate
+                for candidate in self._store.list_items()
+                if candidate.id == item.id
+            )
+            self._store.update_item(
+                replace(
+                    current,
+                    phase=ItemPhase.NEEDS_ATTENTION,
+                    latest_error=error,
+                    last_judged_fingerprint=(
+                        current.evidence_fingerprint
+                        if judgment_round == 0
+                        else current.last_judged_fingerprint
+                    ),
+                    last_assessed_target=(
+                        preparation.context_fingerprint
+                        if judgment_round > 0
+                        else current.last_assessed_target
+                    ),
+                    last_checked_at=queued_at,
+                    last_progressed_at=queued_at,
+                ),
+                history_event="worker-preparation-failed",
+                summary="The judgment packet could not be prepared.",
+                detail={"error": error},
+            )
             return _QueueResult(
                 0,
                 preparation.request_count,
-                preparation.errors,
+                preparation.errors + (error,),
             )
         if not self._store.reserve_worker(
             reservation,
@@ -659,11 +778,14 @@ def _worker_for_item(workers: Sequence[object], item: WorkflowItem):
         worker
         for worker in workers
         if worker.item_id == item.id
-        and worker.episode == item.episode
-        and worker.evidence_fingerprint == item.evidence_fingerprint
         and worker.consumed_at is None
     ]
-    return matches[-1] if matches else None
+    active = [
+        worker
+        for worker in matches
+        if worker.state in {WorkState.QUEUED, WorkState.RUNNING}
+    ]
+    return (active or matches)[-1] if matches else None
 
 
 def _action_for_item(actions: Sequence[object], item: WorkflowItem):
@@ -671,6 +793,17 @@ def _action_for_item(actions: Sequence[object], item: WorkflowItem):
         action
         for action in actions
         if action.item_id == item.id and action.episode == item.episode
+    ]
+    return matches[-1] if matches else None
+
+
+def _action_for_worker(actions: Sequence[object], worker: object):
+    matches = [
+        action
+        for action in actions
+        if action.item_id == worker.item_id
+        and action.episode == worker.episode
+        and action.action_id.startswith(f"{worker.worker_id}:")
     ]
     return matches[-1] if matches else None
 

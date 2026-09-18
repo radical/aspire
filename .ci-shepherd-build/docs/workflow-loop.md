@@ -67,6 +67,49 @@ Local-judgment proposals remain unconsumed across repeated no-effect passes, so
 a later explicitly authorized live pass can execute the original judgment.
 Identical `would-do` history entries are not duplicated.
 
+## Repeated-pass correctness
+
+Every successful poll persists `last_checked_at`, even when no semantic state
+changes. `last_progressed_at` and progress history change only for real
+progress.
+
+Follow-up assessments are bound to the task, PR head/base, check state, draft
+state, and issue ownership they evaluated. Unchanged non-action or stale
+results remain stable across process restarts. Changed semantic target evidence
+gets a distinct worker context fingerprint without weakening duplicate
+reservation protection.
+
+A PREPARED effect is resumable after a transient read failure. Its worker
+result remains unconsumed until a later healthy pass confirms or supersedes the
+effect. INVOKING and UNCERTAIN effects are never retried. The final follow-up
+guard rechecks human issue ownership and draft state; either moves the item to
+human waiting without changing the task ID or follow-up count.
+
+Late human ownership, draft conversion, green checks, or changed targets
+durably supersede an existing PREPARED follow-up. This releases capacity and
+consumes the retained proposal without invoking the actor. Copilot-only
+assignment remains eligible; when Copilot and a human are both assigned, human
+ownership takes precedence.
+
+Queued and running workers remain attached to their item even when newer
+failure evidence arrives or recovery starts a new episode. The new evidence
+waits for that process to terminate. A terminal stale worker and any
+never-invoked PREPARED action are then durably recorded as superseded evidence
+before exactly one worker can be queued for the current evidence.
+
+The workflow scenario adopts one verified canonical issue before creating the
+immutable round-zero packet. Human- or Copilot-owned issues become passive
+observation, while ambiguous or unavailable searches never guess. A successful
+later attempt of the same run can prove recovery. A new completed failure after
+recovery advances the same scenario case to a new episode; any still-live task
+from the previous episode retains capacity until terminal.
+
+Packet preparation failures become durable `needs_attention` state and a
+degraded pass rather than queued work without a reservation. Follow-up
+preparation failures also persist the exact task/PR/check/ownership target, so
+an unchanged restart does not retry; meaningful target changes may be assessed
+again.
+
 `--local-judgment` permits the view-only local Copilot judgment process. The
 worker receives only the `view` tool and cannot mutate GitHub.
 `--model` and `--reasoning-effort` select that local runtime explicitly; they
@@ -200,6 +243,25 @@ each worker uses an owner-only empty `COPILOT_HOME` under its private packet
 directory. It inherits supported authentication without copying user
 configuration, plugins, MCP definitions, or extension files. JSONL usage
 metadata verifies that the resulting tool list is exactly `view`.
+
+When a verified issue is bound or uniquely adopted, judgment preparation reads
+a bounded immutable issue context: title up to 512 characters, body up to
+16 KiB, sorted unique labels, and at most 20 comments of 8 KiB each.
+Truncation, pagination, and read failures are explicit. Included content gets
+exact `issue:<number>` and `comment:<id>` evidence IDs.
+
+Fixed safety rules precede `<untrusted-issue-context>`, whose string values are
+JSON encoded and delimiter characters escaped. Exact item, episode, evidence,
+job allowlists, decision enum, and output schema follow the closing delimiter.
+Issue prose cannot change identity, tools, capacity, freshness, effect
+authority, retries, or recovery. Cloud task prompts use only the validated
+local result and freshly verified GitHub targets, not issue instructions.
+The final prompt is additionally capped at 200,000 UTF-8 bytes. Issue fields
+and comments are deterministically shortened to fit after reserving space for
+trusted instructions and the output schema; truncation flags and comment
+evidence IDs describe only the content actually retained. Malformed issue
+fields become typed unavailable evidence and degrade only that item rather than
+aborting the pass.
 
 The first real fork failure also exposed a prompt-selection defect. Its complete
 10,890-character job excerpt placed `KeyError: 'output_dir'` at offset 8,626,

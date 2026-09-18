@@ -107,6 +107,7 @@ class JudgmentPreparation:
     item: WorkflowItem
     request_count: int
     errors: tuple[str, ...]
+    context_fingerprint: str | None = None
 
 
 class CiScenario(Protocol):

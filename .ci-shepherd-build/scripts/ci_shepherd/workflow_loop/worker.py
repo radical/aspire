@@ -845,6 +845,7 @@ def _reservation_from_worker(worker: WorkerView) -> WorkerReservation:
         item_id=worker.item_id,
         episode=worker.episode,
         evidence_fingerprint=worker.evidence_fingerprint,
+        context_fingerprint=worker.context_fingerprint,
         session_id=worker.session_id,
         request_path=worker.request_path,
         result_path=worker.result_path,

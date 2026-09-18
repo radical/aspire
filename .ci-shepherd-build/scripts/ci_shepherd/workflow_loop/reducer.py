@@ -14,9 +14,62 @@ from .models import (
     TaskState,
     WorkflowItem,
     WorkState,
+    canonical_fingerprint,
 )
-from .reader import ItemRefresh, PullRequestObservation
+from .reader import (
+    ItemRefresh,
+    PullRequestObservation,
+    classify_issue_owner,
+)
 from .scenario import ConfirmedIssueCreation, ItemTransition, NextStep
+
+
+def _followup_assessment_key(refresh: ItemRefresh) -> str | None:
+    pull = refresh.pull_request
+    task = refresh.task
+    issue = refresh.issue
+    if pull is None:
+        return None
+    return _followup_assessment_key_from_parts(
+        task.task_id if task is not None else None,
+        pull.number,
+        pull.head_sha,
+        pull.head_ref,
+        pull.base_ref,
+        pull.checks_state,
+        pull.draft,
+        (
+            tuple(issue.assignees)
+            if issue is not None
+            else None
+        ),
+    )
+
+
+def _followup_assessment_key_from_parts(
+    task_id: str | None,
+    pull_number: int | None,
+    head_sha: str | None,
+    head_ref: str | None,
+    base_ref: str | None,
+    checks_state: str | None,
+    draft: bool | None,
+    assignees: tuple[str, ...] | None,
+) -> str | None:
+    if pull_number is None:
+        return None
+    return canonical_fingerprint(
+        {
+            "taskId": task_id,
+            "pullNumber": pull_number,
+            "headSha": head_sha,
+            "headRef": head_ref,
+            "baseRef": base_ref,
+            "checksState": checks_state,
+            "draft": draft,
+            "assignees": assignees,
+        }
+    )
 
 
 _PR_EVENTS = frozenset({"pull_request", "pull_request_target", "merge_group"})
@@ -190,7 +243,7 @@ def reduce_item(
             "worker-active",
             "The owned judgment worker is still active.",
         )
-    if action_state in {ActionState.PREPARED, ActionState.INVOKING}:
+    if action_state is ActionState.INVOKING:
         return _finish(
             item,
             observed,
@@ -199,18 +252,41 @@ def reduce_item(
             "action-active",
             "The owned action attempt is still active.",
         )
+    if (
+        action_state is ActionState.PREPARED
+        and (request is None or judgment is None)
+    ):
+        return _finish(
+            item,
+            observed,
+            now,
+            NextStep.WAIT_FOR_OWNED_WORK,
+            "action-prepared-result-unavailable",
+            "The prepared action is waiting for its retained judgment result.",
+        )
 
     external = _external_owner(refresh)
-    if external is not None and item.task_id is None:
+    if external is not None and (
+        item.task_id is None or external == "human"
+    ):
+        phase = (
+            ItemPhase.WAITING_FOR_HUMAN
+            if external == "human"
+            else ItemPhase.OBSERVING_EXTERNAL_REPAIR
+        )
         return _finish(
             item,
             replace(
                 observed,
-                phase=ItemPhase.OBSERVING_EXTERNAL_REPAIR,
+                phase=phase,
                 external_owner=external,
             ),
             now,
-            NextStep.OBSERVE_EXTERNAL,
+            (
+                NextStep.WAIT_FOR_HUMAN
+                if external == "human"
+                else NextStep.OBSERVE_EXTERNAL
+            ),
             "external-repair-observed",
             "An externally owned repair is already in progress.",
         )
@@ -271,7 +347,19 @@ def reduce_item(
             confirmed_issue,
         )
         if stale_reason is not None:
-            return _attention(item, observed, now, stale_reason)
+            return _attention(
+                item,
+                replace(
+                    observed,
+                    last_assessed_target=(
+                        _followup_assessment_key(refresh)
+                        if request.round > 0
+                        else observed.last_assessed_target
+                    ),
+                ),
+                now,
+                stale_reason,
+            )
         return _apply_judgment(
             item,
             observed,
@@ -279,6 +367,7 @@ def reduce_item(
             judgment,
             now,
             capacity_available,
+            _followup_assessment_key(refresh),
         )
 
     task_transition = _reduce_owned_task(item, observed, refresh, now)
@@ -422,7 +511,13 @@ def _reduce_owned_task(
             now,
             "The owned task finished without authoritative pull request evidence.",
         )
-    return _reduce_pull_request(original, updated, refresh.pull_request, now)
+    return _reduce_pull_request(
+        original,
+        updated,
+        refresh.pull_request,
+        refresh,
+        now,
+    )
 
 
 def _reduce_blocking_owned_task(
@@ -486,6 +581,7 @@ def _reduce_pull_request(
     original: WorkflowItem,
     item: WorkflowItem,
     pull: PullRequestObservation,
+    refresh: ItemRefresh,
     now: str,
 ) -> ItemTransition:
     if item.pull_request_number is not None and (
@@ -536,6 +632,19 @@ def _reduce_pull_request(
             "The pull request is green or merged; main-workflow recovery is still required.",
         )
     if pull.checks_state == "red":
+        if item.last_assessed_target == _followup_assessment_key(refresh):
+            return _finish(
+                original,
+                item,
+                now,
+                (
+                    NextStep.NEEDS_ATTENTION
+                    if item.phase is ItemPhase.NEEDS_ATTENTION
+                    else NextStep.WAIT_FOR_CHANGE
+                ),
+                "follow-up-evidence-unchanged",
+                "The latest follow-up assessment already covers this target.",
+            )
         if item.followup_count >= 2:
             return _finish(
                 original,
@@ -569,10 +678,16 @@ def _apply_judgment(
     judgment: JudgmentResult,
     now: str,
     capacity_available: bool,
+    assessment_key: str | None,
 ) -> ItemTransition:
     judged = replace(
         item,
         last_judged_fingerprint=judgment.evidence_fingerprint,
+        last_assessed_target=(
+            assessment_key
+            if request.round > 0
+            else item.last_assessed_target
+        ),
     )
     if judgment.decision is JudgmentDecision.ASSIGN:
         jobs_by_id = {job.job_id: job.key for job in request.failed_jobs}
@@ -848,7 +963,6 @@ def _judgment_stale_reason(
         or request.pull_request_head_sha != pull.head_sha
         or request.pull_request_head_ref != pull.head_ref
         or request.pull_request_base_ref != pull.base_ref
-        or request.pull_request_observed_at != refresh.observed_at
     ):
         return "Follow-up judgment target identity is stale."
     return None
@@ -940,7 +1054,12 @@ def _proven_recovery(
         or candidate.status != "completed"
         or not candidate.jobs_complete
         or not item.failed_jobs
-        or not _is_newer_execution(candidate, failure)
+        or not (
+            candidate.run_id == item.failure_run_id
+            and candidate.attempt > item.failure_attempt
+            or candidate.run_id != item.failure_run_id
+            and _is_newer_execution(candidate, failure)
+        )
     ):
         return None
     for target in item.failed_jobs:
@@ -972,13 +1091,7 @@ def _task_is_active_or_unknown(item: WorkflowItem) -> bool:
 
 
 def _external_owner(refresh: ItemRefresh) -> str | None:
-    if refresh.issue is None:
-        return None
-    if refresh.issue.copilot_assigned:
-        return "copilot"
-    if refresh.issue.human_assigned:
-        return "human"
-    return None
+    return classify_issue_owner(refresh.issue)
 
 
 def _is_newer_execution(

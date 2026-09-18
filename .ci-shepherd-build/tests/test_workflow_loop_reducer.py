@@ -782,10 +782,31 @@ class WorkflowLoopReducerTests(unittest.TestCase):
 
         self.assert_transition(
             transition,
-            phase=ItemPhase.OBSERVING_EXTERNAL_REPAIR,
-            step=NextStep.OBSERVE_EXTERNAL,
+            phase=ItemPhase.WAITING_FOR_HUMAN,
+            step=NextStep.WAIT_FOR_HUMAN,
         )
         self.assertEqual("human", transition.item.external_owner)
+
+        owned = replace(
+            item,
+            task_id="task-123",
+            task_state=TaskState.IDLE,
+        )
+        takeover = reduce_item(
+            owned,
+            _refresh(
+                item=owned,
+                issue=_issue(human_assigned=True),
+                task=_task("idle"),
+            ),
+            now=LATER,
+        )
+        self.assert_transition(
+            takeover,
+            phase=ItemPhase.WAITING_FOR_HUMAN,
+            step=NextStep.WAIT_FOR_HUMAN,
+        )
+        self.assertEqual("task-123", takeover.item.task_id)
 
     def test_owned_task_states_choose_wait_or_human_handoff(self) -> None:
         item = _item(task_id="task-123")
@@ -1012,6 +1033,10 @@ class WorkflowLoopReducerTests(unittest.TestCase):
             issue_number=17,
             task_id="task-123",
             pull_request=pull,
+        )
+        request = replace(
+            request,
+            pull_request_observed_at=NOW,
         )
         judgment = _judgment(
             item,

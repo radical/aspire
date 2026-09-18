@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 import threading
 from typing import Any
 
@@ -178,3 +179,56 @@ def api_error(
         attempts=attempts,
         sanitized_stderr="unavailable",
     )
+
+
+class StatefulWorkflowHarness:
+    """Reopens the real store and reconstructs the coordinator every tick."""
+
+    def __init__(
+        self,
+        *,
+        state_directory: Path,
+        repository: str,
+        branch: str,
+        reader: object,
+        launcher_factory: Callable[[object], object],
+        writer_factory: Callable[[object], object | None],
+        clock: Callable[[], object],
+        id_factory: Callable[[], str],
+        workflow_ids: tuple[int, ...] | None = None,
+    ) -> None:
+        self.state_directory = state_directory
+        self.repository = repository
+        self.branch = branch
+        self.reader = reader
+        self.launcher_factory = launcher_factory
+        self.writer_factory = writer_factory
+        self.clock = clock
+        self.id_factory = id_factory
+        self.workflow_ids = workflow_ids
+
+    def tick(self, mode):
+        from ci_shepherd.workflow_loop.manager import WorkflowLoopManager
+        from ci_shepherd.workflow_loop.state import WorkflowLoopStore
+
+        store = WorkflowLoopStore(
+            self.state_directory,
+            repository=self.repository,
+            branch=self.branch,
+        )
+        store.initialize(workflow_ids=self.workflow_ids)
+        launcher = self.launcher_factory(store)
+        writer = self.writer_factory(store)
+        manager = WorkflowLoopManager(
+            state_directory=self.state_directory,
+            repository=self.repository,
+            branch=self.branch,
+            store=store,
+            reader=self.reader,
+            launcher=launcher,
+            writer=writer,
+            clock=self.clock,
+            id_factory=self.id_factory,
+            workflow_ids=self.workflow_ids,
+        )
+        return store, launcher, writer, manager.run_pass(mode=mode)
