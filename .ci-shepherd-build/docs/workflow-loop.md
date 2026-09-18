@@ -144,13 +144,22 @@ directory. It inherits supported authentication without copying user
 configuration, plugins, MCP definitions, or extension files. JSONL usage
 metadata verifies that the resulting tool list is exactly `view`.
 
-The complete Python suite passed 2,581 tests after this correction. Live fork
-validation remains blocked: HTTPS rejected fixture commit
-`64c8a69cd5bd5bb604645cc273f4eddff2c81d01` because the current OAuth token
-lacks workflow scope, the target branch is absent, and SSH authentication
-failed with `publickey`. No issue, task, pull request, or writer audit was
-created. The unresolved gate is the actual fork workflow/cloud-task/PR/recovery
-lifecycle after suitable credentials are provided.
+The first real fork failure also exposed a prompt-selection defect. Its complete
+10,890-character job excerpt placed `KeyError: 'output_dir'` at offset 8,626,
+while the prompt used the first 4,000 characters and omitted the failure.
+Prompt construction now uses the existing diagnostic-aware bounded preview,
+which keeps a contiguous window containing the traceback and nearby context.
+It reports source truncation separately from prompt excerpting; API byte limits
+are unchanged. A fixture-shaped regression verifies the error and cleanup are
+present and the complete prompt remains within 20,000 characters.
+
+The complete Python suite passed 2,582 tests after this correction. The live
+fork fixture is published on a dedicated test branch, and its intentional
+configuration failure was observed through GitHub Actions. Initial publication
+required using the existing stored fork-owner credential rather than an
+injected token lacking workflow scope; no global authentication settings
+were changed. The real cloud-task and repair-PR lifecycle remains under
+validation. No upstream mutation has occurred.
 
 ## Persistence and ownership
 

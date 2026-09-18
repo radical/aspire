@@ -76,7 +76,8 @@ _BUILD_BREAK_DIAGNOSTIC_RE = re.compile(r"(?i)\b(?:error|warning)\s+(?P<code>(?:
 # Without this, expected/actual text inside a test assertion would be mined for causes.
 _DIAGNOSTIC_LINE_RE = re.compile(
     r"(?i)(?:##\[error\]|\berror\b|\bfailed\b|\bfailure\b|\bfatal\b|\btimed out\b|(?<![-\w])timeout(?![-\w])"
-    r"|\bexception\b|\bunable to\b|\brefused\b|\breset by peer\b)"
+    r"|\bexception\b|\bunable to\b|\brefused\b|\breset by peer\b"
+    r"|(?<![\w.])[A-Za-z_][A-Za-z0-9_.]*Error:)"
 )
 # Assertion/diff lines emitted by test frameworks, e.g.
 #   "  Expected: HTTP 503"

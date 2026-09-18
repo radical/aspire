@@ -12,11 +12,13 @@ import time
 import uuid
 
 from ci_shepherd.jsonl import exclusive_file_lock
+from ci_shepherd.observations import workflow_log_preview
 
 from .models import (
     ActionKind,
     ActionState,
     ItemPhase,
+    JobObservation,
     JudgmentDecision,
     JudgmentRequest,
     TaskState,
@@ -689,11 +691,7 @@ def _judgment_prompt(
     failure = refresh.failure_run
     assert failure is not None
     jobs = "\n".join(
-        (
-            f"- jobId={job.job_id} name={job.key.name!r} "
-            f"conclusion={job.conclusion!r} "
-            f"log={(job.log_excerpt or '[unavailable]')[:4000]}"
-        )
+        _prompt_job_line(job)
         for job in failure.jobs
         if (job.conclusion or "").casefold() in {"failure", "timed_out"}
     )
@@ -777,6 +775,22 @@ def _judgment_prompt(
         "be [] and copilotRequest must be null."
     )
     return f"{body[:18_000]}{schema}"
+
+
+def _prompt_job_line(job: JobObservation) -> str:
+    log = job.log_excerpt
+    excerpt = (
+        "[unavailable]"
+        if log is None
+        else workflow_log_preview(log, 4_000)
+    )
+    return (
+        f"- jobId={job.job_id} name={job.key.name!r} "
+        f"conclusion={job.conclusion!r} "
+        f"logSourceTruncated={str(job.log_truncated).lower()} "
+        f"promptExcerpted={str(log is not None and len(log) > 4_000).lower()} "
+        f"log={excerpt}"
+    )
 
 
 def _worker_for_item(workers, item: WorkflowItem):

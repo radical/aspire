@@ -16,7 +16,11 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from ci_shepherd.workflow_loop.manager import EffectMode, WorkflowLoopManager
+from ci_shepherd.workflow_loop.manager import (
+    EffectMode,
+    WorkflowLoopManager,
+    _judgment_request,
+)
 from ci_shepherd.workflow_loop.models import (
     ItemPhase,
     JudgmentDecision,
@@ -261,6 +265,96 @@ def _cleanup_process(process) -> None:
 
 
 class WorkflowLoopManagerTests(unittest.TestCase):
+    def test_real_request_prompt_keeps_late_python_failure_in_budget(self) -> None:
+        checkout_prefix = "".join(
+            f"checkout setup line {index:04d} {'x' * 60}\n"
+            for index in range(120)
+        )
+        failure_text = (
+            "Traceback (most recent call last):\n"
+            '  File ".github/ci-shepherd-fixture/resolve_config.py", '
+            "line 10, in <module>\n"
+            '    print(configuration["output_dir"])\n'
+            "          ~~~~~~~~~~~~~^^^^^^^^^^^^^^\n"
+            "KeyError: 'output_dir'\n"
+            "##[error]Process completed with exit code 1.\n"
+        )
+        cleanup_suffix = (
+            "Node 20 is being deprecated.\n"
+            "Post job cleanup.\n"
+            + "".join(f"cleanup line {index:04d}\n" for index in range(150))
+        )
+        full_log = checkout_prefix + failure_text + cleanup_suffix
+        observed_run = run(101)
+        client = EndpointClient({
+            **base_responses(observed_run),
+            f"/repos/{REPOSITORY}/actions/runs/101": observed_run,
+            (
+                f"/repos/{REPOSITORY}/actions/runs/101/attempts/1/jobs"
+            ): PagedResponse((job(101, 1001, "Build"),)),
+            f"/repos/{REPOSITORY}/actions/jobs/1001/logs": full_log,
+        })
+        reader = WorkflowReader(
+            client=client,
+            clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            request_count=lambda: client.request_count,
+        )
+        snapshot = reader.observe(
+            repository=REPOSITORY,
+            branch=BRANCH,
+            tracked_items=(),
+            workflow_ids=(WORKFLOW_ID,),
+        )
+        detail = reader.read_run_details(
+            snapshot.workflows[0].latest_completed
+        )
+        self.assertFalse(detail.run.jobs[0].log_truncated)
+        self.assertGreater(
+            detail.run.jobs[0].log_excerpt.index("KeyError"),
+            4_000,
+        )
+
+        with TemporaryDirectory() as scratch:
+            store = WorkflowLoopStore(
+                Path(scratch) / "state",
+                repository=REPOSITORY,
+                branch=BRANCH,
+            )
+            store.initialize(workflow_ids=(WORKFLOW_ID,))
+            item = store.upsert_failure(
+                detail.run,
+                "2026-09-17T20:00:00Z",
+            )
+            request = _judgment_request(
+                item,
+                ItemRefresh(
+                    item_id=item.id,
+                    observed_at="2026-09-17T20:00:00Z",
+                    runs=(detail.run,),
+                    failure_run=detail.run,
+                    wait_run=None,
+                    recovery="failed",
+                    recovery_run=None,
+                    issue=None,
+                    task=None,
+                    pull_request=None,
+                    pre_write=False,
+                    complete=True,
+                    errors=(),
+                    request_count=detail.request_count,
+                ),
+                worker_id="worker-prompt",
+                session_id="6bab0076-b91c-4e01-a049-bf36b92cb34f",
+                judgment_round=0,
+            )
+
+        self.assertIn("Traceback (most recent call last):", request.prompt)
+        self.assertIn("KeyError: 'output_dir'", request.prompt)
+        self.assertIn("Post job cleanup.", request.prompt)
+        self.assertIn("logSourceTruncated=false", request.prompt)
+        self.assertIn("promptExcerpted=true", request.prompt)
+        self.assertLessEqual(len(request.prompt), 20_000)
+
     def test_read_failure_is_persisted_as_a_degraded_pass(self) -> None:
         class UnavailableReader:
             calls = 0
