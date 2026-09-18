@@ -2300,6 +2300,388 @@ class GitHubActorClientTests(unittest.TestCase):
         self.assertEqual(900, result["id"])
         self.assertEqual(1, len(runner.calls))
 
+    def test_create_issue_uses_exact_endpoint_and_payload(self) -> None:
+        runner = RecordingRunner({"number": 123, "state": "open"})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        issue = client.create_issue(
+            "radical/aspire",
+            title="CI workflow failure: Fixture",
+            body="[automated] Tracking the fixture failure.",
+        )
+
+        command, request = runner.calls[0]
+        self.assertEqual(123, issue["number"])
+        self.assertIn("POST", command)
+        self.assertEqual("repos/radical/aspire/issues", command[-1])
+        self.assertEqual(
+            {
+                "title": "CI workflow failure: Fixture",
+                "body": "[automated] Tracking the fixture failure.",
+            },
+            request,
+        )
+
+    def test_create_issue_requires_a_nonempty_title(self) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "title must be nonempty"):
+            client.create_issue(
+                "radical/aspire",
+                title=" \t",
+                body="[automated] Tracking the fixture failure.",
+            )
+
+        self.assertEqual([], runner.calls)
+
+    def test_create_issue_requires_an_automated_body(self) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"must start with '\[automated\] '",
+        ):
+            client.create_issue(
+                "radical/aspire",
+                title="CI workflow failure: Fixture",
+                body="Tracking the fixture failure.",
+            )
+
+        self.assertEqual([], runner.calls)
+
+    def test_create_copilot_task_uses_exact_payload_and_api_version(self) -> None:
+        task_payload = {
+            "id": "task_01JXYZ",
+            "state": "queued",
+            "name": "Repair fixture workflow",
+        }
+        runner = HeaderRecordingRunner(task_payload, status=201)
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+        prompt = (
+            "[automated] Repair the workflow failure tracked in "
+            "radical/aspire#123. Include Refs radical/aspire#123."
+        )
+
+        task = client.create_copilot_task(
+            "radical/aspire",
+            prompt=prompt,
+            base_branch="main",
+        )
+
+        command, request = runner.calls[0]
+        self.assertEqual(task_payload, task)
+        self.assertEqual("agents/repos/radical/aspire/tasks", command[-1])
+        self.assertIn("X-GitHub-Api-Version: 2026-03-10", command)
+        self.assertNotIn("X-GitHub-Api-Version: 2022-11-28", command)
+        self.assertEqual(
+            {
+                "prompt": prompt,
+                "base_ref": "main",
+                "create_pull_request": True,
+            },
+            request,
+        )
+
+    def test_create_copilot_task_includes_configured_model(self) -> None:
+        runner = HeaderRecordingRunner({"id": "task_01JXYZ"}, status=201)
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        client.create_copilot_task(
+            "radical/aspire",
+            prompt="[automated] Repair fixture. Include Refs radical/aspire#123.",
+            base_branch="main",
+            model="gpt-5.4",
+        )
+
+        self.assertEqual(
+            {
+                "prompt": (
+                    "[automated] Repair fixture. Include Refs "
+                    "radical/aspire#123."
+                ),
+                "base_ref": "main",
+                "create_pull_request": True,
+                "model": "gpt-5.4",
+            },
+            runner.calls[0][1],
+        )
+
+    def test_create_copilot_task_uses_existing_head_without_pr_creation(
+        self,
+    ) -> None:
+        runner = HeaderRecordingRunner({"id": "task_01JXYZ"}, status=201)
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        client.create_copilot_task(
+            "radical/aspire",
+            prompt=(
+                "[automated] Continue repairing the workflow failure. "
+                "Include Refs radical/aspire#123."
+            ),
+            base_branch="main",
+            head_branch="copilot/repair-fixture",
+        )
+
+        command, request = runner.calls[0]
+        self.assertIn("X-GitHub-Api-Version: 2026-03-10", command)
+        self.assertEqual(
+            {
+                "prompt": (
+                    "[automated] Continue repairing the workflow failure. "
+                    "Include Refs radical/aspire#123."
+                ),
+                "base_ref": "main",
+                "head_ref": "copilot/repair-fixture",
+            },
+            request,
+        )
+        self.assertNotIn("create_pull_request", request)
+
+    def test_create_copilot_task_preserves_legacy_api_version(self) -> None:
+        runner = SequencedRunner(
+            [
+                {"id": "task_01JXYZ"},
+                {"number": 123, "state": "open"},
+            ]
+        )
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        client.create_copilot_task(
+            "radical/aspire",
+            prompt="[automated] Repair fixture. Include Refs radical/aspire#123.",
+            base_branch="main",
+        )
+        client.create_issue(
+            "radical/aspire",
+            title="CI workflow failure: Fixture",
+            body="[automated] Tracking the fixture failure.",
+        )
+
+        self.assertIn(
+            "X-GitHub-Api-Version: 2026-03-10",
+            runner.calls[0][0],
+        )
+        self.assertIn(
+            "X-GitHub-Api-Version: 2022-11-28",
+            runner.calls[1][0],
+        )
+
+    def test_create_copilot_task_validates_prompt_and_base_branch(self) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        invalid_requests = [
+            {
+                "prompt": "Repair fixture.",
+                "base_branch": "main",
+                "error": "must start with",
+            },
+            {
+                "prompt": "[automated] \t",
+                "base_branch": "main",
+                "error": "must be nonempty",
+            },
+            {
+                "prompt": "[automated] Repair fixture.",
+                "base_branch": " \t",
+                "error": "base branch must be nonempty",
+            },
+            {
+                "prompt": "[automated] Repair fixture.",
+                "base_branch": "main",
+                "head_branch": " \t",
+                "error": "head branch must be nonempty",
+            },
+        ]
+        for request in invalid_requests:
+            with (
+                self.subTest(request=request),
+                self.assertRaisesRegex(ValueError, str(request["error"])),
+            ):
+                client.create_copilot_task(
+                    "radical/aspire",
+                    prompt=str(request["prompt"]),
+                    base_branch=str(request["base_branch"]),
+                    head_branch=(
+                        str(request["head_branch"])
+                        if "head_branch" in request
+                        else None
+                    ),
+                )
+
+        self.assertEqual([], runner.calls)
+
+    def test_create_copilot_task_rejects_malformed_task_id(self) -> None:
+        invalid_payloads: list[object] = [
+            {},
+            {"id": None},
+            {"id": ""},
+            {"id": " \t"},
+            {"id": 123},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                runner = HeaderRecordingRunner(payload, status=201)
+                client = GitHubActorClient(
+                    runner=runner,
+                    allowed_repositories={"radical/aspire"},
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "valid task id"):
+                    client.create_copilot_task(
+                        "radical/aspire",
+                        prompt=(
+                            "[automated] Repair fixture. Include Refs "
+                            "radical/aspire#123."
+                        ),
+                        base_branch="main",
+                    )
+
+    def test_create_copilot_task_rejects_empty_configured_model(self) -> None:
+        runner = RecordingRunner({"id": "task_01JXYZ"})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "model must be nonempty"):
+            client.create_copilot_task(
+                "radical/aspire",
+                prompt=(
+                    "[automated] Repair fixture. Include Refs "
+                    "radical/aspire#123."
+                ),
+                base_branch="main",
+                model=" \t",
+            )
+
+        self.assertEqual([], runner.calls)
+
+    def test_create_copilot_task_rejects_foreign_repository(self) -> None:
+        runner = RecordingRunner({"id": "task_01JXYZ"})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        with self.assertRaisesRegex(
+            MutationRepositoryError,
+            "not explicitly allowed",
+        ):
+            client.create_copilot_task(
+                "owner/repo",
+                prompt="[automated] Repair fixture. Include Refs owner/repo#123.",
+                base_branch="main",
+            )
+
+        self.assertEqual([], runner.calls)
+
+    def test_create_copilot_task_preserves_request_override_signature(
+        self,
+    ) -> None:
+        class FakeClient(GitHubActorClient):
+            def __init__(self) -> None:
+                self.calls: list[
+                    tuple[str, str, dict[str, object] | None]
+                ] = []
+
+            def _request(
+                self,
+                method: str,
+                endpoint: str,
+                payload: dict[str, object] | None = None,
+            ) -> object:
+                self.calls.append((method, endpoint, payload))
+                return {"id": "task_01JXYZ", "state": "queued"}
+
+        client = FakeClient()
+
+        task = client.create_copilot_task(
+            "radical/aspire",
+            prompt="[automated] Repair fixture. Include Refs radical/aspire#123.",
+            base_branch="main",
+        )
+
+        self.assertEqual("task_01JXYZ", task["id"])
+        self.assertEqual(
+            "agents/repos/radical/aspire/tasks",
+            client.calls[0][1],
+        )
+
+    def test_agent_task_repository_extraction_is_exact(self) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+        endpoints = [
+            "agents/repos/radical/aspire/tasks/task_01JXYZ",
+            "agents/repos/radical/aspire/tasks/",
+            "agents/repos/radical/aspire/other",
+            "agents/organizations/radical/tasks",
+        ]
+
+        for endpoint in endpoints:
+            with (
+                self.subTest(endpoint=endpoint),
+                self.assertRaisesRegex(
+                    MutationRepositoryError,
+                    "must identify one repository",
+                ),
+            ):
+                client._request("POST", endpoint, {})
+
+        self.assertEqual([], runner.calls)
+
+    def test_agent_task_collection_rejects_non_post_methods(self) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"radical/aspire"},
+        )
+
+        for method in ("DELETE", "PATCH", "PUT"):
+            with (
+                self.subTest(method=method),
+                self.assertRaisesRegex(
+                    MutationRepositoryError,
+                    "must identify one repository",
+                ),
+            ):
+                client._request(
+                    method,
+                    "agents/repos/radical/aspire/tasks",
+                    {},
+                )
+
+        self.assertEqual([], runner.calls)
+
     def test_production_repository_is_hard_denied(self) -> None:
         for repository in ("microsoft/aspire", "Microsoft/aspire", "microsoft/Aspire"):
             with self.subTest(repository=repository):
@@ -2345,6 +2727,50 @@ class GitHubActorClientTests(unittest.TestCase):
                 allowed_repositories={"radical/aspire"},
                 protected_comment_repositories={"microsoft/aspire"},
             )
+
+    def test_production_workflow_repair_repository_must_also_be_allowed(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "explicitly allowed"):
+            GitHubActorClient(
+                allowed_repositories={"radical/aspire"},
+                protected_workflow_repair_repositories={"microsoft/aspire"},
+            )
+
+    def test_protected_workflow_repair_repository_is_disjoint_from_existing_modes(
+        self,
+    ) -> None:
+        existing_modes = (
+            "protected_comment_repositories",
+            "protected_closure_repositories",
+            "protected_delegation_repositories",
+        )
+        for existing_mode in existing_modes:
+            with (
+                self.subTest(existing_mode=existing_mode),
+                self.assertRaisesRegex(ValueError, "disjoint"),
+            ):
+                GitHubActorClient(
+                    allowed_repositories={"microsoft/aspire"},
+                    protected_workflow_repair_repositories={"microsoft/aspire"},
+                    **{existing_mode: {"microsoft/aspire"}},
+                )
+
+    def test_existing_protected_mode_disjoint_error_is_unchanged(self) -> None:
+        with self.assertRaises(ValueError) as error:
+            GitHubActorClient(
+                allowed_repositories={"microsoft/aspire"},
+                protected_comment_repositories={"microsoft/aspire"},
+                protected_closure_repositories={"microsoft/aspire"},
+            )
+
+        self.assertEqual(
+            (
+                "Protected comment, closure, and delegation repositories "
+                "must be disjoint."
+            ),
+            str(error.exception),
+        )
 
     def test_production_closure_repository_allows_issue_closure_only(self) -> None:
         runner = RecordingRunner(
@@ -2429,6 +2855,314 @@ class GitHubActorClientTests(unittest.TestCase):
         self.assertEqual(1, len(runner.calls))
         self.assertIn("POST", runner.calls[0][0])
         self.assertIn("issues/21/assignees", " ".join(runner.calls[0][0]))
+
+    def test_production_workflow_repair_repository_allows_bounded_mutations(
+        self,
+    ) -> None:
+        runner = SequencedRunner(
+            [
+                {"number": 123, "state": "open"},
+                {"id": "task_01JXYZ", "state": "queued"},
+                {"id": "task_01JABC", "state": "queued"},
+            ]
+        )
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_workflow_repair_repositories={"Microsoft/Aspire"},
+        )
+
+        client.create_issue(
+            "microsoft/aspire",
+            title="CI workflow failure: Fixture",
+            body="[automated] Tracking the fixture failure.",
+        )
+        client.create_copilot_task(
+            "microsoft/aspire",
+            prompt=(
+                "[automated] Repair the workflow failure tracked in "
+                "microsoft/aspire#123. Include Refs microsoft/aspire#123."
+            ),
+            base_branch="main",
+        )
+        client.create_copilot_task(
+            "microsoft/aspire",
+            prompt=(
+                "[automated] Continue repairing the workflow failure tracked "
+                "in microsoft/aspire#123. Include Refs microsoft/aspire#123."
+            ),
+            base_branch="main",
+            head_branch="copilot/repair-fixture",
+        )
+
+        self.assertEqual(
+            [
+                "repos/microsoft/aspire/issues",
+                "agents/repos/microsoft/aspire/tasks",
+                "agents/repos/microsoft/aspire/tasks",
+            ],
+            [call[0][-1] for call in runner.calls],
+        )
+
+    def test_production_workflow_repair_repository_rejects_other_mutations(
+        self,
+    ) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_workflow_repair_repositories={"microsoft/aspire"},
+        )
+        disallowed_requests = [
+            (
+                "PATCH",
+                "repos/microsoft/aspire/issues/comments/900",
+                {"body": COMMENT_BODY},
+            ),
+            (
+                "PATCH",
+                "repos/microsoft/aspire/issues/123",
+                {"state": "closed", "state_reason": "completed"},
+            ),
+            (
+                "DELETE",
+                "repos/microsoft/aspire/issues/123/assignees",
+                {"assignees": ["copilot-swe-agent[bot]"]},
+            ),
+            (
+                "POST",
+                "repos/microsoft/aspire/issues/123/assignees",
+                {
+                    "assignees": ["copilot-swe-agent[bot]"],
+                    "agent_assignment": {
+                        "target_repo": "microsoft/aspire",
+                        "base_branch": "main",
+                        "custom_instructions": "Repair the fixture failure.",
+                        "custom_agent": "",
+                        "model": "",
+                    },
+                },
+            ),
+            (
+                "POST",
+                "repos/microsoft/aspire/issues/123/comments",
+                {"body": COMMENT_BODY},
+            ),
+            (
+                "POST",
+                "repos/microsoft/aspire/issues/123/labels",
+                {"labels": ["ci-failure"]},
+            ),
+            (
+                "POST",
+                "repos/microsoft/aspire/actions/runs/456/rerun",
+                None,
+            ),
+            (
+                "POST",
+                "repos/microsoft/aspire/pulls",
+                {"title": "Repair CI", "head": "repair", "base": "main"},
+            ),
+            (
+                "PATCH",
+                "repos/microsoft/aspire/issues/123",
+                {"title": "Rewrite the issue"},
+            ),
+            (
+                "POST",
+                "repos/microsoft/aspire/issues/0/comments",
+                {"body": COMMENT_BODY},
+            ),
+        ]
+
+        for method, endpoint, payload in disallowed_requests:
+            with (
+                self.subTest(method=method, endpoint=endpoint),
+                self.assertRaisesRegex(
+                    MutationRepositoryError,
+                    "workflow repair",
+                ),
+            ):
+                client._request(method, endpoint, payload)
+
+        self.assertEqual([], runner.calls)
+
+    def test_production_workflow_repair_repository_requires_exact_issue_payloads(
+        self,
+    ) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_workflow_repair_repositories={"microsoft/aspire"},
+        )
+        invalid_requests = [
+            (
+                "repos/microsoft/aspire/issues",
+                {
+                    "title": "CI workflow failure: Fixture",
+                    "body": "Tracking the fixture failure.",
+                },
+            ),
+            (
+                "repos/microsoft/aspire/issues",
+                {
+                    "title": "CI workflow failure: Fixture",
+                    "body": "[automated] Tracking the fixture failure.",
+                    "labels": ["ci-failure"],
+                },
+            ),
+        ]
+
+        for endpoint, payload in invalid_requests:
+            with (
+                self.subTest(endpoint=endpoint, payload=payload),
+                self.assertRaises(MutationRepositoryError),
+            ):
+                client._request("POST", endpoint, payload)
+
+        self.assertEqual([], runner.calls)
+
+    def test_production_workflow_repair_repository_requires_exact_task_payload(
+        self,
+    ) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_workflow_repair_repositories={"microsoft/aspire"},
+        )
+        task = {
+            "prompt": (
+                "[automated] Repair the workflow failure tracked in "
+                "microsoft/aspire#123. Include Refs microsoft/aspire#123."
+            ),
+            "base_ref": "main",
+            "create_pull_request": True,
+        }
+        invalid_tasks = [
+            {
+                key: value
+                for key, value in task.items()
+                if key != "prompt"
+            },
+            {**task, "custom_agent": "workflow-repair"},
+            {**task, "reasoning_effort": "high"},
+            {**task, "create_pull_request": False},
+            {**task, "base_ref": " \t"},
+            {**task, "prompt": "Repair the workflow failure."},
+            {**task, "model": 123},
+            {**task, "model": " \t"},
+            {
+                **task,
+                "head_ref": "copilot/repair-fixture",
+            },
+            {
+                "prompt": task["prompt"],
+                "base_ref": "main",
+                "head_ref": "copilot/repair-fixture",
+                "create_pull_request": True,
+            },
+        ]
+
+        for payload in invalid_tasks:
+            with (
+                self.subTest(payload=payload),
+                self.assertRaises(MutationRepositoryError),
+            ):
+                client._request(
+                    "POST",
+                    "agents/repos/microsoft/aspire/tasks",
+                    payload,
+                )
+
+        self.assertEqual([], runner.calls)
+
+    def test_production_workflow_repair_repository_accepts_optional_task_model(
+        self,
+    ) -> None:
+        runner = RecordingRunner({"id": "task_01JXYZ"})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_workflow_repair_repositories={"microsoft/aspire"},
+        )
+
+        client.create_copilot_task(
+            "microsoft/aspire",
+            prompt=(
+                "[automated] Repair the workflow failure tracked in "
+                "microsoft/aspire#123. Include Refs microsoft/aspire#123."
+            ),
+            base_branch="main",
+            model="gpt-5.4",
+        )
+
+        self.assertEqual(
+            {
+                "prompt": (
+                    "[automated] Repair the workflow failure tracked in "
+                    "microsoft/aspire#123. Include Refs microsoft/aspire#123."
+                ),
+                "base_ref": "main",
+                "create_pull_request": True,
+                "model": "gpt-5.4",
+            },
+            runner.calls[0][1],
+        )
+
+    def test_production_workflow_repair_repository_rejects_foreign_repository(
+        self,
+    ) -> None:
+        runner = RecordingRunner({})
+        client = GitHubActorClient(
+            runner=runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_workflow_repair_repositories={"microsoft/aspire"},
+        )
+
+        with self.assertRaisesRegex(
+            MutationRepositoryError,
+            "not explicitly allowed",
+        ):
+            client.create_copilot_task(
+                "radical/aspire",
+                prompt=(
+                    "[automated] Repair the workflow failure tracked in "
+                    "radical/aspire#123. Include Refs radical/aspire#123."
+                ),
+                base_branch="main",
+            )
+
+        self.assertEqual([], runner.calls)
+
+    def test_existing_modes_do_not_inherit_workflow_repair_payload_rules(
+        self,
+    ) -> None:
+        comment_runner = RecordingRunner({"id": 900, "body": "Manual note."})
+        comment_client = GitHubActorClient(
+            runner=comment_runner,
+            allowed_repositories={"microsoft/aspire"},
+            protected_comment_repositories={"microsoft/aspire"},
+        )
+        assignment_runner = RecordingRunner({"number": 21, "state": "open"})
+        assignment_client = GitHubActorClient(
+            runner=assignment_runner,
+            allowed_repositories={"owner/repo"},
+        )
+
+        comment_client.create_comment("microsoft/aspire", 21, "Manual note.")
+        assignment_client.assign_copilot(
+            "owner/repo",
+            21,
+            target_repository="other/repo",
+            base_branch="main",
+            custom_instructions="Repair the fixture failure.",
+            model="",
+        )
+
+        self.assertEqual(1, len(comment_runner.calls))
+        self.assertEqual(1, len(assignment_runner.calls))
 
     def test_uses_fixed_get_issue_endpoint(self) -> None:
         runner = RecordingRunner({"number": 21, "state": "open"})

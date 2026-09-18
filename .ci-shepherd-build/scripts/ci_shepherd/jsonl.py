@@ -140,10 +140,9 @@ def _validate_jsonl_bytes(payload: bytes, path: Path) -> None:
 
 
 @contextmanager
-def exclusive_jsonl_lock(path: Path) -> Iterator[None]:
-    lock_path = path.with_name(f"{path.name}.lock")
+def exclusive_file_lock(lock_path: Path) -> Iterator[None]:
     if lock_path.is_symlink():
-        raise ValueError(f"JSONL lock must not be a symlink: {lock_path}")
+        raise ValueError(f"File lock must not be a symlink: {lock_path}")
     lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock_path.parent.chmod(0o700)
 
@@ -170,3 +169,9 @@ def exclusive_jsonl_lock(path: Path) -> Iterator[None]:
                 msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def exclusive_jsonl_lock(path: Path) -> Iterator[None]:
+    with exclusive_file_lock(path.with_name(f"{path.name}.lock")):
+        yield

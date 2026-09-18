@@ -16,6 +16,9 @@ _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _REPOSITORY_ENDPOINT_RE = re.compile(
     r"^repos/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/|$)"
 )
+_CREATE_ISSUE_ENDPOINT_RE = re.compile(
+    r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues$"
+)
 _CREATE_COMMENT_ENDPOINT_RE = re.compile(
     r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/comments$"
 )
@@ -27,6 +30,9 @@ _CLOSE_ISSUE_ENDPOINT_RE = re.compile(
 )
 _ASSIGN_COPILOT_ENDPOINT_RE = re.compile(
     r"^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/assignees$"
+)
+_CREATE_COPILOT_TASK_ENDPOINT_RE = re.compile(
+    r"^agents/repos/(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/tasks$"
 )
 _PROTECTED_REPOSITORIES = frozenset({"microsoft/aspire"})
 _HTTP_STATUS_RE = re.compile(r"(?m)^HTTP/\S+\s+(?P<status>[1-5][0-9]{2})\b")
@@ -44,6 +50,7 @@ class GitHubActorClient:
         protected_comment_repositories: Collection[str] = (),
         protected_closure_repositories: Collection[str] = (),
         protected_delegation_repositories: Collection[str] = (),
+        protected_workflow_repair_repositories: Collection[str] = (),
         runner: Any = subprocess.run,
         request_timeout_seconds: float = 60,
         audit_path: Path | None = None,
@@ -67,10 +74,15 @@ class GitHubActorClient:
             self._repository(repository).casefold()
             for repository in protected_delegation_repositories
         )
+        self._protected_workflow_repair_repositories = frozenset(
+            self._repository(repository).casefold()
+            for repository in protected_workflow_repair_repositories
+        )
         protected_overrides = (
             self._protected_comment_repositories
             | self._protected_closure_repositories
             | self._protected_delegation_repositories
+            | self._protected_workflow_repair_repositories
         )
         if not protected_overrides.issubset(
             _PROTECTED_REPOSITORIES & self._allowed_repositories
@@ -88,6 +100,15 @@ class GitHubActorClient:
         ):
             raise ValueError(
                 "Protected comment, closure, and delegation repositories must be disjoint."
+            )
+        if self._protected_workflow_repair_repositories & (
+            self._protected_comment_repositories
+            | self._protected_closure_repositories
+            | self._protected_delegation_repositories
+        ):
+            raise ValueError(
+                "Protected workflow repair repositories must be disjoint "
+                "from other protected modes."
             )
         self._runner = runner
         self._request_timeout_seconds = request_timeout_seconds
@@ -154,6 +175,27 @@ class GitHubActorClient:
             "Issue comment pagination exceeded the 10,000-comment safety bound."
         )
 
+    def create_issue(
+        self,
+        repository: str,
+        *,
+        title: str,
+        body: str,
+    ) -> dict[str, object]:
+        if not title.strip():
+            raise ValueError("Issue title must be nonempty.")
+        if not body.startswith("[automated] "):
+            raise ValueError(
+                "Automated issue body must start with '[automated] '."
+            )
+        return self._object(
+            self._request(
+                "POST",
+                f"repos/{self._repository(repository)}/issues",
+                {"title": title, "body": body},
+            )
+        )
+
     def create_comment(
         self,
         repository: str,
@@ -170,6 +212,49 @@ class GitHubActorClient:
                 {"body": body},
             )
         )
+
+    def create_copilot_task(
+        self,
+        repository: str,
+        *,
+        prompt: str,
+        base_branch: str,
+        head_branch: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, object]:
+        if not prompt.startswith("[automated] "):
+            raise ValueError(
+                "Automated task prompt must start with '[automated] '."
+            )
+        if not prompt.removeprefix("[automated] ").strip():
+            raise ValueError("Automated task prompt must be nonempty.")
+        if not base_branch.strip():
+            raise ValueError("Task base branch must be nonempty.")
+        if head_branch is not None and not head_branch.strip():
+            raise ValueError("Task head branch must be nonempty when configured.")
+        if model is not None and not model.strip():
+            raise ValueError("Task model must be nonempty when configured.")
+        payload: dict[str, object] = {
+            "prompt": prompt,
+            "base_ref": base_branch,
+        }
+        if head_branch is None:
+            payload["create_pull_request"] = True
+        else:
+            payload["head_ref"] = head_branch
+        if model is not None:
+            payload["model"] = model
+        task = self._object(
+            self._request(
+                "POST",
+                f"agents/repos/{self._repository(repository)}/tasks",
+                payload,
+            )
+        )
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise RuntimeError("GitHub returned a task without a valid task id.")
+        return task
 
     def edit_comment(
         self,
@@ -258,7 +343,14 @@ class GitHubActorClient:
         payload: dict[str, object] | None = None,
     ) -> object:
         if method != "GET":
-            match = _REPOSITORY_ENDPOINT_RE.match(endpoint)
+            match = (
+                _REPOSITORY_ENDPOINT_RE.match(endpoint)
+                or (
+                    _CREATE_COPILOT_TASK_ENDPOINT_RE.fullmatch(endpoint)
+                    if method == "POST"
+                    else None
+                )
+            )
             repository = match.group("repository") if match else None
             if repository is None:
                 raise MutationRepositoryError(
@@ -266,7 +358,21 @@ class GitHubActorClient:
                 )
             normalized_repository = repository.casefold()
             if normalized_repository in _PROTECTED_REPOSITORIES:
-                if normalized_repository in self._protected_comment_repositories:
+                if (
+                    normalized_repository
+                    in self._protected_workflow_repair_repositories
+                ):
+                    if not self._is_workflow_repair_mutation(
+                        method,
+                        endpoint,
+                        payload,
+                    ):
+                        raise MutationRepositoryError(
+                            "Protected repository workflow repair permits "
+                            "automated issue creation, direct Copilot task "
+                            "creation only."
+                        )
+                elif normalized_repository in self._protected_comment_repositories:
                     if not (
                         (
                             method == "POST"
@@ -322,7 +428,11 @@ class GitHubActorClient:
             "-H",
             "Accept: application/vnd.github+json",
             "-H",
-            "X-GitHub-Api-Version: 2022-11-28",
+            (
+                "X-GitHub-Api-Version: 2026-03-10"
+                if _CREATE_COPILOT_TASK_ENDPOINT_RE.fullmatch(endpoint)
+                else "X-GitHub-Api-Version: 2022-11-28"
+            ),
             "--include",
         ]
         temporary_path: Path | None = None
@@ -373,6 +483,57 @@ class GitHubActorClient:
                 self._append_audit(method, endpoint, response_status)
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _is_workflow_repair_mutation(
+        method: str,
+        endpoint: str,
+        payload: dict[str, object] | None,
+    ) -> bool:
+        if method != "POST" or payload is None:
+            return False
+        if _CREATE_ISSUE_ENDPOINT_RE.fullmatch(endpoint):
+            return (
+                set(payload) == {"title", "body"}
+                and isinstance(payload["title"], str)
+                and bool(payload["title"].strip())
+                and isinstance(payload["body"], str)
+                and payload["body"].startswith("[automated] ")
+            )
+        if not _CREATE_COPILOT_TASK_ENDPOINT_RE.fullmatch(endpoint):
+            return False
+        common_keys = {"prompt", "base_ref"}
+        initial_keys = common_keys | {"create_pull_request"}
+        follow_up_keys = common_keys | {"head_ref"}
+        payload_keys = set(payload)
+        if payload_keys not in (
+            initial_keys,
+            initial_keys | {"model"},
+            follow_up_keys,
+            follow_up_keys | {"model"},
+        ):
+            return False
+        if not (
+            isinstance(payload["prompt"], str)
+            and payload["prompt"].startswith("[automated] ")
+            and bool(payload["prompt"].removeprefix("[automated] ").strip())
+            and isinstance(payload["base_ref"], str)
+            and bool(payload["base_ref"].strip())
+            and (
+                "model" not in payload
+                or (
+                    isinstance(payload["model"], str)
+                    and bool(payload["model"].strip())
+                )
+            )
+        ):
+            return False
+        if "head_ref" in payload:
+            return (
+                isinstance(payload["head_ref"], str)
+                and bool(payload["head_ref"].strip())
+            )
+        return payload["create_pull_request"] is True
 
     def _append_audit(
         self,
