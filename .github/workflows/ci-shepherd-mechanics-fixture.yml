@@ -1,0 +1,19 @@
+name: CI shepherd mechanics fixture
+
+on:
+  push:
+    branches:
+      - ci-shepherd-mechanics/**
+
+permissions:
+  contents: read
+
+jobs:
+  repair-target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run controlled fixture
+        shell: bash
+        run: bash .github/ci-shepherd-mechanics-fixture/run.sh
