@@ -1097,17 +1097,27 @@ class WorkflowLoopStore:
         *,
         checked_at: str,
         read_status: str,
+        progressed_at: str | None = None,
     ) -> None:
         _positive(item_id, "item_id")
         _validate_timestamp(checked_at, "checked_at")
         _nonempty(read_status, "read_status")
+        if progressed_at is not None:
+            _validate_timestamp(progressed_at, "progressed_at")
         with self._transaction() as connection:
             self._current_item(connection, item_id)
-            connection.execute(
-                "UPDATE workflow_items SET last_checked_at = ?, "
-                "read_status = ? WHERE id = ?",
-                (checked_at, read_status, item_id),
-            )
+            if progressed_at is None:
+                connection.execute(
+                    "UPDATE workflow_items SET last_checked_at = ?, "
+                    "read_status = ? WHERE id = ?",
+                    (checked_at, read_status, item_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE workflow_items SET last_checked_at = ?, "
+                    "last_progressed_at = ?, read_status = ? WHERE id = ?",
+                    (checked_at, progressed_at, read_status, item_id),
+                )
 
     def reserve_worker(
         self,

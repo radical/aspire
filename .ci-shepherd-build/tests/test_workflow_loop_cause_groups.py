@@ -700,7 +700,56 @@ class CauseCoordinatorTests(unittest.TestCase):
             self.store.upsert_leaf_failure(run, job.key, NOW)
         return run
 
-    def tick(self, launcher, reader, writer, mode=EffectMode.LIVE):
+    def seed_exhausted_deferred_target(self, target_diagnostic):
+        diagnostics = (
+            "src/App0.cs(1): error CS1002: ; expected",
+            "src/App1.cs(1): error CS1002: ; expected",
+            target_diagnostic,
+        )
+        jobs = tuple(
+            replace(
+                _job(900 + index, name=f"Lane {index:02}"),
+                log_excerpt=diagnostic,
+            )
+            for index, diagnostic in enumerate(diagnostics)
+        )
+        run = _run(jobs=jobs)
+        for job in jobs:
+            self.store.upsert_leaf_failure(run, job.key, NOW)
+        first, second, target = self.store.list_items()
+        for item in (first, second):
+            item = self.store.record_cause(item.id, run, observed_at=NOW)
+            self.assertTrue(
+                self.store.reserve_cause_start(item.id, reserved_at=NOW)
+            )
+            self.store.update_item(
+                replace(item, phase=ItemPhase.SUPERSEDED),
+                history_event="completed",
+                summary="Prior start completed.",
+                detail={},
+            )
+        target = replace(
+            target,
+            phase=ItemPhase.OBSERVING_FAILURE,
+            wait_reason="deferred_by_episode_budget",
+        )
+        self.store.update_item(
+            target,
+            history_event="deferred-by-episode-budget",
+            summary="The episode budget is exhausted.",
+            detail={},
+        )
+        return run, first, target
+
+    def tick(
+        self,
+        launcher,
+        reader,
+        writer,
+        mode=EffectMode.LIVE,
+        *,
+        now=datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+    ):
         # Reopen on every pass: no in-memory budget or grouping state may be required.
         self.store = WorkflowLoopStore(self.path, repository="owner/repo", branch="main")
         self.store.initialize()
@@ -710,7 +759,7 @@ class CauseCoordinatorTests(unittest.TestCase):
         result = WorkflowLoopManager(
             state_directory=self.path, repository="owner/repo", branch="main",
             store=self.store, reader=reader, launcher=launcher, writer=writer,
-            clock=lambda: datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            clock=lambda: now,
             id_factory=lambda: f"pass-{next(self.counter)}",
         ).run_pass(mode=mode)
         self.assertEqual((), result.errors)
@@ -799,6 +848,220 @@ class CauseCoordinatorTests(unittest.TestCase):
         self.assertEqual(2, len(self.store.list_cause_starts()))
         self.assertEqual((), self.store.list_actions())
         self.assertEqual([], actor.calls)
+
+    def test_stable_budget_deferred_leaf_does_not_repeat_progress_after_ownership_check(self):
+        run = self.seed(3)
+        first, second, deferred = self.store.list_items()
+        for item in (first, second):
+            item = self.store.record_cause(item.id, run, observed_at=NOW)
+            self.assertTrue(self.store.reserve_cause_start(item.id, reserved_at=NOW))
+            self.store.update_item(
+                replace(item, phase=ItemPhase.SUPERSEDED),
+                history_event="completed",
+                summary="Prior start completed.",
+                detail={},
+            )
+        deferred = self.store.record_cause(deferred.id, run, observed_at=NOW)
+        reader = _LeafReader(replace(_refresh(), failure_run=run, runs=(run,)))
+        launcher = _LeafLauncher(self.path, self.store)
+
+        first_pass = self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 1, tzinfo=UTC),
+        )
+        after_first = next(
+            item for item in self.store.list_items()
+            if item.id == deferred.id
+        )
+        history_after_first = len(self.store.recent_history(deferred.id))
+        second_pass = self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 2, tzinfo=UTC),
+        )
+
+        current = next(
+            item for item in self.store.list_items()
+            if item.id == deferred.id
+        )
+        self.assertEqual(1, first_pass.progressed_items)
+        self.assertEqual(0, second_pass.progressed_items)
+        self.assertEqual("deferred_by_episode_budget", current.wait_reason)
+        self.assertEqual(
+            after_first.last_progressed_at,
+            current.last_progressed_at,
+        )
+        self.assertEqual("2026-09-17T20:02:00Z", current.last_checked_at)
+        self.assertEqual(
+            history_after_first,
+            len(self.store.recent_history(deferred.id)),
+            self.store.recent_history(deferred.id),
+        )
+        self.assertEqual((), self.store.list_workers())
+
+    def test_budget_override_preserves_progress_for_already_deferred_leaf(self):
+        run = self.seed(7)
+        first, second, *unowned = self.store.list_items()
+        for item in (first, second):
+            item = self.store.record_cause(item.id, run, observed_at=NOW)
+            self.assertTrue(self.store.reserve_cause_start(item.id, reserved_at=NOW))
+            self.store.update_item(
+                replace(item, phase=ItemPhase.SUPERSEDED),
+                history_event="completed",
+                summary="Prior start completed.",
+                detail={},
+            )
+        target = replace(
+            unowned[-1],
+            phase=ItemPhase.OBSERVING_FAILURE,
+            wait_reason="deferred_by_episode_budget",
+        )
+        self.store.update_item(
+            target,
+            history_event="deferred-by-episode-budget",
+            summary="The episode budget is exhausted.",
+            detail={},
+        )
+        initial_history_count = len(self.store.recent_history(target.id))
+        reader = _MetadataLeafReader(
+            replace(_refresh(), failure_run=run, runs=(run,))
+        )
+        launcher = _LeafLauncher(self.path, self.store)
+
+        self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 1, tzinfo=UTC),
+        )
+
+        current = next(
+            item for item in self.store.list_items()
+            if item.id == target.id
+        )
+        self.assertIsNone(current.cause_group_id)
+        self.assertEqual(target.last_progressed_at, current.last_progressed_at)
+        self.assertEqual("2026-09-17T20:01:00Z", current.last_checked_at)
+        self.assertEqual(
+            initial_history_count,
+            len(self.store.recent_history(target.id)),
+            self.store.recent_history(target.id),
+        )
+        self.assertEqual((), self.store.list_workers())
+
+    def test_budget_ownership_preparation_counts_new_follower_progress_once(self):
+        run, leader, target = self.seed_exhausted_deferred_target(
+            "src/App0.cs(1): error CS1002: ; expected"
+        )
+        reader = _MetadataLeafReader(
+            replace(_refresh(), failure_run=run, runs=(run,))
+        )
+        launcher = _LeafLauncher(self.path, self.store)
+
+        first_pass = self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 1, tzinfo=UTC),
+        )
+        after_first = next(
+            item for item in self.store.list_items()
+            if item.id == target.id
+        )
+        history_after_first = self.store.recent_history(target.id)
+        second_pass = self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 2, tzinfo=UTC),
+        )
+        current = next(
+            item for item in self.store.list_items()
+            if item.id == target.id
+        )
+        current_leader = next(
+            item for item in self.store.list_items()
+            if item.id == leader.id
+        )
+
+        self.assertEqual(1, first_pass.progressed_items)
+        self.assertEqual(0, second_pass.progressed_items)
+        self.assertEqual(current_leader.cause_group_id, current.cause_group_id)
+        self.assertEqual(leader.id, current.cause_leader_id)
+        self.assertEqual("cause_group_follower", current.wait_reason)
+        self.assertEqual("2026-09-17T20:01:00Z", current.last_progressed_at)
+        self.assertEqual("2026-09-17T20:02:00Z", current.last_checked_at)
+        self.assertEqual(
+            1,
+            sum(entry.event == "cause-group-derived" for entry in history_after_first),
+        )
+        self.assertEqual(
+            1,
+            sum(entry.event == "cause-group-follower" for entry in history_after_first),
+        )
+        self.assertEqual(
+            history_after_first,
+            self.store.recent_history(target.id),
+        )
+        self.assertEqual((), self.store.list_workers())
+
+    def test_budget_ownership_preparation_counts_new_singleton_progress_once(self):
+        run, _, target = self.seed_exhausted_deferred_target(
+            "Process completed with exit code 1."
+        )
+        reader = _MetadataLeafReader(
+            replace(_refresh(), failure_run=run, runs=(run,))
+        )
+        launcher = _LeafLauncher(self.path, self.store)
+
+        first_pass = self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 1, tzinfo=UTC),
+        )
+        after_first = next(
+            item for item in self.store.list_items()
+            if item.id == target.id
+        )
+        history_after_first = self.store.recent_history(target.id)
+        second_pass = self.tick(
+            launcher,
+            reader,
+            None,
+            now=datetime(2026, 9, 17, 20, 2, tzinfo=UTC),
+        )
+        current = next(
+            item for item in self.store.list_items()
+            if item.id == target.id
+        )
+
+        self.assertEqual(1, first_pass.progressed_items)
+        self.assertEqual(0, second_pass.progressed_items)
+        self.assertIsNotNone(current.cause_group_id)
+        self.assertEqual(current.id, current.cause_leader_id)
+        self.assertEqual("deferred_by_episode_budget", current.wait_reason)
+        self.assertEqual("2026-09-17T20:01:00Z", current.last_progressed_at)
+        self.assertEqual("2026-09-17T20:02:00Z", current.last_checked_at)
+        self.assertEqual(
+            1,
+            sum(entry.event == "cause-group-derived" for entry in history_after_first),
+        )
+        self.assertEqual(
+            1,
+            sum(
+                entry.event == "deferred-by-episode-budget"
+                for entry in history_after_first
+            ),
+        )
+        self.assertEqual(
+            history_after_first,
+            self.store.recent_history(target.id),
+        )
+        self.assertEqual((), self.store.list_workers())
 
     def test_metadata_only_follower_rechecks_new_execution_and_freezes_owned_conflict(self):
         self.assert_follower_conflict(run_id=102, attempt=1)

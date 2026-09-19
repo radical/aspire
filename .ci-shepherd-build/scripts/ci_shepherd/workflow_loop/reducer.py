@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields, replace
+from dataclasses import replace
 
 from .models import (
     ActionKind,
@@ -23,7 +23,12 @@ from .reader import (
     PullRequestObservation,
     classify_issue_owner,
 )
-from .scenario import ConfirmedIssueCreation, ItemTransition, NextStep
+from .scenario import (
+    ConfirmedIssueCreation,
+    ItemTransition,
+    NextStep,
+    meaningful_item_change,
+)
 
 
 def _followup_assessment_key(refresh: ItemRefresh) -> str | None:
@@ -1187,7 +1192,7 @@ def _finish(
     retain_judgment: bool = False,
 ) -> ItemTransition:
     updated = item
-    if _semantic_signature(original) != _semantic_signature(item):
+    if meaningful_item_change(original, item):
         updated = replace(updated, last_progressed_at=now)
     return ItemTransition(
         item=updated,
@@ -1197,13 +1202,4 @@ def _finish(
         action_kind=action_kind,
         judgment_round=judgment_round,
         retain_judgment=retain_judgment,
-    )
-
-
-def _semantic_signature(item: WorkflowItem) -> tuple[object, ...]:
-    ignored = {"last_checked_at", "last_progressed_at", "read_status"}
-    return tuple(
-        getattr(item, field.name)
-        for field in fields(item)
-        if field.name not in ignored
     )

@@ -39,9 +39,10 @@ from ..scenario import (
     ConfirmedIssueCreation,
     ItemTransition,
     JudgmentPreparation,
+    NextStep,
     ScenarioDiscovery,
     ScenarioObservation,
-    NextStep,
+    meaningful_item_change,
 )
 from ..state import WorkflowLoopStore
 from .workflow_policy import workflow_priority, classify_job_role, EXCLUDED_WORKFLOW_PATHS
@@ -586,11 +587,27 @@ class WorkflowFailureScenario:
                 return JudgmentPreparation(None, item, request_count, errors)
             if item.cause_leader_id != item.id:
                 item = replace(item, phase=ItemPhase.OBSERVING_FAILURE, wait_reason="cause_group_follower")
-                store.update_item(
-                    item, history_event="cause-group-follower",
-                    summary="Exact cause is represented by its canonical leader.",
-                    detail={"leaderId": item.cause_leader_id},
+                current = next(
+                    candidate
+                    for candidate in store.list_items()
+                    if candidate.id == item.id
                 )
+                if meaningful_item_change(current, item):
+                    store.update_item(
+                        item, history_event="cause-group-follower",
+                        summary="Exact cause is represented by its canonical leader.",
+                        detail={"leaderId": item.cause_leader_id},
+                    )
+                else:
+                    item = replace(
+                        item,
+                        last_progressed_at=current.last_progressed_at,
+                    )
+                    store.update_item_check(
+                        item.id,
+                        checked_at=item.last_checked_at,
+                        read_status=item.read_status,
+                    )
                 return JudgmentPreparation(None, item, request_count, errors)
             if judgment_round == 0:
                 item, refresh, count, search_errors, blocked = self._adopt_tracking_issue(
@@ -603,11 +620,27 @@ class WorkflowFailureScenario:
                 if not store.episode_start_available(item.id):
                     item = replace(item, phase=ItemPhase.OBSERVING_FAILURE,
                         wait_reason="deferred_by_episode_budget")
-                    store.update_item(
-                        item, history_event="deferred-by-episode-budget",
-                        summary="Exact ownership checked; no new task start remains for this run/attempt.",
-                        detail={},
+                    current = next(
+                        candidate
+                        for candidate in store.list_items()
+                        if candidate.id == item.id
                     )
+                    if meaningful_item_change(current, item):
+                        store.update_item(
+                            item, history_event="deferred-by-episode-budget",
+                            summary="Exact ownership checked; no new task start remains for this run/attempt.",
+                            detail={},
+                        )
+                    else:
+                        item = replace(
+                            item,
+                            last_progressed_at=current.last_progressed_at,
+                        )
+                        store.update_item_check(
+                            item.id,
+                            checked_at=item.last_checked_at,
+                            read_status=item.read_status,
+                        )
                     return JudgmentPreparation(None, item, request_count, errors)
 
         repair_evidence = None

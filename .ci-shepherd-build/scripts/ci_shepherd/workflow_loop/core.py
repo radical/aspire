@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 import os
@@ -32,6 +32,7 @@ from .scenario import (
     NextStep,
     ScenarioDiscovery,
     ScenarioObservation,
+    meaningful_item_change,
 )
 from .state import WorkflowLoopStore
 from .shadow import read_shadow_metadata
@@ -68,6 +69,7 @@ class _QueueResult:
     launched: int
     request_count: int
     errors: tuple[str, ...]
+    item: WorkflowItem
 
 
 class CiCoordinator:
@@ -420,10 +422,37 @@ class CiCoordinator:
                         retain_judgment=True,
                     )
 
-                if _meaningful_item_change(
-                    item,
-                    transition.item,
-                ):
+                if not meaningful_item_change(item, transition.item):
+                    transition = replace(
+                        transition,
+                        item=replace(
+                            transition.item,
+                            last_progressed_at=item.last_progressed_at,
+                        ),
+                    )
+
+                if budget_exhausted and ownership_check:
+                    queued = self._queue_judgment(
+                        scenario,
+                        transition.item,
+                        refresh,
+                        transition.judgment_round,
+                        started_at,
+                    )
+                    launched_workers += queued.launched
+                    scenario_requests += queued.request_count
+                    errors.extend(queued.errors)
+                    if meaningful_item_change(item, queued.item):
+                        self._store.update_item_check(
+                            queued.item.id,
+                            checked_at=transition.item.last_checked_at,
+                            read_status=queued.item.read_status,
+                            progressed_at=started_at,
+                        )
+                        progressed_items += 1
+                    continue
+
+                if meaningful_item_change(item, transition.item):
                     detail: dict[str, object] = {
                         "nextStep": transition.next_step.value,
                     }
@@ -618,7 +647,7 @@ class CiCoordinator:
         queued_at: str,
     ) -> _QueueResult:
         if judgment_round is None:
-            return _QueueResult(0, 0, ())
+            return _QueueResult(0, 0, (), item)
         worker_id = f"worker-{self._id_factory()}"
         session_id = str(uuid.uuid4())
         preparation: JudgmentPreparation = scenario.prepare_judgment(
@@ -629,22 +658,32 @@ class CiCoordinator:
             worker_id=worker_id,
             session_id=session_id,
         )
+
+        def persisted_item() -> WorkflowItem:
+            return next(
+                candidate
+                for candidate in self._store.list_items()
+                if candidate.id == preparation.item.id
+            )
+
+        prepared_item = persisted_item()
         request = preparation.request
         if request is None:
             return _QueueResult(
                 0,
                 preparation.request_count,
                 preparation.errors,
+                prepared_item,
             )
         paths = self._launcher.packet_paths(worker_id)
         reservation = WorkerReservation(
             worker_id=worker_id,
-            item_id=preparation.item.id,
-            episode=preparation.item.episode,
-            evidence_fingerprint=preparation.item.evidence_fingerprint,
+            item_id=prepared_item.id,
+            episode=prepared_item.episode,
+            evidence_fingerprint=prepared_item.evidence_fingerprint,
             context_fingerprint=(
                 preparation.context_fingerprint
-                or preparation.item.evidence_fingerprint
+                or prepared_item.evidence_fingerprint
             ),
             session_id=session_id,
             request_path=str(paths.request),
@@ -691,6 +730,7 @@ class CiCoordinator:
                 0,
                 preparation.request_count,
                 preparation.errors + (error,),
+                persisted_item(),
             )
         if not self._store.reserve_worker(
             reservation,
@@ -700,6 +740,7 @@ class CiCoordinator:
                 0,
                 preparation.request_count,
                 preparation.errors,
+                persisted_item(),
             )
         launched = self._launcher.launch(reservation)
         launch_error = (
@@ -709,6 +750,7 @@ class CiCoordinator:
             int(launched.status is WorkerLaunchStatus.LAUNCHED),
             preparation.request_count,
             preparation.errors + launch_error,
+            persisted_item(),
         )
 
     def _observe_workers(
@@ -912,18 +954,6 @@ def _read_errors(value: object) -> list[str]:
         f"{error.scope}:{error.code}:{error.detail}"
         for error in getattr(value, "errors", ())
     ]
-
-
-def _meaningful_item_change(
-    original: WorkflowItem,
-    updated: WorkflowItem,
-) -> bool:
-    ignored = {"last_checked_at"}
-    return any(
-        getattr(original, field.name) != getattr(updated, field.name)
-        for field in fields(original)
-        if field.name not in ignored
-    )
 
 
 def _timestamp(value: datetime) -> str:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from collections.abc import Collection
 from typing import Protocol, TYPE_CHECKING
@@ -108,6 +108,18 @@ class JudgmentPreparation:
     request_count: int
     errors: tuple[str, ...]
     context_fingerprint: str | None = None
+
+
+def meaningful_item_change(
+    original: WorkflowItem,
+    updated: WorkflowItem,
+) -> bool:
+    ignored = {"last_checked_at", "last_progressed_at", "read_status"}
+    return any(
+        getattr(original, field.name) != getattr(updated, field.name)
+        for field in fields(original)
+        if field.name not in ignored
+    )
 
 
 class CiScenario(Protocol):
