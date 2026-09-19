@@ -95,10 +95,18 @@ analyze unrelated items. Canonical task state and live capacity are unchanged.
 At the first external effect boundary, the shared effect executor records a
 structured **PROPOSED** history entry with the exact live intent and payload.
 `status` shows the exact external target and title/body/prompt, not the internal
-assessment packet. Identical proposals are deduplicated. They reserve no action
-capacity, and terminal local judgments remain available for later shadow passes.
-Unrelated items continue. A proposed issue creation cannot fabricate an issue
-number to simulate a downstream task.
+assessment packet. It labels a proposal **CURRENT** only when its request and
+action identity still match the persisted ready-for-action item, episode,
+evidence, and action-specific state; all older entries remain visible as
+**STALE** audit history. Identical proposals are deduplicated. They reserve no
+action capacity, and terminal local judgments remain available for later shadow
+passes. Unrelated items continue. A proposed issue creation cannot fabricate an
+issue number to simulate a downstream task.
+
+Leaf issue titles use bounded observed diagnostics or canonical failed-test
+names. Transport preview markers, runner/setup banners, ANSI-only metadata, and
+generic exit wrappers are not promoted; unavailable diagnostics use a stable
+nonassertive investigation label.
 
 LIVE uses only canonical state and fresh observations. It cannot use a shadow
 as its state directory or promote a shadow proposal/judgment. Run LIVE with
@@ -489,9 +497,9 @@ PYTHONPATH=scripts python3 scripts/workflow_loop.py status \
 
 The summary shows local activity, waits, last checked/progressed timestamps,
 known run/issue/PR links, explicit task IDs, pass duration, GitHub request
-count, capacity, and time to first confirmed assignment. Detailed worker
-stdout, stderr, usage, and terminal envelopes remain in the item's private
-worker directory.
+count, capacity, current versus stale proposal counts, and time to first
+confirmed assignment. Detailed worker stdout, stderr, usage, and terminal
+envelopes remain in the item's private worker directory.
 
 The shadow's `workflow-loop.sqlite3` retains complete proposal history and
 `github-reads.jsonl` records reads. A read-only run creates no

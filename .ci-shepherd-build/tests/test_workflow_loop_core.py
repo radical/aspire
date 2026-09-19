@@ -435,9 +435,10 @@ class CiCoordinatorBoundaryTests(unittest.TestCase):
                 now=datetime(2026, 9, 18, 4, tzinfo=UTC),
             )
             self.assertIn(
-                "PROPOSED create_issue",
+                "PROPOSED STALE create_issue",
                 report,
             )
+            self.assertIn("Proposals: current=0 stale=1", report)
             self.assertIn('"body": "Exact body"', report)
 
     def test_all_ownership_refreshes_precede_priority_assessment(self) -> None:

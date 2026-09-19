@@ -552,6 +552,290 @@ class WorkflowWriterTests(unittest.TestCase):
         self.assertIn('"attempt":1', body)
         self.assertIn('"number":3', body)
 
+    def test_leaf_issue_title_uses_later_observed_diagnostic_after_transport_noise(self) -> None:
+        _, request, result = self._leaf_request()
+        log = "\n".join(
+            (
+                "[... selected diagnostic lines retained ...]",
+                "2026-09-17T20:00:01.123Z ##[group]Run actions/setup-dotnet@v5",
+                "2026-09-17T20:00:02.123Z Process completed with exit code 1.",
+                "2026-09-17T20:00:03.123Z System.Threading.Tasks.TaskCanceledException: "
+                "The operation was canceled.",
+            )
+        )
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        request = replace(
+            request,
+            failure_run=replace(request.failure_run, jobs=(job,)),
+            failed_jobs=(job,),
+        )
+
+        title, _ = self._writer(
+            FakeReader(lambda item, action: _refresh(item, request.failure_run)),
+            None,
+        )._issue_content(request, result)
+
+        self.assertIn("TaskCanceledException: The operation was canceled.", title)
+        self.assertNotIn("selected diagnostic lines retained", title)
+        self.assertNotIn("setup-dotnet", title)
+        self.assertNotIn("Process completed with exit code", title)
+
+    def test_leaf_issue_proposal_ignores_command_and_assertion_diagnostics(self) -> None:
+        _, request, result = self._leaf_request()
+        log = "\n".join(
+            (
+                "##[group]Run dotnet test --filter FullyQualifiedName~ThrowsException",
+                "##[command]dotnet test --filter FullyQualifiedName~ThrowsException",
+                "Expected: System.InvalidOperationException: boom",
+                "Expected: error CS1002: ; expected",
+                "Actual: error NU1101: Unable to find package Missing.Package.",
+                "Assert.Equal() Failure: error MSB1009: Project file does not exist.",
+                "src/App.cs(14,9): error CS1002: ; expected",
+            )
+        )
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        failure_run = replace(request.failure_run, jobs=(job,))
+        request = replace(
+            request,
+            failure_run=failure_run,
+            failed_jobs=(job,),
+        )
+        reader = FakeReader(lambda item, action: _refresh(item, failure_run))
+
+        outcome = self._writer(reader, None).execute(
+            request,
+            result,
+            pass_id="title-noise",
+            owner_id="preview",
+            propose_only=True,
+        )
+
+        self.assertEqual("proposed", outcome.status, outcome.reason)
+        proposal, = self.store.list_proposals()
+        self.assertEqual(
+            "[automated] CI failure: CI / Build / Linux — "
+            "src/App.cs(14,9): error CS1002: ; expected",
+            proposal.detail["payload"]["write"]["title"],
+        )
+
+    def test_leaf_issue_proposal_uses_fallback_when_all_diagnostics_are_noise(self) -> None:
+        _, request, result = self._leaf_request()
+        log = "\n".join(
+            (
+                "##[group]Run dotnet test --filter FullyQualifiedName~ThrowsException",
+                "##[command]dotnet test --filter FullyQualifiedName~ThrowsException",
+                "Expected: System.InvalidOperationException: boom",
+                "Expected: error CS1002: ; expected",
+                "Actual: error NU1101: Unable to find package Missing.Package.",
+                "Assert.Equal() Failure: error MSB1009: Project file does not exist.",
+            )
+        )
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        failure_run = replace(request.failure_run, jobs=(job,))
+        request = replace(
+            request,
+            failure_run=failure_run,
+            failed_jobs=(job,),
+        )
+        reader = FakeReader(lambda item, action: _refresh(item, failure_run))
+
+        outcome = self._writer(reader, None).execute(
+            request,
+            result,
+            pass_id="title-all-noise",
+            owner_id="preview",
+            propose_only=True,
+        )
+
+        self.assertEqual("proposed", outcome.status, outcome.reason)
+        proposal, = self.store.list_proposals()
+        self.assertEqual(
+            "[automated] CI failure: CI / Build / Linux — "
+            "investigate with limited evidence",
+            proposal.detail["payload"]["write"]["title"],
+        )
+
+    def test_leaf_issue_title_strips_ansi_and_timestamp_from_maven_diagnostic(self) -> None:
+        _, request, result = self._leaf_request()
+        log = "\n".join(
+            (
+                "2026-09-17T20:00:01Z \u001b[36mRunner Image Provisioner\u001b[0m",
+                "2026-09-17T20:00:02Z \u001b[31m[ERROR] "
+                "/home/runner/work/app/src/Main.java:[14,9] cannot find symbol\u001b[0m",
+                "Error: Process completed with exit code 1.",
+            )
+        )
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        request = replace(
+            request,
+            failure_run=replace(request.failure_run, jobs=(job,)),
+            failed_jobs=(job,),
+        )
+
+        title, _ = self._writer(
+            FakeReader(lambda item, action: _refresh(item, request.failure_run)),
+            None,
+        )._issue_content(request, result)
+
+        self.assertIn(
+            "[ERROR] /home/runner/work/app/src/Main.java:[14,9] cannot find symbol",
+            title,
+        )
+        self.assertNotIn("\u001b", title)
+        self.assertNotIn("2026-09-17", title)
+        self.assertNotIn("Process completed with exit code", title)
+
+    def test_leaf_issue_title_preserves_standard_build_diagnostics(self) -> None:
+        _, request, result = self._leaf_request()
+        cases = (
+            (
+                "timestamped marked compiler",
+                "2026-09-17T20:00:03Z ##[error]"
+                "/repo/File.cs(14,9): error CS1002: ; expected",
+                "/repo/File.cs(14,9): error CS1002: ; expected",
+            ),
+            (
+                "normalized compiler",
+                "/repo/File.cs(14,9): error CS1002: ; expected",
+                "/repo/File.cs(14,9): error CS1002: ; expected",
+            ),
+            (
+                "normalized MSBuild",
+                "MSBUILD : error MSB1009: Project file does not exist.",
+                "MSBUILD : error MSB1009: Project file does not exist.",
+            ),
+            (
+                "normalized NuGet",
+                "error NU1101: Unable to find package Missing.Package.",
+                "error NU1101: Unable to find package Missing.Package.",
+            ),
+        )
+        for name, diagnostic, expected in cases:
+            with self.subTest(name=name):
+                log = "\n".join(
+                    (
+                        "2026-09-17T20:00:01Z Runner Image Provisioner",
+                        "2026-09-17T20:00:02Z ##[error]Build failed.",
+                        "Error: Process completed with exit code 1.",
+                        diagnostic,
+                    )
+                )
+                job = replace(request.failed_jobs[0], log_excerpt=log)
+                candidate = replace(
+                    request,
+                    failure_run=replace(request.failure_run, jobs=(job,)),
+                    failed_jobs=(job,),
+                )
+
+                title, _ = self._writer(
+                    FakeReader(
+                        lambda item, action: _refresh(
+                            item,
+                            candidate.failure_run,
+                        )
+                    ),
+                    None,
+                )._issue_content(candidate, result)
+
+                self.assertIn(expected, title)
+                self.assertNotIn("Runner Image Provisioner", title)
+                self.assertNotIn("Build failed.", title)
+                self.assertNotIn("Process completed with exit code", title)
+                self.assertNotIn("2026-09-17", title)
+
+    def test_leaf_issue_title_uses_canonical_failed_test_name(self) -> None:
+        _, request, result = self._leaf_request()
+        log = "\n".join(
+            (
+                "2026-09-17T20:00:01Z Test run for net10.0",
+                "  Failed Aspire.Tests.Resources.RedisConnection [42 ms]",
+                "Error: Process completed with exit code 1.",
+            )
+        )
+        job = replace(request.failed_jobs[0], log_excerpt=log)
+        request = replace(
+            request,
+            failure_run=replace(request.failure_run, jobs=(job,)),
+            failed_jobs=(job,),
+        )
+
+        title, _ = self._writer(
+            FakeReader(lambda item, action: _refresh(item, request.failure_run)),
+            None,
+        )._issue_content(request, result)
+
+        self.assertIn("Failed Aspire.Tests.Resources.RedisConnection", title)
+        self.assertNotIn("[42 ms]", title)
+
+    def test_leaf_issue_title_uses_nonassertive_fallback_for_useless_logs(self) -> None:
+        _, request, result = self._leaf_request()
+        cases = (
+            (
+                None,
+                FailureClassification.INSUFFICIENT_EVIDENCE,
+                "investigate with limited evidence",
+            ),
+            (
+                "\n".join(
+                    (
+                        "[... selected diagnostic lines retained ...]",
+                        "2026-09-17T20:00:01Z \u001b[36mRunner Image\u001b[0m",
+                        "##[group]Run tests",
+                        "Error: Process completed with exit code 1.",
+                    )
+                ),
+                FailureClassification.SUSPECTED_FLAKE,
+                "investigate suspected flaky failure",
+            ),
+        )
+        for log, classification, expected in cases:
+            with self.subTest(classification=classification.value):
+                job = replace(request.failed_jobs[0], log_excerpt=log)
+                candidate = replace(
+                    request,
+                    failure_run=replace(request.failure_run, jobs=(job,)),
+                    failed_jobs=(job,),
+                )
+                title, _ = self._writer(
+                    FakeReader(
+                        lambda item, action: _refresh(
+                            item,
+                            candidate.failure_run,
+                        )
+                    ),
+                    None,
+                )._issue_content(
+                    candidate,
+                    replace(
+                        result,
+                        classification=classification,
+                        recommended_response=RecommendedResponse.INVESTIGATE,
+                        summary="MODEL ROOT CAUSE",
+                    ),
+                )
+
+                self.assertTrue(title.endswith(expected), title)
+                self.assertNotIn("MODEL ROOT CAUSE", title)
+                self.assertNotIn("Process completed with exit code", title)
+
+    def test_leaf_issue_title_bounds_long_workflow_without_losing_lane_or_diagnostic(self) -> None:
+        _, request, result = self._leaf_request()
+        failure_run = replace(
+            request.failure_run,
+            workflow_name="CI validation workflow " + "segment-" * 80,
+        )
+        request = replace(request, failure_run=failure_run)
+
+        title, _ = self._writer(
+            FakeReader(lambda item, action: _refresh(item, failure_run)),
+            None,
+        )._issue_content(request, result)
+
+        self.assertLessEqual(len(title), 256)
+        self.assertIn("CI validation workflow", title)
+        self.assertIn("Build / Linux", title)
+        self.assertIn("Failed Example.Tests.Connection", title)
+
     def test_leaf_task_payload_bound_keeps_scope_when_log_is_huge(self) -> None:
         _, request, result = self._leaf_request()
         job = replace(request.failed_jobs[0], log_excerpt="診断\n" * 40_000, log_truncated=True)
@@ -800,7 +1084,8 @@ class WorkflowWriterTests(unittest.TestCase):
             branch=BRANCH,
             now=datetime(2026, 9, 17, 20, 2, tzinfo=UTC),
         )
-        self.assertIn("PROPOSED create_issue", report)
+        self.assertIn("Proposals: current=1 stale=0", report)
+        self.assertIn("PROPOSED CURRENT create_issue", report)
         self.assertIn('"repository": "radical/aspire"', report)
         self.assertIn(proposal["payload"]["write"]["title"], report)
         self.assertNotIn(request.prompt, report)

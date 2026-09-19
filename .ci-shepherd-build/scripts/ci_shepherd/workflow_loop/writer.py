@@ -4,9 +4,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import json
+import re
 from typing import Any, Literal, Protocol
 
-from ci_shepherd.observations import is_workflow_log_diagnostic_line
+from ci_shepherd.observations import (
+    _ASSERTION_LINE_RE,
+    _COMMAND_ECHO_RE,
+    _COMMAND_OPTIONS_RE,
+    is_workflow_log_diagnostic_line,
+    normalize_log_text,
+)
 
 from .effects import EffectResult, GitHubEffectExecutor
 from .models import (
@@ -14,6 +21,7 @@ from .models import (
     ActionKind,
     ActionState,
     ActionView,
+    FailureClassification,
     ItemPhase,
     JobObservation,
     JudgmentDecision,
@@ -44,6 +52,34 @@ WriterStatus = Literal[
     "uncertain",
 ]
 
+_TITLE_EXCEPTION_RE = re.compile(
+    r"(?i)\b[A-Za-z_][A-Za-z0-9_.]*Exception(?::|\b)"
+)
+_TITLE_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_TITLE_MAVEN_DIAGNOSTIC_RE = re.compile(
+    r"^\[ERROR\]\s+\S.*:\[\d+(?:,\d+)?\]\s+\S"
+)
+_TITLE_BUILD_DIAGNOSTIC_RE = re.compile(
+    r"(?i)^(?:.*?:\s+)?error\s+(?:CS|MSB|NU|NETSDK)\d{4}\s*:\s*\S"
+)
+_TITLE_FAILED_TEST_RE = re.compile(
+    r"^\s*Failed\s+(?P<name>.+?)\s+\[[^\]\r\n]+\]\s*$"
+)
+_TITLE_GENERIC_EXIT_RE = re.compile(
+    r"(?i)(?:error:\s*)?(?:process completed with exit code \d+|"
+    r"(?:the )?(?:job|step|process|operation|command) "
+    r"(?:failed|timed out|exited with (?:code|status) \d+)|"
+    r"exit (?:code|status)[: ]+\d+)[.!]?"
+)
+
+
+def _is_title_diagnostic_noise(line: str) -> bool:
+    return (
+        _COMMAND_ECHO_RE.match(line) is not None
+        or _COMMAND_OPTIONS_RE.match(line) is not None
+        or _ASSERTION_LINE_RE.match(line) is not None
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class WorkflowWriteResult:
@@ -53,6 +89,42 @@ class WorkflowWriteResult:
     issue_number: int | None = None
     task_id: str | None = None
     newly_confirmed: bool = False
+
+
+def _issue_title_diagnostic(log: str) -> str | None:
+    for raw_line in log.splitlines():
+        line = _TITLE_ANSI_RE.sub("", normalize_log_text(raw_line)).strip()
+        line = line.removeprefix("##[error]").strip()
+        if (
+            not line
+            or _is_title_diagnostic_noise(line)
+            or _TITLE_GENERIC_EXIT_RE.fullmatch(line)
+        ):
+            continue
+        failed_test = _TITLE_FAILED_TEST_RE.fullmatch(line)
+        if failed_test is not None:
+            return f"Failed {failed_test.group('name')}"
+        if (
+            is_workflow_log_diagnostic_line(line)
+            or _TITLE_EXCEPTION_RE.search(line)
+            or _TITLE_MAVEN_DIAGNOSTIC_RE.search(line)
+            or _TITLE_BUILD_DIAGNOSTIC_RE.search(line)
+        ):
+            return line
+    return None
+
+
+def _issue_title_fallback(result: JudgmentResult) -> str:
+    if result.classification is FailureClassification.SUSPECTED_FLAKE:
+        return "investigate suspected flaky failure"
+    return "investigate with limited evidence"
+
+
+def _bounded_title_text(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit - 1].rstrip() + "…"
 
 
 class _Reader(Protocol):
@@ -1022,14 +1094,23 @@ class WorkflowWriter:
             # Quote the observed failure, never promote the worker's explanation
             # into an asserted root cause or a new issue identity.
             log = job.log_excerpt or "Evidence unavailable"
-            summary = next(
-                (line for line in log.splitlines() if is_workflow_log_diagnostic_line(line)),
-                log.splitlines()[0] if log.splitlines() else "Evidence unavailable",
+            summary = (
+                _issue_title_diagnostic(log)
+                or _issue_title_fallback(result)
             )
-            title = (
-                f"[automated] CI failure: {request.failure_run.workflow_name} / "
-                f"{job.key.name} — {' '.join(summary.split())[:100]}"
-            )[:256]
+            workflow_name = _bounded_title_text(
+                request.failure_run.workflow_name,
+                64,
+            )
+            lane_name = _bounded_title_text(job.key.name, 80)
+            title_prefix = (
+                f"[automated] CI failure: {workflow_name} / "
+                f"{lane_name} — "
+            )
+            title = title_prefix + _bounded_title_text(
+                summary,
+                256 - len(title_prefix),
+            )
             body = self._leaf_payload(
                 request, result,
                 "[automated] **Operational impact**\n\n"

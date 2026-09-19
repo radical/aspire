@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 import json
 import sqlite3
 
 from .models import (
+    ActionKind,
     FailureClassification,
     ItemPhase,
     RecommendedResponse,
@@ -42,6 +43,7 @@ def render_status(
     )
     store.initialize(workflow_ids=workflow_ids)
     items = store.list_items()
+    items_by_id = {item.id: item for item in items}
     active_ids = store.active_item_ids()
     latest_pass = _latest_pass(database)
     shadow = read_shadow_metadata(state_directory)
@@ -55,9 +57,27 @@ def render_status(
         default=None,
     )
 
+    proposals = tuple(
+        (
+            proposal,
+            _proposal_is_current(
+                proposal,
+                items_by_id.get(proposal.item_id),
+            ),
+        )
+        for proposal in store.list_proposals()
+    )
     lines = [
         f"CI shepherd: {_safe(repository)} branch={_safe(branch)}",
         f"Capacity: {len(active_ids)}/{capacity_limit} active",
+    ]
+    if proposals:
+        current_proposals = sum(current for _, current in proposals)
+        lines.append(
+            f"Proposals: current={current_proposals} "
+            f"stale={len(proposals) - current_proposals}"
+        )
+    lines.extend((
         _pass_line(latest_pass),
         (
             "Time to first confirmed assignment: unavailable"
@@ -65,7 +85,7 @@ def render_status(
             else "Time to first confirmed assignment: "
             f"{_duration(first_assignment.total_seconds())}"
         ),
-    ]
+    ))
     if shadow is not None:
         lines.extend((
             f"Canonical source state: {_safe(shadow['canonical_state_directory'])}",
@@ -177,14 +197,15 @@ def render_status(
                     json.dumps(shadow["frozen_reasons"][str(item.id)], ensure_ascii=True)
                 )
             )
-    for proposal in store.list_proposals():
+    for proposal, current in proposals:
         detail = proposal.detail
         payload = detail["payload"]
         request = payload.get("request", {})
         lines.extend(
             (
                 "",
-                f"PROPOSED {_safe(detail['kind'])} "
+                f"PROPOSED {'CURRENT' if current else 'STALE'} "
+                f"{_safe(detail['kind'])} "
                 f"item={proposal.item_id} action={_safe(detail['actionId'])}",
                 "  Would-Do only; not authorized or executed.",
                 f"  episode={detail['episode']} "
@@ -193,6 +214,119 @@ def render_status(
             )
         )
     return "\n".join(lines)
+
+
+def _proposal_is_current(
+    proposal: object,
+    item: WorkflowItem | None,
+) -> bool:
+    if item is None or item.phase is not ItemPhase.READY_FOR_ACTION:
+        return False
+    detail = getattr(proposal, "detail", None)
+    if not isinstance(detail, Mapping):
+        return False
+    payload = detail.get("payload")
+    if not isinstance(payload, Mapping):
+        return False
+    request = payload.get("request")
+    result = payload.get("result")
+    write = payload.get("write")
+    if (
+        not isinstance(request, Mapping)
+        or not isinstance(result, Mapping)
+        or not isinstance(write, Mapping)
+    ):
+        return False
+    required = {
+        "workerId",
+        "itemId",
+        "episode",
+        "evidenceFingerprint",
+        "round",
+        "issueNumber",
+        "taskId",
+        "pullRequestNumber",
+        "followupCount",
+    }
+    if not required.issubset(request):
+        return False
+    if (
+        type(detail.get("itemId")) is not int
+        or detail["itemId"] != item.id
+        or detail["itemId"] != getattr(proposal, "item_id", None)
+        or type(request["itemId"]) is not int
+        or request["itemId"] != item.id
+        or type(detail.get("episode")) is not int
+        or detail["episode"] != item.episode
+        or type(request["episode"]) is not int
+        or request["episode"] != item.episode
+        or not isinstance(request["evidenceFingerprint"], str)
+        or request["evidenceFingerprint"] != item.evidence_fingerprint
+        or type(result.get("itemId")) is not int
+        or result["itemId"] != item.id
+        or type(result.get("episode")) is not int
+        or result["episode"] != item.episode
+        or result.get("evidenceFingerprint") != item.evidence_fingerprint
+        or item.last_judged_fingerprint != item.evidence_fingerprint
+        or type(request["round"]) is not int
+        or request["round"] < 0
+        or type(request["followupCount"]) is not int
+        or request["followupCount"] < 0
+        or request["followupCount"] != item.followup_count
+        or type(detail.get("ordinal")) is not int
+        or detail["ordinal"] < 1
+        or detail.get("status") != "PROPOSED"
+        or not isinstance(request["workerId"], str)
+        or not request["workerId"]
+    ):
+        return False
+    try:
+        kind = ActionKind(detail.get("kind"))
+    except (TypeError, ValueError):
+        return False
+    expected_action_id = (
+        f"{request['workerId']}:{item.id}:{item.episode}:"
+        f"{item.evidence_fingerprint}:{kind.value}:{detail['ordinal']}"
+    )
+    if detail.get("actionId") != expected_action_id:
+        return False
+    if kind is ActionKind.CREATE_ISSUE:
+        return (
+            result.get("decision") == "assign"
+            and request["round"] == 0
+            and request["issueNumber"] is None
+            and request["taskId"] is None
+            and request["pullRequestNumber"] is None
+            and item.issue_number is None
+            and item.task_id is None
+            and item.pull_request_number is None
+        )
+    if kind is ActionKind.ASSIGN_COPILOT:
+        return (
+            result.get("decision") == "assign"
+            and request["round"] == 0
+            and request["issueNumber"] == item.issue_number
+            and type(request["issueNumber"]) is int
+            and item.issue_number is not None
+            and request["taskId"] is None
+            and request["pullRequestNumber"] is None
+            and item.task_id is None
+            and item.pull_request_number is None
+        )
+    return (
+        result.get("decision") == "follow_up"
+        and request["round"] == item.followup_count + 1
+        and request["issueNumber"] == item.issue_number
+        and type(request["issueNumber"]) is int
+        and request["taskId"] == item.task_id
+        and isinstance(request["taskId"], str)
+        and bool(request["taskId"])
+        and request["pullRequestNumber"] == item.pull_request_number
+        and type(request["pullRequestNumber"]) is int
+        and item.issue_number is not None
+        and item.task_id is not None
+        and item.pull_request_number is not None
+    )
 
 
 def _workflow_health(store: WorkflowLoopStore) -> list[str]:
