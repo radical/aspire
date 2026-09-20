@@ -1,6 +1,6 @@
 name: ZZ Shepherd Canary
 
-# Temporary fixture for CI shepherd fork validation. Intentionally invalid so
+# Temporary fixture (second failing run) for CI shepherd fork validation. Intentionally invalid so
 # GitHub concludes the run before creating any job, which is the jobless
 # failure case the tracker-only settlement handles.
 
