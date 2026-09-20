@@ -1,8 +1,8 @@
 name: ZZ Shepherd Canary
 
-# Temporary fixture (second failing run) for CI shepherd fork validation. Intentionally invalid so
-# GitHub concludes the run before creating any job, which is the jobless
-# failure case the tracker-only settlement handles.
+# Temporary fixture for CI shepherd fork validation. Now valid and passing, to
+# observe what the shepherd does with the tracker it filed while this workflow
+# was failing.
 
 on:
   push:
@@ -13,5 +13,5 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-        with: this-is-not-a-mapping
+      - name: Succeed
+        run: echo "canary is green"
