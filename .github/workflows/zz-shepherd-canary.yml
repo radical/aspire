@@ -1,8 +1,8 @@
 name: ZZ Shepherd Canary
 
-# Temporary fixture. `uses:` a path that does not exist, which GitHub reports
-# as startup_failure on the run with zero jobs -- the shape real upstream
-# jobless failures have, unlike an invalid `with:` which concludes `failure`.
+# Temporary fixture for CI shepherd fork validation. Intentionally invalid so
+# GitHub concludes the run before creating any job, which is the jobless
+# failure case the tracker-only settlement handles.
 
 on:
   push:
@@ -13,4 +13,5 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     steps:
-      - uses: ./.github/actions/this-action-does-not-exist
+      - uses: actions/checkout@v5
+        with: this-is-not-a-mapping
