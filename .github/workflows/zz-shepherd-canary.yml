@@ -1,0 +1,16 @@
+name: ZZ Shepherd Canary
+
+# Temporary fixture. `uses:` a path that does not exist, which GitHub reports
+# as startup_failure on the run with zero jobs -- the shape real upstream
+# jobless failures have, unlike an invalid `with:` which concludes `failure`.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/this-action-does-not-exist
