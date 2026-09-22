@@ -194,7 +194,14 @@ code changes yourself.
    `docs/ci/test-trigger-map.md`, and the real changed-file list from the
    example PRs before concluding the selection is wrong. Do not speculate
    about what a file "probably" affects.
-7. **Check how this was handled before.** Maintainers have already made
+7. **Check whether a fix is already in flight.** Before going further with a
+   candidate, use `search_pull_requests` to look for **open** PRs touching
+   `eng/github-ci/test-trigger-map.yml` or naming the rule.
+
+   If a fix is already in flight, reject the candidate and say so in the
+   run summary. Filing anyway would start a second coding agent on work
+   that is already done and put a duplicate PR in front of a reviewer.
+8. **Check how this was handled before.** Maintainers have already made
    many of these decisions, and the trigger map records them. For each
    surviving candidate — not up front, and not for the whole file — use
    `list_commits` with `path: eng/github-ci/test-trigger-map.yml` and
@@ -218,7 +225,7 @@ code changes yourself.
    - **Look for missed siblings.** If a past commit routed one consumer of
      a shared input but left sibling consumers on the fallback, that gap
      is itself a strong candidate.
-8. **Apply the confidence bar.** Candidate findings include: a path rule
+9. **Apply the confidence bar.** Candidate findings include: a path rule
    broader than its actual consumers, a missing path rule that would let a
    runtime-only consumer (e.g. a test fixture, generated AppHost, or package
    copied into an E2E workspace) silently rely on the ALL fallback, an
@@ -243,7 +250,7 @@ code changes yourself.
 
    If any of those is missing, it is not high-confidence. Report it in the
    run summary instead.
-9. **Pick one, or none.** If several candidates clear the bar, file only the
+10. **Pick one, or none.** If several candidates clear the bar, file only the
    strongest — the one with the clearest evidence and the most `ALL` runs
    avoided. If none clear it, file nothing. A run that files no issue is a
    normal, successful run; filing a weak finding is worse than filing
@@ -310,6 +317,7 @@ In your final response, report:
 - Candidates you considered but rejected as correct-by-design or as failing
   the confidence bar, and which specific criterion each one failed. Call out
   separately any candidate rejected because history shows the same change
-  was already tried and reverted.
+  was already tried and reverted, and any rejected because a fix is already
+  in flight.
 - The issue filed this run, if any, or a one-line note that no finding
   cleared the bar this week.
