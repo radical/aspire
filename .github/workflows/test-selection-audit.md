@@ -147,15 +147,24 @@ code changes yourself.
    already cover the invariant, or a focused guard test could be added that
    would fail if the narrowed behavior regressed. A missed test is worse
    than an extra CI run — when in doubt, do not propose narrowing.
-4. **Do not question broad build-input files.** Files like
-   `Directory.Packages.props`, `Directory.Build.props`,
-   `Directory.Build.targets`, `NuGet.config`, `eng/Versions.props`, and
-   `src/Directory.Build.props` legitimately affect nearly the entire .NET
-   project graph — treat their `ALL` escalation as correct-by-design and do
-   not flag it as a finding, even if it looks broad.
+4. **Do not question broad build-input files.** These files legitimately
+   affect nearly the entire .NET project graph — treat their `ALL`
+   escalation as correct-by-design and do not flag it as a finding, even if
+   it looks broad:
 
-   This exemption covers build inputs **only**. It does not extend to CI
-   YAML.
+   `Directory.Packages.props`, `Directory.Build.props`,
+   `Directory.Build.targets`, `NuGet.config`, `eng/Versions.props`,
+   `eng/Version.Details.xml`, `src/Directory.Build.props`, `global.json`,
+   and `Aspire.slnx`.
+
+   **That list is exhaustive.** It is not a category to reason by analogy
+   from. A file is exempt because it appears above, not because it sits at
+   the repository root, has a `.props`/`.json` extension, or looks
+   infrastructural. In particular, `.gitattributes`, `.editorconfig`,
+   `.config/dotnet-tools.json`, and CI YAML are **not** on this list and
+   must be judged on their actual effect like anything else — a previous
+   run wrongly waved `.gitattributes` through as a "broad build input",
+   which is exactly the kind of over-selection this audit exists to catch.
 5. **CI YAML and composite actions are in scope.** Changes under
    `.github/workflows/**` and `.github/actions/**` are a frequent `ALL`
    trigger, and unlike build inputs they are *not* automatically
