@@ -104,11 +104,22 @@ code changes yourself.
 
 ## Audit procedure
 
-1. **Enumerate.** List recent PRs (or the given PR numbers) and their
-   selection results. For each, capture: PR number, run ID, attempt,
-   timestamp, changed files, selected project/test count, whether the
-   selection was `ALL`, the escalation reason, and any unmatched/unattributed
-   file that caused the escalation.
+1. **Enumerate, cheaply first.** Work in two passes so you do not spend the
+   run's budget on PRs that selected normally.
+
+   - *Pass 1 (broad, cheap).* Get the candidate PR list for the window in as
+     few calls as possible — use `list_pull_requests`/`search_pull_requests`
+     and reuse the metadata they already return. Then read only the
+     **selection comment** for each PR to decide whether it selected `ALL`.
+     Do not fetch per-PR metadata or changed files in this pass; a PR that
+     selected normally needs no further calls.
+   - *Pass 2 (narrow, detailed).* Only for PRs that selected `ALL`, capture:
+     PR number, run ID, attempt, timestamp, changed files, selected
+     project/test count, the escalation reason, and any
+     unmatched/unattributed file that caused the escalation.
+
+   When a PR has no selection comment (fork PRs), fall back to its CI run —
+   the selection job's log or artifact — rather than skipping it.
 2. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
    concrete example PRs per trigger.
@@ -133,8 +144,9 @@ code changes yourself.
    surviving candidate — not up front, and not for the whole file — use
    `list_commits` with `path: eng/github-ci/test-trigger-map.yml` and
    `get_commit` to read the commits that last touched the rule or section
-   you are about to change, plus their PR discussion. Use this for three
-   things:
+   you are about to change, plus their PR discussion. Keep `perPage` small
+   (5-10) — commit messages in this repository are long, and a wide page
+   costs far more context than it returns. Use this for three things:
 
    - **Pick an existing fix shape.** The map has distinct mechanisms —
      `prefilter`, `ignore`, `path_rules`, `affected_project_rules`,
