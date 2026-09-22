@@ -2,11 +2,13 @@
 description: |
   Weekly audit of Aspire PR CI's dynamic test selection (`tools/SelectTests`,
   `eng/github-ci/test-trigger-map.yml`). Looks for pull requests where the
-  selector fell back to running ALL tests, classifies why, and files at most
-  one issue per run for its single highest-confidence case where the
-  selection could safely run fewer tests. The filed issue is assigned to the
-  Copilot coding agent, which implements and validates the fix and opens a
-  PR for human review. This workflow never edits the trigger map itself.
+  selector fell back to running ALL tests, classifies why, checks how
+  similar cases were handled in the trigger map's own commit history, and
+  files at most one issue per run for its single highest-confidence case
+  where the selection could safely run fewer tests. The filed issue is
+  assigned to the Copilot coding agent, which implements and validates the
+  fix and opens a PR for human review. This workflow never edits the
+  trigger map itself.
 
 max-daily-ai-credits: -1
 
@@ -126,7 +128,30 @@ code changes yourself.
    `docs/ci/test-trigger-map.md`, and the real changed-file list from the
    example PRs before concluding the selection is wrong. Do not speculate
    about what a file "probably" affects.
-6. **Apply the confidence bar.** Candidate findings include: a path rule
+6. **Check how this was handled before.** Maintainers have already made
+   many of these decisions, and the trigger map records them. For each
+   surviving candidate — not up front, and not for the whole file — use
+   `list_commits` with `path: eng/github-ci/test-trigger-map.yml` and
+   `get_commit` to read the commits that last touched the rule or section
+   you are about to change, plus their PR discussion. Use this for three
+   things:
+
+   - **Pick an existing fix shape.** The map has distinct mechanisms —
+     `prefilter`, `ignore`, `path_rules`, `affected_project_rules`,
+     `derived_targets`, and `groups` — and they are not interchangeable.
+     In particular, when a file genuinely cannot affect any test outcome,
+     the established fix is an `ignore:` entry with a comment saying why
+     (e.g. "Layer 1 covers", "no GH-CI consumer"), **not** a narrowed
+     `path_rules` target. Match the surrounding comment convention,
+     including its habit of documenting deliberate *non*-entries.
+   - **Respect recorded failures.** If history shows a rule was already
+     narrowed and later widened back (or an `ignore` entry was removed),
+     that is direct evidence the narrowing was wrong. Do not propose it
+     again — report it in the run summary as previously-tried instead.
+   - **Look for missed siblings.** If a past commit routed one consumer of
+     a shared input but left sibling consumers on the fallback, that gap
+     is itself a strong candidate.
+7. **Apply the confidence bar.** Candidate findings include: a path rule
    broader than its actual consumers, a missing path rule that would let a
    runtime-only consumer (e.g. a test fixture, generated AppHost, or package
    copied into an E2E workspace) silently rely on the ALL fallback, an
@@ -140,13 +165,16 @@ code changes yourself.
    - You identified the exact rule or code path responsible, by reading it.
    - You enumerated the file's real consumers from repository source, not
      from what the name suggests.
-   - You can name the specific narrowed rule the fix should produce.
+   - You can name the specific narrowed rule the fix should produce, using
+     one of the map's existing mechanisms.
    - You can name a test that would fail if the narrowing were wrong.
+   - History does not show this same narrowing already being tried and
+     reverted.
    - You would be comfortable defending the change in review.
 
    If any of those is missing, it is not high-confidence. Report it in the
    run summary instead.
-7. **Pick one, or none.** If several candidates clear the bar, file only the
+8. **Pick one, or none.** If several candidates clear the bar, file only the
    strongest — the one with the clearest evidence and the most `ALL` runs
    avoided. If none clear it, file nothing. A run that files no issue is a
    normal, successful run; filing a weak finding is worse than filing
@@ -175,9 +203,16 @@ The body must contain:
   than necessary, in one or two plain-language sentences.
 - **Suggested fix**: the specific, scoped change to
   `eng/github-ci/test-trigger-map.yml` (or the selector) — not a rewrite of
-  the selection design. Name the test to add or update under
-  `tests/Infrastructure.Tests/TestTriggerMap/` to pin the new behavior, and
-  note whether `docs/ci/test-trigger-map.md` needs a matching update.
+  the selection design. Say which mechanism it uses (`prefilter`, `ignore`,
+  `path_rules`, `affected_project_rules`, `derived_targets`, or `groups`)
+  and cite a prior commit that used the same shape, so the assigned agent
+  follows established convention rather than inventing one. Name the test to
+  add or update under `tests/Infrastructure.Tests/TestTriggerMap/` to pin the
+  new behavior, and note whether `docs/ci/test-trigger-map.md` needs a
+  matching update.
+- **Prior art**: the commits you consulted for this rule and what they
+  establish. If history shows a related change that was reverted, say so
+  and explain why this proposal is different.
 - **Required validation** (the assigned agent must do this before opening a
   PR, and must not claim success without it):
   - Run `tools/SelectTests` against the changed-file lists from the example
@@ -201,6 +236,8 @@ In your final response, report:
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
   with counts.
 - Candidates you considered but rejected as correct-by-design or as failing
-  the confidence bar, and which specific criterion each one failed.
+  the confidence bar, and which specific criterion each one failed. Call out
+  separately any candidate rejected because history shows the same change
+  was already tried and reverted.
 - The issue filed this run, if any, or a one-line note that no finding
   cleared the bar this week.
