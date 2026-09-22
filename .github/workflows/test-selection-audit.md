@@ -122,8 +122,23 @@ code changes yourself.
      project/test count, the escalation reason, and any
      unmatched/unattributed file that caused the escalation.
 
-   When a PR has no selection comment (fork PRs), fall back to its CI run —
-   the selection job's log or artifact — rather than skipping it.
+   **Skip, without spending further calls on them**, any PR that cannot have
+   a selection result yet:
+
+   - CI still pending — runs that are queued or in progress. The selection
+     may not be posted yet, or may still change on a later attempt.
+   - CI in `action_required` — a fork PR waiting on maintainer approval
+     before workflows run. No selection has happened at all.
+   - No CI run in the window, or the selection job did not run.
+
+   These are not findings and they are not "no comment" cases; do not fall
+   back to reading their runs. Count them and report the total as skipped in
+   the run summary, so a window that looks quiet for this reason is
+   distinguishable from one that genuinely had no `ALL` selections.
+
+   When a PR has no selection comment but its CI **did** complete (fork PRs
+   don't get commented on), fall back to its CI run — the selection job's
+   log or artifact — rather than skipping it.
 2. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
    concrete example PRs per trigger.
@@ -278,6 +293,9 @@ In your final response, report:
 
 - How many PRs/runs were analyzed and over what window (or which PR numbers,
   if explicitly given).
+- How many PRs were skipped because they could not have a selection result
+  yet (CI pending, `action_required`, or no selection job), so a quiet
+  window is distinguishable from an unanalyzable one.
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
   with counts.
 - Candidates you considered but rejected as correct-by-design or as failing
