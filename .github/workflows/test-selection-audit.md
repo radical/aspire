@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: "How many days of PRs/CI runs to analyze (default: 7)"
+        description: "How many days of PRs/CI runs to analyze (default: 14)"
         required: false
         type: number
       pr_numbers:
@@ -88,7 +88,11 @@ code changes yourself.
 ## Scope and data sources
 
 - Lookback: the last `${{ github.event.inputs.lookback_days }}` days of pull
-  requests and CI runs, or **7 days** if that input is empty. If
+  requests and CI runs, or **14 days** if that input is empty. The window is
+  deliberately wider than the weekly cadence: a single week's merges are
+  mostly routine and tend to surface only correct-by-design escalations, so
+  a one-week window produces empty runs. Overlapping windows are safe
+  because findings are deduplicated by title. If
   `${{ github.event.inputs.pr_numbers }}` is set, analyze only those PRs
   (ignore the lookback window for selecting PRs, but still use it as context
   when useful).
@@ -134,12 +138,39 @@ code changes yourself.
    `src/Directory.Build.props` legitimately affect nearly the entire .NET
    project graph — treat their `ALL` escalation as correct-by-design and do
    not flag it as a finding, even if it looks broad.
-5. **Verify against source, not memory.** For every candidate, read the
+
+   This exemption covers build inputs **only**. It does not extend to CI
+   YAML.
+5. **CI YAML and composite actions are in scope.** Changes under
+   `.github/workflows/**` and `.github/actions/**` are a frequent `ALL`
+   trigger, and unlike build inputs they are *not* automatically
+   correct-by-design. A workflow or action that gates exactly one job, or
+   whose change cannot affect any test outcome at all (release gating,
+   labeling, issue automation, docs publishing), is a legitimate finding —
+   do not wave it through just because the rule that matched it carries a
+   comment. Judge the specific file's real effect, not the rule's blurb.
+
+   Two things to get right before proposing anything here:
+
+   - **`.github/actions/**` -> ALL is pinned by a guard test.** The map
+     routes every local composite action to ALL, and
+     `TestTriggerMapTests.EveryLocalActionUsedByAWorkflowIsRoutedToAll`
+     asserts that every action referenced by any workflow stays routed that
+     way. So a narrowing here is not a one-line map edit: your suggested fix
+     must say explicitly how that test's contract changes (for example, a
+     documented exception list the test honors) and must treat updating the
+     test as part of the work. If you cannot describe that coherently, the
+     candidate fails the confidence bar.
+   - **A self-referential ALL is correct.** If the PR modified the selector
+     itself — `tools/SelectTests`, `eng/github-ci/test-trigger-map.yml`, or
+     the select-tests action/workflow — then running ALL is the intended
+     safety behavior, not an over-selection bug. Reject those.
+6. **Verify against source, not memory.** For every candidate, read the
    actual selector implementation, `eng/github-ci/test-trigger-map.yml`,
    `docs/ci/test-trigger-map.md`, and the real changed-file list from the
    example PRs before concluding the selection is wrong. Do not speculate
    about what a file "probably" affects.
-6. **Check how this was handled before.** Maintainers have already made
+7. **Check how this was handled before.** Maintainers have already made
    many of these decisions, and the trigger map records them. For each
    surviving candidate — not up front, and not for the whole file — use
    `list_commits` with `path: eng/github-ci/test-trigger-map.yml` and
@@ -163,7 +194,7 @@ code changes yourself.
    - **Look for missed siblings.** If a past commit routed one consumer of
      a shared input but left sibling consumers on the fallback, that gap
      is itself a strong candidate.
-7. **Apply the confidence bar.** Candidate findings include: a path rule
+8. **Apply the confidence bar.** Candidate findings include: a path rule
    broader than its actual consumers, a missing path rule that would let a
    runtime-only consumer (e.g. a test fixture, generated AppHost, or package
    copied into an E2E workspace) silently rely on the ALL fallback, an
@@ -180,13 +211,15 @@ code changes yourself.
    - You can name the specific narrowed rule the fix should produce, using
      one of the map's existing mechanisms.
    - You can name a test that would fail if the narrowing were wrong.
+   - If an existing guard test currently pins the behavior you want to
+     change, you can state how that test's contract should change.
    - History does not show this same narrowing already being tried and
      reverted.
    - You would be comfortable defending the change in review.
 
    If any of those is missing, it is not high-confidence. Report it in the
    run summary instead.
-8. **Pick one, or none.** If several candidates clear the bar, file only the
+9. **Pick one, or none.** If several candidates clear the bar, file only the
    strongest — the one with the clearest evidence and the most `ALL` runs
    avoided. If none clear it, file nothing. A run that files no issue is a
    normal, successful run; filing a weak finding is worse than filing
