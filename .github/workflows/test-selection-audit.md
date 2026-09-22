@@ -58,9 +58,10 @@ tools:
   # A completed CI run's selection result never changes, so re-deriving it
   # every week is wasted budget -- and with a 14-day window on a weekly
   # schedule, consecutive runs overlap by about half. `processed-runs.jsonl`
-  # records the runs already resolved so they are never looked at twice; it
-  # is pruned to the lookback window, since older runs are never enumerated
-  # again.
+  # records the PR head commits already resolved so they are never looked at
+  # twice. It keys on pr+sha rather than the PR alone because an open PR
+  # keeps gaining commits, each with its own selection. It is pruned to the
+  # lookback window, since older commits are never enumerated again.
   #
   # `watchlist.jsonl` is the durable half. A rule that escalates to ALL a
   # few times in one window is weak evidence, but the same rule accumulating
@@ -73,7 +74,7 @@ tools:
   # retained indefinitely.
   repo-memory:
     branch-name: memory/test-selection-audit
-    description: "Processed CI runs and the rule watchlist for the CI test-selection audit"
+    description: "Resolved PR selections and the rule watchlist for the CI test-selection audit"
     # Both ledgers are JSONL because gh-aw union-merges .jsonl on conflict,
     # so an append from one run can never clobber another's rows.
     file-glob: ["*.jsonl", "*.md"]
@@ -145,27 +146,49 @@ code changes yourself.
    normal, treat both as empty and carry on):
 
    - `processed-runs.jsonl` — the "already looked at, nothing to do here"
-     ledger. One terse row per CI run whose selection you have already
-     resolved:
-     `{"run": 35792530560, "pr": 20131, "all": false, "seen": "2026-09-22"}`.
+     ledger. One terse row per PR head commit whose selection you have
+     already resolved:
+     `{"pr": 20131, "sha": "a1b2c3d", "all": false, "seen": "2026-09-22"}`.
 
-     **Key on the run, not the PR.** A completed run's selection result is
-     immutable, so a run in this ledger never needs looking at again. A
-     *pull request* is not settled the same way — an open PR gets new
-     commits and new selection runs later, so skipping a whole PR because
-     you saw one of its runs would silently miss everything after it.
+     **`sha` is required on every row.** Key on the commit, never on the
+     PR alone. Selection is a function of the files changed at a given
+     commit, so a `pr`+`sha` pair is settled permanently — but a *pull
+     request* is not: an open PR keeps gaining commits, each with its own
+     selection. A row carrying only `pr` would make the next run skip that
+     PR forever and silently miss every push after the one you saw.
+
+     Use the head SHA that pass 1 already returns, abbreviated to 7
+     characters. Do not spend extra calls establishing identity; if you
+     genuinely cannot determine the head SHA for a PR, omit the row
+     entirely rather than writing one without `sha`.
 
      Keep rows minimal. This file is read back in full on every run, so
      anything beyond identity and outcome costs context forever and buys
-     nothing — the interesting detail belongs in `watchlist.jsonl`.
+     nothing — the interesting detail belongs in `watchlist.jsonl`. The one
+     useful extra is `"rule"` on an `all: true` row, which lets a later run
+     recount escalations without re-fetching.
 
    - `watchlist.jsonl` — the rules worth continuing to watch. One row per
      trigger you have judged:
-     `{"rule": ".github/actions/**", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "filed_issue": null}`.
+     `{"rule": ".github/actions/**", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
 
-     `verdict` is one of `watch` (a plausible candidate that has not yet
-     cleared the confidence bar), `correct-by-design` (settled; stop
-     re-deriving it), or `filed` (an issue exists — see `filed_issue`).
+     `verdict` is one of:
+
+     - `watch` — a plausible candidate that has not yet cleared the
+       confidence bar. Keep accumulating evidence for it.
+     - `correct-by-design` — settled; stop re-deriving it.
+     - `filed` — **this workflow** filed an issue for it. Put the issue
+       number in `ref`.
+     - `in-flight` — someone else is already fixing it (see step 8). Put
+       the PR number in `ref`. Do not record this as `filed`: the two
+       decay differently, since an in-flight PR can be closed unmerged and
+       the rule then returns to `watch`, whereas a filed issue stays ours.
+
+     Only record a rule you actually observed escalating this window, or
+     one already carried forward from a previous run. Do not seed a row
+     for a rule you merely noticed sharing a fix with an observed one — a
+     row with `all_runs: 0` is noise that dilutes the counts this ledger
+     exists to accumulate.
 
      Carry these forward rather than re-deriving them. For a rule recorded
      `correct-by-design`, do not re-read the trigger map and its history
@@ -182,9 +205,11 @@ code changes yourself.
 
    - *Pass 1 (broad, cheap).* Get the candidate PR list for the window in as
      few calls as possible — use `list_pull_requests`/`search_pull_requests`
-     and reuse the metadata they already return. Skip any CI run already
-     recorded in `processed-runs.jsonl`; if every run for a PR is already
-     recorded, the PR needs no calls at all. Then read only the
+     and reuse the metadata they already return — including each PR's
+     **head SHA**, which you need both to skip already-resolved work and
+     to write the ledger later. Skip any PR whose current head SHA already
+     has a row in `processed-runs.jsonl`; a PR whose head has not moved
+     since you resolved it needs no calls at all. Then read only the
      **selection comment** for each remaining PR to decide whether it
      selected `ALL`. Do not fetch per-PR metadata or changed files in this
      pass; a PR that selected normally needs no further calls.
@@ -273,8 +298,10 @@ code changes yourself.
 
    - Use `search_pull_requests` for **open** PRs touching
      `eng/github-ci/test-trigger-map.yml` or naming the rule.
-   - Check `watchlist.jsonl` for a `filed_issue` recorded against this
-     rule by an earlier run.
+   - Check `watchlist.jsonl` for an `in-flight` or `filed` verdict
+     recorded against this rule by an earlier run, and confirm its `ref`
+     is still open — an in-flight PR that was closed unmerged no longer
+     blocks the candidate.
 
    If a fix is already in flight, reject the candidate and say so in the
    run summary. Filing anyway would start a second coding agent on work
@@ -338,19 +365,22 @@ code changes yourself.
     ledgers in `/tmp/gh-aw/repo-memory/default/`. They are committed
     automatically after the run; you only need to write the files.
 
-    - Append one row to `processed-runs.jsonl` for every CI run you
+    - Append one row to `processed-runs.jsonl` for every PR head you
       resolved this run, including the ones that selected normally —
       recording a non-`ALL` outcome is what stops the next run from
-      fetching it again. Do **not** append rows for PRs you skipped as
-      pending / `action_required`: nothing was resolved, and they still
-      need analysis once their CI finishes.
+      fetching it again. **Every row must carry both `pr` and `sha`**; a
+      row without `sha` would make future runs skip that PR permanently.
+      Do **not** append rows for PRs you skipped as pending /
+      `action_required`: nothing was resolved, and they still need
+      analysis once their CI finishes.
 
       Then **prune** it: drop rows whose `seen` date is older than twice
-      the lookback window. Runs outside the window are never enumerated
+      the lookback window. Commits outside the window are never enumerated
       again, so keeping them only grows a file you re-read every time.
-    - Update `watchlist.jsonl` for each rule you judged this run: carry the
-      cumulative `all_runs` count forward, refresh `last_seen`, and set
-      `verdict` / `filed_issue` to match where the rule now stands. Keep a
+    - Update `watchlist.jsonl` for each rule you actually observed
+      escalating this run, plus any carried forward from earlier runs:
+      carry the cumulative `all_runs` count forward, refresh `last_seen`,
+      and set `verdict` / `ref` to match where the rule now stands. Keep a
       rule here even when it fails the confidence bar — a `watch` row that
       keeps accumulating escalations is the evidence a future run needs to
       justify acting. Drop a rule only once it is settled
