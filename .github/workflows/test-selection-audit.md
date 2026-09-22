@@ -5,10 +5,12 @@ description: |
   selector fell back to running ALL tests, classifies why, checks how
   similar cases were handled in the trigger map's own commit history, and
   files at most one issue per run for its single highest-confidence case
-  where the selection could safely run fewer tests. The filed issue is
-  assigned to the Copilot coding agent, which implements and validates the
-  fix and opens a PR for human review. This workflow never edits the
-  trigger map itself.
+  where the selection could safely run fewer tests. Per-PR results and
+  per-rule verdicts persist across runs in a memory branch, so escalation
+  counts accumulate into cross-run evidence and no PR is analyzed twice.
+  The filed issue is assigned to the Copilot coding agent, which
+  implements and validates the fix and opens a PR for human review. This
+  workflow never edits the trigger map itself.
 
 max-daily-ai-credits: -1
 
@@ -52,6 +54,35 @@ tools:
     # this workflow reads PR content, including from forks.
     toolsets: [repos, pull_requests, actions]
     lockdown: false
+
+  # A completed CI run's selection result never changes, so re-deriving it
+  # every week is wasted budget -- and with a 14-day window on a weekly
+  # schedule, consecutive runs overlap by about half. `processed-runs.jsonl`
+  # records the runs already resolved so they are never looked at twice; it
+  # is pruned to the lookback window, since older runs are never enumerated
+  # again.
+  #
+  # `watchlist.jsonl` is the durable half. A rule that escalates to ALL a
+  # few times in one window is weak evidence, but the same rule accumulating
+  # escalations week after week is worth acting on -- and that is only
+  # visible if the counts survive across runs.
+  #
+  # Repo memory, not cache memory: GitHub Actions evicts unused caches after
+  # 7 days, which is exactly this workflow's period, so a cache would
+  # routinely be gone by the next run. Repo memory is branch-backed and
+  # retained indefinitely.
+  repo-memory:
+    branch-name: memory/test-selection-audit
+    description: "Processed CI runs and the rule watchlist for the CI test-selection audit"
+    # Both ledgers are JSONL because gh-aw union-merges .jsonl on conflict,
+    # so an append from one run can never clobber another's rows.
+    file-glob: ["*.jsonl", "*.md"]
+    allowed-extensions: [".jsonl", ".md"]
+    # Defaults (100KB file / 10KB patch) are too small: a run appends a row
+    # per resolved CI run, and a busy window covers a few hundred.
+    max-file-size: 2097152
+    max-patch-size: 262144
+    max-file-count: 10
 
 safe-outputs:
   create-issue:
@@ -108,15 +139,55 @@ code changes yourself.
 
 ## Audit procedure
 
-1. **Enumerate, cheaply first.** Work in two passes so you do not spend the
+1. **Load what previous runs already know.** Persistent memory for this
+   workflow is mounted at `/tmp/gh-aw/repo-memory/default/`. Read these two
+   files if they exist (on the very first run they will not — that is
+   normal, treat both as empty and carry on):
+
+   - `processed-runs.jsonl` — the "already looked at, nothing to do here"
+     ledger. One terse row per CI run whose selection you have already
+     resolved:
+     `{"run": 35792530560, "pr": 20131, "all": false, "seen": "2026-09-22"}`.
+
+     **Key on the run, not the PR.** A completed run's selection result is
+     immutable, so a run in this ledger never needs looking at again. A
+     *pull request* is not settled the same way — an open PR gets new
+     commits and new selection runs later, so skipping a whole PR because
+     you saw one of its runs would silently miss everything after it.
+
+     Keep rows minimal. This file is read back in full on every run, so
+     anything beyond identity and outcome costs context forever and buys
+     nothing — the interesting detail belongs in `watchlist.jsonl`.
+
+   - `watchlist.jsonl` — the rules worth continuing to watch. One row per
+     trigger you have judged:
+     `{"rule": ".github/actions/**", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "filed_issue": null}`.
+
+     `verdict` is one of `watch` (a plausible candidate that has not yet
+     cleared the confidence bar), `correct-by-design` (settled; stop
+     re-deriving it), or `filed` (an issue exists — see `filed_issue`).
+
+     Carry these forward rather than re-deriving them. For a rule recorded
+     `correct-by-design`, do not re-read the trigger map and its history
+     again unless the rule's own text has changed since `last_seen`; just
+     add this window's counts and move on.
+
+   The watchlist is the point of this memory. A rule that escalates to ALL
+   a few times in one window is weak evidence and will not clear the
+   confidence bar — but the same rule accumulating escalations week after
+   week is exactly the signal worth acting on, and it is only visible if
+   the counts survive across runs.
+2. **Enumerate, cheaply first.** Work in two passes so you do not spend the
    run's budget on PRs that selected normally.
 
    - *Pass 1 (broad, cheap).* Get the candidate PR list for the window in as
      few calls as possible — use `list_pull_requests`/`search_pull_requests`
-     and reuse the metadata they already return. Then read only the
-     **selection comment** for each PR to decide whether it selected `ALL`.
-     Do not fetch per-PR metadata or changed files in this pass; a PR that
-     selected normally needs no further calls.
+     and reuse the metadata they already return. Skip any CI run already
+     recorded in `processed-runs.jsonl`; if every run for a PR is already
+     recorded, the PR needs no calls at all. Then read only the
+     **selection comment** for each remaining PR to decide whether it
+     selected `ALL`. Do not fetch per-PR metadata or changed files in this
+     pass; a PR that selected normally needs no further calls.
    - *Pass 2 (narrow, detailed).* Only for PRs that selected `ALL`, capture:
      PR number, run ID, attempt, timestamp, changed files, selected
      project/test count, the escalation reason, and any
@@ -139,15 +210,18 @@ code changes yourself.
    When a PR has no selection comment but its CI **did** complete (fork PRs
    don't get commented on), fall back to its CI run — the selection job's
    log or artifact — rather than skipping it.
-2. **Classify.** Group `ALL` selections by the triggering file/path/rule.
+3. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
-   concrete example PRs per trigger.
-3. **Prefer safety over CI savings.** Do not propose narrowing a selection
+   concrete example PRs per trigger. Add this window's counts to any counts
+   already carried in `watchlist.jsonl`, and report the cumulative
+   figure alongside this window's — a rule's cross-run total is the
+   strongest frequency evidence you have.
+4. **Prefer safety over CI savings.** Do not propose narrowing a selection
    unless the file's real consumers are known and either existing tests
    already cover the invariant, or a focused guard test could be added that
    would fail if the narrowed behavior regressed. A missed test is worse
    than an extra CI run — when in doubt, do not propose narrowing.
-4. **Do not question broad build-input files.** These files legitimately
+5. **Do not question broad build-input files.** These files legitimately
    affect nearly the entire .NET project graph — treat their `ALL`
    escalation as correct-by-design and do not flag it as a finding, even if
    it looks broad:
@@ -165,7 +239,7 @@ code changes yourself.
    must be judged on their actual effect like anything else — a previous
    run wrongly waved `.gitattributes` through as a "broad build input",
    which is exactly the kind of over-selection this audit exists to catch.
-5. **CI YAML and composite actions are in scope.** Changes under
+6. **CI YAML and composite actions are in scope.** Changes under
    `.github/workflows/**` and `.github/actions/**` are a frequent `ALL`
    trigger, and unlike build inputs they are *not* automatically
    correct-by-design. A workflow or action that gates exactly one job, or
@@ -189,19 +263,23 @@ code changes yourself.
      itself — `tools/SelectTests`, `eng/github-ci/test-trigger-map.yml`, or
      the select-tests action/workflow — then running ALL is the intended
      safety behavior, not an over-selection bug. Reject those.
-6. **Verify against source, not memory.** For every candidate, read the
+7. **Verify against source, not memory.** For every candidate, read the
    actual selector implementation, `eng/github-ci/test-trigger-map.yml`,
    `docs/ci/test-trigger-map.md`, and the real changed-file list from the
    example PRs before concluding the selection is wrong. Do not speculate
    about what a file "probably" affects.
-7. **Check whether a fix is already in flight.** Before going further with a
-   candidate, use `search_pull_requests` to look for **open** PRs touching
-   `eng/github-ci/test-trigger-map.yml` or naming the rule.
+8. **Check whether a fix is already in flight.** Before going further with a
+   candidate, check whether someone is already fixing it:
+
+   - Use `search_pull_requests` for **open** PRs touching
+     `eng/github-ci/test-trigger-map.yml` or naming the rule.
+   - Check `watchlist.jsonl` for a `filed_issue` recorded against this
+     rule by an earlier run.
 
    If a fix is already in flight, reject the candidate and say so in the
    run summary. Filing anyway would start a second coding agent on work
    that is already done and put a duplicate PR in front of a reviewer.
-8. **Check how this was handled before.** Maintainers have already made
+9. **Check how this was handled before.** Maintainers have already made
    many of these decisions, and the trigger map records them. For each
    surviving candidate — not up front, and not for the whole file — use
    `list_commits` with `path: eng/github-ci/test-trigger-map.yml` and
@@ -225,7 +303,7 @@ code changes yourself.
    - **Look for missed siblings.** If a past commit routed one consumer of
      a shared input but left sibling consumers on the fallback, that gap
      is itself a strong candidate.
-9. **Apply the confidence bar.** Candidate findings include: a path rule
+10. **Apply the confidence bar.** Candidate findings include: a path rule
    broader than its actual consumers, a missing path rule that would let a
    runtime-only consumer (e.g. a test fixture, generated AppHost, or package
    copied into an E2E workspace) silently rely on the ALL fallback, an
@@ -250,12 +328,41 @@ code changes yourself.
 
    If any of those is missing, it is not high-confidence. Report it in the
    run summary instead.
-10. **Pick one, or none.** If several candidates clear the bar, file only the
+11. **Pick one, or none.** If several candidates clear the bar, file only the
    strongest — the one with the clearest evidence and the most `ALL` runs
    avoided. If none clear it, file nothing. A run that files no issue is a
    normal, successful run; filing a weak finding is worse than filing
    nothing, because it starts a coding agent session and consumes human
    review time.
+12. **Write back what you learned.** Before finishing, update the two
+    ledgers in `/tmp/gh-aw/repo-memory/default/`. They are committed
+    automatically after the run; you only need to write the files.
+
+    - Append one row to `processed-runs.jsonl` for every CI run you
+      resolved this run, including the ones that selected normally —
+      recording a non-`ALL` outcome is what stops the next run from
+      fetching it again. Do **not** append rows for PRs you skipped as
+      pending / `action_required`: nothing was resolved, and they still
+      need analysis once their CI finishes.
+
+      Then **prune** it: drop rows whose `seen` date is older than twice
+      the lookback window. Runs outside the window are never enumerated
+      again, so keeping them only grows a file you re-read every time.
+    - Update `watchlist.jsonl` for each rule you judged this run: carry the
+      cumulative `all_runs` count forward, refresh `last_seen`, and set
+      `verdict` / `filed_issue` to match where the rule now stands. Keep a
+      rule here even when it fails the confidence bar — a `watch` row that
+      keeps accumulating escalations is the evidence a future run needs to
+      justify acting. Drop a rule only once it is settled
+      `correct-by-design` or its fix has merged.
+
+    Prefer appending over rewriting: both files are `.jsonl` and are
+    union-merged on conflict, so an append is safe even if another run
+    writes concurrently, while a rewrite can silently drop rows. When you
+    must rewrite — pruning, or updating a watchlist row in place — re-read
+    the file first and preserve every row you are not deliberately
+    changing. Keep rows one-line and minimal; these files are size-capped
+    and are read back in full on every future run.
 
 ## The issue you file
 
@@ -308,12 +415,16 @@ The body must contain:
 In your final response, report:
 
 - How many PRs/runs were analyzed and over what window (or which PR numbers,
-  if explicitly given).
+  if explicitly given), and how many CI runs were skipped as already
+  recorded in `processed-runs.jsonl` rather than re-fetched.
 - How many PRs were skipped because they could not have a selection result
   yet (CI pending, `action_required`, or no selection job), so a quiet
   window is distinguishable from an unanalyzable one.
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
-  with counts.
+  with counts — both for this window and cumulatively across runs.
+- The current watchlist: each rule being tracked, its cumulative `ALL`
+  count, and how that count moved this run. A rule whose count is climbing
+  week over week is the audit's main product even when nothing is filed.
 - Candidates you considered but rejected as correct-by-design or as failing
   the confidence bar, and which specific criterion each one failed. Call out
   separately any candidate rejected because history shows the same change
