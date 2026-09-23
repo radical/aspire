@@ -17,18 +17,6 @@ concurrency:
 
 jobs:
 
-  retry_smoke:
-    name: Fork retry smoke
-    if: ${{ github.repository == 'radical/aspire' && github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fail every attempt
-        shell: bash
-        run: |
-          echo "Fork retry smoke attempt $GITHUB_RUN_ATTEMPT"
-          echo "::error::Expected fork retry smoke failure at every attempt"
-          exit 1
-
   prepare_for_ci:
     runs-on: ubuntu-latest
     name: Prepare for CI
