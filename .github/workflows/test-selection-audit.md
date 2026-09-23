@@ -50,9 +50,13 @@ network: defaults
 tools:
   bash: ["cat", "ls", "grep", "head", "tail", "wc"]
   github:
-    # Only reads: PRs, their CI runs/artifacts/summaries, and repository
-    # source (selector implementation, trigger map, docs). No write access
-    # is granted to the agent itself; all writes go through safe-outputs.
+    # Only reads: PRs, their CI runs/artifacts/summaries, repository source
+    # (selector implementation, trigger map, docs), and issues (to
+    # reconcile a `pending-filed` watchlist row against the real issue
+    # `create-issue` produced, per step 1). The `issues` toolset also
+    # exposes `create_issue`, but the GitHub MCP server always runs with
+    # `GITHUB_READ_ONLY: "1"` regardless of toolset -- write tools are
+    # non-functional here. All writes go through safe-outputs instead.
     # The default "approved" integrity filter would hide fork PRs from
     # first-time/external contributors -- exactly the fork PRs this audit
     # is meant to cover (see "Primary evidence" below), so it is disabled
@@ -60,7 +64,7 @@ tools:
     # itself: the agent can only ever produce a single low-stakes GitHub
     # issue (create-issue, max: 1), which a human reviews before any code
     # change is made.
-    toolsets: [repos, pull_requests, actions]
+    toolsets: [repos, pull_requests, actions, issues]
     min-integrity: none
 
   # A completed CI run's selection result never changes, so re-deriving it
@@ -153,6 +157,17 @@ code changes yourself.
    files if they exist (on the very first run they will not — that is
    normal, treat both as empty and carry on):
 
+   Before anything else, **reconcile any `pending-filed` row** in
+   `watchlist.jsonl` (see below): search issues (`search_issues`, any
+   state, no date bound) for the exact title stored in that row's `note`.
+   If found, rewrite the row to `filed` with that issue's number in `ref`.
+   If a `pending-filed` row is still unreconciled after surviving one full
+   run this way, the filing did not happen — `create-issue` runs in the
+   same workflow run, so a real issue would already exist by the next
+   scheduled run — so revert it to `watch` instead of leaving it stuck
+   forever; the underlying evidence is not lost, just no longer credited
+   as filed.
+
    - `processed-runs.jsonl` — the "already looked at, nothing to do here"
      ledger. One terse row per PR head commit whose selection you have
      already resolved:
@@ -205,8 +220,16 @@ code changes yourself.
      - `watch` — a plausible candidate that has not yet cleared the
        confidence bar. Keep accumulating evidence for it.
      - `correct-by-design` — settled; stop re-deriving it.
-     - `filed` — **this workflow** filed an issue for it. Put the issue
-       number in `ref`.
+     - `pending-filed` — this run asked `create-issue` to file it, but
+       `create-issue` runs in a separate job after this one finishes, so
+       the agent never learns the resulting issue number or whether
+       filing even succeeded (it can be silently dropped by
+       `deduplicate-by-title`, or fail if the assignment PAT is missing).
+       Put the exact issue title in `note` so the next run can find it.
+       Do not write `filed` directly — there is no issue number to put in
+       `ref` yet.
+     - `filed` — a prior `pending-filed` row was confirmed against a real
+       issue (see step 1). Put the issue number in `ref`.
      - `in-flight` — someone else is already fixing it (see step 9). Put
        the PR number in `ref`. Do not record this as `filed`: the two
        decay differently, since an in-flight PR can be closed unmerged and
@@ -544,15 +567,19 @@ code changes yourself.
       re-read every time.
     - Update `watchlist.jsonl` for each path you actually observed
       escalating (or missing a consumer) this run, plus any carried
-      forward from earlier runs: carry the cumulative `all_runs` /
-      `miss_runs` count forward, refresh `last_seen`, and set `verdict` /
-      `ref` to match where the path now stands. Keep a row here even when
-      it fails the confidence bar — a `watch` row that keeps accumulating
-      escalations is the evidence a future run needs to
-      justify acting. Never drop a `correct-by-design` row: it is the
-      durable verdict this ledger exists to preserve, so a future run
-      doesn't re-derive it from scratch. Drop a rule only once its fix has
-      actually merged.
+      forward from earlier runs. For a path observed escalating this run,
+      increment its `all_runs` / `miss_runs` count, refresh `last_seen` to
+      this run's date, and set `verdict` / `ref` to match where it now
+      stands. For a row merely carried forward with no new observation
+      this run, copy it unchanged — in particular, **do not** refresh
+      `last_seen`; doing so would make an inactive path look like it
+      recurred every week and corrupt the very signal this ledger exists
+      to preserve. Keep a row here even when it fails the confidence bar
+      — a `watch` row that keeps accumulating escalations is the evidence
+      a future run needs to justify acting. Never drop a
+      `correct-by-design` row: it is the durable verdict this ledger
+      exists to preserve, so a future run doesn't re-derive it from
+      scratch. Drop a rule only once its fix has actually merged.
 
     Prefer appending over rewriting: both files are `.jsonl` and are
     union-merged on conflict, so an append is safe even if another run
