@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using Aspire.TestUtilities;
 using Xunit;
 using YamlDotNet.RepresentationModel;
 
@@ -10,6 +11,12 @@ namespace Infrastructure.Tests;
 public sealed class AgenticWorkflowTests
 {
     private static readonly string s_workflowsPath = Path.Combine(RepoRoot.Path, ".github", "workflows");
+    private readonly ITestOutputHelper _testOutput;
+
+    public AgenticWorkflowTests(ITestOutputHelper testOutput)
+    {
+        _testOutput = testOutput;
+    }
 
     [Fact]
     public void GeneratedWorkflowsMatchBootstrapCompiler()
@@ -118,6 +125,197 @@ public sealed class AgenticWorkflowTests
         Assert.Contains("BODY_FILE=\"$CHANGELOG_DIR/new-body.md\"", script, StringComparison.Ordinal);
         Assert.Contains("MEMORY_DIR=\"$CHANGELOG_DIR/memory/$MILESTONE\"", script, StringComparison.Ordinal);
         AssertUploadOrdering(root, extension, upload, download, publish);
+    }
+
+    [Theory]
+    [InlineData(".md")]
+    [InlineData(".lock.yml")]
+    public void TestSelectionAuditCollectsBoundedEvidenceBeforeTheAgentRuns(string extension)
+    {
+        var root = LoadWorkflow("test-selection-audit" + extension);
+        var prepareCollector = Step(root, "Prepare test-selection collector");
+        var collector = Step(root, "Collect test-selection evidence");
+        var script = Scalar(prepareCollector, "run") + Scalar(collector, "run");
+
+        Assert.Contains("/tmp/gh-aw/test-selection-audit/evidence.json", Scalar(Mapping(collector, "env"), "OUTPUT_PATH"), StringComparison.Ordinal);
+        Assert.Equal("/tmp/gh-aw/repo-memory/default/processed-runs.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_RUNS_PATH"));
+        Assert.Equal("/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_BASELINE_PATH"));
+        Assert.Contains("MAX_COMPRESSED_BYTES", script, StringComparison.Ordinal);
+        Assert.Contains("MAX_EXPANDED_BYTES", script, StringComparison.Ordinal);
+        Assert.Contains("http.client.IncompleteRead", script, StringComparison.Ordinal);
+        Assert.Contains("for attempt in range(3)", script, StringComparison.Ordinal);
+        Assert.Contains("ThreadPoolExecutor(max_workers=8)", script, StringComparison.Ordinal);
+        Assert.Contains("entry.filename == ARTIFACT_MEMBER", script, StringComparison.Ordinal);
+        Assert.Contains("stream.read(MAX_EXPANDED_BYTES + 1)", script, StringComparison.Ordinal);
+        Assert.Contains("authorization_prefix + token", script, StringComparison.Ordinal);
+        Assert.Contains("redirected.remove_header(\"Authorization\")", script, StringComparison.Ordinal);
+        Assert.Contains("\"untrusted-fork-artifact\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"artifact-head-mismatch\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"pr-attribution-ambiguous\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"collector-error\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"recorded\"", script, StringComparison.Ordinal);
+        Assert.Contains("normalized[\"sourceHeadSha\"] == head_sha", script, StringComparison.Ordinal);
+        Assert.Contains("except Exception as error:", script, StringComparison.Ordinal);
+        Assert.Contains("\"sourceBaseSha\": source_base_sha", script, StringComparison.Ordinal);
+        Assert.Contains("output_path.chmod(0o444)", script, StringComparison.Ordinal);
+
+        if (extension == ".md")
+        {
+            Assert.Equal("30", Scalar(root, "timeout-minutes"));
+            var tools = Mapping(root, "tools");
+            var bash = Assert.IsType<YamlSequenceNode>(tools.Children[new YamlScalarNode("bash")])
+                .Children.Select(node => node.ToString()).ToArray();
+            Assert.DoesNotContain("curl", bash);
+            Assert.DoesNotContain("unzip", bash);
+
+            var githubToolsets = Assert.IsType<YamlSequenceNode>(
+                    Mapping(tools, "github").Children[new YamlScalarNode("toolsets")])
+                .Children.Select(node => node.ToString()).ToArray();
+            Assert.DoesNotContain("actions", githubToolsets);
+
+            var repoMemory = Mapping(tools, "repo-memory");
+            Assert.Equal([".jsonl"], Assert.IsType<YamlSequenceNode>(
+                repoMemory.Children[new YamlScalarNode("allowed-extensions")]).Children.Select(node => node.ToString()));
+            var validation = Scalar(Mapping(repoMemory, "validation"), "script");
+            Assert.Contains("Invalid test-selection audit memory", validation, StringComparison.Ordinal);
+            Assert.Contains("counter ${actualCount} does not match ${expectedCount}", validation, StringComparison.Ordinal);
+            Assert.Contains("entry.name === \".git\"", validation, StringComparison.Ordinal);
+            Assert.Contains("does not match trusted selection evidence", validation, StringComparison.Ordinal);
+            Assert.Contains("is not an unchanged baseline or trusted selection", validation, StringComparison.Ordinal);
+        }
+        else
+        {
+            var mappings = Mappings(root).ToList();
+            Assert.True(mappings.IndexOf(Step(root, "Clone repo-memory branch (default)")) < mappings.IndexOf(prepareCollector));
+            Assert.True(mappings.IndexOf(prepareCollector) < mappings.IndexOf(collector));
+            var validation = Step(root, "Validate repo-memory domain content (default)");
+            Assert.NotEmpty(Scalar(Mapping(validation, "env"), "VALIDATION_SCRIPT_B64"));
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task TestSelectionAuditRejectsMemoryCountersNotBackedByProcessedHeads()
+    {
+        var root = LoadWorkflow("test-selection-audit.md");
+        var validationScript = Scalar(Mapping(Mapping(Mapping(root, "tools"), "repo-memory"), "validation"), "script");
+        using var workspace = TemporaryWorkspace.Create(_testOutput);
+        var memoryPath = Path.Combine(workspace.Path, "memory");
+        Directory.CreateDirectory(memoryPath);
+        Directory.CreateDirectory(Path.Combine(memoryPath, ".git"));
+
+        var evidencePath = Path.Combine(workspace.Path, "evidence.json");
+        var baselinePath = Path.Combine(workspace.Path, "processed-runs-before.jsonl");
+        validationScript = validationScript
+            .Replace("\"/tmp/gh-aw/test-selection-audit/evidence.json\"", JsonSerializer.Serialize(evidencePath), StringComparison.Ordinal)
+            .Replace("\"/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl\"", JsonSerializer.Serialize(baselinePath), StringComparison.Ordinal);
+        var validationPath = Path.Combine(workspace.Path, "validation.js");
+        await File.WriteAllTextAsync(validationPath, validationScript);
+        var harnessPath = Path.Combine(workspace.Path, "validate-memory.js");
+        await File.WriteAllTextAsync(
+            harnessPath,
+            """
+            const fs = require("fs");
+            const path = require("path");
+            const vm = require("vm");
+            const memoryRoot = process.argv[2];
+            const script = fs.readFileSync(process.argv[3], "utf8");
+            vm.runInNewContext(script, { fs, path, memoryRoot });
+            """);
+
+        var processed = new Dictionary<string, object?>
+        {
+            ["pr"] = 42,
+            ["sha"] = new string('a', 40),
+            ["run"] = 100,
+            ["attempt"] = 1,
+            ["all"] = true,
+            ["over_paths"] = new[] { ".gitattributes" },
+            ["miss_edges"] = Array.Empty<object>(),
+            ["seen"] = "2026-09-23"
+        };
+        var watch = new Dictionary<string, object?>
+        {
+            ["path"] = ".gitattributes",
+            ["rule"] = ".gitattributes",
+            ["rule_ref"] = "eng/github-ci/test-trigger-map.yml@abcdef1",
+            ["path_ref"] = ".gitattributes@abcdef1",
+            ["kind"] = "over-selection",
+            ["verdict"] = "watch",
+            ["all_runs"] = 1,
+            ["first_seen"] = "2026-09-23",
+            ["last_seen"] = "2026-09-23",
+            ["example_prs"] = new[] { 42 },
+            ["ref"] = null
+        };
+        var processedPath = Path.Combine(memoryPath, "processed-runs.jsonl");
+        var watchPath = Path.Combine(memoryPath, "watchlist.jsonl");
+        var evidence = new
+        {
+            records = new[]
+            {
+                new
+                {
+                    pr = 42,
+                    headSha = new string('a', 40),
+                    selection = new
+                    {
+                        status = "resolved",
+                        creditable = true,
+                        run = 100,
+                        attempt = 1,
+                        result = new { selectsAll = true }
+                    }
+                }
+            }
+        };
+        await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(evidence));
+        await File.WriteAllTextAsync(baselinePath, "");
+        await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
+        await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
+
+        using var command = new NodeCommand(_testOutput, "test-selection-memory-validation");
+        command.WithTimeout(TimeSpan.FromSeconds(30));
+        var valid = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.True(valid.ExitCode == 0, valid.Output);
+
+        watch["all_runs"] = 2;
+        await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
+        var invalid = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, invalid.ExitCode);
+        Assert.Contains("counter 2 does not match 1 processed heads", invalid.Output, StringComparison.Ordinal);
+
+        watch["all_runs"] = 1;
+        await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
+        evidence = new
+        {
+            records = new[]
+            {
+                new
+                {
+                    pr = 42,
+                    headSha = new string('a', 40),
+                    selection = new
+                    {
+                        status = "untrusted-fork-artifact",
+                        creditable = false,
+                        run = 100,
+                        attempt = 1,
+                        result = new { selectsAll = true }
+                    }
+                }
+            }
+        };
+        await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(evidence));
+        var untrusted = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, untrusted.ExitCode);
+        Assert.Contains("is not an unchanged baseline or trusted selection", untrusted.Output, StringComparison.Ordinal);
+
+        await File.WriteAllTextAsync(baselinePath, JsonSerializer.Serialize(processed) + Environment.NewLine);
+        await File.WriteAllTextAsync(processedPath, "");
+        var missingBaseline = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, missingBaseline.ExitCode);
+        Assert.Contains("missing baseline processed row", missingBaseline.Output, StringComparison.Ordinal);
     }
 
     [Fact]

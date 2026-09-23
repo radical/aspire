@@ -57,34 +57,539 @@ concurrency:
   job-discriminator: ${{ github.event.inputs.pr_numbers || github.run_id }}
 
 engine: copilot
+timeout-minutes: 30
 
 network:
   allowed:
     - defaults
-    - github-actions
 
-tools:
-  bash: ["cat", "ls", "grep", "head", "tail", "wc", "curl", "unzip"]
-  github:
-    # Only GitHub MCP reads: PRs, their CI runs/artifacts, repository source
-    # (selector implementation, trigger map, docs), and issues (to
-    # reconcile a `pending-filed` watchlist row against the real issue
-    # `create-issue` produced, per step 1). The `issues` toolset also
-    # exposes `create_issue`, but the GitHub MCP server always runs with
-    # `GITHUB_READ_ONLY: "1"` regardless of toolset -- write tools are
-    # non-functional here. All writes go through safe-outputs instead.
-    # The default "approved" integrity filter would hide fork PRs from
-    # first-time/external contributors -- exactly the fork PRs this audit
-    # is meant to cover (see "Primary evidence" below), so it is disabled
-    # here. GitHub mutations are limited to one safe-output issue
-    # (create-issue, max: 1), whose assignment starts a coding agent;
-    # the resulting PR still requires human review before merging.
-    # Untrusted fork content can also influence shell commands: `curl`
-    # has outbound access to allowlisted domains for signed CI artifacts.
-    # Only fetch artifact URLs returned by GitHub's actions API, never
-    # a URL or shell fragment supplied by a PR.
-    toolsets: [repos, pull_requests, actions, issues]
-    min-integrity: none
+pre-agent-steps:
+  - name: Prepare test-selection collector
+    run: |
+      mkdir -p /tmp/gh-aw/test-selection-audit
+      cat > /tmp/gh-aw/test-selection-audit/collector.py <<'PY'
+      import concurrent.futures
+      import datetime
+      import http.client
+      import io
+      import json
+      import os
+      import pathlib
+      import re
+      import time
+      import urllib.error
+      import urllib.parse
+      import urllib.request
+      import zipfile
+
+      API_ROOT = "https://api.github.com"
+      ARTIFACT_NAME = "select-tests-selection-Linux"
+      ARTIFACT_MEMBER = "select-tests-selection.json"
+      MAX_COMPRESSED_BYTES = 10 * 1024 * 1024
+      MAX_EXPANDED_BYTES = 1024 * 1024
+      MAX_PRS = 1000
+      PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/@+#=\-]+$")
+      TARGET_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+      SELECTION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._:\-]+$")
+      SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+      TRANSIENT_NETWORK_ERRORS = (
+          urllib.error.URLError,
+          http.client.IncompleteRead,
+          http.client.RemoteDisconnected,
+          ConnectionResetError,
+          TimeoutError,
+      )
+      TRANSIENT_API_ERRORS = TRANSIENT_NETWORK_ERRORS + (json.JSONDecodeError,)
+      COLLECTOR_RECORD_ERRORS = (ValueError,) + TRANSIENT_NETWORK_ERRORS
+
+      token = os.environ["GH_TOKEN"]
+      repository = os.environ["REPOSITORY"]
+      output_path = pathlib.Path(os.environ["OUTPUT_PATH"])
+      baseline_path = pathlib.Path(os.environ["PROCESSED_BASELINE_PATH"])
+      authorization_prefix = bytes((66, 101, 97, 114, 101, 114, 32)).decode("ascii")
+
+      def parse_timestamp(value):
+          if not value:
+              return None
+          return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+      def request(path, parameters=None):
+          url = f"{API_ROOT}{path}"
+          if parameters:
+              url += "?" + urllib.parse.urlencode(parameters)
+          for attempt in range(3):
+              request_value = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": authorization_prefix + token,
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "aspire-audit",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request_value, timeout=30) as response:
+                      return json.loads(response.read())
+              except urllib.error.HTTPError as error:
+                  if error.code != 429 and error.code < 500:
+                      raise
+                  if attempt == 2:
+                      raise
+              except TRANSIENT_API_ERRORS:
+                  if attempt == 2:
+                      raise
+              time.sleep(2 ** attempt)
+          raise RuntimeError("unreachable")
+
+      def paginate(path, parameters=None, key=None, max_pages=20):
+          result = []
+          parameters = dict(parameters or {})
+          parameters["per_page"] = 100
+          for page in range(1, max_pages + 1):
+              parameters["page"] = page
+              payload = request(path, parameters)
+              values = payload[key] if key else payload
+              if not isinstance(values, list):
+                  raise ValueError(f"{path} did not return a list")
+              result.extend(values)
+              if len(values) < 100:
+                  return result, False
+          return result, True
+
+      def require_safe_string(value, pattern, context, maximum=400):
+          if not isinstance(value, str) or not value or len(value) > maximum or not pattern.fullmatch(value):
+              raise ValueError(f"{context} is invalid")
+          return value
+
+      def normalize_string_list(value, pattern, context, maximum_items=5000):
+          if not isinstance(value, list) or len(value) > maximum_items:
+              raise ValueError(f"{context} is not a bounded array")
+          result = []
+          seen = set()
+          for index, item in enumerate(value):
+              item = require_safe_string(item, pattern, f"{context}[{index}]")
+              if item in seen:
+                  raise ValueError(f"{context} contains duplicate {item}")
+              seen.add(item)
+              result.append(item)
+          return sorted(result)
+
+      def normalize_named_items(value, context):
+          if not isinstance(value, list) or len(value) > 5000:
+              raise ValueError(f"{context} is not a bounded array")
+          result = []
+          seen = set()
+          for index, item in enumerate(value):
+              if not isinstance(item, dict):
+                  raise ValueError(f"{context}[{index}] is not an object")
+              name = require_safe_string(
+                  item.get("name"), SELECTION_NAME_PATTERN, f"{context}[{index}].name", 200
+              )
+              if name in seen:
+                  raise ValueError(f"{context} contains duplicate {name}")
+              seen.add(name)
+              result.append(name)
+          return sorted(result)
+
+      def normalize_selection(payload, include_reason):
+          if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
+              raise ValueError("selection artifact has an unsupported schema")
+          inputs = payload.get("inputs")
+          if not isinstance(inputs, dict) or not isinstance(inputs.get("changeSource"), str):
+              raise ValueError("selection artifact inputs are invalid")
+          change_source = inputs["changeSource"]
+          diff_match = re.fullmatch(r"git diff ([0-9a-f]{40})\.\.([0-9a-f]{40})", change_source)
+          if diff_match:
+              source_base_sha, source_head_sha = diff_match.groups()
+          elif change_source == "(none -- force-all or unset)":
+              source_base_sha = None
+              source_head_sha = None
+          else:
+              raise ValueError("selection artifact changeSource is unsupported")
+          selects_all = payload.get("selectsAll")
+          if not isinstance(selects_all, bool):
+              raise ValueError("selection artifact selectsAll is not boolean")
+          reason = None
+          if include_reason and payload.get("escalationReason") is not None:
+              if not isinstance(payload["escalationReason"], str):
+                  raise ValueError("selection artifact escalationReason is not a string")
+              reason = payload["escalationReason"]
+              if len(reason) > 500 or any(ord(character) < 32 for character in reason):
+                  raise ValueError("selection artifact escalationReason is invalid")
+          return {
+              "selectsAll": selects_all,
+              "sourceBaseSha": source_base_sha,
+              "sourceHeadSha": source_head_sha,
+              "escalationReason": reason,
+              "changedFiles": normalize_string_list(payload.get("changedFiles"), PATH_PATTERN, "changedFiles"),
+              "excludedFiles": normalize_string_list(payload.get("excludedFiles"), PATH_PATTERN, "excludedFiles"),
+              "unattributedFiles": normalize_string_list(payload.get("unattributedFiles"), PATH_PATTERN, "unattributedFiles"),
+              "testProjects": normalize_named_items(payload.get("testProjects"), "testProjects"),
+              "jobs": normalize_named_items(payload.get("jobs"), "jobs"),
+          }
+
+      class ArtifactRedirectHandler(urllib.request.HTTPRedirectHandler):
+          def redirect_request(self, request_value, file_pointer, code, message, headers, new_url):
+              redirected = super().redirect_request(
+                  request_value, file_pointer, code, message, headers, new_url
+              )
+              if redirected and urllib.parse.urlsplit(new_url).netloc != "api.github.com":
+                  redirected.remove_header("Authorization")
+              return redirected
+
+      def download_selection(artifact_id, include_reason):
+          path = f"/repos/{repository}/actions/artifacts/{artifact_id}/zip"
+          compressed = None
+          for attempt in range(3):
+              request_value = urllib.request.Request(
+                  f"{API_ROOT}{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": authorization_prefix + token,
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "aspire-audit",
+                  },
+              )
+              try:
+                  current = bytearray()
+                  opener = urllib.request.build_opener(ArtifactRedirectHandler())
+                  with opener.open(request_value, timeout=30) as response:
+                      while True:
+                          chunk = response.read(65536)
+                          if not chunk:
+                              break
+                          current.extend(chunk)
+                          if len(current) > MAX_COMPRESSED_BYTES:
+                              raise ValueError("selection artifact exceeds the compressed-byte limit")
+                  compressed = current
+                  break
+              except urllib.error.HTTPError as error:
+                  if error.code != 429 and error.code < 500:
+                      raise
+                  if attempt == 2:
+                      raise
+              except TRANSIENT_NETWORK_ERRORS:
+                  if attempt == 2:
+                      raise
+              time.sleep(2 ** attempt)
+          if compressed is None:
+              raise RuntimeError("unreachable")
+          with zipfile.ZipFile(io.BytesIO(compressed)) as archive:
+              members = [entry for entry in archive.infolist() if entry.filename == ARTIFACT_MEMBER]
+              if len(members) != 1:
+                  raise ValueError(f"selection artifact contains {len(members)} exact members")
+              member = members[0]
+              if member.is_dir() or member.file_size > MAX_EXPANDED_BYTES:
+                  raise ValueError("selection artifact member exceeds the expanded-byte limit")
+              with archive.open(member) as stream:
+                  expanded = stream.read(MAX_EXPANDED_BYTES + 1)
+              if len(expanded) > MAX_EXPANDED_BYTES:
+                  raise ValueError("selection artifact member exceeded the expanded-byte limit while reading")
+          try:
+              payload = json.loads(expanded)
+          except (UnicodeDecodeError, json.JSONDecodeError) as error:
+              raise ValueError("selection artifact member is not valid UTF-8 JSON") from error
+          return normalize_selection(payload, include_reason)
+
+      PY
+  - name: Collect test-selection evidence
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days }}
+      PR_NUMBERS: ${{ github.event.inputs.pr_numbers }}
+      OUTPUT_PATH: /tmp/gh-aw/test-selection-audit/evidence.json
+      PROCESSED_RUNS_PATH: /tmp/gh-aw/repo-memory/default/processed-runs.jsonl
+      PROCESSED_BASELINE_PATH: /tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl
+    run: |
+      cat >> /tmp/gh-aw/test-selection-audit/collector.py <<'PY'
+      def list_pull_requests():
+          explicit_text = os.environ.get("PR_NUMBERS", "").strip()
+          if explicit_text:
+              numbers = []
+              for item in explicit_text.split(","):
+                  item = item.strip()
+                  if not re.fullmatch(r"[1-9][0-9]*", item):
+                      raise ValueError(f"invalid PR number {item!r}")
+                  number = int(item)
+                  if number not in numbers:
+                      numbers.append(number)
+              pull_requests = []
+              for number in numbers:
+                  try:
+                      pull_requests.append(request(f"/repos/{repository}/pulls/{number}"))
+                  except Exception as error:
+                      pull_requests.append({"number": number, "_collectorError": type(error).__name__})
+              return pull_requests, False
+
+          lookback_text = os.environ.get("LOOKBACK_DAYS", "").strip() or "14"
+          if not re.fullmatch(r"[1-9][0-9]*", lookback_text):
+              raise ValueError("lookback_days must be a positive integer")
+          lookback_days = int(lookback_text)
+          if lookback_days > 90:
+              raise ValueError("lookback_days must not exceed 90")
+          cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=lookback_days)
+          pull_requests = []
+          truncated = False
+          for page in range(1, 11):
+              values = request(
+                  f"/repos/{repository}/pulls",
+                  {
+                      "state": "all",
+                      "sort": "updated",
+                      "direction": "desc",
+                      "per_page": 100,
+                      "page": page,
+                  },
+              )
+              if not isinstance(values, list):
+                  raise ValueError("pull request listing did not return an array")
+              for pull_request in values:
+                  if pull_request.get("state") == "open":
+                      scope_timestamp = parse_timestamp(pull_request.get("updated_at"))
+                  else:
+                      scope_timestamp = max(
+                          timestamp
+                          for timestamp in (
+                              parse_timestamp(pull_request.get("created_at")),
+                              parse_timestamp(pull_request.get("closed_at")),
+                              parse_timestamp(pull_request.get("merged_at")),
+                          )
+                          if timestamp is not None
+                      )
+                  if scope_timestamp >= cutoff:
+                      pull_requests.append(pull_request)
+              if len(values) < 100:
+                  break
+              if parse_timestamp(values[-1].get("updated_at")) < cutoff:
+                  break
+          else:
+              truncated = True
+          if len(pull_requests) > MAX_PRS:
+              pull_requests = pull_requests[:MAX_PRS]
+              truncated = True
+          return pull_requests, truncated
+
+      def load_processed_index():
+          processed_path = pathlib.Path(os.environ["PROCESSED_RUNS_PATH"])
+          baseline_path.parent.mkdir(parents=True, exist_ok=True)
+          if not processed_path.exists():
+              baseline_path.write_text("", encoding="utf-8")
+              baseline_path.chmod(0o444)
+              return {}
+          raw = processed_path.read_bytes()
+          if len(raw) > 2 * 1024 * 1024:
+              raise ValueError("processed-runs.jsonl exceeds the configured memory limit")
+          baseline_path.write_bytes(raw)
+          baseline_path.chmod(0o444)
+          index = {}
+          for line_number, line in enumerate(raw.decode("utf-8").splitlines(), 1):
+              if not line:
+                  continue
+              row = json.loads(line)
+              if (
+                  not isinstance(row, dict)
+                  or not isinstance(row.get("pr"), int)
+                  or not isinstance(row.get("sha"), str)
+                  or not SHA_PATTERN.fullmatch(row["sha"])
+                  or not isinstance(row.get("run"), int)
+                  or not isinstance(row.get("attempt"), int)
+              ):
+                  raise ValueError(f"processed-runs.jsonl:{line_number} has an invalid identity")
+              key = (row["pr"], row["sha"])
+              if key in index:
+                  raise ValueError(f"processed-runs.jsonl:{line_number} duplicates {row['pr']}:{row['sha']}")
+              index[key] = (row["run"], row["attempt"])
+          return index
+
+      def list_changed_files(number):
+          values, truncated = paginate(
+              f"/repos/{repository}/pulls/{number}/files",
+              max_pages=30,
+          )
+          paths = []
+          for index, value in enumerate(values):
+              paths.append(require_safe_string(value.get("filename"), PATH_PATTERN, f"PR {number} file {index}"))
+          return sorted(set(paths)), truncated
+
+      def find_selection_record(pull_request):
+          number = pull_request["number"]
+          if "_collectorError" in pull_request:
+              return {
+                  "pr": number,
+                  "headSha": None,
+                  "isFork": None,
+                  "selection": {"status": "collector-error", "error": pull_request["_collectorError"]},
+              }
+          head_sha = require_safe_string(pull_request["head"]["sha"], SHA_PATTERN, f"PR {number} head SHA", 40)
+          head_repo = (pull_request.get("head", {}).get("repo") or {}).get("full_name")
+          head_ref = pull_request.get("head", {}).get("ref")
+          is_fork = head_repo != repository
+          record = {
+              "pr": number,
+              "headSha": head_sha,
+              "isFork": is_fork,
+              "selection": {"status": "unresolved"},
+          }
+          runs, runs_truncated = paginate(
+              f"/repos/{repository}/actions/runs",
+              {"event": "pull_request", "head_sha": head_sha},
+              key="workflow_runs",
+              max_pages=5,
+          )
+          relevant_runs = [
+              run for run in runs
+              if run.get("path") == ".github/workflows/ci.yml"
+              and run.get("head_sha") == head_sha
+              and (run.get("head_repository") or {}).get("full_name") == head_repo
+              and run.get("head_branch") == head_ref
+          ]
+          relevant_runs.sort(key=lambda run: (run.get("created_at") or "", run.get("run_attempt") or 0), reverse=True)
+          if not relevant_runs:
+              record["selection"] = {"status": "no-ci-run", "runsTruncated": runs_truncated}
+              return record
+
+          run = relevant_runs[0]
+          selection = {
+              "status": "unresolved",
+              "run": run["id"],
+              "attempt": run.get("run_attempt"),
+              "runsTruncated": runs_truncated,
+          }
+          record["selection"] = selection
+          if run.get("status") != "completed":
+              selection["status"] = "pending"
+              return record
+          if run.get("conclusion") == "action_required":
+              selection["status"] = "action-required"
+              return record
+          if processed_index.get((number, head_sha)) == (run["id"], run.get("run_attempt")):
+              selection["status"] = "recorded"
+              return record
+
+          associated, associations_truncated = paginate(
+              f"/repos/{repository}/commits/{head_sha}/pulls",
+              max_pages=3,
+          )
+          matching_prs = [
+              value for value in associated
+              if value.get("head", {}).get("sha") == head_sha
+              and value.get("head", {}).get("ref") == head_ref
+              and (value.get("head", {}).get("repo") or {}).get("full_name") == head_repo
+          ]
+          if associations_truncated or len(matching_prs) != 1 or matching_prs[0].get("number") != number:
+              selection["status"] = "pr-attribution-ambiguous"
+              return record
+
+          changed_files, files_truncated = list_changed_files(number)
+          record["changedFilesFromGitHub"] = changed_files
+          record["filesTruncated"] = files_truncated
+          jobs, jobs_truncated = paginate(
+              f"/repos/{repository}/actions/runs/{run['id']}/jobs",
+              {"filter": "latest"},
+              key="jobs",
+              max_pages=10,
+          )
+          selection_jobs = [
+              job for job in jobs
+              if job.get("name", "").endswith("Tests / Setup for tests")
+              and job.get("run_attempt") == run.get("run_attempt")
+          ]
+          if len(selection_jobs) != 1:
+              selection["status"] = "selection-job-ambiguous" if selection_jobs else "no-selection-job"
+              selection["jobsTruncated"] = jobs_truncated
+              return record
+          job = selection_jobs[0]
+          selection["jobsTruncated"] = jobs_truncated
+          if job.get("status") != "completed":
+              selection["status"] = "pending"
+              return record
+          steps = [step for step in job.get("steps", []) if step.get("name") == "Select relevant tests"]
+          if len(steps) != 1 or steps[0].get("conclusion") != "success":
+              selection["status"] = "selection-step-failed"
+              return record
+          select_started = parse_timestamp(steps[0].get("started_at"))
+          job_completed = parse_timestamp(job.get("completed_at"))
+
+          artifacts, artifacts_truncated = paginate(
+              f"/repos/{repository}/actions/runs/{run['id']}/artifacts",
+              key="artifacts",
+              max_pages=20,
+          )
+          candidates = []
+          for artifact in artifacts:
+              workflow_run = artifact.get("workflow_run") or {}
+              created_at = parse_timestamp(artifact.get("created_at"))
+              if (
+                  artifact.get("name") == ARTIFACT_NAME
+                  and workflow_run.get("id") == run["id"]
+                  and workflow_run.get("head_sha") == head_sha
+                  and created_at is not None
+                  and select_started is not None
+                  and job_completed is not None
+                  and select_started <= created_at <= job_completed
+              ):
+                  candidates.append(artifact)
+          selection["artifactsTruncated"] = artifacts_truncated
+          if len(candidates) != 1:
+              selection["status"] = "artifact-ambiguous" if candidates else "artifact-missing"
+              return record
+          artifact = candidates[0]
+          if artifact.get("expired"):
+              selection["status"] = "artifact-expired"
+              return record
+          try:
+              normalized = download_selection(artifact["id"], include_reason=not is_fork)
+          except Exception as error:
+              selection["status"] = "artifact-invalid"
+              selection["error"] = type(error).__name__
+              return record
+
+          source_head_matches = normalized["sourceHeadSha"] == head_sha
+          selection["creditable"] = not is_fork and source_head_matches
+          if is_fork:
+              selection["status"] = "untrusted-fork-artifact"
+              return record
+          elif not source_head_matches:
+              selection["status"] = "artifact-head-mismatch"
+          else:
+              selection["status"] = "resolved"
+          selection["result"] = normalized
+          return record
+
+      def collect_selection_record(pull_request):
+          try:
+              return find_selection_record(pull_request)
+          except COLLECTOR_RECORD_ERRORS as error:
+              head = pull_request.get("head") or {}
+              head_repo = (head.get("repo") or {}).get("full_name")
+              return {
+                  "pr": pull_request.get("number"),
+                  "headSha": head.get("sha") if SHA_PATTERN.fullmatch(head.get("sha") or "") else None,
+                  "isFork": head_repo != repository,
+                  "selection": {
+                      "status": "collector-error",
+                      "error": type(error).__name__,
+                  },
+              }
+
+      pull_requests, enumeration_truncated = list_pull_requests()
+      processed_index = load_processed_index()
+      with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+          records = list(executor.map(collect_selection_record, pull_requests))
+      output = {
+          "schemaVersion": 1,
+          "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          "repository": repository,
+          "enumerationTruncated": enumeration_truncated,
+          "records": records,
+      }
+      output_path.parent.mkdir(parents=True, exist_ok=True)
+      output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+      output_path.chmod(0o444)
+      print(f"Wrote {len(records)} records to {output_path}")
+      PY
+      python3 /tmp/gh-aw/test-selection-audit/collector.py
 
   # A selection is fixed for a particular CI run/attempt, not for a PR
   # head: re-runs can replace its result. `processed-runs.jsonl` retains
@@ -101,6 +606,24 @@ tools:
   # 7 days, which is exactly this workflow's period, so a cache would
   # routinely be gone by the next run. Repo memory is branch-backed and
   # retained indefinitely.
+tools:
+  bash: ["cat", "ls", "grep", "head", "tail", "wc"]
+  github:
+    # Only GitHub MCP reads: repository source (selector implementation,
+    # trigger map, docs), PR history, and issues (to reconcile a
+    # `pending-filed` watchlist row against the real issue `create-issue`
+    # produced, per step 1). CI selection evidence is collected by the
+    # deterministic pre-agent step above, not by the agent. The `issues`
+    # toolset also exposes `create_issue`, but the GitHub MCP server always
+    # runs with `GITHUB_READ_ONLY: "1"` regardless of toolset -- write tools
+    # are non-functional here. All writes go through safe-outputs instead.
+    # The default "approved" integrity filter would hide fork PRs from
+    # first-time/external contributors -- exactly the fork PRs this audit
+    # is meant to inspect, so it is disabled here. GitHub mutations are
+    # limited to one safe-output issue whose resulting PR still requires
+    # human review before merging.
+    toolsets: [repos, pull_requests, issues]
+    min-integrity: none
   repo-memory:
     branch-name: memory/test-selection-audit
     description: "Resolved PR selections and the rule watchlist for the CI test-selection audit"
@@ -108,13 +631,273 @@ tools:
     # updated. gh-aw's push retry uses `git pull --no-rebase -X ours` (step
     # 13), not a JSONL-aware merge; even two appends can conflict and lose
     # rows. The workflow-level concurrency group protects these ledgers.
-    file-glob: ["*.jsonl", "*.md"]
-    allowed-extensions: [".jsonl", ".md"]
+    file-glob: ["processed-runs.jsonl", "watchlist.jsonl"]
+    allowed-extensions: [".jsonl"]
     # Defaults (100KB file / 10KB patch) are too small: the durable index
     # retains one row per resolved PR head and a busy window covers hundreds.
     max-file-size: 2097152
     max-patch-size: 262144
     max-file-count: 10
+    validation:
+      timeout-minutes: 1
+      script: |
+        const allowedFiles = new Set(["processed-runs.jsonl", "watchlist.jsonl"]);
+        const pathPattern = /^[A-Za-z0-9._/@+#=\-]+$/;
+        const globPattern = /^[A-Za-z0-9._/@+#=*?\[\]\-]+$/;
+        const targetPattern = /^(test|job):[A-Za-z0-9._-]+$/;
+        const shaPattern = /^[0-9a-f]{40}$/;
+        const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+        const titlePattern = /^\[test-selection-audit\] [A-Za-z0-9 .-]{1,77}$/;
+
+        const fail = message => {
+          throw new Error(`Invalid test-selection audit memory: ${message}`);
+        };
+        const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+        const requireKeys = (value, required, allowed, context) => {
+          if (!isObject(value)) fail(`${context} must be an object`);
+          for (const key of required) {
+            if (!(key in value)) fail(`${context} is missing ${key}`);
+          }
+          for (const key of Object.keys(value)) {
+            if (!allowed.has(key)) fail(`${context} has unexpected field ${key}`);
+          }
+        };
+        const requireInteger = (value, context, minimum = 0) => {
+          if (!Number.isSafeInteger(value) || value < minimum) fail(`${context} must be an integer >= ${minimum}`);
+        };
+        const requireString = (value, pattern, context, maxLength = 400) => {
+          if (typeof value !== "string" || value.length === 0 || value.length > maxLength || !pattern.test(value)) {
+            fail(`${context} is invalid`);
+          }
+        };
+        const requireUniqueStrings = (values, pattern, context) => {
+          if (!Array.isArray(values)) fail(`${context} must be an array`);
+          const seen = new Set();
+          for (const [index, value] of values.entries()) {
+            requireString(value, pattern, `${context}[${index}]`);
+            if (seen.has(value)) fail(`${context} contains duplicate ${value}`);
+            seen.add(value);
+          }
+          return seen;
+        };
+        const readJsonLines = fileName => {
+          const fullPath = path.join(memoryRoot, fileName);
+          if (!fs.existsSync(fullPath)) return [];
+          const text = fs.readFileSync(fullPath, "utf8");
+          if (text.length === 0) return [];
+          if (!text.endsWith("\n")) fail(`${fileName} must end with a newline`);
+          return text.trimEnd().split("\n").map((line, index) => {
+            if (line.length > 16384) fail(`${fileName}:${index + 1} exceeds 16 KiB`);
+            try {
+              return JSON.parse(line);
+            } catch {
+              fail(`${fileName}:${index + 1} is not valid JSON`);
+            }
+          });
+        };
+
+        for (const entry of fs.readdirSync(memoryRoot, { withFileTypes: true })) {
+          if (entry.name === ".git") continue;
+          if (!entry.isFile() || !allowedFiles.has(entry.name)) {
+            fail(`unexpected memory entry ${entry.name}`);
+          }
+        }
+
+        const processedAllowed = new Set([
+          "pr", "sha", "run", "attempt", "all", "over_paths", "miss_edges", "seen"
+        ]);
+        const edgeAllowed = new Set(["path", "target"]);
+        const processed = readJsonLines("processed-runs.jsonl");
+        const evidencePath = "/tmp/gh-aw/test-selection-audit/evidence.json";
+        const baselinePath = "/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl";
+        const hasProvenance = fs.existsSync(evidencePath) && fs.existsSync(baselinePath);
+        const canonical = value => {
+          if (Array.isArray(value)) return value.map(canonical);
+          if (!isObject(value)) return value;
+          return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+        };
+        const baselineRows = new Map();
+        const trustedSelections = new Map();
+        if (hasProvenance) {
+          const baselineText = fs.readFileSync(baselinePath, "utf8");
+          for (const line of baselineText.split("\n")) {
+            if (!line) continue;
+            const row = JSON.parse(line);
+            baselineRows.set(`${row.pr}:${row.sha}`, JSON.stringify(canonical(row)));
+          }
+          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          for (const record of evidence.records) {
+            const selection = record.selection;
+            if (selection.status === "resolved" && selection.creditable === true) {
+              trustedSelections.set(`${record.pr}:${record.headSha}`, selection);
+            }
+          }
+        }
+        const processedKeys = new Set();
+        const overCounts = new Map();
+        const missCounts = new Map();
+        const overPrs = new Map();
+        const missPrs = new Map();
+        for (const [index, row] of processed.entries()) {
+          const context = `processed-runs.jsonl:${index + 1}`;
+          requireKeys(
+            row,
+            ["pr", "sha", "run", "attempt", "all", "over_paths", "miss_edges", "seen"],
+            processedAllowed,
+            context);
+          requireInteger(row.pr, `${context}.pr`, 1);
+          requireString(row.sha, shaPattern, `${context}.sha`, 40);
+          requireInteger(row.run, `${context}.run`, 1);
+          requireInteger(row.attempt, `${context}.attempt`, 1);
+          if (typeof row.all !== "boolean") fail(`${context}.all must be boolean`);
+          requireString(row.seen, datePattern, `${context}.seen`, 10);
+          const identity = `${row.pr}:${row.sha}`;
+          if (processedKeys.has(identity)) fail(`duplicate processed identity ${identity}`);
+          processedKeys.add(identity);
+          if (hasProvenance) {
+            const selection = trustedSelections.get(identity);
+            if (selection) {
+              if (row.run !== selection.run ||
+                  row.attempt !== selection.attempt ||
+                  row.all !== selection.result.selectsAll) {
+                fail(`${context} does not match trusted selection evidence`);
+              }
+            } else if (baselineRows.get(identity) !== JSON.stringify(canonical(row))) {
+              fail(`${context} is not an unchanged baseline or trusted selection`);
+            }
+          }
+
+          if (!row.all && row.over_paths.length > 0) {
+            fail(`${context}.over_paths must be empty for a narrow selection`);
+          }
+          for (const pathValue of requireUniqueStrings(row.over_paths, pathPattern, `${context}.over_paths`)) {
+            overCounts.set(pathValue, (overCounts.get(pathValue) || 0) + 1);
+            if (!overPrs.has(pathValue)) overPrs.set(pathValue, new Set());
+            overPrs.get(pathValue).add(row.pr);
+          }
+
+          if (!Array.isArray(row.miss_edges)) fail(`${context}.miss_edges must be an array`);
+          if (row.all && row.miss_edges.length > 0) {
+            fail(`${context}.miss_edges must be empty for an ALL selection`);
+          }
+          const edgeKeys = new Set();
+          for (const [edgeIndex, edge] of row.miss_edges.entries()) {
+            const edgeContext = `${context}.miss_edges[${edgeIndex}]`;
+            requireKeys(edge, ["path", "target"], edgeAllowed, edgeContext);
+            requireString(edge.path, pathPattern, `${edgeContext}.path`);
+            requireString(edge.target, targetPattern, `${edgeContext}.target`);
+            const edgeKey = `${edge.path}\u0000${edge.target}`;
+            if (edgeKeys.has(edgeKey)) fail(`${context} contains duplicate missing edge`);
+            edgeKeys.add(edgeKey);
+            missCounts.set(edgeKey, (missCounts.get(edgeKey) || 0) + 1);
+            if (!missPrs.has(edgeKey)) missPrs.set(edgeKey, new Set());
+            missPrs.get(edgeKey).add(row.pr);
+          }
+        }
+        if (hasProvenance) {
+          for (const identity of baselineRows.keys()) {
+            if (!processedKeys.has(identity)) fail(`missing baseline processed row ${identity}`);
+          }
+          for (const identity of trustedSelections.keys()) {
+            if (!processedKeys.has(identity)) fail(`missing processed row for trusted selection ${identity}`);
+          }
+        }
+
+        const watchAllowed = new Set([
+          "path", "rule", "rule_ref", "path_ref", "consumer_refs", "target",
+          "kind", "verdict", "all_runs", "miss_runs", "first_seen", "last_seen",
+          "example_prs", "note", "ref"
+        ]);
+        const verdicts = new Set(["watch", "correct-by-design", "pending-filed", "filed", "in-flight", "fixed"]);
+        const watch = readJsonLines("watchlist.jsonl");
+        const watchKeys = new Set();
+        for (const [index, row] of watch.entries()) {
+          const context = `watchlist.jsonl:${index + 1}`;
+          requireKeys(
+            row,
+            ["path", "rule", "rule_ref", "path_ref", "kind", "verdict",
+             "first_seen", "last_seen", "example_prs", "ref"],
+            watchAllowed,
+            context);
+          requireString(row.path, pathPattern, `${context}.path`);
+          if (row.rule !== null) requireString(row.rule, globPattern, `${context}.rule`);
+          requireString(row.rule_ref, /^[A-Za-z0-9._/@+#=\-]+@[0-9a-f]{7,40}$/, `${context}.rule_ref`);
+          requireString(row.path_ref, /^[A-Za-z0-9._/@+#=\-]+@[0-9a-f]{7,40}$/, `${context}.path_ref`);
+          requireString(row.first_seen, datePattern, `${context}.first_seen`, 10);
+          requireString(row.last_seen, datePattern, `${context}.last_seen`, 10);
+          if (row.first_seen > row.last_seen) fail(`${context}.first_seen is after last_seen`);
+          if (!verdicts.has(row.verdict)) fail(`${context}.verdict is invalid`);
+          if (row.ref !== null) requireInteger(row.ref, `${context}.ref`, 1);
+          if (!Array.isArray(row.example_prs) || row.example_prs.length > 3) {
+            fail(`${context}.example_prs must contain at most three PR numbers`);
+          }
+          const examples = new Set();
+          for (const [exampleIndex, pr] of row.example_prs.entries()) {
+            requireInteger(pr, `${context}.example_prs[${exampleIndex}]`, 1);
+            if (examples.has(pr)) fail(`${context}.example_prs contains duplicates`);
+            examples.add(pr);
+          }
+
+          let key;
+          let expectedCount;
+          let contributingPrs;
+          if (row.kind === "over-selection") {
+            if ("target" in row || "consumer_refs" in row || "miss_runs" in row) {
+              fail(`${context} mixes under-selection fields into an over-selection row`);
+            }
+            requireInteger(row.all_runs, `${context}.all_runs`);
+            key = `over\u0000${row.path}`;
+            expectedCount = overCounts.get(row.path) || 0;
+            contributingPrs = overPrs.get(row.path) || new Set();
+          } else if (row.kind === "under-selection") {
+            if ("all_runs" in row) fail(`${context} mixes all_runs into an under-selection row`);
+            requireString(row.target, targetPattern, `${context}.target`);
+            requireInteger(row.miss_runs, `${context}.miss_runs`);
+            if (!Array.isArray(row.consumer_refs) || row.consumer_refs.length === 0) {
+              fail(`${context}.consumer_refs must identify the proven runtime edge`);
+            }
+            requireUniqueStrings(
+              row.consumer_refs,
+              /^[A-Za-z0-9._/@+#=\-]+@[0-9a-f]{7,40}$/,
+              `${context}.consumer_refs`);
+            const edgeKey = `${row.path}\u0000${row.target}`;
+            key = `miss\u0000${edgeKey}`;
+            expectedCount = missCounts.get(edgeKey) || 0;
+            contributingPrs = missPrs.get(edgeKey) || new Set();
+          } else {
+            fail(`${context}.kind is invalid`);
+          }
+          if (watchKeys.has(key)) fail(`duplicate watchlist identity ${key}`);
+          watchKeys.add(key);
+
+          const actualCount = row.kind === "over-selection" ? row.all_runs : row.miss_runs;
+          if (actualCount !== expectedCount) {
+            fail(`${context} counter ${actualCount} does not match ${expectedCount} processed heads`);
+          }
+          for (const pr of examples) {
+            if (!contributingPrs.has(pr)) fail(`${context}.example_prs contains uncredited PR ${pr}`);
+          }
+
+          if (row.verdict === "pending-filed") {
+            requireString(row.note, titlePattern, `${context}.note`, 100);
+            if (row.ref !== null) fail(`${context}.ref must be null while pending-filed`);
+          } else if ("note" in row) {
+            fail(`${context}.note is allowed only for pending-filed rows`);
+          }
+          if (["filed", "in-flight", "fixed"].includes(row.verdict) && row.ref === null) {
+            fail(`${context}.ref is required for ${row.verdict}`);
+          }
+          if (["watch", "correct-by-design"].includes(row.verdict) && row.ref !== null) {
+            fail(`${context}.ref must be null for ${row.verdict}`);
+          }
+        }
+
+        for (const pathValue of overCounts.keys()) {
+          if (!watchKeys.has(`over\u0000${pathValue}`)) fail(`missing watchlist row for ${pathValue}`);
+        }
+        for (const edgeKey of missCounts.keys()) {
+          if (!watchKeys.has(`miss\u0000${edgeKey}`)) fail(`missing watchlist row for missing edge`);
+        }
 
 safe-outputs:
   create-issue:
@@ -163,42 +946,25 @@ code changes yourself.
   `${{ github.event.inputs.pr_numbers }}` is set, analyze only those PRs
   (ignore the lookback window for both selecting PRs and finding their
   completed CI runs; still use it as context when useful).
-- Primary evidence, in order of preference:
-  1. The PR's test-selection comment (posted by CI on same-repo PRs).
-  2. When no comment matches the current head (fork PRs don't get
-     commented on) — the latest relevant CI run for that head: paginate
-     `actions_list` through **all pages** of that run's artifacts to find
-     `select-tests-selection-Linux` (large CI runs can put it past the
-     first page). Download that artifact and read
-     `select-tests-selection.json` from its ZIP. The GitHub `actions_get`
-     artifact download method returns a temporary ZIP URL, not its
-     contents: use `curl --fail --location --silent --show-error
-     --max-time 30 --max-filesize 10485760 --output
-     /tmp/gh-aw/selection-<run-id>-<attempt>.zip <download-url>` and,
-     **only if the download succeeds**, `unzip -p` that ZIP's exact
-     `select-tests-selection.json` member. Use the numeric run ID and
-     attempt from GitHub, not text from the PR, in the filename. Quote
-     the GitHub-provided URL when passing it to the shell; never use a
-     PR-authored URL. Do not extract other archive members or trust a
-     stale ZIP if the download fails. If the artifact is missing,
-     expired, unreadable, or has no selection result, report the data
-     gap and leave that PR head unprocessed rather than inventing a
-     selection. For a rerun, check the selection job's `run_attempt`
-     and `started_at`; an artifact for the same workflow run may be
-     left over from an earlier attempt. Use the artifact only when
-     its `created_at` falls after this selection job started and its
-     workflow run/head SHA match. If no artifact can be attributed
-     unambiguously to this attempt, keep the prior record unchanged
-     and report the gap. This is the
-     authoritative source for fork PRs; do not report a fork PR as "no
-     data" just because there is no PR comment.
-- If a PR has multiple CI attempts, use the most recent completed attempt
-  of the selection job (order by job completion time, not comment
-  creation time) only after confirming no newer attempt is still
-  pending. A selection
-  comment is keyed by head SHA, **not** by attempt; on a new attempt for
-  an already recorded head, use that attempt's selection artifact, not
-  the comment that may still describe the previous attempt.
+- Primary evidence is the deterministic collector output at
+  `/tmp/gh-aw/test-selection-audit/evidence.json`. Read it before making
+  GitHub calls. It already enumerates the requested PR scope, finds the
+  latest CI run and selection-job attempt for each current head, paginates
+  artifacts, bounds both compressed and expanded bytes, validates the
+  JSON schema, and normalizes selection data. Do not repeat those
+  mechanical steps or substitute PR comments for this file.
+- A record is creditable only when `selection.creditable` is `true` and
+  `selection.status` is `resolved`. Other statuses are explicit data
+  gaps, except `recorded`: that status means the latest run/attempt
+  exactly matches the existing processed row, so reuse that row without
+  changing its counters or re-running the analysis. In particular, a
+  fork's artifact is produced by PR-authored workflow, action, and
+  selector code: its signed download URL proves transport, not truth.
+  The collector validates the artifact only to classify it as
+  `untrusted-fork-artifact`, then withholds its result. It cannot update
+  counters, support an issue, or authorize persistent memory. Report the
+  data gap separately; the current collector does not implement an
+  independent corroboration path that can make it creditable.
 
 ## Audit procedure
 
@@ -218,14 +984,14 @@ code changes yourself.
    issues; search results alone are not proof of identity. If several
    issues match, use the one for this finding and the most recent filing,
    not an unrelated old issue. Record its number in `ref` and mark the
-   row `filed` (including when deduplication reused a matching issue).
+   row `filed`, remove its `note`, and keep the issue number in `ref`
+   (including when deduplication reused a matching issue).
    If the search is incomplete, fails, or yields ambiguous candidates,
    leave the row pending and report the gap. Only revert an unreconciled
    row to `watch` after a *subsequent* run completes a reliable search
-   with no matching issue; do not infer failure from an unavailable
-   search or a differently formatted title. Leave legacy rows whose
-   `note` is not a reliable final title pending until their issue
-   identity can be checked by the path and target in the issue body.
+   with no matching issue; when reverting it, remove `note` and keep
+   `ref` null. Do not infer failure from an unavailable search or a
+   differently formatted title.
 
    - `processed-runs.jsonl` — a **durable index**, one row per resolved
      `pr`+full `sha`, recording the last selection evidence and the exact
@@ -242,11 +1008,10 @@ code changes yourself.
      **`pr` and the full head `sha` are required on every new row.** Key
      on both: a PR gains commits, and the same commit can be reselected
      on another CI run or attempt (including a transient merge-base
-     fail-safe becoming a narrow selection on rerun). A comment's
-     abbreviated footer is for display; use its linked full commit SHA
-     and confirm it equals the PR head. If you cannot establish the full
-     SHA, run ID, or attempt, leave the head unresolved rather than write
-     an identity that could make a later run skip it.
+     fail-safe becoming a narrow selection on rerun). Use the full head
+     SHA, run ID, and attempt from the deterministic evidence. If any
+     identity field is unavailable, leave the head unresolved rather
+     than write an identity that could make a later run skip it.
 
      Retain these rows even after their `seen` date ages out. This file
      is read in full every run and has a 2 MiB limit: keep rows compact,
@@ -263,7 +1028,7 @@ code changes yourself.
      files with different effects, and one file can miss two independent
      consumers: neither a verdict nor a fix for one edge settles the
      other. Record the matching trigger-map rule separately:
-     `{"path": ".github/workflows/build.yml", "rule": ".github/workflows/**", "rule_ref": "eng/github-ci/test-trigger-map.yml@a1b2c3d", "path_ref": ".github/workflows/build.yml@e4f5a6b", "kind": "over-selection", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
+     `{"path":".github/workflows/build.yml","rule":".github/workflows/**","rule_ref":"eng/github-ci/test-trigger-map.yml@a1b2c3d","path_ref":".github/workflows/build.yml@e4f5a6b","kind":"over-selection","verdict":"watch","all_runs":12,"first_seen":"2026-09-08","last_seen":"2026-09-22","example_prs":[20131,20046],"ref":null}`.
      For an under-selection row add `"target":"job:extension-e2e"`,
      `"consumer_refs":["<consumer source path>@a1b2c3d","<eligibility source path>@e4f5a6b"]`,
      and `miss_runs` instead of `all_runs`. The refs identify the source
@@ -309,8 +1074,6 @@ code changes yourself.
        Put the intended final issue title (including `create-issue`'s
        `[test-selection-audit] ` prefix) in `note`, and keep it short and
        plain as specified below so sanitization cannot change it.
-       Legacy rows without a reliable final title must be reconciled
-       against their finding's path and target, not assumed absent.
        Do not write `filed` directly — there is no confirmed issue
        number to put in `ref` yet.
      - `filed` — a prior `pending-filed` row was confirmed against a real
@@ -348,152 +1111,32 @@ code changes yourself.
      the edge and its status from current source before suppressing it.
      An unchanged CI rerun alone adds no new counter contribution.
 
-   **Rows written by an older version of this prompt may not match the
-   shapes above.** Never delete or rewrite a row just because its shape is
-   unfamiliar, and never invent a missing field to make one conform. Treat
-   an unrecognized field as extra detail and ignore it; treat a missing
-   field as unknown. In particular, a row with no `sha` cannot prove
-   which head was resolved; do not use it to skip any head. For a short
-   `sha` that matches the listed head's prefix, or a row without `run`,
-   `attempt`, or contribution arrays, do not add another count or
-   subtract a contribution you cannot identify. Report the uncertain
-   historical count and exclude it from a candidate's confidence claim
-   until the legacy entry can be reconciled against evidence. Preserve
-   legacy rows and totals; never silently reset them. A legacy
-   `miss_paths` entry is a **path-level** contribution, not proof of
-   any particular missing target. Migrate it only when its `pr`+`sha`,
-   old watchlist row, and current selection-time evidence can all be
-   verified: subtract its old path-level credit once, then credit each
-   proven `(path, target)` edge once. Otherwise retain the legacy row
-   and counter without converting or including them in edge-specific
-   confidence claims. New heads use `miss_edges`, not `miss_paths`.
-
    The watchlist is the point of this memory. A rule that escalates to ALL
    a few times in one window is weak evidence and will not clear the
    confidence bar — but the same rule accumulating escalations week after
    week is exactly the signal worth acting on, and it is only visible if
    the counts survive across runs.
-2. **Enumerate, cheaply first.** Work in two passes for ALL
-   escalations, then examine narrow results' runtime-only inputs in
-   step 7. A narrow selection is not evidence that every consumer was
-   covered.
+2. **Use the collected evidence.** Read every record in
+   `/tmp/gh-aw/test-selection-audit/evidence.json`; do not enumerate PRs,
+   runs, jobs, comments, or artifacts again. The collector includes all PR
+   states in the requested scope and records the current head SHA, latest
+   CI run/attempt, normalized changed and excluded paths, selected tests
+   and jobs, and explicit gap status.
 
-   - *Pass 1 (broad, cheap).* Get the candidate PR list for the window in as
-     few calls as possible — use `list_pull_requests`/`search_pull_requests`
-     and reuse the metadata they already return — including each PR's
-     **head SHA**, which you need both to skip already-resolved work and
-     to write the ledger later. **Enumerate all PR states, not just
-     open** — `list_pull_requests` defaults to `state: open`, but most PRs
-     in a multi-week window are already merged or closed, and their
-     completed selection runs are exactly the evidence this audit exists
-     to accumulate. Pass `state: all` (or issue separate `open`/`closed`
-     calls) and bound the set by the window using each PR's own
-     created/updated/merged timestamp — do not rely on API result
-     ordering alone to decide when to stop paging. Do **not** skip a PR
-     merely because its current head SHA has a processed row. First
-     compare the head's **latest relevant selection run ID and attempt**
-     with the recorded values. An unchanged completed attempt needs no
-     comment or artifact calls. A newer attempt on the same head must be
-     re-evaluated, not skipped; if it is pending, approval-blocked, or has
-     no usable selection evidence, keep the prior row and contributions
-     unchanged and report the gap. For an unrecorded head, check run
-     status/conclusion before trusting a head-matching comment. Then read
-     the **selection comment** for remaining unrecorded heads to decide
-     whether they selected `ALL`; if the comment cannot be tied to the
-     latest completed attempt (for example, there was a rerun), use that
-     attempt's artifact instead. A selection comment does **not**
-     contain changed files. For a narrow result that still needs the
-     step 7 check, read both `changedFiles` and `excludedFiles` from
-     its attributable selection artifact, or obtain the raw changed-file
-     list for the selection-time diff and apply its historical prefilter
-     when the artifact is unavailable. Do not substitute today's
-     PR file list for an older selection if the diff or base has moved.
-     Fetch the file lists for narrow results as needed to examine the
-     runtime-only paths in step 7; if they cannot be established, report
-     that head as under-selection-unverified, not fully processed. If
-     the selection job did not rerun when another job in the same
-     workflow was rerun, that is
-     not new selection evidence; keep the recorded selection unchanged.
+   The collector checks prior processed rows only after resolving the
+   latest run and attempt. Reuse a `recorded` row unchanged. Re-evaluate
+   a newer creditable attempt, but preserve the prior row and contributions when
+   the newer record is pending, approval-blocked, missing, invalid,
+   truncated, or untrusted. An unchanged creditable attempt contributes
+   no new count.
 
-     Identify that comment by its marker, not by prose. The selector's
-     comment always begins with `<!-- select-tests-comment -->` and ends
-     with a footer naming the commit it was computed for:
-
-     ```
-     <!-- select-tests-comment -->
-     ...selection summary...
-
-     ---
-     _Selection computed for commit [`a1b2c3d`](.../commit/a1b2c3d...)._
-     ```
-
-     Match the marker, never the wording — a busy PR accumulates review
-     chatter that mentions "all tests" for unrelated reasons. The selector
-     posts **one comment per pushed commit** and updates it in place on
-     re-runs, so a PR can carry several marked comments. Do not take
-     whichever is newest by timestamp: out-of-order CI completions (a
-     later push's run finishing before an earlier push's) and a force-push
-     back to an already-commented SHA (which updates that comment in
-     place, not its position) both make "most recent" point at a
-     superseded commit even though the real result already exists. Instead,
-     match by the footer SHA itself: find the marked comment whose footer
-     names the PR's current head SHA (from pass 1's listing). Never use
-     a comment for a different SHA as evidence for the current head.
-     If none match, follow the no-matching-comment run check below;
-     zero comments is normal for forks, not a reason to skip their CI.
-
-     When a matching comment exists, use its footer SHA for the ledger;
-     when the result comes from a CI artifact, use that run's head SHA.
-     In either case it must equal the PR's listed current head SHA.
-   - *Pass 2 (narrow, detailed).* Only for PRs that selected `ALL`, capture:
-     PR number, run ID, attempt, timestamp, changed files, selected
-     project/test count, the escalation reason, and any
-     unmatched/unattributed file that caused the escalation.
-
-   **Skip, without spending further calls on them**, any PR that cannot have
-   a selection result yet:
-
-   - CI still pending — the latest run's `status` is `queued` or
-     `in_progress`. The selection may not be posted yet, or may still
-     change on a later attempt.
-   - CI blocked on approval — a fork PR waiting on maintainer approval
-     before workflows run. This is `action_required`, a run *conclusion*,
-     not a status: the run's `status` is already `completed` (there is
-     nothing in progress to wait on), so check `conclusion ==
-     "action_required"`, not `status`. Checking `status` alone treats an
-     approval-blocked run as an ordinary completed run with no selection
-     output, which is a false gap, not a real one.
-   - No CI run in the lookback window (only when `pr_numbers` is empty),
-     or the selection job did not run. For an explicit `pr_numbers`
-     dispatch, inspect the specified PR's latest relevant run for its
-     current head even when that run predates the lookback window; if
-     its artifact has expired, report the gap without inventing a result.
-
-   These are not findings. Do not read an artifact for a pending or
-   approval-blocked attempt even if an older head-matching comment exists;
-   that comment may be stale. Preserve any recorded result until a newer
-   completed attempt has usable evidence. Count skips in the run summary
-   so a quiet window is distinguishable from one with no `ALL` selections.
-
-   A PR with no **head-matching** marked comment is ambiguous on its own:
-   a stale comment proves nothing about the current head, and a fork PR
-   may never get one regardless of CI state. Check the latest CI run for
-   the **current head SHA**, including its `status` and `conclusion`,
-   before deciding which bucket it falls in:
-
-   - If `status` is queued/in-progress or `conclusion` is
-     `action_required`, skip it per the list above, without recording
-     this head as processed.
-   - If the run completed and the selection job ran, read its selection
-     artifact as described under Primary evidence. This is expected for
-     forks; for same-repo PRs, report the missing head-matching comment
-     as a gap but still use the artifact rather than silently skipping
-     a completed selection. For a newer run/attempt on a previously
-     recorded head, always use that attempt's artifact: a comment's SHA
-     footer cannot attest to which attempt wrote it.
-   - If no selection job ran, or its artifact is unavailable, skip the
-     unresolved head and report the data gap. Do not add or replace its
-     row in `processed-runs.jsonl`.
+   Work in two analytical passes: classify creditable `ALL` results first,
+   then inspect creditable narrow results for runtime-only consumers in
+   step 7. A narrow selection is not proof that every consumer was covered.
+   Report every non-creditable status as a data gap; never turn a gap into
+   a finding or a processed row. If `enumerationTruncated` or a record's
+   pagination flags are true, file no issue because the audit scope is
+   incomplete.
 3. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
    concrete example PRs per trigger.
@@ -657,20 +1300,17 @@ code changes yourself.
 
    For each example head, verify **at the time of that selection** that
    the changed input, consumer edge, PR-eligible target, map omission,
-   and effective selected set all coexisted. The selection artifact
-   records changed files and chosen targets but no explicit base/head
-   refs; a run's head SHA alone does not identify the checkout's merge
-   snapshot. Use the selection job's recorded checkout/event refs and
-   historical repository source if they can establish that snapshot;
-   do not treat current main, today's PR diff, or current call sites as
-   historical proof. If any part cannot be reconstructed, report an
-   unverified candidate without crediting a miss or filing it. Confirm
-   separately that the gap still exists on current main before
-   proposing a fix.
+   and effective selected set all coexisted. The deterministic evidence
+   establishes the selection-time head, changed inputs, and selected
+   targets; use historical repository source at that head/base for the
+   consumer, eligibility, and trigger-map claims. Do not treat current
+   main, today's PR diff, or current call sites as historical proof. If
+   any part cannot be reconstructed, report an unverified candidate
+   without crediting a miss or filing it. Confirm separately that the
+   gap still exists on current main before proposing a fix.
 
    When re-evaluating a head, check every exact edge previously in its
-   `miss_edges` (and investigate legacy `miss_paths` without guessing
-   their targets). Stage the distinct `(literal path, missing target)`
+   `miss_edges`. Stage the distinct `(literal path, missing target)`
    edges only when that attempt's result omitted a proven consumer.
    Compare these with its prior credits in step 13; do not use
    `example_prs` to deduplicate counts, because it does not track SHAs.
@@ -701,7 +1341,8 @@ code changes yourself.
      or merged, or a filed issue still tracks the fix. An open issue,
      open PR, or merged fix that still applies blocks a duplicate.
      Reopen `watch` if an in-flight PR closed unmerged or a prior fix
-     no longer applies to the current rule.
+     no longer applies to the current rule; remove any `note` and clear
+     `ref` when doing so.
 
    If a fix is already tracked or merged, reject the duplicate and say so
    in the run summary. Filing anyway would start a second coding agent on work
@@ -781,23 +1422,20 @@ code changes yourself.
       if newly credited and `-1` only if previously credited but now
       absent; unchanged sets have delta zero. Use `(path, over-selection)`
       for `all_runs` and `(path, under-selection, target)` for
-      `miss_runs`. If an old row has `miss_paths` but no `miss_edges`,
-      migrate its path-level counts only by the verified procedure in
-      step 1; never identify a missing target from the old path alone.
-      Apply all deltas to the matching watchlist rows, then replace the
+      `miss_runs`. Apply all deltas to the matching watchlist rows, then replace the
       processed row with this run ID, attempt, `over_paths`,
       `miss_edges`, and `seen` date (or append it for a new head).
       Count a head once per path or missing edge, never once per CI
       attempt. Check that no counter becomes negative and every prior
-      credit has a matching row; if either check or migration fails,
+      credit has a matching row; if either check fails,
       report the inconsistency and leave **both** ledgers unchanged
       rather than guessing a correction.
 
       If a newer attempt is pending, blocked, has no selection job, or
-      lacks attributable selection or changed-file evidence, do not
+      lacks creditable deterministic selection or changed-file evidence, do not
       replace the head's prior row, adjust its counters, or treat an old
-      SHA-matching comment as current evidence. Do not write rows for
-      unresolved heads. Preserve older rows **indefinitely**: PR `updated` time can
+      result as current evidence. Do not write rows for unresolved heads.
+      Preserve older rows **indefinitely**: PR `updated` time can
       bring an old head back into a scheduled window, and `pr_numbers`
       can revisit one at any age. Pruning by `seen` would turn it into
       a fresh head and add its existing contribution a second time.
@@ -816,6 +1454,11 @@ code changes yourself.
       and `correct-by-design` rows even when their counts fall to zero.
       Once a fix merges, mark the row `fixed` instead of deleting it:
       old heads still reference its counts and may need corrections.
+
+    Repo-memory validation rejects unknown files or fields, unsafe strings,
+    duplicate identities, counters that do not exactly match the processed
+    rows, and examples that are not currently credited. Keep the ledgers
+    in the exact schemas above; arbitrary prose is not persistent memory.
 
     No JSONL-aware merge protects either file: a rejected push retries
     with `git pull --no-rebase -X ours`, and **even two appends at EOF
@@ -856,7 +1499,7 @@ The body must contain:
   (under-selection). For an ALL result, quote the actual escalation
   reason/log line verbatim in a fenced code block. A narrow result has
   no escalation reason: instead quote its actual selected tests/jobs
-  from the artifact or attributable summary and identify the omitted
+  from the deterministic evidence and identify the omitted
   target. Spell out the literal input path and `test:`/`job:` target in
   the body so a pending issue can be reconciled with the right watchlist
   edge. Never fabricate a reason for a narrow result.
@@ -925,8 +1568,7 @@ In your final response, report:
 
 - How many PRs/runs were analyzed and over what window (or which PR numbers,
   if explicitly given), and how many heads reused a recorded result
-  after a current-run metadata check without re-fetching selection
-  comments or artifacts. Report separately any reruns that replaced
+  after comparing the deterministic run metadata. Report separately any reruns that replaced
   prior contributions and any missing/stale-attempt evidence.
 - How many PRs were skipped because they could not have a selection result
   yet (CI pending, `action_required`, or no selection job), so a quiet
