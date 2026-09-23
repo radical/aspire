@@ -348,14 +348,22 @@ code changes yourself.
      Match the marker, never the wording — a busy PR accumulates review
      chatter that mentions "all tests" for unrelated reasons. The selector
      posts **one comment per pushed commit** and updates it in place on
-     re-runs, so a PR can carry several marked comments; take the most
-     recent, since earlier ones describe superseded commits.
+     re-runs, so a PR can carry several marked comments. Do not take
+     whichever is newest by timestamp: out-of-order CI completions (a
+     later push's run finishing before an earlier push's) and a force-push
+     back to an already-commented SHA (which updates that comment in
+     place, not its position) both make "most recent" point at a
+     superseded commit — and the SHA-mismatch skip below would then
+     misfire forever even though the real result already exists. Instead,
+     match by the footer SHA itself: find the marked comment whose footer
+     names the PR's current head SHA (from pass 1's listing). If none of
+     the marked comments match, treat the PR as not yet resolved and skip
+     it this run rather than falling back to an unrelated comment.
 
-     That footer SHA is the selection's own idempotency key, so prefer it
-     over the listing's head SHA when writing the ledger — it is the
-     commit the result actually belongs to. If the two disagree, a newer
-     commit was pushed before its selection was posted: treat that as not
-     yet resolved and skip the PR this run.
+     That footer SHA is the selection's own idempotency key, so use it
+     when writing the ledger — it is the commit the result actually
+     belongs to, and by construction (the match above) it equals the
+     PR's current head SHA.
    - *Pass 2 (narrow, detailed).* Only for PRs that selected `ALL`, capture:
      PR number, run ID, attempt, timestamp, changed files, selected
      project/test count, the escalation reason, and any
@@ -364,10 +372,16 @@ code changes yourself.
    **Skip, without spending further calls on them**, any PR that cannot have
    a selection result yet:
 
-   - CI still pending — runs that are queued or in progress. The selection
-     may not be posted yet, or may still change on a later attempt.
-   - CI in `action_required` — a fork PR waiting on maintainer approval
-     before workflows run. No selection has happened at all.
+   - CI still pending — the latest run's `status` is `queued` or
+     `in_progress`. The selection may not be posted yet, or may still
+     change on a later attempt.
+   - CI blocked on approval — a fork PR waiting on maintainer approval
+     before workflows run. This is `action_required`, a run *conclusion*,
+     not a status: the run's `status` is already `completed` (there is
+     nothing in progress to wait on), so check `conclusion ==
+     "action_required"`, not `status`. Checking `status` alone treats an
+     approval-blocked run as an ordinary completed run with no selection
+     output, which is a false gap, not a real one.
    - No CI run in the window, or the selection job did not run.
 
    These are not findings and they are not "no comment" cases; do not fall
@@ -382,14 +396,16 @@ code changes yourself.
 
    - **Same-repo PR** (head and base share the same owner): no comment
      means the selection job has not posted yet. Check its latest run's
-     status once. If it is queued/in-progress or `action_required`, skip
-     it per the list above. If a run **completed** with no comment, that
-     is a real gap — read its job summary/artifact instead of silently
-     skipping, since something is wrong either with the selector or with
-     this assumption.
+     `status` and `conclusion` once. If `status` is queued/in-progress, or
+     `conclusion` is `action_required`, skip it per the list above. If the
+     run **completed** with a real conclusion (success, failure, etc.) and
+     no comment, that is a real gap — read its job summary/artifact
+     instead of silently skipping, since something is wrong either with
+     the selector or with this assumption.
    - **Fork PR** (head repo differs from base repo): no comment is
      expected regardless of CI state, by design. Check its latest run's
-     status once to decide the bucket: queued/in-progress/`action_required`
+     `status`/`conclusion` once to decide the bucket:
+     queued/in-progress/`action_required`
      still means skip; a **completed** run means fall back to the
      selection job's log or artifact rather than skipping — do not report
      a fork PR as "no data" just because there is no PR comment.
@@ -428,12 +444,21 @@ code changes yourself.
    (e.g. "checkout normalization can affect fixture-sensitive tests")
    rather than a specific, already-covered test is not proof the ALL scope
    is the minimum safe one — it usually means nobody has written the guard
-   yet. That guard does not need to exercise every downstream consumer
-   possibly affected: a test that reads the file's own content and pins
-   the specific directives/values CI actually depends on is sufficient,
-   because it fails on exactly the class of edit that would otherwise
-   regress silently, wherever that test happens to live. If you can write
-   that guard, propose it alongside the narrower route.
+   yet. That guard must be exhaustive, not just pin today's known values: a
+   test that only asserts the file's *current* directives/values stay
+   unchanged does not catch a new, unguarded directive being added, and a
+   new addition is exactly the class of edit a narrower route needs to
+   catch. For example, a guard pinning `.gitattributes`'s existing rules
+   stays green when a PR adds a brand-new `*.cs` rule, because it only
+   ever inspected the rules it already knew about — yet that new rule
+   changes every checkout of a `.cs` file, and a narrower route would
+   silently miss it. The guard must instead assert the file's *complete*
+   set of directives against an explicit allow-list and fail on anything
+   outside it — including a new directive of the same byte-affecting kind
+   (e.g. another `text`/`eol`/filter attribute) — not just re-check the
+   values already known. If you cannot write a guard with that exhaustive,
+   reject-anything-new shape, keep the path routed to `ALL` instead of
+   proposing the narrower route.
 5. **Do not question broad build-input files.** These files legitimately
    affect nearly the entire .NET project graph — treat their `ALL`
    escalation as correct-by-design and do not flag it as a finding, even if
