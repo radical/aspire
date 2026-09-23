@@ -179,7 +179,7 @@ code changes yourself.
      - `correct-by-design` — settled; stop re-deriving it.
      - `filed` — **this workflow** filed an issue for it. Put the issue
        number in `ref`.
-     - `in-flight` — someone else is already fixing it (see step 8). Put
+     - `in-flight` — someone else is already fixing it (see step 9). Put
        the PR number in `ref`. Do not record this as `filed`: the two
        decay differently, since an in-flight PR can be closed unmerged and
        the rule then returns to `watch`, whereas a filed issue stays ours.
@@ -370,12 +370,54 @@ code changes yourself.
      itself — `tools/SelectTests`, `eng/github-ci/test-trigger-map.yml`, or
      the select-tests action/workflow — then running ALL is the intended
      safety behavior, not an over-selection bug. Reject those.
-7. **Verify against source, not memory.** For every candidate, read the
+7. **Also look for under-selection, not just ALL.** A rule that already
+   names specific `targets` can still be wrong in the opposite direction:
+   its target list can be narrower than the file's real consumers, so a
+   change silently runs too few tests instead of falling back to ALL. This
+   is the more dangerous failure mode, because nothing in the selection
+   comment looks anomalous — the selector reports a confident, narrow
+   selection, and a missed test does not show up as a `.gitattributes`-style
+   over-broad rule would. Treat a candidate here with **at least** the same
+   rigor as an over-selection one, and weigh it higher when both are
+   equally well-evidenced: a missed test risks a real regression escaping,
+   where an extra CI run only costs compute.
+
+   This check is not driven by which PRs selected ALL this window — an
+   under-selecting rule never shows up that way. Instead, read the trigger
+   map's `path_rules` / `affected_project_rules` / `derived_targets`
+   entries whose paths fall under the repository's highest cross-cutting
+   surfaces, where a change ripples into multiple consumers and a stale or
+   incomplete target list would let a regression through untested:
+
+   - `src/Aspire.Hosting/**` — core orchestration APIs every hosting
+     integration and the CLI's generated-AppHost path build on.
+   - `src/Aspire.TypeSystem/**` and `src/Aspire.Hosting.CodeGeneration.*/**`
+     — changes ripple into every polyglot language exporter (Go, Java,
+     Python, Rust, TypeScript) and the generated SDK contract.
+   - `src/Aspire.Dashboard/**` — Blazor components plus their JS interop.
+   - `extension/**` — the VS Code extension (bootstrap, RPC bridge, e2e).
+   - the CLI (`src/Aspire.Cli/**`, acquisition scripts, native archive
+     packaging).
+
+   For each such rule, independently enumerate the path's real consumers
+   from source — grep for project references, generated-code call sites,
+   or RPC/protocol message types it defines — rather than trusting the
+   rule's `reason` comment to already be complete. Most compiled C#
+   dependencies here are Layer 1's job (the project graph is exhaustive
+   for MSBuild project references) and do not need this check; focus on
+   exactly the blind spots Layer 2 exists to cover — a runtime-only
+   dependency such as a package loaded by `aspire add`, a generated
+   AppHost, a fixture copied into an E2E workspace, or a contract read by
+   a codegen target that Layer 1's static graph cannot see. If you find a
+   consumer the rule's targets omit, name the missing target and cite the
+   specific reference (file:line) that proves the dependency — the same
+   standard of evidence step 11 requires for an over-selection candidate.
+8. **Verify against source, not memory.** For every candidate, read the
    actual selector implementation, `eng/github-ci/test-trigger-map.yml`,
    `docs/ci/test-trigger-map.md`, and the real changed-file list from the
    example PRs before concluding the selection is wrong. Do not speculate
    about what a file "probably" affects.
-8. **Check whether a fix is already in flight.** Before going further with a
+9. **Check whether a fix is already in flight.** Before going further with a
    candidate, check whether someone is already fixing it:
 
    - Use `search_pull_requests` for **open** PRs touching
@@ -388,7 +430,7 @@ code changes yourself.
    If a fix is already in flight, reject the candidate and say so in the
    run summary. Filing anyway would start a second coding agent on work
    that is already done and put a duplicate PR in front of a reviewer.
-9. **Check how this was handled before.** Maintainers have already made
+10. **Check how this was handled before.** Maintainers have already made
    many of these decisions, and the trigger map records them. For each
    surviving candidate — not up front, and not for the whole file — use
    `list_commits` with `path: eng/github-ci/test-trigger-map.yml` and
@@ -412,7 +454,7 @@ code changes yourself.
    - **Look for missed siblings.** If a past commit routed one consumer of
      a shared input but left sibling consumers on the fallback, that gap
      is itself a strong candidate.
-10. **Apply the confidence bar.** Candidate findings include: a path rule
+11. **Apply the confidence bar.** Candidate findings include: a path rule
    broader than its actual consumers, a missing path rule that would let a
    runtime-only consumer (e.g. a test fixture, generated AppHost, or package
    copied into an E2E workspace) silently rely on the ALL fallback, an
@@ -437,13 +479,13 @@ code changes yourself.
 
    If any of those is missing, it is not high-confidence. Report it in the
    run summary instead.
-11. **Pick one, or none.** If several candidates clear the bar, file only the
+12. **Pick one, or none.** If several candidates clear the bar, file only the
    strongest — the one with the clearest evidence and the most `ALL` runs
    avoided. If none clear it, file nothing. A run that files no issue is a
    normal, successful run; filing a weak finding is worse than filing
    nothing, because it starts a coding agent session and consumes human
    review time.
-12. **Write back what you learned.** Before finishing, update the two
+13. **Write back what you learned.** Before finishing, update the two
     ledgers in `/tmp/gh-aw/repo-memory/default/`. They are committed
     automatically after the run; you only need to write the files.
 
