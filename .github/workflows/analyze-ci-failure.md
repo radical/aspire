@@ -29,7 +29,7 @@ jobs:
         github.event_name == 'workflow_dispatch'
         || (
           github.event.workflow_run.conclusion == 'failure'
-          && github.event.workflow_run.run_attempt <= 3
+          && github.event.workflow_run.run_attempt == 4
         )
       )
     permissions:
@@ -55,6 +55,7 @@ jobs:
             .github/workflows/analyze-ci-failure-history.sh
             .github/workflows/analyze-ci-failure-candidates.sh
             .github/workflows/analyze-ci-failure-persistence.sh
+            .github/workflows/analyze-ci-failure-terminal.sh
           sparse-checkout-cone-mode: false
       - name: Collect CI failure data
         id: collect
@@ -245,6 +246,20 @@ jobs:
               run_scope: $run_scope,
               pr_numbers: $pr_numbers
             }' > ci-failure-data/run-context.json
+
+          if [ "$RUN_SCOPE" = "main" ]; then
+            if bash .github/workflows/analyze-ci-failure-terminal.sh \
+                ci-failure-data/run-context.json "$REPO"; then
+              echo "Analyzing the final failed attempt for current main."
+            else
+              STATUS=$?
+              if [ "$STATUS" -eq 2 ]; then
+                echo "has_work=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              exit "$STATUS"
+            fi
+          fi
 
           # Fetch all jobs for this run attempt.
           # Use --jq '.jobs[]' to emit individual job objects (handles pagination
@@ -731,6 +746,7 @@ safe-outputs:
               .github/workflows/analyze-ci-failure-persistence.sh
               .github/workflows/analyze-ci-failure-comment.sh
               .github/workflows/analyze-ci-failure-issue.sh
+              .github/workflows/analyze-ci-failure-terminal.sh
             sparse-checkout-cone-mode: false
         - uses: actions/download-artifact@v8.0.1
           with:
@@ -768,6 +784,18 @@ safe-outputs:
             RUN_URL=$(jq -r '.html_url // ""' ci-failure-data/run.json)
             ANALYZED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             PR_NUMBER=$(bash .github/workflows/analyze-ci-failure-persistence.sh pr-number)
+
+            if [ "$RUN_SCOPE" = "main" ]; then
+              if bash .github/workflows/analyze-ci-failure-terminal.sh "$RUN_CONTEXT_FILE" "$REPO"; then
+                echo "Publishing the final failed attempt for current main."
+              else
+                STATUS=$?
+                if [ "$STATUS" -eq 2 ]; then
+                  exit 0
+                fi
+                exit "$STATUS"
+              fi
+            fi
 
             # ── 1. Set up memory branch and merge cause data ──
             # Skip persisting data for code-issue verdicts — these are not
@@ -982,6 +1010,18 @@ safe-outputs:
                   # Check if the stored issue is closed (may need reopening)
                   if [ "$ISSUE_STATE" = "closed" ]; then
                     REOPEN="true"
+                  fi
+                fi
+
+                if [ "$RUN_SCOPE" = "main" ]; then
+                  if bash .github/workflows/analyze-ci-failure-terminal.sh "$RUN_CONTEXT_FILE" "$REPO"; then
+                    echo "Main CI run is still current before issue publication."
+                  else
+                    STATUS=$?
+                    if [ "$STATUS" -eq 2 ]; then
+                      exit 0
+                    fi
+                    exit "$STATUS"
                   fi
                 fi
 

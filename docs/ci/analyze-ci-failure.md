@@ -11,10 +11,11 @@ GitHub.
 
 ## Supported runs
 
-Automatic analysis currently runs for failed `CI` workflow pushes to `main`.
-Manual dispatch can analyze a specific run. The collector accepts `main` push
-runs and pull-request runs; other workflow paths, events, and branches are
-rejected or skipped.
+Automatic analysis runs only when a `CI` push to `main` fails on attempt 4,
+after the three automatic failed-job reruns. Manual dispatch can analyze a
+specific run, but early attempts cannot publish a main-breakage issue. The
+collector accepts `main` push runs and pull-request runs; other workflow
+paths, events, and branches are rejected or skipped.
 
 The collector pins the run attempt from the `workflow_run` event so a later
 rerun cannot change the evidence being analyzed. Run ID, attempt, workflow
@@ -23,9 +24,12 @@ agent output.
 
 The [CI auto-rerun workflow](auto-rerun-transient-ci-failures.md) handles
 current-main reruns independently of this analysis queue. Source attempts
-1–3 can request a rerun, producing at most four total attempts. This workflow
-continues analyzing failed attempts 1–3; the auto-rerun workflow records the
-attempt-4 cap decision or a successful retry.
+1–3 can request a rerun, producing at most four total attempts. A successful
+retry needs no failure analysis. If the retry request fails before attempt 4,
+the auto-rerun workflow fails and records the failure; an operator can inspect
+that workflow and request a failed-job retry with
+`gh run rerun <run-id> --repo microsoft/aspire --failed` if appropriate. No
+main-breakage issue is filed for an unverified early attempt.
 
 ## Attribution
 
@@ -72,8 +76,13 @@ run, `refs/heads/main`, and the workflow's main run list. It fails closed unless
 the trusted run is still the current `main` SHA, no newer main CI run has a
 greater run number, the attempt is unchanged, and the source attempt is at most
 3. The decision and request outcome are stored as a separate, attempt-scoped
-record on `memory/ci-failure-analysis`. The analysis publisher retries
-concurrent memory-branch updates instead of losing its cause history.
+record on `memory/ci-failure-analysis`. Before collecting evidence and again
+before publication, the analyzer verifies that attempt 4 is completed and
+failed, belongs to the current `main` SHA, and has not been superseded by a
+newer main CI run. It repeats the check before updating each cause issue.
+Stale runs are skipped rather than canceled through the shared CI concurrency
+key, which would also cancel unrelated main builds. The analysis publisher
+retries concurrent memory-branch updates instead of losing its cause history.
 
 External and agent-supplied text is bounded and rendered inert before it is
 used in workflow diagnostics, Markdown comments, or issue bodies.

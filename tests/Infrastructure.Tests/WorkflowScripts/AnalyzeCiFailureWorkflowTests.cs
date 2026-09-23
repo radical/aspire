@@ -67,9 +67,124 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         ForEachExecutableWorkflow(workflow =>
         {
             Assert.DoesNotContain("- name: Rerun failed jobs for current main", workflow, StringComparison.Ordinal);
-            Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflow, StringComparison.Ordinal);
+            Assert.Contains("github.event.workflow_run.run_attempt == 4", workflow, StringComparison.Ordinal);
             Assert.Contains("Current-main reruns are handled by the automatic failed-job rerun policy.", workflow, StringComparison.Ordinal);
+            Assert.Contains("analyze-ci-failure-terminal.sh", workflow, StringComparison.Ordinal);
         });
+    }
+
+    [Theory]
+    [InlineData(4, 4, "trusted-failure", 1, "failure", 0)]
+    [InlineData(3, 3, "trusted-failure", 1, "failure", 2)]
+    [InlineData(4, 3, "trusted-failure", 1, "failure", 2)]
+    [InlineData(4, 5, "trusted-failure", 1, "failure", 2)]
+    [InlineData(4, 4, "new-main", 1, "failure", 2)]
+    [InlineData(4, 4, "trusted-failure", 2, "failure", 2)]
+    [InlineData(4, 4, "trusted-failure", 1, "success", 2)]
+    [RequiresTools(["bash", "jq"])]
+    public async Task OnlyCurrentFailedFinalMainAttemptMayPublish(
+        int sourceAttempt,
+        int liveAttempt,
+        string mainSha,
+        int latestRunNumber,
+        string conclusion,
+        int expectedExitCode)
+    {
+        var contextPath = Path.Combine(_workspace.Path, "run-context.json");
+        await File.WriteAllTextAsync(
+            contextPath,
+            $$"""{"run_id":123,"run_attempt":{{sourceAttempt}},"run_scope":"main","head_sha":"trusted-failure"}""");
+        var fakeGh = await CreateFakeGhAsync(
+            """
+            #!/usr/bin/env bash
+            case "$*" in
+              "api repos/microsoft/aspire/actions/runs/123")
+                printf '{"id":123,"run_attempt":%s,"run_number":1,"workflow_id":42,"event":"push","head_branch":"main","head_sha":"trusted-failure","path":".github/workflows/ci.yml","status":"completed","conclusion":"%s"}\n' "$LIVE_ATTEMPT" "$LIVE_CONCLUSION"
+                ;;
+              "api repos/microsoft/aspire/git/ref/heads/main")
+                printf '{"object":{"sha":"%s"}}\n' "$MAIN_SHA"
+                ;;
+              "api --method GET repos/microsoft/aspire/actions/workflows/42/runs -f branch=main -f event=push -f per_page=100")
+                printf '{"workflow_runs":[{"id":123,"run_number":1},{"id":124,"run_number":%s}]}\n' "$LATEST_RUN_NUMBER"
+                ;;
+              *) exit 99 ;;
+            esac
+            """);
+
+        var result = await RunBashScriptAsync(
+            Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"),
+            [contextPath, "microsoft/aspire"],
+            new Dictionary<string, string>
+            {
+                ["LIVE_ATTEMPT"] = liveAttempt.ToString(),
+                ["MAIN_SHA"] = mainSha,
+                ["LATEST_RUN_NUMBER"] = latestRunNumber.ToString(),
+                ["LIVE_CONCLUSION"] = conclusion,
+                ["PATH"] = $"{Path.GetDirectoryName(fakeGh)}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+            });
+
+        Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
+    [Fact]
+    public void MainPublicationRechecksTerminalRunBeforeSideEffects()
+    {
+        ForEachExecutableWorkflow(workflow =>
+        {
+            var collection = GetSection(workflow, "- name: Collect CI failure data", "- name: Create analysis summary");
+            var collectionGuard = collection.IndexOf("bash .github/workflows/analyze-ci-failure-terminal.sh", StringComparison.Ordinal);
+            Assert.True(collectionGuard >= 0);
+            Assert.True(
+                collectionGuard <
+                collection.IndexOf("# Fetch all jobs for this run attempt.", StringComparison.Ordinal));
+
+            var publisher = GetSection(workflow, "- name: Publish analysis data and comment on PR", "- name: Comment on PR");
+            var guard = "bash .github/workflows/analyze-ci-failure-terminal.sh \"$RUN_CONTEXT_FILE\" \"$REPO\"";
+            var firstGuard = publisher.IndexOf(guard, StringComparison.Ordinal);
+            var memoryWrite = publisher.IndexOf("# ── 1. Set up memory branch and merge cause data ──", StringComparison.Ordinal);
+            var issueLoop = publisher.IndexOf("# ── 2. Create or update issues for each cause ──", StringComparison.Ordinal);
+            var secondGuard = publisher.IndexOf(guard, firstGuard + guard.Length, StringComparison.Ordinal);
+            var issueCreate = publisher.IndexOf("gh issue create", StringComparison.Ordinal);
+
+            Assert.True(firstGuard >= 0 && firstGuard < memoryWrite);
+            Assert.True(secondGuard > issueLoop && secondGuard < issueCreate);
+        });
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "jq"])]
+    public async Task EarlyMainFailureCannotPublishAnIssueOrMemory()
+    {
+        await PreparePublicationStepFixtureAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(_workspace.Path, "ci-failure-data", "run-context.json"),
+            """{"run_id":123,"run_attempt":2,"run_scope":"main","head_sha":"trusted-failure","pr_numbers":""}""");
+        var fakeBinDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "fake-bin")).FullName;
+        var callsPath = Path.Combine(_workspace.Path, "unexpected-calls.log");
+        await WriteExecutableAsync(
+            Path.Combine(fakeBinDirectory, "gh"),
+            "#!/usr/bin/env bash\necho \"gh $*\" >> \"$CALLS_PATH\"\nexit 99\n");
+        await WriteExecutableAsync(
+            Path.Combine(fakeBinDirectory, "git"),
+            "#!/usr/bin/env bash\necho \"git $*\" >> \"$CALLS_PATH\"\nexit 99\n");
+
+        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR");
+        var result = await RunProcessAsync(
+            "bash",
+            ["-c", script],
+            new Dictionary<string, string>
+            {
+                ["ANALYSIS_DIR"] = Path.Combine(_workspace.Path, "ci-analysis-output"),
+                ["CALLS_PATH"] = callsPath,
+                ["GH_TOKEN"] = "test-token",
+                ["REPO"] = "microsoft/aspire",
+                ["PATH"] = $"{fakeBinDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+            });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("is not the final automatic attempt", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(callsPath));
+        Assert.False(Directory.Exists(Path.Combine(_workspace.Path, "memory-repo")));
     }
 
     [Fact]
@@ -294,7 +409,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             case "$*" in
               "api repos/microsoft/aspire/actions/runs/123")
                 cat <<'JSON'
-            {"id":123,"path":".github/workflows/ci.yml","workflow_id":1,"run_attempt":1,"run_started_at":"1970-01-01T00:00:01Z","created_at":"1970-01-01T00:00:01Z","updated_at":"1970-01-01T00:00:01Z","event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/microsoft/aspire/actions/runs/123","conclusion":"failure"}
+            {"id":123,"path":".github/workflows/ci.yml","workflow_id":1,"run_number":1,"run_attempt":4,"run_started_at":"1970-01-01T00:00:01Z","created_at":"1970-01-01T00:00:01Z","updated_at":"1970-01-01T00:00:01Z","event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/microsoft/aspire/actions/runs/123","status":"completed","conclusion":"failure"}
             JSON
                 ;;
               *"commits/abc/pulls"*)
@@ -309,10 +424,13 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
                   echo '[{"number":17,"merged_at":null,"base":{"repo":{"full_name":"microsoft/aspire"},"ref":"main"}}]'
                 fi
                 ;;
+              "api repos/microsoft/aspire/git/ref/heads/main")
+                echo '{"object":{"sha":"abc"}}'
+                ;;
               *"actions/workflows/1/runs"*)
                 echo '{"total_count":0,"workflow_runs":[]}'
                 ;;
-              *"actions/runs/123/attempts/1/jobs"*)
+              *"actions/runs/123/attempts/4/jobs"*)
                 ;;
               *)
                 exit 99
@@ -330,6 +448,9 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         File.Copy(
             Path.Combine(RepoRoot.Path, CandidatesScriptRelativePath),
             Path.Combine(workflowDirectory, Path.GetFileName(CandidatesScriptRelativePath)));
+        File.Copy(
+            Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"),
+            Path.Combine(workflowDirectory, "analyze-ci-failure-terminal.sh"));
         var callLogPath = Path.Combine(_workspace.Path, "gh-calls.log");
 
         var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Collect CI failure data");
@@ -4392,7 +4513,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             $$"""{"id":"main-failure","type":"{{causeType}}","title":"PR #19999 broke main","error_pattern":"Introduced by PR #19999","job_ids":[456]}""");
         await File.WriteAllTextAsync(
             Path.Combine(failureDataDirectory, "run-context.json"),
-            """{"run_id":123,"run_attempt":1,"run_scope":"main","head_sha":"trusted-failure","pr_numbers":""}""");
+            """{"run_id":123,"run_attempt":4,"run_scope":"main","head_sha":"trusted-failure","pr_numbers":""}""");
         await File.WriteAllTextAsync(
             Path.Combine(failureDataDirectory, "last-successful-main-run.json"),
             """{"head_sha":"trusted-success"}""");
@@ -4482,6 +4603,18 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             Path.Combine(fakeBinDirectory, "gh"),
             """
             #!/usr/bin/env bash
+            if [ "$1" = "api" ] && [ "$2" = "repos/microsoft/aspire/actions/runs/123" ]; then
+              echo '{"id":123,"run_attempt":4,"run_number":1,"workflow_id":42,"event":"push","head_branch":"main","head_sha":"trusted-failure","path":".github/workflows/ci.yml","status":"completed","conclusion":"failure"}'
+              exit 0
+            fi
+            if [ "$1" = "api" ] && [ "$2" = "repos/microsoft/aspire/git/ref/heads/main" ]; then
+              echo '{"object":{"sha":"trusted-failure"}}'
+              exit 0
+            fi
+            if [ "$1" = "api" ] && [ "$2" = "--method" ]; then
+              echo '{"workflow_runs":[{"id":123,"run_number":1}]}'
+              exit 0
+            fi
             if [ "$1" = "api" ] && [ "$2" = "repos/microsoft/aspire/issues/77" ]; then
               if [ "${3:-}" = "--jq" ]; then
                 cat "$CURRENT_BODY_PATH"
@@ -7149,6 +7282,9 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         File.Copy(
             Path.Combine(RepoRoot.Path, IssueScriptRelativePath),
             Path.Combine(workflowDirectory, Path.GetFileName(IssueScriptRelativePath)));
+        File.Copy(
+            Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"),
+            Path.Combine(workflowDirectory, "analyze-ci-failure-terminal.sh"));
 
         var analysisDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "ci-analysis-output")).FullName;
         var failureDataDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "ci-failure-data")).FullName;
