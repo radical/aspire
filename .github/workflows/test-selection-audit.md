@@ -9,7 +9,7 @@ description: |
   single highest-confidence case where the selection could be made safer
   or cheaper. Per-PR results and per-rule verdicts persist across runs in
   a memory branch, so escalation counts accumulate into cross-run
-  evidence and no completed CI run is analyzed twice.
+  evidence without double-counting PR heads or their reruns.
   The filed issue is assigned to the Copilot coding agent, which
   implements and validates the fix and opens a PR for human review. This
   workflow never edits the trigger map itself.
@@ -48,8 +48,8 @@ concurrency:
   # or PR-focused, one at a time, queued in trigger order. That is
   # deliberate here, not just an accepted side effect: two agent runs
   # executing concurrently would each read the memory ledger from the
-  # same base and independently rewrite it (pruning, watchlist updates),
-  # and the push that lands second can silently discard the first's
+  # same base and independently rewrite it (head replacements and
+  # watchlist updates); the push that lands second can discard the first's
   # rows, even for appends (see step 13). This job-discriminator only
   # scopes the agent job's own concurrency group; it cannot change the
   # top-level group's serialization.
@@ -85,13 +85,11 @@ tools:
     toolsets: [repos, pull_requests, actions, issues]
     min-integrity: none
 
-  # A completed CI run's selection result never changes, so re-deriving it
-  # every week is wasted budget -- and with a 14-day window on a weekly
-  # schedule, consecutive runs overlap by about half. `processed-runs.jsonl`
-  # records the PR head commits already resolved so they are never looked at
-  # twice. It keys on pr+sha rather than the PR alone because an open PR
-  # keeps gaining commits, each with its own selection. Rows are retained
-  # for twice the larger of this run's lookback and the 14-day default.
+  # A selection is fixed for a particular CI run/attempt, not for a PR
+  # head: re-runs can replace its result. `processed-runs.jsonl` retains
+  # each head and its counted path contributions so a newer attempt can
+  # replace, rather than add to, its earlier counts. Do not prune identities:
+  # even an old head may be revisited by a focused dispatch or PR update.
   #
   # `watchlist.jsonl` is the durable half. A rule that escalates to ALL a
   # few times in one window is weak evidence, but the same rule accumulating
@@ -106,13 +104,13 @@ tools:
     branch-name: memory/test-selection-audit
     description: "Resolved PR selections and the rule watchlist for the CI test-selection audit"
     # Both ledgers are JSONL so individual observations can be counted and
-    # pruned. gh-aw's push retry uses `git pull --no-rebase -X ours` (step
+    # updated. gh-aw's push retry uses `git pull --no-rebase -X ours` (step
     # 13), not a JSONL-aware merge; even two appends can conflict and lose
     # rows. The workflow-level concurrency group protects these ledgers.
     file-glob: ["*.jsonl", "*.md"]
     allowed-extensions: [".jsonl", ".md"]
-    # Defaults (100KB file / 10KB patch) are too small: a run appends a row
-    # per resolved CI run, and a busy window covers a few hundred.
+    # Defaults (100KB file / 10KB patch) are too small: the durable index
+    # retains one row per resolved PR head and a busy window covers hundreds.
     max-file-size: 2097152
     max-patch-size: 262144
     max-file-count: 10
@@ -161,8 +159,8 @@ code changes yourself.
   deliberately wider than the weekly cadence: a single week's merges are
   mostly routine and tend to surface only correct-by-design escalations, so
   a one-week window produces empty runs. Overlapping windows are safe
-  because processed PR heads are recorded and findings are deduplicated
-  by title. If
+  because processed PR heads and their counted contributions are retained
+  and findings are deduplicated by title. If
   `${{ github.event.inputs.pr_numbers }}` is set, analyze only those PRs
   (ignore the lookback window for both selecting PRs and finding their
   completed CI runs; still use it as context when useful).
@@ -186,11 +184,22 @@ code changes yourself.
      stale ZIP if the download fails. If the artifact is missing,
      expired, unreadable, or has no selection result, report the data
      gap and leave that PR head unprocessed rather than inventing a
-     selection. This is the
+     selection. For a rerun, check the selection job's `run_attempt`
+     and `started_at`; an artifact for the same workflow run may be
+     left over from an earlier attempt. Use the artifact only when
+     its `created_at` falls after this selection job started and its
+     workflow run/head SHA match. If no artifact can be attributed
+     unambiguously to this attempt, keep the prior record unchanged
+     and report the gap. This is the
      authoritative source for fork PRs; do not report a fork PR as "no
      data" just because there is no PR comment.
 - If a PR has multiple CI attempts, use the most recent completed attempt
-  only after confirming no newer attempt is still pending.
+  of the selection job (order by job completion time, not comment
+  creation time) only after confirming no newer attempt is still
+  pending. A selection
+  comment is keyed by head SHA, **not** by attempt; on a new attempt for
+  an already recorded head, use that attempt's selection artifact, not
+  the comment that may still describe the previous attempt.
 
 ## Audit procedure
 
@@ -210,36 +219,42 @@ code changes yourself.
    forever; the underlying evidence is not lost, just no longer credited
    as filed.
 
-   - `processed-runs.jsonl` — the "already looked at, nothing to do here"
-     ledger. One terse row per PR head commit whose selection you have
-     already resolved:
-     `{"pr": 20131, "sha": "a1b2c3d", "all": false, "seen": "2026-09-22"}`.
+   - `processed-runs.jsonl` — a **durable index**, one row per resolved
+     `pr`+full `sha`, recording the last selection evidence and the exact
+     paths credited to that head:
+     `{"pr":20131,"sha":"<full head SHA>","run":35802294466,"attempt":2,"all":true,"over_paths":[".github/workflows/build.yml"],"miss_paths":[],"seen":"2026-09-22"}`.
+     Use distinct literal paths in each array, not a rule glob or an
+     `example_prs` list. An unaffected selection has empty arrays. A
+     single head contributes at most **one** to each path's corresponding
+     counter, even if it has several CI attempts or several changed files
+     matching the same path rule. The `run` and `attempt` identify the
+     selection job whose output you used, not the audit workflow's run.
 
-     **`sha` is required on every row.** Key on the commit, never on the
-     PR alone. Selection is a function of the files changed at a given
-     commit, so a `pr`+`sha` pair is settled permanently — but a *pull
-     request* is not: an open PR keeps gaining commits, each with its own
-     selection. A row carrying only `pr` would make the next run skip that
-     PR forever and silently miss every push after the one you saw.
+     **`pr` and the full head `sha` are required on every new row.** Key
+     on both: a PR gains commits, and the same commit can be reselected
+     on another CI run or attempt (including a transient merge-base
+     fail-safe becoming a narrow selection on rerun). A comment's
+     abbreviated footer is for display; use its linked full commit SHA
+     and confirm it equals the PR head. If you cannot establish the full
+     SHA, run ID, or attempt, leave the head unresolved rather than write
+     an identity that could make a later run skip it.
 
-     Use the head SHA that pass 1 already returns, abbreviated to 7
-     characters. Do not spend extra calls establishing identity; if you
-     genuinely cannot determine the head SHA for a PR, omit the row
-     entirely rather than writing one without `sha`.
-
-     Keep rows minimal. This file is read back in full on every run, so
-     anything beyond identity and outcome costs context forever and buys
-     nothing — the interesting detail belongs in `watchlist.jsonl`. The one
-     useful extra is `"rule"` on an `all: true` row, which lets a later run
-     recount escalations without re-fetching.
+     Retain these rows even after their `seen` date ages out. This file
+     is read in full every run and has a 2 MiB limit: keep rows compact,
+     but **never prune or silently omit** an identity to make it fit.
+     If a write would exceed the configured size or patch limit, report
+     the capacity failure prominently, do not write incomplete ledgers or
+     claim exact cumulative counts, and file no issue until the memory
+     capacity is explicitly addressed.
 
    - `watchlist.jsonl` — the rules worth continuing to watch. One row per
-     exact triggering path, not per rule: broad rules like
+     exact triggering path **and kind**, not per rule: broad rules like
      `.github/workflows/**` match files with very different effects, and
      step 6 requires judging each file on its own, so a verdict for one
-     matching file must never be reused for another. Key on `path` (the
-     literal file, e.g. `.github/workflows/build.yml`), and record which
-     trigger-map rule matched it separately:
+     matching file must never be reused for another. The same file may
+     over-select in one run and under-select in another. Key on `path`
+     (the literal file, e.g. `.github/workflows/build.yml`) plus `kind`;
+     record which trigger-map rule matched it separately:
      `{"path": ".github/workflows/build.yml", "rule": ".github/workflows/**", "rule_ref": "eng/github-ci/test-trigger-map.yml@a1b2c3d", "path_ref": ".github/workflows/build.yml@e4f5a6b", "kind": "over-selection", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
 
      `kind` is `over-selection` (the path escalates to ALL) or
@@ -247,7 +262,7 @@ code changes yourself.
      consumer, per step 7). It picks which counter the row tracks:
      `all_runs` for `over-selection` rows counts escalations to ALL;
      `miss_runs` for `under-selection` rows counts **distinct affected
-     PRs/commits** you found evidence of this run — never increment it
+     PRs/commits** currently credited to that path — never increment it
      just because step 7's static source analysis still finds the same
      gap it found last week, since that gap does not change between runs
      and would otherwise inflate the count every week for zero new
@@ -292,18 +307,22 @@ code changes yourself.
        the PR number in `ref`. Do not record this as `filed`: the two
        decay differently, since an in-flight PR can be closed unmerged and
        the rule then returns to `watch`, whereas a filed issue stays ours.
+     - `fixed` — the referenced fix has merged. Retain the row and its
+       historical counters so a later CI attempt can reverse a credited
+       head's prior contribution. Put the merged fix's PR number in `ref`;
+       re-evaluate if the rule changes again.
 
      Use `correct-by-design` for anything the prompt tells you to reject as
      intended behavior rather than as weak evidence — a file on the
      build-input list in step 5, or a self-referential selector change in
      step 6. Those are settled, not still being watched.
 
-     Only record a path you actually observed escalating (or missing a
-     consumer, for `under-selection`) this window, or one already carried
-     forward from a previous run. Do not seed a row for a path you merely
-     noticed sharing a fix with an observed one — a row with `all_runs: 0`
-     / `miss_runs: 0` is noise that dilutes the counts this ledger exists
-     to accumulate.
+     Only create a row for a path actually observed escalating (or
+     missing a consumer, for `under-selection`) this window. Do not seed
+     a row for a path you merely noticed sharing a fix with an observed
+     one. Retain a previously credited row even if its count falls to
+     zero after a rerun; the prior finding and its verdict are still
+     part of the audit history.
 
      Carry these forward rather than re-deriving them. For a row recorded
      `correct-by-design`, skip re-reading the trigger map and the
@@ -312,18 +331,22 @@ code changes yourself.
      `list_commits`/`get_file_contents` check per path, not a full
      re-derivation); if either the trigger-map rule or the triggering path
      has moved since it was recorded, re-derive the verdict and update
-     whichever `*_ref` changed. Otherwise just add this window's counts
-     and move on.
+     whichever `*_ref` changed. Otherwise apply only the per-head
+     contribution changes from step 13; an unchanged rerun adds nothing.
 
    **Rows written by an older version of this prompt may not match the
    shapes above.** Never delete or rewrite a row just because its shape is
    unfamiliar, and never invent a missing field to make one conform. Treat
    an unrecognized field as extra detail and ignore it; treat a missing
-   field as unknown. In particular, a `processed-runs.jsonl` row with no
-   `sha` cannot prove that any specific commit was resolved, so it must
-   not cause a PR to be skipped — re-analyze that PR and append a proper
-   `pr`+`sha` row alongside. Leave the old row in place; pruning clears it
-   in time.
+   field as unknown. In particular, a row with no `sha` cannot prove
+   which head was resolved; do not use it to skip any head. For a short
+   `sha` that matches the listed head's prefix, or a row without `run`,
+   `attempt`, or contribution arrays, do not add another count or
+   subtract a contribution you cannot identify. Report the uncertain
+   historical count and exclude it from a candidate's confidence claim
+   until the legacy entry can be reconciled against evidence. Preserve
+   legacy rows and totals; never silently reset them. New heads that
+   do not match a legacy identity can use the complete row format.
 
    The watchlist is the point of this memory. A rule that escalates to ALL
    a few times in one window is weak evidence and will not clear the
@@ -344,15 +367,24 @@ code changes yourself.
      to accumulate. Pass `state: all` (or issue separate `open`/`closed`
      calls) and bound the set by the window using each PR's own
      created/updated/merged timestamp — do not rely on API result
-     ordering alone to decide when to stop paging. Skip any PR whose
-     current head SHA already has a row in `processed-runs.jsonl`; a PR
-     whose head has not moved since you resolved it needs no calls at
-     all. Then read only the
-     **selection comment** for each remaining PR to decide whether it
-     selected `ALL`. Retain any changed paths already included in a
-     narrow-selection comment as potential step 7 evidence; fetch changed
-     files only for a specific under-selection candidate, not every
-     normally selected PR in this pass.
+     ordering alone to decide when to stop paging. Do **not** skip a PR
+     merely because its current head SHA has a processed row. First
+     compare the head's **latest relevant selection run ID and attempt**
+     with the recorded values. An unchanged completed attempt needs no
+     comment or artifact calls. A newer attempt on the same head must be
+     re-evaluated, not skipped; if it is pending, approval-blocked, or has
+     no usable selection evidence, keep the prior row and contributions
+     unchanged and report the gap. For an unrecorded head, check run
+     status/conclusion before trusting a head-matching comment. Then read
+     the **selection comment** for remaining unrecorded heads to decide
+     whether they selected `ALL`; if the comment cannot be tied to the
+     latest completed attempt (for example, there was a rerun), use that
+     attempt's artifact instead. Retain changed paths already included
+     in a narrow-selection comment as potential step 7 evidence; fetch
+     changed files only for a specific under-selection candidate, not
+     every normally selected PR in this pass. If the selection job did
+     not rerun when another job in the same workflow was rerun, that is
+     not new selection evidence; keep the recorded selection unchanged.
 
      Identify that comment by its marker, not by prose. The selector's
      comment always begins with `<!-- select-tests-comment -->` and ends
@@ -408,10 +440,11 @@ code changes yourself.
      current head even when that run predates the lookback window; if
      its artifact has expired, report the gap without inventing a result.
 
-   These are not findings and they are not "no comment" cases; do not fall
-   back to reading their runs. Count them and report the total as skipped in
-   the run summary, so a window that looks quiet for this reason is
-   distinguishable from one that genuinely had no `ALL` selections.
+   These are not findings. Do not read an artifact for a pending or
+   approval-blocked attempt even if an older head-matching comment exists;
+   that comment may be stale. Preserve any recorded result until a newer
+   completed attempt has usable evidence. Count skips in the run summary
+   so a quiet window is distinguishable from one with no `ALL` selections.
 
    A PR with no **head-matching** marked comment is ambiguous on its own:
    a stale comment proves nothing about the current head, and a fork PR
@@ -426,10 +459,12 @@ code changes yourself.
      artifact as described under Primary evidence. This is expected for
      forks; for same-repo PRs, report the missing head-matching comment
      as a gap but still use the artifact rather than silently skipping
-     a completed selection.
+     a completed selection. For a newer run/attempt on a previously
+     recorded head, always use that attempt's artifact: a comment's SHA
+     footer cannot attest to which attempt wrote it.
    - If no selection job ran, or its artifact is unavailable, skip the
-     unresolved head and report the data gap. Do not add it to
-     `processed-runs.jsonl`.
+     unresolved head and report the data gap. Do not add or replace its
+     row in `processed-runs.jsonl`.
 3. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
    concrete example PRs per trigger.
@@ -445,16 +480,14 @@ code changes yourself.
    over-broaden this exclusion to match on "kill switch" or `ForceAll`
    generically.
 
-   Then add to the counts already carried in `watchlist.jsonl` and report
-   the cumulative figure alongside this window's — a rule's cross-run
-   total is the strongest frequency evidence you have.
-
-   **Count only selections you resolved for the first time this run** —
-   those whose `pr`+`sha` was not already in `processed-runs.jsonl`. The
-   14-day window on a weekly cadence means consecutive runs overlap by
-   about half, so adding the whole window every time would silently
-   double-count every carried-over commit and inflate exactly the
-   evidence the watchlist exists to make trustworthy.
+   Stage each resolved head's distinct `over_paths` as proposed
+   contributions, and report the cumulative figure from `watchlist.jsonl`
+   alongside this window's. Do not increment the watchlist here:
+   step 13 applies the difference from that head's prior contributions
+   **after** step 7 determines `miss_paths`. An unchanged rerun contributes
+   nothing new; an ALL-to-narrow rerun must remove its previous ALL
+   contribution. A merge-base fail-safe ALL result has no triggering path
+   and must not be attributed to a rule just to make the totals grow.
 4. **Prefer safety over CI savings.** Do not propose narrowing a selection
    unless the file's real consumers are known and either existing tests
    already cover the invariant, or a focused guard test could be added that
@@ -576,12 +609,14 @@ code changes yourself.
    Once a gap is confirmed, find distinct affected PR heads in this
    window from the changed paths retained in pass 1's comments or
    selection artifacts; fetch changed files for promising narrow-result
-   PRs only when that evidence is absent. Increment `miss_runs` only for
-   `pr`+`sha` pairs **absent from `processed-runs.jsonl` at the start of
-   this run** whose changed path matches this rule and whose selection
-   omitted the proven consumer. Do not re-fetch a previously processed
-   head just to count it again in an overlapping window; `example_prs`
-   does not track SHAs and cannot deduplicate that counter. A static map
+   PRs only when that evidence is absent. When re-evaluating a head,
+   also check every path previously in its `miss_paths`, even if it
+   would not be considered as a new candidate this run. Stage the
+   matching literal path in that head's `miss_paths` when its selection
+   omitted the proven consumer, whether this is the first selection or
+   a newer attempt for a previously processed head. Compare with its prior
+   `miss_paths` in step 13; do not use `example_prs` to deduplicate
+   counts, because it does not track SHAs. A static map
    omission without a matching new PR is still worth reporting in the
    run summary, but supplies neither a `miss_runs` increment nor the
    concrete example required to file an issue.
@@ -601,13 +636,16 @@ code changes yourself.
      files (`get_pull_request_files`) for `eng/github-ci/test-trigger-map.yml`;
      use `search_pull_requests` in addition, for PRs that name the rule by
      text but might not (yet) touch the file.
-   - Check `watchlist.jsonl` for an `in-flight` or `filed` verdict
-     recorded against this exact `path` by an earlier run, and confirm its
-     `ref` is still open — an in-flight PR that was closed unmerged no
-     longer blocks the candidate.
+   - Check `watchlist.jsonl` for an `in-flight`, `filed`, or `fixed`
+     verdict against this exact `(path, kind)` by an earlier run.
+     Confirm whether a referenced PR is still open, closed unmerged,
+     or merged, or a filed issue still tracks the fix. An open issue,
+     open PR, or merged fix that still applies blocks a duplicate.
+     Reopen `watch` if an in-flight PR closed unmerged or a prior fix
+     no longer applies to the current rule.
 
-   If a fix is already in flight, reject the candidate and say so in the
-   run summary. Filing anyway would start a second coding agent on work
+   If a fix is already tracked or merged, reject the duplicate and say so
+   in the run summary. Filing anyway would start a second coding agent on work
    that is already done and put a duplicate PR in front of a reviewer.
 10. **Check how this was handled before.** Maintainers have already made
    many of these decisions, and the trigger map records them. For each
@@ -672,52 +710,55 @@ code changes yourself.
     ledgers in `/tmp/gh-aw/repo-memory/default/`. They are committed
     automatically after the run; you only need to write the files.
 
-    - Append one row to `processed-runs.jsonl` for every PR head you
-      resolved this run, including the ones that selected normally —
-      recording a non-`ALL` outcome is what stops the next run from
-      fetching it again. **Every row must carry both `pr` and `sha`**; a
-      row without `sha` would make future runs skip that PR permanently.
-      Do **not** append rows for PRs you skipped as pending /
-      `action_required`: nothing was resolved, and they still need
-      analysis once their CI finishes.
+    - For every head with a **new, verified** selection result this run,
+      finish both over- and under-selection checks before updating either
+      ledger. Compare its staged distinct `over_paths`/`miss_paths`
+      against that exact `pr`+full `sha` row's arrays **as they existed
+      at the start of this run** (empty sets for a genuinely new head).
+      For each `(path, kind)`, apply `+1` only if newly credited and `-1`
+      only if previously credited but now absent; unchanged sets have
+      delta zero. Apply all deltas to the corresponding `watchlist.jsonl`
+      `all_runs` or `miss_runs` fields, then replace the old processed
+      row with this run ID, attempt, result, path arrays, and `seen` date
+      (or append the row for a new head). Count a head once per path,
+      never once per CI attempt. Check that no counter becomes negative
+      and that a row exists for every previously credited path; if either
+      check fails, report the inconsistency and leave **both** ledgers
+      unchanged rather than guessing a correction.
 
-      Then **prune** it: drop rows whose `seen` date is older than twice
-      the larger of this run's lookback window and the 14-day scheduled
-      default (so a short manual dispatch never prunes rows a later
-      scheduled run still needs). Commits outside that retention window
-      are never enumerated again, so keeping them only grows a file you
-      re-read every time.
-    - Update `watchlist.jsonl` for each path you actually observed
-      escalating (or missing a consumer) this run, plus any carried
-      forward from earlier runs. For an `over-selection` row, "observed
-      escalating this run" means a PR/run resolved this run selected ALL
-      because of it. For an `under-selection` row it means you identified
-      a *new* affected PR/commit this run — re-deriving the same static
-      gap step 7 already found in an earlier run is not a new
-      observation and must not increment `miss_runs` or refresh
-      `last_seen`; treat it as carried forward instead. For a row
-      genuinely observed this run, increment its `all_runs` / `miss_runs`
-      count, refresh `last_seen` to this run's date, and set `verdict` /
-      `ref` to match where it now stands. For a row merely carried
-      forward with no new observation
-      this run, copy it unchanged — in particular, **do not** refresh
-      `last_seen`; doing so would make an inactive path look like it
-      recurred every week and corrupt the very signal this ledger exists
-      to preserve. Keep a row here even when it fails the confidence bar
-      — a `watch` row that keeps accumulating escalations is the evidence
-      a future run needs to justify acting. Never drop a
-      `correct-by-design` row: it is the durable verdict this ledger
-      exists to preserve, so a future run doesn't re-derive it from
-      scratch. Drop a rule only once its fix has actually merged.
+      If a newer attempt is pending, blocked, has no selection job, or
+      lacks an attributable selection artifact, do not replace the head's
+      prior row, adjust its counters, or treat an old SHA-matching
+      comment as current evidence. Do not write rows for unresolved
+      heads. Preserve older rows **indefinitely**: PR `updated` time can
+      bring an old head back into a scheduled window, and `pr_numbers`
+      can revisit one at any age. Pruning by `seen` would turn it into
+      a fresh head and add its existing contribution a second time.
+    - Update `watchlist.jsonl` using those per-head deltas, plus any
+      carried-forward rows. An unchanged rerun or repeated static gap
+      has no delta: it must not refresh `last_seen` or increment a
+      counter. Refresh `last_seen` only on a newly credited observation;
+      on retraction, keep it as the historical last-observation date,
+      not an assertion that the retracted evidence is still credited.
+      Keep `example_prs` drawn from currently credited heads rather
+      than retaining a PR whose only contribution was retracted.
+      Preserve existing `verdict` and `ref` when replacing evidence;
+      change them only after separately verifying that the underlying
+      rule or fix changed. Keep `watch`
+      and `correct-by-design` rows even when their counts fall to zero.
+      Once a fix merges, mark the row `fixed` instead of deleting it:
+      old heads still reference its counts and may need corrections.
 
     No JSONL-aware merge protects either file: a rejected push retries
     with `git pull --no-rebase -X ours`, and **even two appends at EOF
     can conflict**, silently dropping one run's rows. The workflow-level
     concurrency group serializes the agent and memory-push jobs; do not
-    rely on the file format to make concurrent runs safe. When pruning
-    or updating a watchlist row, preserve every unrelated row. Keep rows
-    one-line and minimal; these files are size-capped and read back in
-    full on every future run.
+    rely on the file format to make concurrent runs safe. When updating
+    a row, preserve every unrelated row. Verify both ledgers fit the
+    configured file and patch limits **before** emitting `create-issue`;
+    on failure, report the capacity problem and make no partial update.
+    Keep rows one-line and minimal; both files are read in full on every
+    future run.
 
 ## The issue you file
 
@@ -803,8 +844,10 @@ The body must contain:
 In your final response, report:
 
 - How many PRs/runs were analyzed and over what window (or which PR numbers,
-  if explicitly given), and how many CI runs were skipped as already
-  recorded in `processed-runs.jsonl` rather than re-fetched.
+  if explicitly given), and how many heads reused a recorded result
+  after a current-run metadata check without re-fetching selection
+  comments or artifacts. Report separately any reruns that replaced
+  prior contributions and any missing/stale-attempt evidence.
 - How many PRs were skipped because they could not have a selection result
   yet (CI pending, `action_required`, or no selection job), so a quiet
   window is distinguishable from an unanalyzable one.
