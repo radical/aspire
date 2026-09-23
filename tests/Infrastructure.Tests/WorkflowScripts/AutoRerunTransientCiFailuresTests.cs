@@ -876,6 +876,22 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkflowRoutesMainRunsWithoutChangingThePullRequestGate()
+    {
+        string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
+        Assert.Contains("github.event.workflow_run.event == 'pull_request'", workflowText);
+        Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflowText);
+        Assert.Contains("github.repository == 'microsoft/aspire'", workflowText);
+        Assert.Contains("github.event.workflow_run.event == 'push'", workflowText);
+        Assert.Contains("github.event.workflow_run.head_branch == 'main'", workflowText);
+        Assert.Contains("github.event.workflow_run.run_attempt <= 4", workflowText);
+        Assert.Contains("github.event.workflow_run.run_attempt > 1", workflowText);
+        Assert.Contains("sourceRunScope: 'main'", workflowText);
+        Assert.Contains("recordSuccessfulMainRun(details)", workflowText);
+        Assert.Contains("persistMainRerunState", workflowText);
+    }
+
+    [Fact]
     public async Task RepresentativeWorkflowFixturesStayAlignedWithCurrentWorkflowDefinitions()
     {
         Dictionary<string, string[]> expectations = new()
@@ -927,6 +943,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     public async Task WorkflowYamlKeepsDocumentedSafetyRails()
     {
         string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
+        string ciWorkflowText = await ReadRepoFileAsync(".github/workflows/ci.yml");
 
         Assert.Contains("workflow_dispatch:", workflowText);
         Assert.Contains("dry_run:", workflowText);
@@ -939,6 +956,8 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Contains("computeRerunExecutionEligibility", workflowText);
         Assert.Contains("getAssociatedPullRequestNumbers", workflowText);
         Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflowText);
+        Assert.Contains("group: ${{ github.workflow }}-${{ github.ref }}", ciWorkflowText);
+        Assert.Contains("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", ciWorkflowText);
     }
 
     [Fact]
@@ -1199,6 +1218,503 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.DoesNotContain(
             result.Requests,
             r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunSkipsWhenMainShaAdvanced()
+    {
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "failed-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 1,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "failed-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "newer-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "failed-sha"
+                    }
+                }
+            });
+
+        Assert.DoesNotContain(
+            result.Requests,
+            r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunSkipsWhenANewerMainCiRunExists()
+    {
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 1,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "main-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 124,
+                        run_number = 101,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    },
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    }
+                }
+            });
+
+        Assert.DoesNotContain(
+            result.Requests,
+            r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunSkipsWhenRunAttemptAdvanced()
+    {
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 2,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "main-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    }
+                }
+            });
+
+        Assert.DoesNotContain(
+            result.Requests,
+            r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunSkipsWhenAttemptCapIsExceeded()
+    {
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 4,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 4,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "main-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    }
+                }
+            });
+
+        Assert.DoesNotContain(
+            result.Requests,
+            r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunRequestsFailedJobsOnceWhenLiveStateIsCurrent()
+    {
+        const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 3,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 3,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "main-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    }
+                }
+            });
+
+        Assert.Single(
+            result.Requests,
+            r => r.Route == rerunRoute);
+        Assert.Equal(rerunRoute, result.Requests[^1].Route);
+        Assert.Equal("rerun", result.ReturnValue.GetProperty("decision").GetString());
+        Assert.Equal("requested", result.ReturnValue.GetProperty("outcome").GetString());
+        Assert.Equal("eligible", result.ReturnValue.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunReturnsFailedOutcomeWhenRequestIsRejected()
+    {
+        const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                failedRequestRoutes = new[] { rerunRoute },
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 1,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "main-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    }
+                }
+            });
+
+        Assert.Single(result.Requests, r => r.Route == rerunRoute);
+        Assert.Equal("rerun", result.ReturnValue.GetProperty("decision").GetString());
+        Assert.Equal("failed", result.ReturnValue.GetProperty("outcome").GetString());
+        Assert.Equal("request-failed", result.ReturnValue.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunSkipsWhenLiveRunShaDoesNotMatchTrustedSource()
+    {
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "trusted-main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 1,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "different-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "trusted-main-sha",
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "different-sha"
+                    }
+                }
+            });
+
+        Assert.DoesNotContain(
+            result.Requests,
+            r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task SuccessfulMainRerunRecordsTheCompletedAttemptWithoutRequestingAnotherRerun()
+    {
+        JsonElement result = await InvokeHarnessAsync<JsonElement>(
+            "recordSuccessfulMainRun",
+            new
+            {
+                owner = "microsoft",
+                repo = "aspire",
+                sourceRunId = 123,
+                sourceRunAttempt = 2,
+                sourceHeadSha = "main-sha",
+                completedAttempt = new
+                {
+                    id = 123,
+                    run_attempt = 2,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml",
+                    conclusion = "success"
+                }
+            });
+
+        Assert.Equal("succeeded", result.GetProperty("state").GetProperty("outcome").GetString());
+        Assert.Equal("success", result.GetProperty("state").GetProperty("run_conclusion").GetString());
+        JsonElement request = Assert.Single(result.GetProperty("requests").EnumerateArray());
+        Assert.Equal("GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}", request.GetProperty("route").GetString());
+        Assert.Equal(2, request.GetProperty("payload").GetProperty("attempt_number").GetInt32());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task SuccessfulMainRerunRejectsAnAttemptWithADifferentSha()
+    {
+        JsonElement result = await InvokeHarnessAsync<JsonElement>(
+            "recordSuccessfulMainRun",
+            new
+            {
+                owner = "microsoft",
+                repo = "aspire",
+                sourceRunId = 123,
+                sourceRunAttempt = 2,
+                sourceHeadSha = "main-sha",
+                completedAttempt = new
+                {
+                    id = 123,
+                    run_attempt = 2,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "other-sha",
+                    path = ".github/workflows/ci.yml",
+                    conclusion = "success"
+                }
+            });
+
+        Assert.Contains("does not match", result.GetProperty("error").GetString());
+        Assert.False(result.TryGetProperty("state", out _));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task MainRerunDecisionIsStoredUnderItsRunAndAttemptAfterAConcurrentCommit()
+    {
+        var state = new
+        {
+            policy = "current-main-failed-jobs-v1",
+            decision = "rerun",
+            outcome = "requested",
+            reason = "eligible",
+            source_run_id = 123,
+            source_run_attempt = 1,
+            source_head_sha = "main-sha",
+            run_conclusion = "failure"
+        };
+        JsonElement result = await InvokeHarnessAsync<JsonElement>(
+            "persistMainRerunState",
+            new { owner = "microsoft", repo = "aspire", state, putConflicts = 1 });
+
+        Assert.Equal("runs/123-attempt-1-rerun.json", result.GetProperty("storedPath").GetString());
+        Assert.Equal(2, result.GetProperty("requests").EnumerateArray().Count(
+            x => x.GetProperty("route").GetString() == "PUT /repos/{owner}/{repo}/contents/{path}"));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task MainRerunDecisionDoesNotOverwriteAnExistingDifferentDecision()
+    {
+        var state = new
+        {
+            source_run_id = 123,
+            source_run_attempt = 1,
+            outcome = "not-requested",
+            reason = "superseded"
+        };
+        JsonElement result = await InvokeHarnessAsync<JsonElement>(
+            "persistMainRerunState",
+            new
+            {
+                owner = "microsoft",
+                repo = "aspire",
+                state,
+                storedDecision = new
+                {
+                    source_run_id = 123,
+                    source_run_attempt = 1,
+                    outcome = "requested",
+                    reason = "eligible"
+                }
+            });
+
+        Assert.Contains("different main CI decision", result.GetProperty("error").GetString());
+        Assert.DoesNotContain(result.GetProperty("requests").EnumerateArray(),
+            x => x.GetProperty("route").GetString() == "PUT /repos/{owner}/{repo}/contents/{path}");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task DuplicateMainRerunDecisionIsAcceptedAfterConcurrentCreation()
+    {
+        var state = new
+        {
+            source_run_id = 123,
+            source_run_attempt = 1,
+            outcome = "requested",
+            reason = "eligible"
+        };
+        JsonElement result = await InvokeHarnessAsync<JsonElement>(
+            "persistMainRerunState",
+            new
+            {
+                owner = "microsoft",
+                repo = "aspire",
+                state,
+                putConflicts = 1,
+                putConflictStatus = 422,
+                storeDecisionOnPutConflict = true
+            });
+
+        Assert.Equal("runs/123-attempt-1-rerun.json", result.GetProperty("storedPath").GetString());
+        Assert.Single(result.GetProperty("requests").EnumerateArray(),
+            x => x.GetProperty("route").GetString() == "PUT /repos/{owner}/{repo}/contents/{path}");
     }
 
     [Fact]
@@ -2349,6 +2865,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     {
         public RequestRecord[] Requests { get; init; } = [];
         public SummaryEvent[] Events { get; init; } = [];
+        public JsonElement ReturnValue { get; init; }
     }
 
     private sealed class RequestRecord

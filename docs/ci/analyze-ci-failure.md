@@ -21,6 +21,12 @@ rerun cannot change the evidence being analyzed. Run ID, attempt, workflow
 path, event, branch, SHA, and failed jobs come from GitHub rather than from
 agent output.
 
+The [CI auto-rerun workflow](auto-rerun-transient-ci-failures.md) handles
+current-main reruns independently of this analysis queue. Source attempts
+1–3 can request a rerun, producing at most four total attempts. This workflow
+continues analyzing failed attempts 1–3; the auto-rerun workflow records the
+attempt-4 cap decision or a successful retry.
+
 ## Attribution
 
 For a pull-request run, PR-directed effects require exactly one subject PR.
@@ -36,10 +42,11 @@ or incomplete comparisons are non-attributable. A candidate commit must also
 map to exactly one PR merged into `main`.
 
 PR comments and pull-request reruns require an unambiguous subject PR that is
-still open and unlocked immediately before the mutation. Validated transient
-`main` failures can be rerun without a subject PR. Run-scoped recurring-cause
-persistence can continue without an actionable PR, but its PR occurrence
-context is recorded as unavailable when the subject cannot be identified.
+still open and unlocked immediately before the mutation. Automatic `main`
+reruns do not require a subject PR or agent classification. Run-scoped
+recurring-cause persistence can continue without an actionable PR, but its PR
+occurrence context is recorded as unavailable when the subject cannot be
+identified.
 
 ## Agent trust boundary
 
@@ -58,6 +65,15 @@ boundary rebuilds trusted run, attempt, SHA, PR, failed-job, test, and cause
 identity from collected artifacts. It rejects output that adds, omits, or
 rebinds trusted records. Published diagnostics are reconstructed from trusted
 evidence rather than copied from agent output.
+
+The automatic `main` rerun is deterministic and does not consume agent output.
+Immediately before the failed-job rerun request, it re-fetches the workflow
+run, `refs/heads/main`, and the workflow's main run list. It fails closed unless
+the trusted run is still the current `main` SHA, no newer main CI run has a
+greater run number, the attempt is unchanged, and the source attempt is at most
+3. The decision and request outcome are stored as a separate, attempt-scoped
+record on `memory/ci-failure-analysis`. The analysis publisher retries
+concurrent memory-branch updates instead of losing its cause history.
 
 External and agent-supplied text is bounded and rendered inert before it is
 used in workflow diagnostics, Markdown comments, or issue bodies.
@@ -104,9 +120,12 @@ Malformed or ambiguous extension results still fail closed.
 
 ## Side-effect gates
 
-- Only validated transient failures from the same run attempt and with available
-  test evidence can request a rerun. Pull-request reruns additionally require
+- Agent-requested reruns require validated transient failures from the same run
+  attempt and available test evidence. Pull-request reruns additionally require
   the subject PR to remain open and unlocked.
+- Automatic `main` reruns are independent of the verdict and require all
+  current-SHA, supersession, attempt, and cap checks to pass immediately before
+  the write.
 - Failures attributed to one PR are reported on that PR only while it remains
   open and unlocked.
 - Deterministic `main` failures are reported through `[Main CI Failure]`

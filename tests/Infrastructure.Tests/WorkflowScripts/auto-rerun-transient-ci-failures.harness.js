@@ -158,13 +158,37 @@ async function dispatch(operation, payload) {
             const summary = new SummaryRecorder();
             const github = createGitHubRecorder(payload, requests);
 
-            await rerunWorkflow.rerunMatchedJobs({
+            const returnValue = await rerunWorkflow.rerunMatchedJobs({
                 ...payload,
                 github,
                 summary,
             });
 
-            return { requests, events: summary.events };
+            return { requests, events: summary.events, returnValue };
+        }
+
+        case 'recordSuccessfulMainRun': {
+            const requests = [];
+            const github = createGitHubRecorder(payload, requests);
+            try {
+                const state = await rerunWorkflow.recordSuccessfulMainRun({ ...payload, github });
+                return { state, requests };
+            }
+            catch (error) {
+                return { error: error.message, requests };
+            }
+        }
+
+        case 'persistMainRerunState': {
+            const requests = [];
+            const github = createGitHubRecorder(payload, requests);
+            try {
+                const storedPath = await rerunWorkflow.persistMainRerunState({ ...payload, github });
+                return { storedPath, requests };
+            }
+            catch (error) {
+                return { error: error.message, requests };
+            }
         }
 
         default:
@@ -173,9 +197,15 @@ async function dispatch(operation, payload) {
 }
 
 function createGitHubRecorder(payload, requests) {
+    let remainingPutConflicts = payload.putConflicts ?? 0;
+    let storedDecision = payload.storedDecision;
     return {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
+
+            if (payload.failedRequestRoutes?.includes(route)) {
+                throw new Error(`Simulated request failure for ${route}`);
+            }
 
             if (route === 'GET /repos/{owner}/{repo}/issues/{issue_number}') {
                 const issueNumber = String(requestPayload.issue_number);
@@ -192,8 +222,53 @@ function createGitHubRecorder(payload, requests) {
 
             if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}') {
                 return {
-                    data: {
+                    data: payload.currentRun ?? {
                         run_attempt: payload.latestRunAttempt ?? null,
+                    },
+                };
+            }
+
+            if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}') {
+                return { data: payload.completedAttempt };
+            }
+
+            if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+                if (!storedDecision) {
+                    throw Object.assign(new Error('Not Found'), { status: 404 });
+                }
+                return {
+                    data: {
+                        type: 'file',
+                        content: Buffer.from(`${JSON.stringify(storedDecision, null, 2)}\n`).toString('base64'),
+                    },
+                };
+            }
+
+            if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+                if (remainingPutConflicts > 0) {
+                    remainingPutConflicts--;
+                    if (payload.storeDecisionOnPutConflict) {
+                        storedDecision = payload.state;
+                    }
+                    throw Object.assign(new Error('Conflict'), { status: payload.putConflictStatus ?? 409 });
+                }
+                return { data: { content: { path: requestPayload.path } } };
+            }
+
+            if (route === 'GET /repos/{owner}/{repo}/git/ref/{ref}') {
+                return {
+                    data: {
+                        object: {
+                            sha: payload.currentMainSha ?? null,
+                        },
+                    },
+                };
+            }
+
+            if (route === 'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs') {
+                return {
+                    data: {
+                        workflow_runs: payload.mainWorkflowRuns ?? [],
                     },
                 };
             }

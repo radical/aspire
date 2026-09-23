@@ -743,6 +743,7 @@ safe-outputs:
         - name: Publish analysis data and comment on PR
           env:
             ANALYSIS_DIR: ${{ steps.download-analysis.outputs.download-path }}
+            REPO: ${{ github.repository }}
           run: |
             set -euo pipefail
 
@@ -759,7 +760,6 @@ safe-outputs:
             TRUSTED_RUN_SCOPE=$(jq -r '.run_scope' "$RUN_CONTEXT_FILE")
             VERDICT=$(jq -r '.verdict' "$ANALYSIS_FILE")
 
-            REPO="${{ github.repository }}"
             MEMORY_BRANCH="memory/ci-failure-analysis"
 
             # Read fields from the analysis JSON
@@ -859,7 +859,8 @@ safe-outputs:
                 echo "No initial changes to memory branch"
               else
                 git -C memory-repo commit -m "Add CI failure analysis for run ${RUN_ID}"
-                git -C memory-repo push origin "HEAD:$MEMORY_BRANCH"
+                bash .github/workflows/analyze-ci-failure-persistence.sh \
+                  push-memory-branch memory-repo "$MEMORY_BRANCH"
                 echo "Memory branch updated with analysis for run ${RUN_ID}"
               fi
 
@@ -1129,7 +1130,8 @@ safe-outputs:
                 echo "No issue-link changes to memory branch"
               else
                 git -C memory-repo commit -m "Link CI failure issues for run ${RUN_ID}"
-                git -C memory-repo push origin "HEAD:$MEMORY_BRANCH"
+                bash .github/workflows/analyze-ci-failure-persistence.sh \
+                  push-memory-branch memory-repo "$MEMORY_BRANCH"
                 echo "Memory branch updated with issue links for run ${RUN_ID}"
               fi
             fi
@@ -1339,6 +1341,10 @@ safe-outputs:
               }
               if (trustedRunScope !== 'main' && trustedRunScope !== 'pull-request') {
                 core.setFailed(`Unsupported trusted run scope: ${trustedRunScope}`);
+                return;
+              }
+              if (trustedRunScope === 'main') {
+                core.info('Current-main reruns are handled by the automatic failed-job rerun policy.');
                 return;
               }
               if (!Array.isArray(analysis.failed_jobs) ||
@@ -1755,7 +1761,7 @@ After writing the JSON files (summary + per-cause), take action based on the ver
 
 Set `verdict` to `"transient-infra"` in the JSON. Set `failed_tests` to an empty array for `transient-infra`; a run with any reported failed test must use `flaky-test`, `code-issue`, or `mixed` according to the evidence. Check the `ENABLE_RERUN` environment variable (set in the workflow `env:` block).
 
-**If `ENABLE_RERUN` is `'true'`:** Emit the `rerun-failed-jobs` safe output to rerun the failed CI jobs.
+**For pull-request scope, if `ENABLE_RERUN` is `'true'`:** Emit the `rerun-failed-jobs` safe output to rerun the failed CI jobs. Current-main failed-job reruns are handled independently by the automatic CI rerun workflow; do not emit this safe output for main scope.
 
 **Regardless of `ENABLE_RERUN`:** Emit the `publish-data` safe output so the analysis is pushed to the memory branch and a PR comment is posted.
 
@@ -1789,7 +1795,7 @@ Emit the `publish-data` safe output. Do NOT emit `rerun-failed-jobs`.
 
 1. **Always write the run summary** — every analysis must produce `/tmp/gh-aw/agent/analysis-result.json`. Write cause files in `/tmp/gh-aw/agent/causes/` for `flaky-test`, `infra-failure`, and `main-repository-breakage` causes (NOT for pull-request `code-issue`).
 2. **Always emit the `publish-data` safe output** — with `run_id` and `pr_numbers` so the publish-data job can push the data and post a comment.
-3. **Never rerun when there are code issues** — only emit `rerun-failed-jobs` for pure infrastructure failures with `ENABLE_RERUN` set to `'true'`.
+3. **Never rerun when there are code issues** — only emit `rerun-failed-jobs` for pure pull-request infrastructure failures with `ENABLE_RERUN` set to `'true'`. Main reruns are handled by the automatic current-main policy.
 4. **Be specific** — include actual error messages and job/test names in the JSON fields.
 5. **Use scope-appropriate history** — cross-reference PR files only for pull-request scope; for main scope, consider every candidate merge since the last successful main run.
 6. **PR-directed effects require an open, unlocked PR** — for pull-request scope, use the "Pull Request" section as analysis context even when the PR is closed or locked. Still emit `publish-data` so run-scoped persistence can continue; the publication and rerun jobs recheck live PR state immediately before any PR-directed mutation.

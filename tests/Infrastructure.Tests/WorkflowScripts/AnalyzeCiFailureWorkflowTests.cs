@@ -62,6 +62,62 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
     }
 
     [Fact]
+    public void CurrentMainRerunsAreNotRequestedByFailureAnalysis()
+    {
+        ForEachExecutableWorkflow(workflow =>
+        {
+            Assert.DoesNotContain("- name: Rerun failed jobs for current main", workflow, StringComparison.Ordinal);
+            Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflow, StringComparison.Ordinal);
+            Assert.Contains("Current-main reruns are handled by the automatic failed-job rerun policy.", workflow, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "git"])]
+    public async Task AnalysisPublicationRetainsConcurrentMainRerunDecision()
+    {
+        var result = await RunProcessAsync(
+            "bash",
+            ["-c",
+                """
+                set -euo pipefail
+                git --no-pager init -q --bare "$ROOT/origin.git"
+                git --no-pager clone -q "$ROOT/origin.git" "$ROOT/analysis"
+                git --no-pager -C "$ROOT/analysis" switch -q -c memory/ci-failure-analysis
+                git --no-pager -C "$ROOT/analysis" config user.name "Test"
+                git --no-pager -C "$ROOT/analysis" config user.email "test@example.com"
+                echo seed > "$ROOT/analysis/seed"
+                git --no-pager -C "$ROOT/analysis" add seed
+                git --no-pager -C "$ROOT/analysis" commit -qm seed
+                git --no-pager -C "$ROOT/analysis" push -q -u origin memory/ci-failure-analysis
+                git --no-pager clone -q --branch memory/ci-failure-analysis "$ROOT/origin.git" "$ROOT/rerun"
+                git --no-pager -C "$ROOT/rerun" config user.name "Test"
+                git --no-pager -C "$ROOT/rerun" config user.email "test@example.com"
+
+                echo analysis > "$ROOT/analysis/analysis.json"
+                git --no-pager -C "$ROOT/analysis" add analysis.json
+                git --no-pager -C "$ROOT/analysis" commit -qm analysis
+                echo rerun > "$ROOT/rerun/rerun.json"
+                git --no-pager -C "$ROOT/rerun" add rerun.json
+                git --no-pager -C "$ROOT/rerun" commit -qm rerun
+                git --no-pager -C "$ROOT/rerun" push -q origin HEAD:memory/ci-failure-analysis
+
+                bash "$HELPER" push-memory-branch "$ROOT/analysis" memory/ci-failure-analysis
+                git --no-pager -C "$ROOT/analysis" show HEAD:analysis.json
+                git --no-pager -C "$ROOT/analysis" show HEAD:rerun.json
+                """],
+            new Dictionary<string, string>
+            {
+                ["ROOT"] = _workspace.Path,
+                ["HELPER"] = Path.Combine(RepoRoot.Path, PersistenceScriptRelativePath),
+            });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("analysis\n", result.Output, StringComparison.Ordinal);
+        Assert.Contains("rerun\n", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     [RequiresTools(["bash", "jq"])]
     public async Task ManualCollectionRejectsRunFromAnotherWorkflow()
     {
@@ -2737,7 +2793,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             Assert.Contains("$lines[1] == $type_marker", publisher, StringComparison.Ordinal);
             Assert.Contains("[\"**Type**: \" + $cause_type]", publisher, StringComparison.Ordinal);
             Assert.True(
-                publisher.IndexOf("git -C memory-repo push origin \"HEAD:$MEMORY_BRANCH\"", StringComparison.Ordinal) <
+                publisher.IndexOf("push-memory-branch memory-repo \"$MEMORY_BRANCH\"", StringComparison.Ordinal) <
                 publisher.IndexOf("# ── 2. Create or update issues for each cause ──", StringComparison.Ordinal));
             Assert.Contains(
                 "\"$ANALYSIS_FILE\" \"$TRUSTED_FAILED_JOBS_FILE\" \"$RUN_URL\" > \"$COMMENT_FILE\"",
@@ -4234,8 +4290,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             exit 0
             """);
 
-        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR")
-            .Replace("${{ github.repository }}", "microsoft/aspire", StringComparison.Ordinal);
+        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR");
         var result = await RunProcessAsync(
             "bash",
             ["-c", script],
@@ -4244,6 +4299,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
                 ["GH_AW_AGENT_OUTPUT"] = Path.Combine(_workspace.Path, "output.json"),
                 ["ANALYSIS_DIR"] = Path.Combine(_workspace.Path, "ci-analysis-output"),
                 ["GH_TOKEN"] = "test-token",
+                ["REPO"] = "microsoft/aspire",
                 ["GIT_CALL_LOG"] = gitCallLog,
                 ["PATH"] = $"{fakeBinDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
             });
@@ -4284,8 +4340,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             Path.Combine(fakeBinDirectory, "git"),
             "#!/usr/bin/env bash\nexit 0");
 
-        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR")
-            .Replace("${{ github.repository }}", "microsoft/aspire", StringComparison.Ordinal);
+        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR");
         var result = await RunProcessAsync(
             "bash",
             ["-c", script],
@@ -4296,6 +4351,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
                 ["ANALYSIS_DIR"] = Path.Combine(_workspace.Path, "ci-analysis-output"),
                 ["GH_CALL_LOG"] = ghCallLog,
                 ["GH_TOKEN"] = "test-token",
+                ["REPO"] = "microsoft/aspire",
                 ["PATH"] = $"{fakeBinDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
                 ["TMPDIR"] = tempDirectory,
             });
@@ -4464,8 +4520,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             exit 99
             """);
 
-        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR")
-            .Replace("${{ github.repository }}", "microsoft/aspire", StringComparison.Ordinal);
+        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Publish analysis data and comment on PR");
         var result = await RunProcessAsync(
             "bash",
             ["-c", script],
@@ -4478,6 +4533,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
                 ["GH_AW_AGENT_OUTPUT"] = Path.Combine(_workspace.Path, "output.json"),
                 ["ANALYSIS_DIR"] = Path.Combine(_workspace.Path, "ci-analysis-output"),
                 ["GH_TOKEN"] = "test-token",
+                ["REPO"] = "microsoft/aspire",
                 ["PATH"] = $"{fakeBinDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
                 ["STORED_CAUSE_PATH"] = storedCausePath,
             });
@@ -4893,10 +4949,8 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
 
     [Fact]
     [RequiresTools(["node"])]
-    public async Task RerunUsesTrustedRunIdForMainScopeTransientAnalysisEvenWithClosedPr()
+    public async Task AgentRerunSkipsMainBecauseAutomaticPolicyAlreadyHandledIt()
     {
-        // Main-scope runs have no associated PR to check for open state, so the PR-state check
-        // must be skipped entirely; a closed prState here proves the branch is never reached.
         await WriteRerunFixtureAsync(
             """{"run_id":123,"run_scope":"main","verdict":"transient-infra","failed_jobs":[{"id":456,"classification":"transient-infra"}],"failed_tests":[],"causes":["nuget-timeout"]}""",
             """{"id":"nuget-timeout","type":"infra-failure","job_ids":[456]}""",
@@ -4906,7 +4960,10 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         var result = await RunRerunScriptAsync(prState: "closed");
 
         Assert.Empty(result.Failed);
-        Assert.Equal([123], result.Reruns);
+        Assert.Empty(result.Reruns);
+        Assert.Contains(
+            "Current-main reruns are handled by the automatic failed-job rerun policy.",
+            result.Infos);
     }
 
     [Fact]
