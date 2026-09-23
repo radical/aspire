@@ -492,17 +492,18 @@ The body must contain:
 - **Symptom**: the concrete over-selection — which PR(s)/run(s), what
   changed, and that the selector ran ALL tests as a result. Quote the
   selection reason/log line verbatim in a fenced code block.
-- **Evidence**: **2-3 real example PRs** that hit this rule (not just the
-  one that triggered this run), each with its number, the file(s) it
-  touched, and a before/after project count — how many test projects ran
-  under the current rule versus how many would have run under your
-  proposed fix. Pull the count and examples from `watchlist.jsonl`'s
-  cumulative history for this rule when it has more than the current
-  window; a rule that only fired once is weaker evidence than one that has
-  been climbing for weeks, and the issue should say which case this is.
-  If genuinely only one example exists, say so explicitly rather than
-  padding with restated context. Link the specific trigger-map rule or
-  code path responsible, with file and line.
+- **Evidence**: real example PR(s) that hit this rule, each with the
+  file(s) it touched and a before/after project count — how many test
+  projects ran under the current rule versus how many would run under
+  your proposed fix. **One clear, unambiguous example is enough** — do not
+  pad the issue with additional PRs just to hit a count. Reach for more
+  than one only when a single example leaves genuine room for doubt (for
+  example, it could plausibly be a one-off rather than a repeating
+  pattern); in that case, pull the extra examples and the cumulative count
+  from `watchlist.jsonl`'s history for this rule rather than searching for
+  new ones. A rule that has been climbing for weeks is stronger evidence
+  than one seen once — say which case this is. Link the specific
+  trigger-map rule or code path responsible, with file and line.
 - **Root cause**: why the current rule is broader (or narrower/missing)
   than necessary, in one or two plain-language sentences. This is the
   sentence a reviewer should be able to quote back to explain the change
