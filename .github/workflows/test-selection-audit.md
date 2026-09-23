@@ -95,7 +95,7 @@ tools:
 safe-outputs:
   create-issue:
     title-prefix: "[test-selection-audit] "
-    labels: [area-testing, ci]
+    labels: [area-testing, area-pipelines]
     # Assigning `copilot` starts a Copilot coding agent session on the filed
     # issue, which implements and validates the fix and opens a PR for human
     # review. This requires the `GH_AW_AGENT_TOKEN` fine-grained PAT secret;
