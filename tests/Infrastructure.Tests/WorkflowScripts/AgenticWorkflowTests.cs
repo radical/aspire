@@ -9,6 +9,7 @@ using YamlDotNet.RepresentationModel;
 
 namespace Infrastructure.Tests;
 
+// Fork-only marker used to exercise conditional test selection.
 public sealed class AgenticWorkflowTests
 {
     private static readonly string s_workflowsPath = Path.Combine(RepoRoot.Path, ".github", "workflows");
