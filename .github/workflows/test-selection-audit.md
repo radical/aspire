@@ -41,7 +41,17 @@ permissions:
   copilot-requests: write
 
 concurrency:
-  job-discriminator: ${{ github.event.inputs.pr_numbers || github.run_id }}
+  # A `pr_numbers`-focused dispatch gets its own group so several can run in
+  # parallel without cancelling each other. Full-window runs (the weekly
+  # schedule, or a dispatch that leaves `pr_numbers` empty) all share one
+  # fixed group instead of `github.run_id`, so an overlapping schedule/manual
+  # run queues behind the one in progress rather than racing it: two
+  # concurrent agent runs would each read the memory ledger from the same
+  # base and independently rewrite it (pruning, watchlist updates), and the
+  # push that lands second silently discards the first's rows for any row
+  # both runs touched (see step 13 on why appends survive that but
+  # rewrites don't).
+  job-discriminator: ${{ github.event.inputs.pr_numbers || 'default-window' }}
 
 engine: copilot
 
@@ -112,8 +122,12 @@ safe-outputs:
     max: 1
     # A weekly schedule would otherwise re-file the same finding (and start a
     # duplicate agent session) every run. Titles name the offending rule, so
-    # near-exact matches against open and recently-closed issues are dropped.
-    deduplicate-by-title: 1
+    # exact matches against open and recently-closed issues are dropped.
+    # Exact (not fuzzy) match: step 1's reconciliation searches for the
+    # literal title it wrote to a `pending-filed` row's `note`, and a fuzzy
+    # match here could silently dedupe against an unrelated near-duplicate
+    # title that reconciliation would never find, stranding the row.
+    deduplicate-by-title: true
 
 ---
 
@@ -204,9 +218,12 @@ code changes yourself.
      `under-selection` (the path's rule names `targets` that miss a real
      consumer, per step 7). It picks which counter the row tracks:
      `all_runs` for `over-selection` rows counts escalations to ALL;
-     `miss_runs` for `under-selection` rows counts observed misses instead
-     — there is no ALL run to count. Never mix the two counters on one
-     row.
+     `miss_runs` for `under-selection` rows counts **distinct affected
+     PRs/commits** you found evidence of this run — never increment it
+     just because step 7's static source analysis still finds the same
+     gap it found last week, since that gap does not change between runs
+     and would otherwise inflate the count every week for zero new
+     evidence. Never mix the two counters on one row.
 
      `rule_ref` is the trigger-map file and the short commit SHA it was
      last read at when this verdict was set. Before carrying a
@@ -578,10 +595,17 @@ code changes yourself.
       re-read every time.
     - Update `watchlist.jsonl` for each path you actually observed
       escalating (or missing a consumer) this run, plus any carried
-      forward from earlier runs. For a path observed escalating this run,
-      increment its `all_runs` / `miss_runs` count, refresh `last_seen` to
-      this run's date, and set `verdict` / `ref` to match where it now
-      stands. For a row merely carried forward with no new observation
+      forward from earlier runs. For an `over-selection` row, "observed
+      escalating this run" means a PR/run resolved this run selected ALL
+      because of it. For an `under-selection` row it means you identified
+      a *new* affected PR/commit this run — re-deriving the same static
+      gap step 7 already found in an earlier run is not a new
+      observation and must not increment `miss_runs` or refresh
+      `last_seen`; treat it as carried forward instead. For a row
+      genuinely observed this run, increment its `all_runs` / `miss_runs`
+      count, refresh `last_seen` to this run's date, and set `verdict` /
+      `ref` to match where it now stands. For a row merely carried
+      forward with no new observation
       this run, copy it unchanged — in particular, **do not** refresh
       `last_seen`; doing so would make an inactive path look like it
       recurred every week and corrupt the very signal this ledger exists
@@ -592,13 +616,18 @@ code changes yourself.
       exists to preserve, so a future run doesn't re-derive it from
       scratch. Drop a rule only once its fix has actually merged.
 
-    Prefer appending over rewriting: both files are `.jsonl` and are
-    union-merged on conflict, so an append is safe even if another run
-    writes concurrently, while a rewrite can silently drop rows. When you
-    must rewrite — pruning, or updating a watchlist row in place — re-read
-    the file first and preserve every row you are not deliberately
-    changing. Keep rows one-line and minimal; these files are size-capped
-    and are read back in full on every future run.
+    Prefer appending over rewriting. There is no JSONL-aware merge here:
+    the push retries with a plain `git pull --no-rebase -X ours`, so a
+    real conflicting hunk resolves by keeping this run's version of that
+    hunk wholesale and silently dropping the other side's. Two pure
+    appends to the end of the same file are not a conflicting hunk (each
+    side only adds new lines), so git's ordinary merge keeps both — which
+    is the only reason concurrent writes are safe at all. A rewrite
+    (pruning, or updating a watchlist row in place) touches existing
+    lines and can conflict, so when you must rewrite, re-read the file
+    first and preserve every row you are not deliberately changing. Keep
+    rows one-line and minimal; these files are size-capped and are read
+    back in full on every future run.
 
 ## The issue you file
 
