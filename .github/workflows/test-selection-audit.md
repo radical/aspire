@@ -2,13 +2,14 @@
 description: |
   Weekly audit of Aspire PR CI's dynamic test selection (`tools/SelectTests`,
   `eng/github-ci/test-trigger-map.yml`). Looks for pull requests where the
-  selector fell back to running ALL tests, classifies why, checks how
-  similar cases were handled in the trigger map's own commit history, and
-  files at most one issue per run for its single highest-confidence case
-  where the selection could safely run fewer tests. Per-PR results and
-  per-rule verdicts persist across runs in a memory branch, so escalation
-  counts accumulate into cross-run evidence and no completed CI run is
-  analyzed twice.
+  selector fell back to running ALL tests (over-selection) or where a
+  narrow rule's target list misses a real consumer (under-selection),
+  classifies why, checks how similar cases were handled in the trigger
+  map's own commit history, and files at most one issue per run for its
+  single highest-confidence case where the selection could be made safer
+  or cheaper. Per-PR results and per-rule verdicts persist across runs in
+  a memory branch, so escalation counts accumulate into cross-run
+  evidence and no completed CI run is analyzed twice.
   The filed issue is assigned to the Copilot coding agent, which
   implements and validates the fix and opens a PR for human review. This
   workflow never edits the trigger map itself.
@@ -176,8 +177,28 @@ code changes yourself.
      recount escalations without re-fetching.
 
    - `watchlist.jsonl` — the rules worth continuing to watch. One row per
-     trigger you have judged:
-     `{"rule": ".github/actions/**", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
+     exact triggering path, not per rule: broad rules like
+     `.github/workflows/**` match files with very different effects, and
+     step 6 requires judging each file on its own, so a verdict for one
+     matching file must never be reused for another. Key on `path` (the
+     literal file, e.g. `.github/workflows/build.yml`), and record which
+     trigger-map rule matched it separately:
+     `{"path": ".github/workflows/build.yml", "rule": ".github/workflows/**", "rule_ref": "eng/github-ci/test-trigger-map.yml@a1b2c3d", "kind": "over-selection", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
+
+     `kind` is `over-selection` (the path escalates to ALL) or
+     `under-selection` (the path's rule names `targets` that miss a real
+     consumer, per step 7). It picks which counter the row tracks:
+     `all_runs` for `over-selection` rows counts escalations to ALL;
+     `miss_runs` for `under-selection` rows counts observed misses instead
+     — there is no ALL run to count. Never mix the two counters on one
+     row.
+
+     `rule_ref` is the trigger-map file and the short commit SHA it was
+     last read at when this verdict was set. Before carrying a
+     `correct-by-design` verdict forward, confirm the rule's current text
+     still matches what you verdict-tested — if the trigger map has
+     changed since `rule_ref`, treat the verdict as stale and re-derive it
+     from scratch rather than trusting an out-of-date read.
 
      `verdict` is one of:
 
@@ -196,16 +217,20 @@ code changes yourself.
      build-input list in step 5, or a self-referential selector change in
      step 6. Those are settled, not still being watched.
 
-     Only record a rule you actually observed escalating this window, or
-     one already carried forward from a previous run. Do not seed a row
-     for a rule you merely noticed sharing a fix with an observed one — a
-     row with `all_runs: 0` is noise that dilutes the counts this ledger
-     exists to accumulate.
+     Only record a path you actually observed escalating (or missing a
+     consumer, for `under-selection`) this window, or one already carried
+     forward from a previous run. Do not seed a row for a path you merely
+     noticed sharing a fix with an observed one — a row with `all_runs: 0`
+     / `miss_runs: 0` is noise that dilutes the counts this ledger exists
+     to accumulate.
 
-     Carry these forward rather than re-deriving them. For a rule recorded
-     `correct-by-design`, do not re-read the trigger map and its history
-     again unless the rule's own text has changed since `last_seen`; just
-     add this window's counts and move on.
+     Carry these forward rather than re-deriving them. For a row recorded
+     `correct-by-design`, skip re-reading the trigger map and its history
+     only after confirming the rule at `rule_ref`'s path is still at the
+     commit SHA recorded there (a cheap `list_commits`/`get_file_contents`
+     check, not a full re-derivation); if the rule has moved since
+     `rule_ref`, re-derive the verdict and update `rule_ref`. Otherwise
+     just add this window's counts and move on.
 
    **Rows written by an older version of this prompt may not match the
    shapes above.** Never delete or rewrite a row just because its shape is
@@ -427,12 +452,18 @@ code changes yourself.
 9. **Check whether a fix is already in flight.** Before going further with a
    candidate, check whether someone is already fixing it:
 
-   - Use `search_pull_requests` for **open** PRs touching
-     `eng/github-ci/test-trigger-map.yml` or naming the rule.
+   - `search_pull_requests` only searches issue-style metadata (title,
+     body, labels) — it cannot see a PR's changed files, so an open PR
+     that edits the trigger map without naming it or the rule in its
+     title/body would be missed. List open PRs
+     (`list_pull_requests`, `state: open`) and check each one's changed
+     files (`get_pull_request_files`) for `eng/github-ci/test-trigger-map.yml`;
+     use `search_pull_requests` in addition, for PRs that name the rule by
+     text but might not (yet) touch the file.
    - Check `watchlist.jsonl` for an `in-flight` or `filed` verdict
-     recorded against this rule by an earlier run, and confirm its `ref`
-     is still open — an in-flight PR that was closed unmerged no longer
-     blocks the candidate.
+     recorded against this exact `path` by an earlier run, and confirm its
+     `ref` is still open — an in-flight PR that was closed unmerged no
+     longer blocks the candidate.
 
    If a fix is already in flight, reject the candidate and say so in the
    run summary. Filing anyway would start a second coding agent on work
@@ -511,12 +542,13 @@ code changes yourself.
       scheduled run still needs). Commits outside that retention window
       are never enumerated again, so keeping them only grows a file you
       re-read every time.
-    - Update `watchlist.jsonl` for each rule you actually observed
-      escalating this run, plus any carried forward from earlier runs:
-      carry the cumulative `all_runs` count forward, refresh `last_seen`,
-      and set `verdict` / `ref` to match where the rule now stands. Keep a
-      rule here even when it fails the confidence bar — a `watch` row that
-      keeps accumulating escalations is the evidence a future run needs to
+    - Update `watchlist.jsonl` for each path you actually observed
+      escalating (or missing a consumer) this run, plus any carried
+      forward from earlier runs: carry the cumulative `all_runs` /
+      `miss_runs` count forward, refresh `last_seen`, and set `verdict` /
+      `ref` to match where the path now stands. Keep a row here even when
+      it fails the confidence bar — a `watch` row that keeps accumulating
+      escalations is the evidence a future run needs to
       justify acting. Never drop a `correct-by-design` row: it is the
       durable verdict this ledger exists to preserve, so a future run
       doesn't re-derive it from scratch. Drop a rule only once its fix has
@@ -537,19 +569,29 @@ will be assigned to it — it should be able to start work from the issue
 alone, without re-doing your analysis.
 
 Title it so it names the offending rule or input, for example
-`Narrow <rule/path> so it no longer escalates test selection to ALL`.
+`Narrow <rule/path> so it no longer escalates test selection to ALL` for
+an over-selection finding, or
+`Add <consumer> to <rule/path>'s targets so <test project> is selected`
+for an under-selection one.
 Titles are deduplicated against open and recently-closed issues, so a stable,
 specific title prevents re-filing the same finding on a later run.
 
 The body must contain:
 
-- **Symptom**: the concrete over-selection — which PR(s)/run(s), what
-  changed, and that the selector ran ALL tests as a result. Quote the
-  selection reason/log line verbatim in a fenced code block.
+- **Symptom**: the concrete finding — which PR(s)/run(s), what changed,
+  and either that the selector ran ALL tests as a result (over-selection)
+  or which real consumer's tests the narrow selection missed
+  (under-selection). Quote the selection reason/log line verbatim in a
+  fenced code block.
 - **Evidence**: real example PR(s) that hit this rule, each with the
   file(s) it touched and a before/after project count — how many test
   projects ran under the current rule versus how many would run under
-  your proposed fix. **One clear, unambiguous example is enough** — do not
+  your proposed fix. You cannot run `tools/SelectTests` yourself in this
+  sandbox, so derive this count by reading the trigger map's rules and
+  targets directly (which rule newly does or no longer matches, and which
+  targets that adds or removes) and label it explicitly as an estimate;
+  the assigned agent establishes the exact count under Required
+  validation below. **One clear, unambiguous example is enough** — do not
   pad the issue with additional PRs just to hit a count. Reach for more
   than one only when a single example leaves genuine room for doubt (for
   example, it could plausibly be a one-off rather than a repeating
@@ -611,9 +653,10 @@ In your final response, report:
   window is distinguishable from an unanalyzable one.
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
   with counts — both for this window and cumulatively across runs.
-- The current watchlist: each rule being tracked, its cumulative `ALL`
-  count, and how that count moved this run. A rule whose count is climbing
-  week over week is the audit's main product even when nothing is filed.
+- The current watchlist: each path being tracked, its cumulative `all_runs`
+  / `miss_runs` count, and how that count moved this run. A path whose
+  count is climbing week over week is the audit's main product even when
+  nothing is filed.
 - Candidates you considered but rejected as correct-by-design or as failing
   the confidence bar, and which specific criterion each one failed. Call out
   separately any candidate rejected because history shows the same change
