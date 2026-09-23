@@ -67,19 +67,36 @@ pre-agent-steps:
     env:
       MEMORY_ROOT: /tmp/gh-aw/repo-memory/default
       RETENTION_DAYS: "14"
+      AUDIT_DATE_PATH: ${{ runner.temp }}/gh-aw/test-selection-audit/audit-date.txt
     run: |
       node <<'JS'
       const fs = require("fs");
       const path = require("path");
 
       const memoryRoot = process.env.MEMORY_ROOT;
+      const auditDatePath = process.env.AUDIT_DATE_PATH;
       const retentionText = process.env.RETENTION_DAYS || "14";
       if (!/^[1-9][0-9]*$/.test(retentionText) || Number(retentionText) > 90) {
         throw new Error("retention days must be between 1 and 90");
       }
-      const cutoff = new Date(Date.now() - Number(retentionText) * 86400000)
-        .toISOString().slice(0, 10);
       const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+      const auditDate = new Date().toISOString().slice(0, 10);
+      const cutoff = new Date(
+        Date.parse(`${auditDate}T00:00:00Z`) - Number(retentionText) * 86400000)
+        .toISOString().slice(0, 10);
+      const requireUtcDate = (value, context) => {
+        if (typeof value !== "string" || !datePattern.test(value)) {
+          throw new Error(`${context} must be a UTC date`);
+        }
+        const milliseconds = Date.parse(`${value}T00:00:00Z`);
+        if (!Number.isFinite(milliseconds) ||
+            new Date(milliseconds).toISOString().slice(0, 10) !== value ||
+            value > auditDate) {
+          throw new Error(`${context} must be a real UTC date no later than ${auditDate}`);
+        }
+      };
+      fs.mkdirSync(path.dirname(auditDatePath), { recursive: true });
+      fs.writeFileSync(auditDatePath, `${auditDate}\n`, { mode: 0o444 });
 
       const readRows = fileName => {
         const filePath = path.join(memoryRoot, fileName);
@@ -105,11 +122,11 @@ pre-agent-steps:
       for (const [index, row] of processedFile.rows.entries()) {
         if (!Number.isSafeInteger(row.pr) ||
             typeof row.sha !== "string" ||
-            !datePattern.test(row.seen) ||
             !Array.isArray(row.over_paths) ||
             !Array.isArray(row.miss_edges)) {
           throw new Error(`processed-runs.jsonl:${index + 1} has an invalid compaction shape`);
         }
+        requireUtcDate(row.seen, `processed-runs.jsonl:${index + 1}.seen`);
       }
       const retained = processedFile.rows.filter(row => row.seen >= cutoff);
       const contributions = new Map();
@@ -135,10 +152,13 @@ pre-agent-steps:
         if (row.kind !== "over-selection" && row.kind !== "under-selection") {
           throw new Error(`watchlist.jsonl:${index + 1} has an invalid kind`);
         }
-        if (!Array.isArray(row.example_prs) ||
-            !datePattern.test(row.first_seen) ||
-            !datePattern.test(row.last_seen)) {
+        if (!Array.isArray(row.example_prs)) {
           throw new Error(`watchlist.jsonl:${index + 1} has an invalid compaction shape`);
+        }
+        requireUtcDate(row.first_seen, `watchlist.jsonl:${index + 1}.first_seen`);
+        requireUtcDate(row.last_seen, `watchlist.jsonl:${index + 1}.last_seen`);
+        if (row.first_seen > row.last_seen) {
+          throw new Error(`watchlist.jsonl:${index + 1}.first_seen is after last_seen`);
         }
         const key = row.kind === "over-selection"
           ? `over\u0000${row.path}`
@@ -400,11 +420,12 @@ pre-agent-steps:
       REPOSITORY: ${{ github.repository }}
       LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days }}
       PR_NUMBERS: ${{ github.event.inputs.pr_numbers }}
-      OUTPUT_PATH: /tmp/gh-aw/test-selection-audit/evidence.json
+      OUTPUT_PATH: ${{ runner.temp }}/gh-aw/test-selection-audit/evidence.json
       PROCESSED_RUNS_PATH: /tmp/gh-aw/repo-memory/default/processed-runs.jsonl
-      PROCESSED_BASELINE_PATH: /tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl
+      PROCESSED_BASELINE_PATH: ${{ runner.temp }}/gh-aw/test-selection-audit/processed-runs-before.jsonl
       WATCHLIST_PATH: /tmp/gh-aw/repo-memory/default/watchlist.jsonl
-      WATCHLIST_BASELINE_PATH: /tmp/gh-aw/test-selection-audit/watchlist-before.jsonl
+      WATCHLIST_BASELINE_PATH: ${{ runner.temp }}/gh-aw/test-selection-audit/watchlist-before.jsonl
+      AUDIT_DATE_PATH: ${{ runner.temp }}/gh-aw/test-selection-audit/audit-date.txt
     run: |
       cat >> /tmp/gh-aw/test-selection-audit/collector.py <<'PY'
       def list_pull_requests():
@@ -691,6 +712,7 @@ pre-agent-steps:
           records = list(executor.map(collect_selection_record, pull_requests))
       output = {
           "schemaVersion": 1,
+          "auditDate": pathlib.Path(os.environ["AUDIT_DATE_PATH"]).read_text(encoding="utf-8").strip(),
           "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
           "repository": repository,
           "enumerationTruncated": enumeration_truncated,
@@ -756,8 +778,8 @@ tools:
         const globPattern = /^[A-Za-z0-9._/@+#=*?\[\]\-]+$/;
         const targetPattern = /^(test|job):[A-Za-z0-9._-]+$/;
         const shaPattern = /^[0-9a-f]{40}$/;
-        const datePattern = /^\d{4}-\d{2}-\d{2}$/;
         const titlePattern = /^\[test-selection-audit\] [A-Za-z0-9 .-]{1,77}$/;
+        let auditDate = new Date().toISOString().slice(0, 10);
 
         const fail = message => {
           throw new Error(`Invalid test-selection audit memory: ${message}`);
@@ -778,6 +800,13 @@ tools:
         const requireString = (value, pattern, context, maxLength = 400) => {
           if (typeof value !== "string" || value.length === 0 || value.length > maxLength || !pattern.test(value)) {
             fail(`${context} is invalid`);
+          }
+        };
+        const requireUtcDate = (value, context) => {
+          requireString(value, /^\d{4}-\d{2}-\d{2}$/, context, 10);
+          const parsed = new Date(value + "T00:00:00Z");
+          if (Number.isNaN(+parsed) || parsed.toISOString().slice(0, 10) !== value || value > auditDate) {
+            fail(`${context} must be a UTC date <= ${auditDate}`);
           }
         };
         const requireUniqueStrings = (values, pattern, context) => {
@@ -818,12 +847,15 @@ tools:
         ]);
         const edgeAllowed = new Set(["path", "target"]);
         const processed = readJsonLines("processed-runs.jsonl");
-        const evidencePath = "/tmp/gh-aw/test-selection-audit/evidence.json";
-        const processedBaselinePath = "/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl";
-        const watchBaselinePath = "/tmp/gh-aw/test-selection-audit/watchlist-before.jsonl";
-        const hasProvenance = fs.existsSync(evidencePath) &&
-          fs.existsSync(processedBaselinePath) &&
-          fs.existsSync(watchBaselinePath);
+        const provenanceRoot = path.join(
+          process.env.RUNNER_TEMP || fail("RUNNER_TEMP unavailable"),
+          "gh-aw/test-selection-audit");
+        const [evidenceFile, processedBefore, watchBefore] =
+          ["evidence.json", "processed-runs-before.jsonl", "watchlist-before.jsonl"]
+            .map(fileName => path.join(provenanceRoot, fileName));
+        const provenance = [evidenceFile, processedBefore, watchBefore].map(fs.existsSync);
+        if (new Set(provenance).size > 1) fail("provenance files are incomplete");
+        const hasProvenance = provenance[0];
         const canonical = value => {
           if (Array.isArray(value)) return value.map(canonical);
           if (!isObject(value)) return value;
@@ -842,8 +874,10 @@ tools:
         const trustedSelections = new Map();
         const recordedSelections = new Map();
         if (hasProvenance) {
-          baselineRows = parseBaseline(processedBaselinePath);
-          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const evidence = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));
+          requireUtcDate(evidence.auditDate, "evidence.auditDate");
+          auditDate = evidence.auditDate;
+          baselineRows = parseBaseline(processedBefore);
           for (const record of evidence.records) {
             const selection = record.selection;
             if (selection.status === "resolved" && selection.creditable === true) {
@@ -879,7 +913,7 @@ tools:
           requireInteger(row.run, `${context}.run`, 1);
           requireInteger(row.attempt, `${context}.attempt`, 1);
           if (typeof row.all !== "boolean") fail(`${context}.all must be boolean`);
-          requireString(row.seen, datePattern, `${context}.seen`, 10);
+          requireUtcDate(row.seen, `${context}.seen`);
           const identity = `${row.pr}:${row.sha}`;
           if (processedKeys.has(identity)) fail(`duplicate processed identity ${identity}`);
           processedKeys.add(identity);
@@ -892,6 +926,9 @@ tools:
                   row.attempt !== selection.attempt ||
                   row.all !== selection.result.selectsAll) {
                 fail(`${context} does not match trusted selection evidence`);
+              }
+              if (row.seen !== auditDate) {
+                fail(`${context}.seen must match the protected audit date`);
               }
             } else if (recordedSelection) {
               if (!baselineRow ||
@@ -978,7 +1015,7 @@ tools:
           : `miss\u0000${row.path}\u0000${row.target}`;
         const baselineWatchRows = new Map();
         if (hasProvenance) {
-          for (const line of fs.readFileSync(watchBaselinePath, "utf8").split("\n")) {
+          for (const line of fs.readFileSync(watchBefore, "utf8").split("\n")) {
             if (!line) continue;
             const row = JSON.parse(line);
             baselineWatchRows.set(watchIdentity(row), row);
@@ -1019,8 +1056,8 @@ tools:
           if (row.rule !== null) requireString(row.rule, globPattern, `${context}.rule`);
           requireString(row.rule_ref, /^[A-Za-z0-9._/@+#=\-]+@[0-9a-f]{7,40}$/, `${context}.rule_ref`);
           requireString(row.path_ref, /^[A-Za-z0-9._/@+#=\-]+@[0-9a-f]{7,40}$/, `${context}.path_ref`);
-          requireString(row.first_seen, datePattern, `${context}.first_seen`, 10);
-          requireString(row.last_seen, datePattern, `${context}.last_seen`, 10);
+          requireUtcDate(row.first_seen, `${context}.first_seen`);
+          requireUtcDate(row.last_seen, `${context}.last_seen`);
           if (row.first_seen > row.last_seen) fail(`${context}.first_seen is after last_seen`);
           if (!verdicts.has(row.verdict)) fail(`${context}.verdict is invalid`);
           if (row.ref !== null) requireInteger(row.ref, `${context}.ref`, 1);
@@ -1165,7 +1202,8 @@ code changes yourself.
   (ignore the lookback window for both selecting PRs and finding their
   completed CI runs; still use it as context when useful).
 - Primary evidence is the deterministic collector output at
-  `/tmp/gh-aw/test-selection-audit/evidence.json`. Read it before making
+  `$RUNNER_TEMP/gh-aw/test-selection-audit/evidence.json`. This path is
+  mounted read-only into the agent. Read it before making
   GitHub calls. It already enumerates the requested PR scope, finds the
   latest CI run and selection-job attempt for each current head, paginates
   artifacts, bounds both compressed and expanded bytes, validates the
@@ -1230,6 +1268,9 @@ code changes yourself.
      SHA, run ID, and attempt from the deterministic evidence. If any
      identity field is unavailable, leave the head unresolved rather
      than write an identity that could make a later run skip it.
+     Set `seen` to the protected evidence file's `auditDate`; do not use
+     the wall clock or preserve an older date when replacing a row from a
+     newer creditable attempt.
 
      A deterministic pre-agent step retains only rows whose `seen` date is
      inside the current lookback window (14 days by default). Do not
@@ -1338,7 +1379,7 @@ code changes yourself.
    survive after their raw observations expire so known cases are not
    repeatedly re-investigated.
 2. **Use the collected evidence.** Read every record in
-   `/tmp/gh-aw/test-selection-audit/evidence.json`; do not enumerate PRs,
+   `$RUNNER_TEMP/gh-aw/test-selection-audit/evidence.json`; do not enumerate PRs,
    runs, jobs, comments, or artifacts again. The collector includes all PR
    states in the requested scope and records the current head SHA, latest
    CI run/attempt, normalized changed and excluded paths, selected tests

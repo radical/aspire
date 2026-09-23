@@ -140,13 +140,15 @@ public sealed class AgenticWorkflowTests
 
         Assert.Equal("/tmp/gh-aw/repo-memory/default", Scalar(Mapping(compactMemory, "env"), "MEMORY_ROOT"));
         Assert.Equal("14", Scalar(Mapping(compactMemory, "env"), "RETENTION_DAYS"));
+        Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/audit-date.txt", Scalar(Mapping(compactMemory, "env"), "AUDIT_DATE_PATH"));
         Assert.Contains("row.seen >= cutoff", Scalar(compactMemory, "run"), StringComparison.Ordinal);
         Assert.Contains("row.verdict === \"watch\"", Scalar(compactMemory, "run"), StringComparison.Ordinal);
-        Assert.Contains("/tmp/gh-aw/test-selection-audit/evidence.json", Scalar(Mapping(collector, "env"), "OUTPUT_PATH"), StringComparison.Ordinal);
+        Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/evidence.json", Scalar(Mapping(collector, "env"), "OUTPUT_PATH"));
         Assert.Equal("/tmp/gh-aw/repo-memory/default/processed-runs.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_RUNS_PATH"));
-        Assert.Equal("/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_BASELINE_PATH"));
+        Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/processed-runs-before.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_BASELINE_PATH"));
         Assert.Equal("/tmp/gh-aw/repo-memory/default/watchlist.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_PATH"));
-        Assert.Equal("/tmp/gh-aw/test-selection-audit/watchlist-before.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_BASELINE_PATH"));
+        Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/watchlist-before.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_BASELINE_PATH"));
+        Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/audit-date.txt", Scalar(Mapping(collector, "env"), "AUDIT_DATE_PATH"));
         Assert.Contains("MAX_COMPRESSED_BYTES", script, StringComparison.Ordinal);
         Assert.Contains("MAX_EXPANDED_BYTES", script, StringComparison.Ordinal);
         Assert.Contains("http.client.IncompleteRead", script, StringComparison.Ordinal);
@@ -192,6 +194,8 @@ public sealed class AgenticWorkflowTests
             Assert.Contains("is not an unchanged baseline or trusted selection", validation, StringComparison.Ordinal);
             Assert.Contains("changes a watch row without trusted current evidence", validation, StringComparison.Ordinal);
             Assert.Contains("requires selection-time diff attribution", validation, StringComparison.Ordinal);
+            Assert.Contains("provenance files are incomplete", validation, StringComparison.Ordinal);
+            Assert.Contains("must be a UTC date <=", validation, StringComparison.Ordinal);
         }
         else
         {
@@ -201,6 +205,11 @@ public sealed class AgenticWorkflowTests
             Assert.True(mappings.IndexOf(prepareCollector) < mappings.IndexOf(collector));
             var validation = Step(root, "Validate repo-memory domain content (default)");
             Assert.NotEmpty(Scalar(Mapping(validation, "env"), "VALIDATION_SCRIPT_B64"));
+            var agentRun = Scalar(Step(root, "Execute GitHub Copilot CLI"), "run");
+            Assert.Contains("--mount \"${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro\"", agentRun, StringComparison.Ordinal);
+            Assert.DoesNotContain("--mount \"${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:rw\"", agentRun, StringComparison.Ordinal);
+            Assert.Contains("--mount \"${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro\"", agentRun, StringComparison.Ordinal);
+            Assert.DoesNotContain("--mount \"${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:rw\"", agentRun, StringComparison.Ordinal);
         }
     }
 
@@ -215,13 +224,12 @@ public sealed class AgenticWorkflowTests
         Directory.CreateDirectory(memoryPath);
         Directory.CreateDirectory(Path.Combine(memoryPath, ".git"));
 
-        var evidencePath = Path.Combine(workspace.Path, "evidence.json");
-        var baselinePath = Path.Combine(workspace.Path, "processed-runs-before.jsonl");
-        var watchBaselinePath = Path.Combine(workspace.Path, "watchlist-before.jsonl");
-        validationScript = validationScript
-            .Replace("\"/tmp/gh-aw/test-selection-audit/evidence.json\"", JsonSerializer.Serialize(evidencePath), StringComparison.Ordinal)
-            .Replace("\"/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl\"", JsonSerializer.Serialize(baselinePath), StringComparison.Ordinal)
-            .Replace("\"/tmp/gh-aw/test-selection-audit/watchlist-before.jsonl\"", JsonSerializer.Serialize(watchBaselinePath), StringComparison.Ordinal);
+        var provenancePath = Path.Combine(workspace.Path, "gh-aw", "test-selection-audit");
+        Directory.CreateDirectory(provenancePath);
+        var evidencePath = Path.Combine(provenancePath, "evidence.json");
+        var baselinePath = Path.Combine(provenancePath, "processed-runs-before.jsonl");
+        var watchBaselinePath = Path.Combine(provenancePath, "watchlist-before.jsonl");
+        var auditDatePath = Path.Combine(provenancePath, "audit-date.txt");
         var validationPath = Path.Combine(workspace.Path, "validation.js");
         await File.WriteAllTextAsync(validationPath, validationScript);
         var harnessPath = Path.Combine(workspace.Path, "validate-memory.js");
@@ -233,9 +241,10 @@ public sealed class AgenticWorkflowTests
             const vm = require("vm");
             const memoryRoot = process.argv[2];
             const script = fs.readFileSync(process.argv[3], "utf8");
-            vm.runInNewContext(script, { fs, path, memoryRoot });
+            vm.runInNewContext(script, { fs, path, memoryRoot, process });
             """);
 
+        var auditDate = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var processed = new Dictionary<string, object?>
         {
             ["pr"] = 42,
@@ -245,7 +254,7 @@ public sealed class AgenticWorkflowTests
             ["all"] = true,
             ["over_paths"] = new[] { ".gitattributes" },
             ["miss_edges"] = Array.Empty<object>(),
-            ["seen"] = "2026-09-23"
+            ["seen"] = auditDate
         };
         var watch = new Dictionary<string, object?>
         {
@@ -256,8 +265,8 @@ public sealed class AgenticWorkflowTests
             ["kind"] = "over-selection",
             ["verdict"] = "watch",
             ["all_runs"] = 1,
-            ["first_seen"] = "2026-09-23",
-            ["last_seen"] = "2026-09-23",
+            ["first_seen"] = auditDate,
+            ["last_seen"] = auditDate,
             ["example_prs"] = new[] { 42 },
             ["ref"] = null
         };
@@ -265,6 +274,8 @@ public sealed class AgenticWorkflowTests
         var watchPath = Path.Combine(memoryPath, "watchlist.jsonl");
         object evidence = new
         {
+            auditDate,
+            generatedAt = DateTime.UtcNow.ToString("O"),
             records = new[]
             {
                 new
@@ -294,14 +305,52 @@ public sealed class AgenticWorkflowTests
         await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(evidence));
         await File.WriteAllTextAsync(baselinePath, "");
         await File.WriteAllTextAsync(watchBaselinePath, "");
+        await File.WriteAllTextAsync(auditDatePath, auditDate + Environment.NewLine);
         await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
         await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
 
         using var command = new NodeCommand(_testOutput, "test-selection-memory-validation");
-        command.WithTimeout(TimeSpan.FromSeconds(30));
+        command
+            .WithTimeout(TimeSpan.FromSeconds(30))
+            .WithEnvironmentVariable("RUNNER_TEMP", workspace.Path);
         var valid = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
         Assert.True(valid.ExitCode == 0, valid.Output);
 
+        File.Delete(evidencePath);
+        var partialProvenance = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, partialProvenance.ExitCode);
+        Assert.Contains("provenance files are incomplete", partialProvenance.Output, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(evidence));
+
+        File.Delete(evidencePath);
+        File.Delete(baselinePath);
+        File.Delete(watchBaselinePath);
+        var noProvenance = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.True(noProvenance.ExitCode == 0, noProvenance.Output);
+        await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(evidence));
+        await File.WriteAllTextAsync(baselinePath, "");
+        await File.WriteAllTextAsync(watchBaselinePath, "");
+
+        processed["seen"] = "2026-02-30";
+        await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
+        var invalidCalendarDate = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, invalidCalendarDate.ExitCode);
+        Assert.Contains("must be a UTC date", invalidCalendarDate.Output, StringComparison.Ordinal);
+
+        processed["seen"] = DateTime.UtcNow.AddDays(2).ToString("yyyy-MM-dd");
+        await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
+        var futureDate = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, futureDate.ExitCode);
+        Assert.Contains("must be a UTC date", futureDate.Output, StringComparison.Ordinal);
+
+        processed["seen"] = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");
+        await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
+        var backdatedTrustedRow = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, backdatedTrustedRow.ExitCode);
+        Assert.Contains("seen must match the protected audit date", backdatedTrustedRow.Output, StringComparison.Ordinal);
+
+        processed["seen"] = auditDate;
+        await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
         watch["all_runs"] = 2;
         await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
         var invalid = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
@@ -312,6 +361,8 @@ public sealed class AgenticWorkflowTests
         await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
         evidence = new
         {
+            auditDate,
+            generatedAt = DateTime.UtcNow.ToString("O"),
             records = new[]
             {
                 new
@@ -382,6 +433,7 @@ public sealed class AgenticWorkflowTests
         var memoryPath = Path.Combine(workspace.Path, "memory");
         Directory.CreateDirectory(memoryPath);
         var scriptPath = Path.Combine(workspace.Path, "compact-memory.js");
+        var auditDatePath = Path.Combine(workspace.Path, "gh-aw", "test-selection-audit", "audit-date.txt");
         await File.WriteAllTextAsync(scriptPath, script);
 
         var recent = DateTime.UtcNow.ToString("yyyy-MM-dd");
@@ -478,7 +530,8 @@ public sealed class AgenticWorkflowTests
         command
             .WithTimeout(TimeSpan.FromSeconds(30))
             .WithEnvironmentVariable("MEMORY_ROOT", memoryPath)
-            .WithEnvironmentVariable("RETENTION_DAYS", "14");
+            .WithEnvironmentVariable("RETENTION_DAYS", "14")
+            .WithEnvironmentVariable("AUDIT_DATE_PATH", auditDatePath);
         var result = await command.ExecuteScriptAsync(scriptPath);
         Assert.True(result.ExitCode == 0, result.Output);
 
@@ -502,6 +555,44 @@ public sealed class AgenticWorkflowTests
         Assert.Equal(0, settled.GetProperty("all_runs").GetInt32());
         Assert.Empty(settled.GetProperty("example_prs").EnumerateArray());
         Assert.Equal("correct-by-design", settled.GetProperty("verdict").GetString());
+
+        var invalidProcessed = new
+        {
+            pr = 3,
+            sha = new string('d', 40),
+            run = 4,
+            attempt = 1,
+            all = true,
+            over_paths = Array.Empty<string>(),
+            miss_edges = Array.Empty<object>(),
+            seen = "2026-02-30"
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(memoryPath, "processed-runs.jsonl"),
+            JsonSerializer.Serialize(invalidProcessed) + Environment.NewLine);
+        File.Delete(auditDatePath);
+        var invalidCalendarDate = await command.ExecuteScriptAsync(scriptPath);
+        Assert.NotEqual(0, invalidCalendarDate.ExitCode);
+        Assert.Contains("must be a real UTC date", invalidCalendarDate.Output, StringComparison.Ordinal);
+
+        var futureProcessed = new
+        {
+            pr = 4,
+            sha = new string('e', 40),
+            run = 5,
+            attempt = 1,
+            all = true,
+            over_paths = Array.Empty<string>(),
+            miss_edges = Array.Empty<object>(),
+            seen = DateTime.UtcNow.AddDays(2).ToString("yyyy-MM-dd")
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(memoryPath, "processed-runs.jsonl"),
+            JsonSerializer.Serialize(futureProcessed) + Environment.NewLine);
+        File.Delete(auditDatePath);
+        var futureDate = await command.ExecuteScriptAsync(scriptPath);
+        Assert.NotEqual(0, futureDate.ExitCode);
+        Assert.Contains("must be a real UTC date", futureDate.Output, StringComparison.Ordinal);
     }
 
     [Fact]
