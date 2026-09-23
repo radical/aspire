@@ -271,9 +271,24 @@ code changes yourself.
    the run summary, so a window that looks quiet for this reason is
    distinguishable from one that genuinely had no `ALL` selections.
 
-   When a PR has no selection comment but its CI **did** complete (fork PRs
-   don't get commented on), fall back to its CI run — the selection job's
-   log or artifact — rather than skipping it.
+   A PR with no marked comment is ambiguous on its own — it could be a
+   same-repo PR whose CI has not finished yet, or a fork PR that will
+   never get one regardless of CI state. Resolve that with one cheap call
+   before deciding which bucket it falls in:
+
+   - **Same-repo PR** (head and base share the same owner): no comment
+     means the selection job has not posted yet. Check its latest run's
+     status once. If it is queued/in-progress or `action_required`, skip
+     it per the list above. If a run **completed** with no comment, that
+     is a real gap — read its job summary/artifact instead of silently
+     skipping, since something is wrong either with the selector or with
+     this assumption.
+   - **Fork PR** (head repo differs from base repo): no comment is
+     expected regardless of CI state, by design. Check its latest run's
+     status once to decide the bucket: queued/in-progress/`action_required`
+     still means skip; a **completed** run means fall back to the
+     selection job's log or artifact rather than skipping — do not report
+     a fork PR as "no data" just because there is no PR comment.
 3. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
    concrete example PRs per trigger.
