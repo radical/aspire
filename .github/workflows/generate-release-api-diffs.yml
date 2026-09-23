@@ -1,0 +1,48 @@
+name: Generate Release API Diffs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 16 * * *' # Daily, after the mainline API review
+
+env:
+  RELEASE_BRANCH: release/13.6
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-and-pr:
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'microsoft' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+
+      - name: Restore and build
+        run: |
+          set +e
+
+          # Find all csproj files excluding specific paths
+          find src -name '*.csproj' | grep -Ev 'Aspire.ProjectTemplates|Aspire.Cli' | while read -r proj; do
+            ./dotnet.sh build "$proj" -f net8.0 --configuration Release --no-incremental /t:"Build;GenAPIGenerateReferenceAssemblySource"
+          done
+        continue-on-error: true
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
+          private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+
+      - name: Create or update pull request
+        uses: ./.github/actions/create-pull-request
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: update-api-diffs-${{ env.RELEASE_BRANCH }}
+          base: ${{ env.RELEASE_BRANCH }}
+          title: "[Automated] Update API Surface Area (${{ env.RELEASE_BRANCH }})"
+          body: "Auto-generated update to the API surface to compare current surface vs latest release. This should only be merged once this surface area ships in a new release."
