@@ -3,11 +3,12 @@ description: |
   Weekly audit of Aspire PR CI's dynamic test selection (`tools/SelectTests`,
   `eng/github-ci/test-trigger-map.yml`). Looks for pull requests where the
   selector fell back to running ALL tests (over-selection) or where a
-  narrow rule's target list misses a real consumer (under-selection),
+  narrow result misses a runtime-only consumer, even with no matching
+  rule (under-selection),
   classifies why, checks how similar cases were handled in the trigger
   map's own commit history, and files at most one issue per run for its
   single highest-confidence case where the selection could be made safer
-  or cheaper. Per-PR results and per-rule verdicts persist across runs in
+  or cheaper. Per-PR results and per-input/target verdicts persist across runs in
   a memory branch, so escalation counts accumulate into cross-run
   evidence without double-counting PR heads or their reruns.
   The filed issue is assigned to the Copilot coding agent, which
@@ -130,11 +131,9 @@ safe-outputs:
     max: 1
     # A weekly schedule would otherwise re-file the same finding (and start a
     # duplicate agent session) every run. Titles name the offending rule, so
-    # exact matches against open and recently-closed issues are dropped.
-    # Exact (not fuzzy) match: step 1's reconciliation searches for the
-    # literal title it wrote to a `pending-filed` row's `note`, and a fuzzy
-    # match here could silently dedupe against an unrelated near-duplicate
-    # title that reconciliation would never find, stranding the row.
+    # normalized exact matches against open and recently-closed issues are
+    # dropped. Fuzzy matches could suppress an unrelated finding whose
+    # issue title would not reconcile with the pending row.
     deduplicate-by-title: true
 
 ---
@@ -210,25 +209,35 @@ code changes yourself.
 
    Before anything else, **reconcile any `pending-filed` row** in
    `watchlist.jsonl` (see below): search issues (`search_issues`, any
-   state, no date bound) for the exact title stored in that row's `note`.
-   If found, rewrite the row to `filed` with that issue's number in `ref`.
-   If a `pending-filed` row is still unreconciled after surviving one full
-   run this way, the filing did not happen — `create-issue` runs in the
-   same workflow run, so a real issue would already exist by the next
-   scheduled run — so revert it to `watch` instead of leaving it stuck
-   forever; the underlying evidence is not lost, just no longer credited
-   as filed.
+   state, no date bound) using the title stored in that row's `note`.
+   Compare the returned issues' actual titles after lowercasing and
+   collapsing whitespace, and verify their bodies describe the same
+   path and, for an under-selection, the same missing target. The
+   `create-issue` handler sanitizes titles, adds a prefix, and
+   deduplicates normalized titles against open and recently closed
+   issues; search results alone are not proof of identity. If several
+   issues match, use the one for this finding and the most recent filing,
+   not an unrelated old issue. Record its number in `ref` and mark the
+   row `filed` (including when deduplication reused a matching issue).
+   If the search is incomplete, fails, or yields ambiguous candidates,
+   leave the row pending and report the gap. Only revert an unreconciled
+   row to `watch` after a *subsequent* run completes a reliable search
+   with no matching issue; do not infer failure from an unavailable
+   search or a differently formatted title. Leave legacy rows whose
+   `note` is not a reliable final title pending until their issue
+   identity can be checked by the path and target in the issue body.
 
    - `processed-runs.jsonl` — a **durable index**, one row per resolved
      `pr`+full `sha`, recording the last selection evidence and the exact
-     paths credited to that head:
-     `{"pr":20131,"sha":"<full head SHA>","run":35802294466,"attempt":2,"all":true,"over_paths":[".github/workflows/build.yml"],"miss_paths":[],"seen":"2026-09-22"}`.
-     Use distinct literal paths in each array, not a rule glob or an
-     `example_prs` list. An unaffected selection has empty arrays. A
-     single head contributes at most **one** to each path's corresponding
-     counter, even if it has several CI attempts or several changed files
-     matching the same path rule. The `run` and `attempt` identify the
-     selection job whose output you used, not the audit workflow's run.
+     over-selection paths and under-selection edges credited to that head:
+     `{"pr":20131,"sha":"<full head SHA>","run":35802294466,"attempt":2,"all":false,"over_paths":[],"miss_edges":[{"path":"<literal input path>","target":"job:extension-e2e"}],"seen":"2026-09-22"}`.
+     Use distinct literal paths and distinct `(path, target)` edges,
+     not rule globs or an `example_prs` list. An unaffected selection
+     has empty arrays. A single head contributes at most **one** to each
+     path's over-selection counter and each missing edge's under-selection
+     counter, even if it has several CI attempts. The `run` and
+     `attempt` identify the selection job whose output you used, not
+     the audit workflow's run.
 
      **`pr` and the full head `sha` are required on every new row.** Key
      on both: a PR gains commits, and the same commit can be reselected
@@ -247,41 +256,44 @@ code changes yourself.
      claim exact cumulative counts, and file no issue until the memory
      capacity is explicitly addressed.
 
-   - `watchlist.jsonl` — the rules worth continuing to watch. One row per
-     exact triggering path **and kind**, not per rule: broad rules like
-     `.github/workflows/**` match files with very different effects, and
-     step 6 requires judging each file on its own, so a verdict for one
-     matching file must never be reused for another. The same file may
-     over-select in one run and under-select in another. Key on `path`
-     (the literal file, e.g. `.github/workflows/build.yml`) plus `kind`;
-     record which trigger-map rule matched it separately:
+   - `watchlist.jsonl` — the rules worth continuing to watch. Key
+     over-selection rows on the literal `path` plus `kind`. Key
+     under-selection rows on the literal `path`, `kind`, and missing
+     `target` (a `test:<project>` or `job:<job>`). A broad rule can match
+     files with different effects, and one file can miss two independent
+     consumers: neither a verdict nor a fix for one edge settles the
+     other. Record the matching trigger-map rule separately:
      `{"path": ".github/workflows/build.yml", "rule": ".github/workflows/**", "rule_ref": "eng/github-ci/test-trigger-map.yml@a1b2c3d", "path_ref": ".github/workflows/build.yml@e4f5a6b", "kind": "over-selection", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
+     For an under-selection row add `"target":"job:extension-e2e"`,
+     `"consumer_refs":["<consumer source path>@a1b2c3d","<eligibility source path>@e4f5a6b"]`,
+     and `miss_runs` instead of `all_runs`. The refs identify the source
+     proving the runtime edge **and** the test or job eligibility (for
+     example a scheduling trait or job gate); use the actual files
+     consulted, not these example names.
 
      `kind` is `over-selection` (the path escalates to ALL) or
-     `under-selection` (the path's rule names `targets` that miss a real
+     `under-selection` (the effective selection misses a real runtime-only
      consumer, per step 7). It picks which counter the row tracks:
      `all_runs` for `over-selection` rows counts escalations to ALL;
      `miss_runs` for `under-selection` rows counts **distinct affected
-     PRs/commits** currently credited to that path — never increment it
-     just because step 7's static source analysis still finds the same
-     gap it found last week, since that gap does not change between runs
-     and would otherwise inflate the count every week for zero new
-     evidence. Never mix the two counters on one row.
+     PRs/commits** currently credited to that exact missing edge —
+     never increment it just because step 7's static source analysis
+     still finds the same gap it found last week. Never mix the two
+     counters on one row.
 
      `rule_ref` is the trigger-map file and the short commit SHA it was
      last read at when this verdict was set. `path_ref` is the *triggering
      path itself* and the short commit SHA it was last read at — track
      both, since a `correct-by-design` verdict for a workflow/action often
      turns on what that file currently runs (step 6's self-referential
-     judgment, or the single-job-gate case in step 4), not just on the
+     judgment, or the single-job-gate case in step 6), not just on the
      trigger-map rule that selected it; if the workflow later changes what
      it gates while the trigger-map rule stays untouched, `rule_ref` alone
      would look unchanged and the stale verdict would suppress the path
-     indefinitely. Before carrying a `correct-by-design` verdict forward,
-     confirm **both** SHAs still match the paths' current commits — if
-     either the trigger-map rule or the triggering path itself has moved
-     since it was recorded, treat the verdict as stale and re-derive it
-     from scratch rather than trusting an out-of-date read.
+     indefinitely. For under-selection, `consumer_refs` also need to
+     match current source, including the test's execution lane. If a referenced
+     consumer or its eligibility changed, the edge may no longer exist
+     even though the trigger map and triggering input did not move.
 
      `verdict` is one of:
 
@@ -292,15 +304,15 @@ code changes yourself.
        `create-issue` runs in a separate job after this one finishes, so
        the agent never learns the resulting issue number or whether
        filing even succeeded (it can be silently dropped by
-       `deduplicate-by-title`, or fail if the assignment PAT is missing).
-       Put the **final** issue title in `note` — the exact string
-       `create-issue`'s `title-prefix` (`[test-selection-audit] `) plus
-       the title you chose, matching what the real issue will actually
-       be titled — so the next run's reconciliation search can find it.
-       A `note` missing that prefix will never match, and the row will
-       keep reverting to `watch` and re-attempting the same filing every
-       run. Do not write `filed` directly — there is no issue number to
-       put in `ref` yet.
+       `deduplicate-by-title`, or filing itself can fail; a missing
+       assignment PAT does not prove no issue was filed).
+       Put the intended final issue title (including `create-issue`'s
+       `[test-selection-audit] ` prefix) in `note`, and keep it short and
+       plain as specified below so sanitization cannot change it.
+       Legacy rows without a reliable final title must be reconciled
+       against their finding's path and target, not assumed absent.
+       Do not write `filed` directly — there is no confirmed issue
+       number to put in `ref` yet.
      - `filed` — a prior `pending-filed` row was confirmed against a real
        issue (see step 1). Put the issue number in `ref`.
      - `in-flight` — someone else is already fixing it (see step 9). Put
@@ -318,7 +330,8 @@ code changes yourself.
      step 6. Those are settled, not still being watched.
 
      Only create a row for a path actually observed escalating (or
-     missing a consumer, for `under-selection`) this window. Do not seed
+     a distinct missing edge, for `under-selection`) in this audit's
+     window or explicit `pr_numbers` scope. Do not seed
      a row for a path you merely noticed sharing a fix with an observed
      one. Retain a previously credited row even if its count falls to
      zero after a rerun; the prior finding and its verdict are still
@@ -326,13 +339,14 @@ code changes yourself.
 
      Carry these forward rather than re-deriving them. For a row recorded
      `correct-by-design`, skip re-reading the trigger map and the
-     triggering path's history only after confirming **both** `rule_ref`
-     and `path_ref` are still at the commit SHA recorded there (a cheap
-     `list_commits`/`get_file_contents` check per path, not a full
-     re-derivation); if either the trigger-map rule or the triggering path
-     has moved since it was recorded, re-derive the verdict and update
-     whichever `*_ref` changed. Otherwise apply only the per-head
-     contribution changes from step 13; an unchanged rerun adds nothing.
+     triggering path's history only after confirming `rule_ref` and
+     `path_ref` still match their current commits. For **any** settled
+     under-selection verdict (`correct-by-design`, `filed`, `in-flight`,
+     or `fixed`), also confirm every `consumer_refs` commit still
+     matches and the referenced test/job still runs in the relevant PR
+     lane. Missing refs or any change makes that verdict stale: re-derive
+     the edge and its status from current source before suppressing it.
+     An unchanged CI rerun alone adds no new counter contribution.
 
    **Rows written by an older version of this prompt may not match the
    shapes above.** Never delete or rewrite a row just because its shape is
@@ -345,16 +359,24 @@ code changes yourself.
    subtract a contribution you cannot identify. Report the uncertain
    historical count and exclude it from a candidate's confidence claim
    until the legacy entry can be reconciled against evidence. Preserve
-   legacy rows and totals; never silently reset them. New heads that
-   do not match a legacy identity can use the complete row format.
+   legacy rows and totals; never silently reset them. A legacy
+   `miss_paths` entry is a **path-level** contribution, not proof of
+   any particular missing target. Migrate it only when its `pr`+`sha`,
+   old watchlist row, and current selection-time evidence can all be
+   verified: subtract its old path-level credit once, then credit each
+   proven `(path, target)` edge once. Otherwise retain the legacy row
+   and counter without converting or including them in edge-specific
+   confidence claims. New heads use `miss_edges`, not `miss_paths`.
 
    The watchlist is the point of this memory. A rule that escalates to ALL
    a few times in one window is weak evidence and will not clear the
    confidence bar — but the same rule accumulating escalations week after
    week is exactly the signal worth acting on, and it is only visible if
    the counts survive across runs.
-2. **Enumerate, cheaply first.** Work in two passes so you do not spend the
-   run's budget on PRs that selected normally.
+2. **Enumerate, cheaply first.** Work in two passes for ALL
+   escalations, then examine narrow results' runtime-only inputs in
+   step 7. A narrow selection is not evidence that every consumer was
+   covered.
 
    - *Pass 1 (broad, cheap).* Get the candidate PR list for the window in as
      few calls as possible — use `list_pull_requests`/`search_pull_requests`
@@ -379,11 +401,18 @@ code changes yourself.
      the **selection comment** for remaining unrecorded heads to decide
      whether they selected `ALL`; if the comment cannot be tied to the
      latest completed attempt (for example, there was a rerun), use that
-     attempt's artifact instead. Retain changed paths already included
-     in a narrow-selection comment as potential step 7 evidence; fetch
-     changed files only for a specific under-selection candidate, not
-     every normally selected PR in this pass. If the selection job did
-     not rerun when another job in the same workflow was rerun, that is
+     attempt's artifact instead. A selection comment does **not**
+     contain changed files. For a narrow result that still needs the
+     step 7 check, read both `changedFiles` and `excludedFiles` from
+     its attributable selection artifact, or obtain the raw changed-file
+     list for the selection-time diff and apply its historical prefilter
+     when the artifact is unavailable. Do not substitute today's
+     PR file list for an older selection if the diff or base has moved.
+     Fetch the file lists for narrow results as needed to examine the
+     runtime-only paths in step 7; if they cannot be established, report
+     that head as under-selection-unverified, not fully processed. If
+     the selection job did not rerun when another job in the same
+     workflow was rerun, that is
      not new selection evidence; keep the recorded selection unchanged.
 
      Identify that comment by its marker, not by prose. The selector's
@@ -484,7 +513,7 @@ code changes yourself.
    contributions, and report the cumulative figure from `watchlist.jsonl`
    alongside this window's. Do not increment the watchlist here:
    step 13 applies the difference from that head's prior contributions
-   **after** step 7 determines `miss_paths`. An unchanged rerun contributes
+   **after** step 7 determines `miss_edges`. An unchanged rerun contributes
    nothing new; an ALL-to-narrow rerun must remove its previous ALL
    contribution. A merge-base fail-safe ALL result has no triggering path
    and must not be attributed to a rule just to make the totals grow.
@@ -577,11 +606,16 @@ code changes yourself.
    where an extra CI run only costs compute.
 
    This check is not driven by which PRs selected ALL this window — an
-   under-selecting rule never shows up that way. Instead, read the trigger
-   map's `path_rules` / `affected_project_rules` / `derived_targets`
-   entries whose paths fall under the repository's highest cross-cutting
-   surfaces, where a change ripples into multiple consumers and a stale or
-   incomplete target list would let a regression through untested:
+   under-selecting result never shows up that way. Start with the
+   selection-time changed **and prefiltered** paths of narrow-result
+   PRs, including ones with no `path_rules` entry. For an explicit
+   `pr_numbers` dispatch, use those PRs even outside the window.
+   Independently search the repository's
+   runtime-only consumer sites (package loads, generated AppHosts,
+   copied fixtures, polyglot codegen contracts, extension RPC and CI
+   job inputs) for inputs among those paths. Bound the search to the
+   paths changed in this audit scope and prioritize these cross-cutting
+   surfaces:
 
    - `src/Aspire.Hosting/**` — core orchestration APIs every hosting
      integration and the CLI's generated-AppHost path build on.
@@ -593,30 +627,54 @@ code changes yourself.
    - the CLI (`src/Aspire.Cli/**`, acquisition scripts, native archive
      packaging).
 
-   For each such rule, independently enumerate the path's real consumers
-   from source — grep for project references, generated-code call sites,
-   or RPC/protocol message types it defines — rather than trusting the
-   rule's `reason` comment to already be complete. Most compiled C#
+   For each matching input, enumerate its real consumers from source —
+   search for package references, generated-code call sites, file
+   copies, or RPC/protocol message types it defines — rather than
+   trusting the trigger map's `reason` comment or using its rules as
+   the list of inputs. Also inspect `path_rules`,
+   `affected_project_rules`, and `derived_targets` on these surfaces,
+   but remember the latter two are keyed on projects/selected tests,
+   not file paths: they cannot by themselves reveal an entirely absent
+   runtime-only edge. Most compiled C#
    dependencies here are Layer 1's job (the project graph is exhaustive
    for MSBuild project references) and do not need this check; focus on
    exactly the blind spots Layer 2 exists to cover — a runtime-only
    dependency such as a package loaded by `aspire add`, a generated
    AppHost, a fixture copied into an E2E workspace, or a contract read by
-   a codegen target that Layer 1's static graph cannot see. If you find a
-   consumer the rule's targets omit, name the missing target and cite the
-   specific reference (file:line) that proves the dependency — the same
-   standard of evidence step 11 requires for an over-selection candidate.
-   Once a gap is confirmed, find distinct affected PR heads in this
-   window from the changed paths retained in pass 1's comments or
-   selection artifacts; fetch changed files for promising narrow-result
-   PRs only when that evidence is absent. When re-evaluating a head,
-   also check every path previously in its `miss_paths`, even if it
-   would not be considered as a new candidate this run. Stage the
-   matching literal path in that head's `miss_paths` when its selection
-   omitted the proven consumer, whether this is the first selection or
-   a newer attempt for a previously processed head. Compare with its prior
-   `miss_paths` in step 13; do not use `example_prs` to deduplicate
-   counts, because it does not track SHAs. A static map
+   a codegen target that Layer 1's static graph cannot see. Check the
+   **effective** selected tests and jobs for each changed input,
+   including Layer 1, conventions, `path_rules`,
+   `affected_project_rules`, `derived_targets`, `ignore`, and
+   prefilter. A prefiltered input never reaches either layer; check
+   `excludedFiles` as well as `changedFiles` before dismissing it.
+   An input with no explicit path rule can be covered by
+   another mechanism; an unmatched input may force `ALL` instead,
+   which is an over-selection, **not** a missed target. Only a narrow
+   result omitting a real eligible consumer is an under-selection.
+   Name the specific `test:<project>` or `job:<job>` missing and cite
+   the source reference (file:line) proving that runtime dependency
+   and the test/job's PR execution lane.
+
+   For each example head, verify **at the time of that selection** that
+   the changed input, consumer edge, PR-eligible target, map omission,
+   and effective selected set all coexisted. The selection artifact
+   records changed files and chosen targets but no explicit base/head
+   refs; a run's head SHA alone does not identify the checkout's merge
+   snapshot. Use the selection job's recorded checkout/event refs and
+   historical repository source if they can establish that snapshot;
+   do not treat current main, today's PR diff, or current call sites as
+   historical proof. If any part cannot be reconstructed, report an
+   unverified candidate without crediting a miss or filing it. Confirm
+   separately that the gap still exists on current main before
+   proposing a fix.
+
+   When re-evaluating a head, check every exact edge previously in its
+   `miss_edges` (and investigate legacy `miss_paths` without guessing
+   their targets). Stage the distinct `(literal path, missing target)`
+   edges only when that attempt's result omitted a proven consumer.
+   Compare these with its prior credits in step 13; do not use
+   `example_prs` to deduplicate counts, because it does not track SHAs.
+   A static map
    omission without a matching new PR is still worth reporting in the
    run summary, but supplies neither a `miss_runs` increment nor the
    concrete example required to file an issue.
@@ -637,7 +695,8 @@ code changes yourself.
      use `search_pull_requests` in addition, for PRs that name the rule by
      text but might not (yet) touch the file.
    - Check `watchlist.jsonl` for an `in-flight`, `filed`, or `fixed`
-     verdict against this exact `(path, kind)` by an earlier run.
+     verdict against this exact `(path, kind)` or, for under-selection,
+     `(path, kind, target)` by an earlier run.
      Confirm whether a referenced PR is still open, closed unmerged,
      or merged, or a filed issue still tracks the fix. An open issue,
      open PR, or merged fix that still applies blocks a duplicate.
@@ -685,11 +744,13 @@ code changes yourself.
    - You identified the exact rule or code path responsible, by reading it.
    - You enumerated the file's real consumers from repository source, not
      from what the name suggests.
-   - You can name the specific narrowed rule the fix should produce, using
-     one of the map's existing mechanisms.
-   - You can name a test that would fail if the narrowing were wrong,
-     including the exhaustive new-directive guard step 4 requires for
-     a byte-affecting file.
+   - You can name the specific scoped fix using a map mechanism: narrow
+     an over-selection, or add the missing target/remove an incorrect
+     prefilter or ignore for an under-selection.
+   - You can name a test that would fail if the fix regressed: an
+     exhaustive new-directive guard as step 4 requires for narrowing
+     a byte-affecting file, or an assertion that the missing target is
+     selected in the correct PR lane for an under-selection.
    - If an existing guard test currently pins the behavior you want to
      change, you can state how that test's contract should change.
    - History does not show this same narrowing already being tried and
@@ -710,27 +771,33 @@ code changes yourself.
     ledgers in `/tmp/gh-aw/repo-memory/default/`. They are committed
     automatically after the run; you only need to write the files.
 
-    - For every head with a **new, verified** selection result this run,
+    - For every head with a **new, verified** selection result and the
+      necessary changed-file and under-selection evidence this run,
       finish both over- and under-selection checks before updating either
-      ledger. Compare its staged distinct `over_paths`/`miss_paths`
+      ledger. Compare its staged distinct `over_paths`/`miss_edges`
       against that exact `pr`+full `sha` row's arrays **as they existed
       at the start of this run** (empty sets for a genuinely new head).
-      For each `(path, kind)`, apply `+1` only if newly credited and `-1`
-      only if previously credited but now absent; unchanged sets have
-      delta zero. Apply all deltas to the corresponding `watchlist.jsonl`
-      `all_runs` or `miss_runs` fields, then replace the old processed
-      row with this run ID, attempt, result, path arrays, and `seen` date
-      (or append the row for a new head). Count a head once per path,
-      never once per CI attempt. Check that no counter becomes negative
-      and that a row exists for every previously credited path; if either
-      check fails, report the inconsistency and leave **both** ledgers
-      unchanged rather than guessing a correction.
+      For each previously or newly credited path/edge, apply `+1` only
+      if newly credited and `-1` only if previously credited but now
+      absent; unchanged sets have delta zero. Use `(path, over-selection)`
+      for `all_runs` and `(path, under-selection, target)` for
+      `miss_runs`. If an old row has `miss_paths` but no `miss_edges`,
+      migrate its path-level counts only by the verified procedure in
+      step 1; never identify a missing target from the old path alone.
+      Apply all deltas to the matching watchlist rows, then replace the
+      processed row with this run ID, attempt, `over_paths`,
+      `miss_edges`, and `seen` date (or append it for a new head).
+      Count a head once per path or missing edge, never once per CI
+      attempt. Check that no counter becomes negative and every prior
+      credit has a matching row; if either check or migration fails,
+      report the inconsistency and leave **both** ledgers unchanged
+      rather than guessing a correction.
 
       If a newer attempt is pending, blocked, has no selection job, or
-      lacks an attributable selection artifact, do not replace the head's
-      prior row, adjust its counters, or treat an old SHA-matching
-      comment as current evidence. Do not write rows for unresolved
-      heads. Preserve older rows **indefinitely**: PR `updated` time can
+      lacks attributable selection or changed-file evidence, do not
+      replace the head's prior row, adjust its counters, or treat an old
+      SHA-matching comment as current evidence. Do not write rows for
+      unresolved heads. Preserve older rows **indefinitely**: PR `updated` time can
       bring an old head back into a scheduled window, and `pr_numbers`
       can revisit one at any age. Pruning by `seen` would turn it into
       a fresh head and add its existing contribution a second time.
@@ -742,9 +809,10 @@ code changes yourself.
       not an assertion that the retracted evidence is still credited.
       Keep `example_prs` drawn from currently credited heads rather
       than retaining a PR whose only contribution was retracted.
-      Preserve existing `verdict` and `ref` when replacing evidence;
-      change them only after separately verifying that the underlying
-      rule or fix changed. Keep `watch`
+      Preserve existing `verdict` and `ref` when replacing evidence
+      only after verifying that the underlying rule, path, missing
+      target, and (for under-selection) consumer and PR eligibility
+      evidence still support them. Keep `watch`
       and `correct-by-design` rows even when their counts fall to zero.
       Once a fix merges, mark the row `fixed` instead of deleting it:
       old heads still reference its counts and may need corrections.
@@ -766,11 +834,17 @@ Write the issue as a task specification for the Copilot coding agent that
 will be assigned to it — it should be able to start work from the issue
 alone, without re-doing your analysis.
 
-Title it so it names the offending rule or input, for example
-`Narrow <rule/path> so it no longer escalates test selection to ALL` for
-an over-selection finding, or
-`Add <consumer> to <rule/path>'s targets so <test project> is selected`
-for an under-selection one.
+Title it so it identifies the offending input and effect, for example
+`Narrow build.yml selection to affected CI jobs` for over-selection, or
+`Select extension e2e for CLI archive changes` for under-selection.
+Use a stable, plain ASCII title of at most 100 characters **including**
+the `[test-selection-audit] ` prefix, with only letters, digits, spaces,
+periods, and hyphens. Do not put Markdown, mentions, or a second copy
+of the prefix in the title passed to `create-issue`. Store the same
+prefixed final title in the pending row's `note`; mention full file
+paths, target names, and other details in the body. If two missing
+targets share a path, distinguish them in the title and body so
+deduplication does not collapse different findings.
 Titles are deduplicated against open and recently-closed issues, so a stable,
 specific title prevents re-filing the same finding on a later run.
 
@@ -779,16 +853,22 @@ The body must contain:
 - **Symptom**: the concrete finding — which PR(s)/run(s), what changed,
   and either that the selector ran ALL tests as a result (over-selection)
   or which real consumer's tests the narrow selection missed
-  (under-selection). Quote the selection reason/log line verbatim in a
-  fenced code block.
+  (under-selection). For an ALL result, quote the actual escalation
+  reason/log line verbatim in a fenced code block. A narrow result has
+  no escalation reason: instead quote its actual selected tests/jobs
+  from the artifact or attributable summary and identify the omitted
+  target. Spell out the literal input path and `test:`/`job:` target in
+  the body so a pending issue can be reconciled with the right watchlist
+  edge. Never fabricate a reason for a narrow result.
 - **Evidence**: real example PR(s) that hit this rule, each with the
-  file(s) it touched and a before/after project count — how many test
-  projects ran under the current rule versus how many would run under
-  your proposed fix. You cannot run `tools/SelectTests` yourself in this
-  sandbox, so derive this count by reading the trigger map's rules and
-  targets directly (which rule newly does or no longer matches, and which
-  targets that adds or removes) and label it explicitly as an estimate;
-  the assigned agent establishes the exact count under Required
+  file(s) it touched and the before/after **selected test-project and
+  job sets**, with counts for each. A missing job can change no test
+  count; do not present a zero test delta as no impact. You cannot
+  run `tools/SelectTests` yourself in this sandbox, so derive the
+  proposed sets from the existing result and map targets (including
+  derived targets), label the after-set explicitly as an estimate,
+  and do not claim a precise count when it cannot be established;
+  the assigned agent establishes exact sets and counts under Required
   validation below. **One clear, unambiguous example is enough** — do not
   pad the issue with additional PRs just to hit a count. Reach for more
   than one only when a single example leaves genuine room for doubt (for
@@ -818,8 +898,8 @@ The body must contain:
 - **Required validation** (the assigned agent must do this before opening a
   PR, and must not claim success without it):
   - Run `tools/SelectTests` against the changed-file lists from **every**
-    example PR named in Evidence, not just one, and report selected-project
-    counts before and after the change for each.
+    example PR named in Evidence, not just one, and report selected test
+    projects **and jobs** before and after the change for each.
   - Run the guard tests:
     `dotnet test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-namespace "*.TestTriggerMap" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"`
   - Open the result as a **draft** PR that links back to this issue.
@@ -829,9 +909,9 @@ The body must contain:
   summary — state it in the issue body as an instruction the assigned
   agent will follow, e.g. "Your PR description must restate why the old
   rule was wrong and name the real PRs this would have helped, with their
-  before/after counts, so a reviewer can judge the change without
-  re-deriving your analysis." A reviewer approving a trigger-map change
-  should not have to re-open this issue to find out why.
+  before/after test-project and job sets, so a reviewer can judge the
+  change without re-deriving your analysis." A reviewer approving a
+  trigger-map change should not have to re-open this issue to find out why.
 - **Unvalidated-analysis caveat**: state that this issue came from an
   automated audit and the suggested fix has not been validated by running
   the selector or tests. If validation contradicts the analysis here, the
@@ -853,10 +933,11 @@ In your final response, report:
   window is distinguishable from an unanalyzable one.
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
   with counts — both for this window and cumulatively across runs.
-- The current watchlist: each path being tracked, its cumulative `all_runs`
-  / `miss_runs` count, and how that count moved this run. A path whose
-  count is climbing week over week is the audit's main product even when
-  nothing is filed.
+- The current watchlist: each path and, for under-selection, each missing
+  target being tracked; its cumulative `all_runs` / `miss_runs` count,
+  and how that count moved this run. Do not sum edge counts and call them
+  distinct PR heads: a head may miss more than one target. A rising
+  count is the audit's main product even when nothing is filed.
 - Candidates you considered but rejected as correct-by-design or as failing
   the confidence bar, and which specific criterion each one failed. Call out
   separately any candidate rejected because history shows the same change
