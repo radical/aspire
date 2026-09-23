@@ -23,13 +23,12 @@ jobs:
 
       - name: Restore and build
         run: |
-          set +e
+          set -euo pipefail
 
-          # Find all csproj files excluding specific paths
-          find src -name '*.csproj' | grep -Ev 'Aspire.ProjectTemplates|Aspire.Cli' | while read -r proj; do
+          # Exclude projects that do not generate a net8.0 release API baseline.
+          find src -name '*.csproj' | grep -Ev '/(Aspire.ProjectTemplates|Aspire.Cli|Aspire.Dashboard|Aspire.Hosting.Analyzers|Aspire.Hosting.Azure.Provisioning.Generators|Aspire.Hosting.Integration.Analyzers|Aspire.Hosting.RemoteHost|Aspire.Managed|Aspire.AppHost.Sdk|Aspire.TerminalHost|Tools)/' | while IFS= read -r proj; do
             ./dotnet.sh build "$proj" -f net8.0 --configuration Release --no-incremental /t:"Build;GenAPIGenerateReferenceAssemblySource"
           done
-        continue-on-error: true
 
       - name: Generate GitHub App Token
         id: app-token
