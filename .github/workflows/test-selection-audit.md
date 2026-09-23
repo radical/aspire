@@ -7,7 +7,8 @@ description: |
   files at most one issue per run for its single highest-confidence case
   where the selection could safely run fewer tests. Per-PR results and
   per-rule verdicts persist across runs in a memory branch, so escalation
-  counts accumulate into cross-run evidence and no PR is analyzed twice.
+  counts accumulate into cross-run evidence and no completed CI run is
+  analyzed twice.
   The filed issue is assigned to the Copilot coding agent, which
   implements and validates the fix and opens a PR for human review. This
   workflow never edits the trigger map itself.
