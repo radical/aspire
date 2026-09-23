@@ -184,6 +184,11 @@ code changes yourself.
        decay differently, since an in-flight PR can be closed unmerged and
        the rule then returns to `watch`, whereas a filed issue stays ours.
 
+     Use `correct-by-design` for anything the prompt tells you to reject as
+     intended behavior rather than as weak evidence — a file on the
+     build-input list in step 5, or a self-referential selector change in
+     step 6. Those are settled, not still being watched.
+
      Only record a rule you actually observed escalating this window, or
      one already carried forward from a previous run. Do not seed a row
      for a rule you merely noticed sharing a fix with an observed one — a
@@ -194,6 +199,16 @@ code changes yourself.
      `correct-by-design`, do not re-read the trigger map and its history
      again unless the rule's own text has changed since `last_seen`; just
      add this window's counts and move on.
+
+   **Rows written by an older version of this prompt may not match the
+   shapes above.** Never delete or rewrite a row just because its shape is
+   unfamiliar, and never invent a missing field to make one conform. Treat
+   an unrecognized field as extra detail and ignore it; treat a missing
+   field as unknown. In particular, a `processed-runs.jsonl` row with no
+   `sha` cannot prove that any specific commit was resolved, so it must
+   not cause a PR to be skipped — re-analyze that PR and append a proper
+   `pr`+`sha` row alongside. Leave the old row in place; pruning clears it
+   in time.
 
    The watchlist is the point of this memory. A rule that escalates to ALL
    a few times in one window is weak evidence and will not clear the
@@ -213,6 +228,30 @@ code changes yourself.
      **selection comment** for each remaining PR to decide whether it
      selected `ALL`. Do not fetch per-PR metadata or changed files in this
      pass; a PR that selected normally needs no further calls.
+
+     Identify that comment by its marker, not by prose. The selector's
+     comment always begins with `<!-- select-tests-comment -->` and ends
+     with a footer naming the commit it was computed for:
+
+     ```
+     <!-- select-tests-comment -->
+     ...selection summary...
+
+     ---
+     _Selection computed for commit [`a1b2c3d`](.../commit/a1b2c3d...)._
+     ```
+
+     Match the marker, never the wording — a busy PR accumulates review
+     chatter that mentions "all tests" for unrelated reasons. The selector
+     posts **one comment per pushed commit** and updates it in place on
+     re-runs, so a PR can carry several marked comments; take the most
+     recent, since earlier ones describe superseded commits.
+
+     That footer SHA is the selection's own idempotency key, so prefer it
+     over the listing's head SHA when writing the ledger — it is the
+     commit the result actually belongs to. If the two disagree, a newer
+     commit was pushed before its selection was posted: treat that as not
+     yet resolved and skip the PR this run.
    - *Pass 2 (narrow, detailed).* Only for PRs that selected `ALL`, capture:
      PR number, run ID, attempt, timestamp, changed files, selected
      project/test count, the escalation reason, and any
@@ -237,10 +276,18 @@ code changes yourself.
    log or artifact — rather than skipping it.
 3. **Classify.** Group `ALL` selections by the triggering file/path/rule.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
-   concrete example PRs per trigger. Add this window's counts to any counts
-   already carried in `watchlist.jsonl`, and report the cumulative
-   figure alongside this window's — a rule's cross-run total is the
-   strongest frequency evidence you have.
+   concrete example PRs per trigger.
+
+   Then add to the counts already carried in `watchlist.jsonl` and report
+   the cumulative figure alongside this window's — a rule's cross-run
+   total is the strongest frequency evidence you have.
+
+   **Count only selections you resolved for the first time this run** —
+   those whose `pr`+`sha` was not already in `processed-runs.jsonl`. The
+   14-day window on a weekly cadence means consecutive runs overlap by
+   about half, so adding the whole window every time would silently
+   double-count every carried-over commit and inflate exactly the
+   evidence the watchlist exists to make trustworthy.
 4. **Prefer safety over CI savings.** Do not propose narrowing a selection
    unless the file's real consumers are known and either existing tests
    already cover the invariant, or a focused guard test could be added that
