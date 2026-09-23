@@ -47,14 +47,20 @@ engine: copilot
 network: defaults
 
 tools:
+  bash: ["cat", "ls", "grep", "head", "tail", "wc"]
   github:
     # Only reads: PRs, their CI runs/artifacts/summaries, and repository
     # source (selector implementation, trigger map, docs). No write access
     # is granted to the agent itself; all writes go through safe-outputs.
-    # Default integrity filtering applies (public repo -> "approved") since
-    # this workflow reads PR content, including from forks.
+    # The default "approved" integrity filter would hide fork PRs from
+    # first-time/external contributors -- exactly the fork PRs this audit
+    # is meant to cover (see "Primary evidence" below), so it is disabled
+    # here. The safety boundary for untrusted PR content is safe-outputs
+    # itself: the agent can only ever produce a single low-stakes GitHub
+    # issue (create-issue, max: 1), which a human reviews before any code
+    # change is made.
     toolsets: [repos, pull_requests, actions]
-    lockdown: false
+    min-integrity: none
 
   # A completed CI run's selection result never changes, so re-deriving it
   # every week is wasted budget -- and with a 14-day window on a weekly
