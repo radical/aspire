@@ -492,10 +492,22 @@ The body must contain:
 - **Symptom**: the concrete over-selection — which PR(s)/run(s), what
   changed, and that the selector ran ALL tests as a result. Quote the
   selection reason/log line verbatim in a fenced code block.
-- **Evidence**: links to the PR(s), CI run(s)/artifact(s), and the specific
-  trigger-map rule or code path responsible, with file and line.
+- **Evidence**: **2-3 real example PRs** that hit this rule (not just the
+  one that triggered this run), each with its number, the file(s) it
+  touched, and a before/after project count — how many test projects ran
+  under the current rule versus how many would have run under your
+  proposed fix. Pull the count and examples from `watchlist.jsonl`'s
+  cumulative history for this rule when it has more than the current
+  window; a rule that only fired once is weaker evidence than one that has
+  been climbing for weeks, and the issue should say which case this is.
+  If genuinely only one example exists, say so explicitly rather than
+  padding with restated context. Link the specific trigger-map rule or
+  code path responsible, with file and line.
 - **Root cause**: why the current rule is broader (or narrower/missing)
-  than necessary, in one or two plain-language sentences.
+  than necessary, in one or two plain-language sentences. This is the
+  sentence a reviewer should be able to quote back to explain the change
+  in one breath — write it so it stands on its own, without the reader
+  needing the rest of the issue.
 - **Suggested fix**: the specific, scoped change to
   `eng/github-ci/test-trigger-map.yml` (or the selector) — not a rewrite of
   the selection design. Say which mechanism it uses (`prefilter`, `ignore`,
@@ -510,11 +522,21 @@ The body must contain:
   and explain why this proposal is different.
 - **Required validation** (the assigned agent must do this before opening a
   PR, and must not claim success without it):
-  - Run `tools/SelectTests` against the changed-file lists from the example
-    PRs, and report selected-project counts before and after the change.
+  - Run `tools/SelectTests` against the changed-file lists from **every**
+    example PR named in Evidence, not just one, and report selected-project
+    counts before and after the change for each.
   - Run the guard tests:
     `dotnet test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-namespace "*.TestTriggerMap" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"`
   - Open the result as a **draft** PR that links back to this issue.
+- **PR description requirement**: tell the assigned agent explicitly that
+  the PR it opens must carry this issue's Root cause sentence and the
+  Evidence examples forward into its own description, not just a diff
+  summary — state it in the issue body as an instruction the assigned
+  agent will follow, e.g. "Your PR description must restate why the old
+  rule was wrong and name the real PRs this would have helped, with their
+  before/after counts, so a reviewer can judge the change without
+  re-deriving your analysis." A reviewer approving a trigger-map change
+  should not have to re-open this issue to find out why.
 - **Unvalidated-analysis caveat**: state that this issue came from an
   automated audit and the suggested fix has not been validated by running
   the selector or tests. If validation contradicts the analysis here, the
