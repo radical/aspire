@@ -506,8 +506,11 @@ code changes yourself.
       analysis once their CI finishes.
 
       Then **prune** it: drop rows whose `seen` date is older than twice
-      the lookback window. Commits outside the window are never enumerated
-      again, so keeping them only grows a file you re-read every time.
+      the larger of this run's lookback window and the 14-day scheduled
+      default (so a short manual dispatch never prunes rows a later
+      scheduled run still needs). Commits outside that retention window
+      are never enumerated again, so keeping them only grows a file you
+      re-read every time.
     - Update `watchlist.jsonl` for each rule you actually observed
       escalating this run, plus any carried forward from earlier runs:
       carry the cumulative `all_runs` count forward, refresh `last_seen`,
