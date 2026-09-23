@@ -164,8 +164,8 @@ code changes yourself.
   because processed PR heads are recorded and findings are deduplicated
   by title. If
   `${{ github.event.inputs.pr_numbers }}` is set, analyze only those PRs
-  (ignore the lookback window for selecting PRs, but still use it as context
-  when useful).
+  (ignore the lookback window for both selecting PRs and finding their
+  completed CI runs; still use it as context when useful).
 - Primary evidence, in order of preference:
   1. The PR's test-selection comment (posted by CI on same-repo PRs).
   2. When no comment matches the current head (fork PRs don't get
@@ -402,7 +402,11 @@ code changes yourself.
      "action_required"`, not `status`. Checking `status` alone treats an
      approval-blocked run as an ordinary completed run with no selection
      output, which is a false gap, not a real one.
-   - No CI run in the window, or the selection job did not run.
+   - No CI run in the lookback window (only when `pr_numbers` is empty),
+     or the selection job did not run. For an explicit `pr_numbers`
+     dispatch, inspect the specified PR's latest relevant run for its
+     current head even when that run predates the lookback window; if
+     its artifact has expired, report the gap without inventing a result.
 
    These are not findings and they are not "no comment" cases; do not fall
    back to reading their runs. Count them and report the total as skipped in
