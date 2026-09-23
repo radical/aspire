@@ -100,8 +100,14 @@ tools:
   repo-memory:
     branch-name: memory/test-selection-audit
     description: "Resolved PR selections and the rule watchlist for the CI test-selection audit"
-    # Both ledgers are JSONL because gh-aw union-merges .jsonl on conflict,
-    # so an append from one run can never clobber another's rows.
+    # Both ledgers are JSONL, one append-only row per resolved PR/rule
+    # observation. That format matters because gh-aw's repo-memory push
+    # retries a rejected push with `git pull --no-rebase -X ours` (see step
+    # 13) — a plain whole-hunk merge, not a JSONL-aware union merge. Pure
+    # appends from two runs land in different hunks and both survive; only
+    # rewrites of an existing line (pruning, in-place row updates) can
+    # create a real conflict, which `-X ours` then resolves by silently
+    # dropping the other side's version of that hunk.
     file-glob: ["*.jsonl", "*.md"]
     allowed-extensions: [".jsonl", ".md"]
     # Defaults (100KB file / 10KB patch) are too small: a run appends a row
@@ -215,7 +221,7 @@ code changes yourself.
      matching file must never be reused for another. Key on `path` (the
      literal file, e.g. `.github/workflows/build.yml`), and record which
      trigger-map rule matched it separately:
-     `{"path": ".github/workflows/build.yml", "rule": ".github/workflows/**", "rule_ref": "eng/github-ci/test-trigger-map.yml@a1b2c3d", "kind": "over-selection", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
+     `{"path": ".github/workflows/build.yml", "rule": ".github/workflows/**", "rule_ref": "eng/github-ci/test-trigger-map.yml@a1b2c3d", "path_ref": ".github/workflows/build.yml@e4f5a6b", "kind": "over-selection", "verdict": "watch", "all_runs": 12, "first_seen": "2026-09-08", "last_seen": "2026-09-22", "example_prs": [20131, 20046], "note": "...", "ref": null}`.
 
      `kind` is `over-selection` (the path escalates to ALL) or
      `under-selection` (the path's rule names `targets` that miss a real
@@ -229,10 +235,18 @@ code changes yourself.
      evidence. Never mix the two counters on one row.
 
      `rule_ref` is the trigger-map file and the short commit SHA it was
-     last read at when this verdict was set. Before carrying a
-     `correct-by-design` verdict forward, confirm the rule's current text
-     still matches what you verdict-tested — if the trigger map has
-     changed since `rule_ref`, treat the verdict as stale and re-derive it
+     last read at when this verdict was set. `path_ref` is the *triggering
+     path itself* and the short commit SHA it was last read at — track
+     both, since a `correct-by-design` verdict for a workflow/action often
+     turns on what that file currently runs (step 6's self-referential
+     judgment, or the single-job-gate case in step 4), not just on the
+     trigger-map rule that selected it; if the workflow later changes what
+     it gates while the trigger-map rule stays untouched, `rule_ref` alone
+     would look unchanged and the stale verdict would suppress the path
+     indefinitely. Before carrying a `correct-by-design` verdict forward,
+     confirm **both** SHAs still match the paths' current commits — if
+     either the trigger-map rule or the triggering path itself has moved
+     since it was recorded, treat the verdict as stale and re-derive it
      from scratch rather than trusting an out-of-date read.
 
      `verdict` is one of:
@@ -273,12 +287,14 @@ code changes yourself.
      to accumulate.
 
      Carry these forward rather than re-deriving them. For a row recorded
-     `correct-by-design`, skip re-reading the trigger map and its history
-     only after confirming the rule at `rule_ref`'s path is still at the
-     commit SHA recorded there (a cheap `list_commits`/`get_file_contents`
-     check, not a full re-derivation); if the rule has moved since
-     `rule_ref`, re-derive the verdict and update `rule_ref`. Otherwise
-     just add this window's counts and move on.
+     `correct-by-design`, skip re-reading the trigger map and the
+     triggering path's history only after confirming **both** `rule_ref`
+     and `path_ref` are still at the commit SHA recorded there (a cheap
+     `list_commits`/`get_file_contents` check per path, not a full
+     re-derivation); if either the trigger-map rule or the triggering path
+     has moved since it was recorded, re-derive the verdict and update
+     whichever `*_ref` changed. Otherwise just add this window's counts
+     and move on.
 
    **Rows written by an older version of this prompt may not match the
    shapes above.** Never delete or rewrite a row just because its shape is
