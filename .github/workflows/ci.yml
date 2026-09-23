@@ -22,14 +22,12 @@ jobs:
     if: ${{ github.repository == 'radical/aspire' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Fail until the fourth attempt
+      - name: Fail every attempt
         shell: bash
         run: |
           echo "Fork retry smoke attempt $GITHUB_RUN_ATTEMPT"
-          if [ "$GITHUB_RUN_ATTEMPT" -lt 4 ]; then
-            echo "::error::Expected fork retry smoke failure before attempt 4"
-            exit 1
-          fi
+          echo "::error::Expected fork retry smoke failure at every attempt"
+          exit 1
 
   prepare_for_ci:
     runs-on: ubuntu-latest
