@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using System.Text.Json;
 using Aspire.TestUtilities;
 using Xunit;
@@ -134,40 +135,42 @@ public sealed class AgenticWorkflowTests
     {
         var root = LoadWorkflow("test-selection-audit" + extension);
         var compactMemory = Step(root, "Compact test-selection memory");
-        var prepareCollector = Step(root, "Prepare test-selection collector");
         var collector = Step(root, "Collect test-selection evidence");
-        var script = Scalar(prepareCollector, "run") + Scalar(collector, "run");
+        var compactScript = ReadTestSelectionAuditFile("compact_memory.cjs");
+        var collectorScript = ReadTestSelectionAuditFile("collect_evidence.py");
 
         Assert.Equal("/tmp/gh-aw/repo-memory/default", Scalar(Mapping(compactMemory, "env"), "MEMORY_ROOT"));
         Assert.Equal("14", Scalar(Mapping(compactMemory, "env"), "RETENTION_DAYS"));
         Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/audit-date.txt", Scalar(Mapping(compactMemory, "env"), "AUDIT_DATE_PATH"));
-        Assert.Contains("row.seen >= cutoff", Scalar(compactMemory, "run"), StringComparison.Ordinal);
-        Assert.Contains("row.verdict === \"watch\"", Scalar(compactMemory, "run"), StringComparison.Ordinal);
+        Assert.Equal("node .github/workflows/test-selection-audit/compact_memory.cjs", Scalar(compactMemory, "run"));
+        Assert.Contains("row.seen >= cutoff", compactScript, StringComparison.Ordinal);
+        Assert.Contains("row.verdict === \"watch\"", compactScript, StringComparison.Ordinal);
         Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/evidence.json", Scalar(Mapping(collector, "env"), "OUTPUT_PATH"));
         Assert.Equal("/tmp/gh-aw/repo-memory/default/processed-runs.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_RUNS_PATH"));
         Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/processed-runs-before.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_BASELINE_PATH"));
         Assert.Equal("/tmp/gh-aw/repo-memory/default/watchlist.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_PATH"));
         Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/watchlist-before.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_BASELINE_PATH"));
         Assert.Equal("${{ runner.temp }}/gh-aw/test-selection-audit/audit-date.txt", Scalar(Mapping(collector, "env"), "AUDIT_DATE_PATH"));
-        Assert.Contains("MAX_COMPRESSED_BYTES", script, StringComparison.Ordinal);
-        Assert.Contains("MAX_EXPANDED_BYTES", script, StringComparison.Ordinal);
-        Assert.Contains("http.client.IncompleteRead", script, StringComparison.Ordinal);
-        Assert.Contains("for attempt in range(3)", script, StringComparison.Ordinal);
-        Assert.Contains("ThreadPoolExecutor(max_workers=8)", script, StringComparison.Ordinal);
-        Assert.Contains("entry.filename == ARTIFACT_MEMBER", script, StringComparison.Ordinal);
-        Assert.Contains("stream.read(MAX_EXPANDED_BYTES + 1)", script, StringComparison.Ordinal);
-        Assert.Contains("authorization_prefix + token", script, StringComparison.Ordinal);
-        Assert.Contains("redirected.remove_header(\"Authorization\")", script, StringComparison.Ordinal);
-        Assert.Contains("\"untrusted-fork-artifact\"", script, StringComparison.Ordinal);
-        Assert.Contains("\"artifact-head-mismatch\"", script, StringComparison.Ordinal);
-        Assert.Contains("\"pr-attribution-ambiguous\"", script, StringComparison.Ordinal);
-        Assert.Contains("\"collector-error\"", script, StringComparison.Ordinal);
-        Assert.Contains("\"recorded\"", script, StringComparison.Ordinal);
-        Assert.Contains("normalized[\"sourceHeadSha\"] == head_sha", script, StringComparison.Ordinal);
-        Assert.Contains("except Exception as error:", script, StringComparison.Ordinal);
-        Assert.Contains("\"sourceBaseSha\": source_base_sha", script, StringComparison.Ordinal);
-        Assert.Contains("\"sourceHasDiff\": diff_match is not None", script, StringComparison.Ordinal);
-        Assert.Contains("output_path.chmod(0o444)", script, StringComparison.Ordinal);
+        Assert.Equal("python3 .github/workflows/test-selection-audit/collect_evidence.py", Scalar(collector, "run"));
+        Assert.Contains("MAX_COMPRESSED_BYTES", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("MAX_EXPANDED_BYTES", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("http.client.IncompleteRead", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("for attempt in range(3)", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("ThreadPoolExecutor(max_workers=8)", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("entry.filename == ARTIFACT_MEMBER", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("stream.read(MAX_EXPANDED_BYTES + 1)", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("authorization_prefix + token", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("redirected.remove_header(\"Authorization\")", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"untrusted-fork-artifact\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"artifact-head-mismatch\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"pr-attribution-ambiguous\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"collector-error\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"recorded\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("normalized[\"sourceHeadSha\"] == head_sha", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("except Exception as error:", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"sourceBaseSha\": source_base_sha", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"sourceHasDiff\": diff_match is not None", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("output_path.chmod(0o444)", collectorScript, StringComparison.Ordinal);
 
         if (extension == ".md")
         {
@@ -201,8 +204,17 @@ public sealed class AgenticWorkflowTests
         {
             var mappings = Mappings(root).ToList();
             Assert.True(mappings.IndexOf(Step(root, "Clone repo-memory branch (default)")) < mappings.IndexOf(compactMemory));
-            Assert.True(mappings.IndexOf(compactMemory) < mappings.IndexOf(prepareCollector));
-            Assert.True(mappings.IndexOf(prepareCollector) < mappings.IndexOf(collector));
+            Assert.True(mappings.IndexOf(compactMemory) < mappings.IndexOf(collector));
+            var compiledWorkflow = File.ReadAllText(Path.Combine(s_workflowsPath, "test-selection-audit.lock.yml"));
+            var restoreBaseIndex = compiledWorkflow.IndexOf(
+                "Restore agent config folders from base branch",
+                StringComparison.Ordinal);
+            var compactScriptIndex = compiledWorkflow.IndexOf(
+                "node .github/workflows/test-selection-audit/compact_memory.cjs",
+                StringComparison.Ordinal);
+            Assert.True(
+                restoreBaseIndex >= 0 && compactScriptIndex > restoreBaseIndex,
+                "The trusted base .github tree must be restored before extracted scripts execute.");
             var validation = Step(root, "Validate repo-memory domain content (default)");
             Assert.NotEmpty(Scalar(Mapping(validation, "env"), "VALIDATION_SCRIPT_B64"));
             var agentRun = Scalar(Step(root, "Execute GitHub Copilot CLI"), "run");
@@ -423,18 +435,11 @@ public sealed class AgenticWorkflowTests
     [RequiresTools(["node"])]
     public async Task TestSelectionAuditCompactsRawMemoryToTheLookbackWindow()
     {
-        var root = LoadWorkflow("test-selection-audit.md");
-        var run = Scalar(Step(root, "Compact test-selection memory"), "run");
-        const string prefix = "node <<'JS'\n";
-        Assert.StartsWith(prefix, run, StringComparison.Ordinal);
-        var script = run[prefix.Length..run.LastIndexOf("\nJS", StringComparison.Ordinal)];
-
         using var workspace = TemporaryWorkspace.Create(_testOutput);
         var memoryPath = Path.Combine(workspace.Path, "memory");
         Directory.CreateDirectory(memoryPath);
-        var scriptPath = Path.Combine(workspace.Path, "compact-memory.js");
+        var scriptPath = Path.Combine(s_workflowsPath, "test-selection-audit", "compact_memory.cjs");
         var auditDatePath = Path.Combine(workspace.Path, "gh-aw", "test-selection-audit", "audit-date.txt");
-        await File.WriteAllTextAsync(scriptPath, script);
 
         var recent = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var expired = DateTime.UtcNow.AddDays(-20).ToString("yyyy-MM-dd");
@@ -596,6 +601,79 @@ public sealed class AgenticWorkflowTests
     }
 
     [Fact]
+    public void TestSelectionAuditDisclosesIssueContractOnlyWhenFiling()
+    {
+        var workflow = File.ReadAllText(Path.Combine(s_workflowsPath, "test-selection-audit.md"));
+        var instructions = ReadTestSelectionAuditFile("issue_instructions.md");
+
+        Assert.Contains(
+            ".github/workflows/test-selection-audit/issue_instructions.md",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("The body must contain:", instructions, StringComparison.Ordinal);
+        Assert.Contains("**Required validation**", instructions, StringComparison.Ordinal);
+        Assert.Contains(
+            "<sub>Automated by the weekly CI test-selection audit workflow.</sub>",
+            instructions,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["python"])]
+    [SkipOnPlatform(TestPlatforms.Linux | TestPlatforms.OSX | TestPlatforms.FreeBSD, "Uses the Windows Python executable.")]
+    public Task TestSelectionAuditPythonTestsPassOnWindows() => TestSelectionAuditPythonTestsPass("python");
+
+    [Fact]
+    [RequiresTools(["python3"])]
+    [SkipOnPlatform(TestPlatforms.Windows, "Uses the Unix Python executable.")]
+    public Task TestSelectionAuditPythonTestsPassOnUnix() => TestSelectionAuditPythonTestsPass("python3");
+
+    private async Task TestSelectionAuditPythonTestsPass(string python)
+    {
+        var startInfo = new ProcessStartInfo(python)
+        {
+            WorkingDirectory = RepoRoot.Path,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("-m");
+        startInfo.ArgumentList.Add("unittest");
+        startInfo.ArgumentList.Add("discover");
+        startInfo.ArgumentList.Add("-s");
+        startInfo.ArgumentList.Add(".github/workflows/test-selection-audit");
+        startInfo.ArgumentList.Add("-p");
+        startInfo.ArgumentList.Add("test_*.py");
+        startInfo.ArgumentList.Add("-v");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start {python}.");
+
+        // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            throw;
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        _testOutput.WriteLine(stdout);
+        _testOutput.WriteLine(stderr);
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"{python} exited with code {process.ExitCode}.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+    }
+
+    [Fact]
     public void WorkflowAppTokensUseClientId()
     {
         var workflows = Directory.EnumerateFiles(s_workflowsPath)
@@ -662,6 +740,9 @@ public sealed class AgenticWorkflowTests
 
     private static string Scalar(YamlMappingNode node, string key) =>
         node.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value.ToString() : "";
+
+    private static string ReadTestSelectionAuditFile(string fileName) =>
+        File.ReadAllText(Path.Combine(s_workflowsPath, "test-selection-audit", fileName));
 
     private static IEnumerable<YamlMappingNode> Mappings(YamlNode node)
     {
