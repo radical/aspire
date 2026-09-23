@@ -315,17 +315,26 @@ code changes yourself.
 
    `Directory.Packages.props`, `Directory.Build.props`,
    `Directory.Build.targets`, `NuGet.config`, `eng/Versions.props`,
-   `eng/Version.Details.xml`, `src/Directory.Build.props`, `global.json`,
-   and `Aspire.slnx`.
+   `eng/Version.Details.xml`, `src/Directory.Build.props`, and
+   `global.json`.
 
    **That list is exhaustive.** It is not a category to reason by analogy
    from. A file is exempt because it appears above, not because it sits at
    the repository root, has a `.props`/`.json` extension, or looks
    infrastructural. In particular, `.gitattributes`, `.editorconfig`,
-   `.config/dotnet-tools.json`, and CI YAML are **not** on this list and
-   must be judged on their actual effect like anything else — a previous
-   run wrongly waved `.gitattributes` through as a "broad build input",
-   which is exactly the kind of over-selection this audit exists to catch.
+   `.config/dotnet-tools.json`, `Aspire.slnx`, and CI YAML are **not** on
+   this list and must be judged on their actual effect like anything else.
+   A previous run wrongly waved `.gitattributes` through as a "broad
+   build input", and separately put `Aspire.slnx` on this very exemption
+   list by analogy ("it's a solution file, sounds build-wide") — but
+   Layer 1 already roots its project graph at `Aspire.slnx` at the PR
+   head, so an added project is already in the universe the graph walks
+   and carries no signal the graph does not already have; only the
+   removal direction still needs the run-all fallback, since a deleted
+   project's files can no longer be attributed to anything. Both are
+   exactly the kind of over-selection this audit exists to catch — do
+   not let a file's *name* substitute for reading what actually consumes
+   it.
 6. **CI YAML and composite actions are in scope.** Changes under
    `.github/workflows/**` and `.github/actions/**` are a frequent `ALL`
    trigger, and unlike build inputs they are *not* automatically
