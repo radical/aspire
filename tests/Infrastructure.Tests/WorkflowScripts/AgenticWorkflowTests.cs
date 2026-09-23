@@ -163,9 +163,11 @@ public sealed class AgenticWorkflowTests
         Assert.Contains("redirected.remove_header(\"Authorization\")", collectorScript, StringComparison.Ordinal);
         Assert.Contains("\"untrusted-fork-artifact\"", collectorScript, StringComparison.Ordinal);
         Assert.Contains("\"artifact-head-mismatch\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("\"selection-outside-lookback\"", collectorScript, StringComparison.Ordinal);
         Assert.Contains("\"pr-attribution-ambiguous\"", collectorScript, StringComparison.Ordinal);
         Assert.Contains("\"collector-error\"", collectorScript, StringComparison.Ordinal);
         Assert.Contains("\"recorded\"", collectorScript, StringComparison.Ordinal);
+        Assert.Contains("len(numbers) > MAX_PRS", collectorScript, StringComparison.Ordinal);
         Assert.Contains("normalized[\"sourceHeadSha\"] == head_sha", collectorScript, StringComparison.Ordinal);
         Assert.Contains("except Exception as error:", collectorScript, StringComparison.Ordinal);
         Assert.Contains("\"sourceBaseSha\": source_base_sha", collectorScript, StringComparison.Ordinal);

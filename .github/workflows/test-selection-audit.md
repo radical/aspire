@@ -123,7 +123,7 @@ tools:
     # rows. The workflow-level concurrency group protects these ledgers.
     file-glob: ["processed-runs.jsonl", "watchlist.jsonl"]
     allowed-extensions: [".jsonl"]
-    # Defaults (100KB file / 10KB patch) are too small: the durable index
+    # Defaults (100KB file / 10KB patch) are too small: the rolling ledger
     # retains one row per resolved PR head and a busy window covers hundreds.
     max-file-size: 2097152
     max-patch-size: 262144
@@ -555,10 +555,13 @@ code changes yourself.
   Before collection, deterministic compaction removes raw processed rows
   observed more than 14 days ago and recomputes active watch counts, so
   the default overlap does not double-count or grow raw memory indefinitely.
-  Settled dispositions remain durable. If
+  The collector also rejects automatic-scope selection artifacts older than
+  the requested lookback, so an expired identity cannot make stale evidence
+  look newly observed. Settled dispositions remain durable. If
   `${{ github.event.inputs.pr_numbers }}` is set, analyze only those PRs
   (ignore the lookback window for both selecting PRs and finding their
-  completed CI runs; still use it as context when useful).
+  completed CI runs; still use it as context when useful). This explicit mode
+  is a targeted re-audit and intentionally bypasses the selection-age check.
 - Primary evidence is the deterministic collector output at
   `$RUNNER_TEMP/gh-aw/test-selection-audit/evidence.json`. This path is
   mounted read-only into the agent. Summarize its statuses and ALL/narrow
@@ -569,9 +572,10 @@ code changes yourself.
   data. Use it instead of repeating collection or substituting PR comments.
 - A record is creditable only when `selection.creditable` is `true` and
   `selection.status` is `resolved`. Other statuses are explicit data
-  gaps, except `recorded`: that status means the latest run/attempt
-  exactly matches the existing processed row, so reuse that row without
-  changing its counters or re-running the analysis. In particular, a
+  gaps, including `selection-outside-lookback`, except `recorded`: that
+  status means the latest run/attempt exactly matches the existing processed
+  row, so reuse that row without changing its counters or re-running the
+  analysis. In particular, a
   fork's artifact is produced by PR-authored workflow, action, and
   selector code: its signed download URL proves transport, not truth.
   The collector validates the artifact only to classify it as
@@ -607,9 +611,10 @@ code changes yourself.
    `ref` null. Do not infer failure from an unavailable search or a
    differently formatted title.
 
-   - `processed-runs.jsonl` — a **durable index**, one row per resolved
-     `pr`+full `sha`, recording the last selection evidence and the exact
-     over-selection paths and under-selection edges credited to that head:
+   - `processed-runs.jsonl` — a **rolling contribution ledger**, one row
+     per resolved `pr`+full `sha`, recording the last selection evidence
+     and the exact over-selection paths and under-selection edges credited
+     to that head:
      `{"pr":20131,"sha":"<full head SHA>","run":35802294466,"attempt":2,"all":false,"over_paths":[],"miss_edges":[{"path":"<literal input path>","target":"job:extension-e2e"}],"seen":"2026-09-22"}`.
      Use distinct literal paths and distinct `(path, target)` edges,
      not rule globs or an `example_prs` list. An unaffected selection
@@ -743,8 +748,8 @@ code changes yourself.
    changed and excluded paths, selected tests/jobs, and explicit gap status.
 
    `recorded` means the exact latest attempt is already represented. A
-   newer pending, blocked, missing, invalid, truncated, or untrusted record
-   cannot replace that prior contribution.
+   newer pending, blocked, missing, invalid, truncated, untrusted, or
+   `selection-outside-lookback` record cannot replace that prior contribution.
 
    Work in two analytical passes: classify creditable `ALL` results first,
    then inspect creditable narrow results for runtime-only consumers in
@@ -1005,8 +1010,9 @@ code changes yourself.
       `pr`+full `sha` row in `processed-runs.jsonl`. Store the evidence run,
       attempt, distinct `over_paths`, distinct `miss_edges`, and protected
       `auditDate`. Reuse `recorded` rows byte-for-byte. If a newer attempt is
-      pending, blocked, missing, truncated, invalid, or untrusted, preserve
-      the prior row and do not treat it as current evidence.
+      pending, blocked, missing, truncated, invalid, untrusted, or outside the
+      automatic lookback, preserve the prior row and do not treat it as current
+      evidence.
     - After the processed rows are final, make each watch counter equal the
       number of retained processed identities that credit that exact path or
       `(path, target)` edge. One head contributes at most once. Rebuild
@@ -1045,8 +1051,9 @@ In your final response, report:
   after comparing the deterministic run metadata. Report separately any reruns that replaced
   prior contributions and any missing/stale-attempt evidence.
 - How many PRs were skipped because they could not have a selection result
-  yet (CI pending, `action_required`, or no selection job), so a quiet
-  window is distinguishable from an unanalyzable one.
+  yet (CI pending, `action_required`, or no selection job), and how many
+  selection artifacts were outside the automatic lookback, so a quiet window
+  is distinguishable from an unanalyzable one.
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
   with counts for the retained lookback window.
 - The current watchlist: each path and, for under-selection, each missing

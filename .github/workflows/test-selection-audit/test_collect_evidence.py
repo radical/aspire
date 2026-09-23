@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 import unittest
@@ -109,6 +110,31 @@ class SelectionStatusTests(unittest.TestCase):
         self.assertEqual(record["selection"]["status"], "artifact-head-mismatch")
         self.assertFalse(record["selection"]["creditable"])
 
+    def test_selection_before_lookback_is_not_creditable(self) -> None:
+        cutoff = datetime.datetime(2026, 9, 23, tzinfo=datetime.timezone.utc)
+
+        record = self._find_record(
+            "microsoft/aspire",
+            normalized_head=_HEAD_SHA,
+            selection_cutoff=cutoff,
+        )
+
+        self.assertEqual(record["selection"]["status"], "selection-outside-lookback")
+        self.assertNotIn("creditable", record["selection"])
+        self.assertNotIn("result", record["selection"])
+
+    def test_selection_on_lookback_boundary_is_creditable(self) -> None:
+        cutoff = datetime.datetime(2026, 9, 22, 10, 2, tzinfo=datetime.timezone.utc)
+
+        record = self._find_record(
+            "microsoft/aspire",
+            normalized_head=_HEAD_SHA,
+            selection_cutoff=cutoff,
+        )
+
+        self.assertEqual(record["selection"]["status"], "resolved")
+        self.assertTrue(record["selection"]["creditable"])
+
     def test_exact_processed_attempt_is_recorded(self) -> None:
         collect_evidence.processed_index = {(123, _HEAD_SHA): (456, 2)}
         pull_request = self._pull_request("microsoft/aspire")
@@ -123,7 +149,12 @@ class SelectionStatusTests(unittest.TestCase):
 
         self.assertEqual(record["selection"]["status"], "recorded")
 
-    def _find_record(self, head_repository: str, normalized_head: str) -> dict:
+    def _find_record(
+        self,
+        head_repository: str,
+        normalized_head: str,
+        selection_cutoff: datetime.datetime | None = None,
+    ) -> dict:
         pull_request = self._pull_request(head_repository)
         run = self._run(head_repository)
         associated = [pull_request]
@@ -164,9 +195,20 @@ class SelectionStatusTests(unittest.TestCase):
         with (
             mock.patch.object(collect_evidence, "paginate", side_effect=paginate),
             mock.patch.object(collect_evidence, "list_changed_files", return_value=(["src/a.cs"], False)),
-            mock.patch.object(collect_evidence, "download_selection", return_value=normalized),
+            mock.patch.object(
+                collect_evidence,
+                "download_selection",
+                return_value=normalized,
+            ) as download_selection,
         ):
-            return collect_evidence.find_selection_record(pull_request)
+            record = collect_evidence.find_selection_record(pull_request, selection_cutoff)
+
+        artifact_created_at = datetime.datetime(2026, 9, 22, 10, 2, tzinfo=datetime.timezone.utc)
+        if selection_cutoff is not None and artifact_created_at < selection_cutoff:
+            download_selection.assert_not_called()
+        else:
+            download_selection.assert_called_once()
+        return record
 
     @staticmethod
     def _pull_request(head_repository: str) -> dict:
@@ -192,6 +234,38 @@ class SelectionStatusTests(unittest.TestCase):
             "status": "completed",
             "conclusion": "success",
         }
+
+
+class PullRequestScopeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        collect_evidence.repository = "microsoft/aspire"
+
+    def test_explicit_scope_rejects_excess_unique_numbers_before_requests(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"PR_NUMBERS": "1,2,3"}, clear=False),
+            mock.patch.object(collect_evidence, "MAX_PRS", 2),
+            mock.patch.object(collect_evidence, "request") as request,
+        ):
+            with self.assertRaisesRegex(ValueError, "at most 2 unique values"):
+                collect_evidence.list_pull_requests(None)
+
+        request.assert_not_called()
+
+    def test_explicit_scope_deduplicates_before_applying_limit(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"PR_NUMBERS": "1,2,1"}, clear=False),
+            mock.patch.object(collect_evidence, "MAX_PRS", 2),
+            mock.patch.object(
+                collect_evidence,
+                "request",
+                side_effect=lambda path: {"number": int(path.rsplit("/", 1)[1])},
+            ) as request,
+        ):
+            pull_requests, truncated = collect_evidence.list_pull_requests(None)
+
+        self.assertEqual([pull_request["number"] for pull_request in pull_requests], [1, 2])
+        self.assertFalse(truncated)
+        self.assertEqual(request.call_count, 2)
 
 
 if __name__ == "__main__":

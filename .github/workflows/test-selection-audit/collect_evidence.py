@@ -218,7 +218,17 @@ def download_selection(artifact_id, include_reason):
         raise ValueError("selection artifact member is not valid UTF-8 JSON") from error
     return normalize_selection(payload, include_reason)
 
-def list_pull_requests():
+def parse_lookback_days():
+    lookback_text = os.environ.get("LOOKBACK_DAYS", "").strip() or "14"
+    if not re.fullmatch(r"[1-9][0-9]*", lookback_text):
+        raise ValueError("lookback_days must be a positive integer")
+    lookback_days = int(lookback_text)
+    if lookback_days > 90:
+        raise ValueError("lookback_days must not exceed 90")
+    return lookback_days
+
+
+def list_pull_requests(cutoff):
     explicit_text = os.environ.get("PR_NUMBERS", "").strip()
     if explicit_text:
         numbers = []
@@ -229,6 +239,8 @@ def list_pull_requests():
             number = int(item)
             if number not in numbers:
                 numbers.append(number)
+        if len(numbers) > MAX_PRS:
+            raise ValueError(f"pr_numbers must contain at most {MAX_PRS} unique values")
         pull_requests = []
         for number in numbers:
             try:
@@ -237,13 +249,8 @@ def list_pull_requests():
                 pull_requests.append({"number": number, "_collectorError": type(error).__name__})
         return pull_requests, False
 
-    lookback_text = os.environ.get("LOOKBACK_DAYS", "").strip() or "14"
-    if not re.fullmatch(r"[1-9][0-9]*", lookback_text):
-        raise ValueError("lookback_days must be a positive integer")
-    lookback_days = int(lookback_text)
-    if lookback_days > 90:
-        raise ValueError("lookback_days must not exceed 90")
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=lookback_days)
+    if cutoff is None:
+        raise ValueError("lookback cutoff is required when pr_numbers is empty")
     pull_requests = []
     truncated = False
     for page in range(1, 11):
@@ -327,7 +334,7 @@ def list_changed_files(number):
         paths.append(require_safe_string(value.get("filename"), PATH_PATTERN, f"PR {number} file {index}"))
     return sorted(set(paths)), truncated
 
-def find_selection_record(pull_request):
+def find_selection_record(pull_request, selection_cutoff=None):
     number = pull_request["number"]
     if "_collectorError" in pull_request:
         return {
@@ -450,6 +457,11 @@ def find_selection_record(pull_request):
         selection["status"] = "artifact-ambiguous" if candidates else "artifact-missing"
         return record
     artifact = candidates[0]
+    artifact_created_at = parse_timestamp(artifact.get("created_at"))
+    selection["artifactCreatedAt"] = artifact_created_at.isoformat()
+    if selection_cutoff is not None and artifact_created_at < selection_cutoff:
+        selection["status"] = "selection-outside-lookback"
+        return record
     if artifact.get("expired"):
         selection["status"] = "artifact-expired"
         return record
@@ -479,9 +491,9 @@ def find_selection_record(pull_request):
     selection["result"] = normalized
     return record
 
-def collect_selection_record(pull_request):
+def collect_selection_record(pull_request, selection_cutoff=None):
     try:
-        return find_selection_record(pull_request)
+        return find_selection_record(pull_request, selection_cutoff)
     except COLLECTOR_RECORD_ERRORS as error:
         head = pull_request.get("head") or {}
         head_repo = (head.get("repo") or {}).get("full_name")
@@ -509,14 +521,30 @@ def main():
     baseline_path = pathlib.Path(os.environ["PROCESSED_BASELINE_PATH"])
     watchlist_baseline_path = pathlib.Path(os.environ["WATCHLIST_BASELINE_PATH"])
 
-    pull_requests, enumeration_truncated = list_pull_requests()
+    audit_date = pathlib.Path(os.environ["AUDIT_DATE_PATH"]).read_text(encoding="utf-8").strip()
+    explicit_scope = bool(os.environ.get("PR_NUMBERS", "").strip())
+    if explicit_scope:
+        selection_cutoff = None
+    else:
+        lookback_days = parse_lookback_days()
+        selection_cutoff = (
+            datetime.datetime.fromisoformat(audit_date).replace(tzinfo=datetime.timezone.utc)
+            - datetime.timedelta(days=lookback_days)
+        )
+
+    pull_requests, enumeration_truncated = list_pull_requests(selection_cutoff)
     processed_index = load_processed_index()
     snapshot_file(pathlib.Path(os.environ["WATCHLIST_PATH"]), watchlist_baseline_path)
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        records = list(executor.map(collect_selection_record, pull_requests))
+        records = list(
+            executor.map(
+                lambda pull_request: collect_selection_record(pull_request, selection_cutoff),
+                pull_requests,
+            )
+        )
     output = {
         "schemaVersion": 1,
-        "auditDate": pathlib.Path(os.environ["AUDIT_DATE_PATH"]).read_text(encoding="utf-8").strip(),
+        "auditDate": audit_date,
         "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "repository": repository,
         "enumerationTruncated": enumeration_truncated,
