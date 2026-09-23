@@ -308,6 +308,17 @@ code changes yourself.
    already cover the invariant, or a focused guard test could be added that
    would fail if the narrowed behavior regressed. A missed test is worse
    than an extra CI run — when in doubt, do not propose narrowing.
+
+   An existing ALL-route with a rationale that names a *general* effect
+   (e.g. "checkout normalization can affect fixture-sensitive tests")
+   rather than a specific, already-covered test is not proof the ALL scope
+   is the minimum safe one — it usually means nobody has written the guard
+   yet. That guard does not need to exercise every downstream consumer
+   possibly affected: a test that reads the file's own content and pins
+   the specific directives/values CI actually depends on is sufficient,
+   because it fails on exactly the class of edit that would otherwise
+   regress silently, wherever that test happens to live. If you can write
+   that guard, propose it alongside the narrower route.
 5. **Do not question broad build-input files.** These files legitimately
    affect nearly the entire .NET project graph — treat their `ALL`
    escalation as correct-by-design and do not flag it as a finding, even if
