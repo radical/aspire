@@ -41,17 +41,20 @@ permissions:
   copilot-requests: write
 
 concurrency:
-  # A `pr_numbers`-focused dispatch gets its own group so several can run in
-  # parallel without cancelling each other. Full-window runs (the weekly
-  # schedule, or a dispatch that leaves `pr_numbers` empty) all share one
-  # fixed group instead of `github.run_id`, so an overlapping schedule/manual
-  # run queues behind the one in progress rather than racing it: two
-  # concurrent agent runs would each read the memory ledger from the same
-  # base and independently rewrite it (pruning, watchlist updates), and the
-  # push that lands second silently discards the first's rows for any row
-  # both runs touched (see step 13 on why appends survive that but
-  # rewrites don't).
-  job-discriminator: ${{ github.event.inputs.pr_numbers || 'default-window' }}
+  # gh-aw's compiler always emits a static top-level group for this
+  # workflow ("gh-aw-${{ github.workflow }}", queue: max) in addition to
+  # whatever this field configures, and that group has no awareness of
+  # `pr_numbers` — it serializes every run of this workflow, full-window
+  # or PR-focused, one at a time, queued in trigger order. That is
+  # deliberate here, not just an accepted side effect: two agent runs
+  # executing concurrently would each read the memory ledger from the
+  # same base and independently rewrite it (pruning, watchlist updates),
+  # and the push that lands second silently discards the first's rows
+  # for any row both touched (see step 13 on why appends survive that
+  # but rewrites don't). This job-discriminator only scopes the agent
+  # job's own concurrency group to match; it does not add or remove any
+  # parallelism the top-level group doesn't already govern.
+  job-discriminator: ${{ github.event.inputs.pr_numbers || github.run_id }}
 
 engine: copilot
 
@@ -242,9 +245,14 @@ code changes yourself.
        the agent never learns the resulting issue number or whether
        filing even succeeded (it can be silently dropped by
        `deduplicate-by-title`, or fail if the assignment PAT is missing).
-       Put the exact issue title in `note` so the next run can find it.
-       Do not write `filed` directly — there is no issue number to put in
-       `ref` yet.
+       Put the **final** issue title in `note` — the exact string
+       `create-issue`'s `title-prefix` (`[test-selection-audit] `) plus
+       the title you chose, matching what the real issue will actually
+       be titled — so the next run's reconciliation search can find it.
+       A `note` missing that prefix will never match, and the row will
+       keep reverting to `watch` and re-attempting the same filing every
+       run. Do not write `filed` directly — there is no issue number to
+       put in `ref` yet.
      - `filed` — a prior `pending-filed` row was confirmed against a real
        issue (see step 1). Put the issue number in `ref`.
      - `in-flight` — someone else is already fixing it (see step 9). Put
