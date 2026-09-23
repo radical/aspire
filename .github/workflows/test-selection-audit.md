@@ -348,6 +348,17 @@ code changes yourself.
    Quantify frequency (how many PRs/runs hit each trigger) and keep 2-3
    concrete example PRs per trigger.
 
+   First, exclude any selection whose `escalationReason` is the
+   `run-full-ci` label kill switch (`"kill switch: the run-full-ci label
+   forces the full matrix"`, or a caller-supplied override of that same
+   switch — see `tools/SelectTests/TestSelector.cs`). That is a human
+   deliberately forcing the full matrix, not a trigger-map defect;
+   treat it as `correct-by-design` and never count it toward a rule's
+   escalation total. This is distinct from the merge-base fail-safe
+   fallback, which uses its own reason text and is real evidence — do not
+   over-broaden this exclusion to match on "kill switch" or `ForceAll`
+   generically.
+
    Then add to the counts already carried in `watchlist.jsonl` and report
    the cumulative figure alongside this window's — a rule's cross-run
    total is the strongest frequency evidence you have.
