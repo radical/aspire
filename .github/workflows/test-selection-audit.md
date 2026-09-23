@@ -517,8 +517,10 @@ code changes yourself.
       and set `verdict` / `ref` to match where the rule now stands. Keep a
       rule here even when it fails the confidence bar — a `watch` row that
       keeps accumulating escalations is the evidence a future run needs to
-      justify acting. Drop a rule only once it is settled
-      `correct-by-design` or its fix has merged.
+      justify acting. Never drop a `correct-by-design` row: it is the
+      durable verdict this ledger exists to preserve, so a future run
+      doesn't re-derive it from scratch. Drop a rule only once its fix has
+      actually merged.
 
     Prefer appending over rewriting: both files are `.jsonl` and are
     union-merged on conflict, so an append is safe even if another run
