@@ -133,13 +133,20 @@ public sealed class AgenticWorkflowTests
     public void TestSelectionAuditCollectsBoundedEvidenceBeforeTheAgentRuns(string extension)
     {
         var root = LoadWorkflow("test-selection-audit" + extension);
+        var compactMemory = Step(root, "Compact test-selection memory");
         var prepareCollector = Step(root, "Prepare test-selection collector");
         var collector = Step(root, "Collect test-selection evidence");
         var script = Scalar(prepareCollector, "run") + Scalar(collector, "run");
 
+        Assert.Equal("/tmp/gh-aw/repo-memory/default", Scalar(Mapping(compactMemory, "env"), "MEMORY_ROOT"));
+        Assert.Equal("14", Scalar(Mapping(compactMemory, "env"), "RETENTION_DAYS"));
+        Assert.Contains("row.seen >= cutoff", Scalar(compactMemory, "run"), StringComparison.Ordinal);
+        Assert.Contains("row.verdict === \"watch\"", Scalar(compactMemory, "run"), StringComparison.Ordinal);
         Assert.Contains("/tmp/gh-aw/test-selection-audit/evidence.json", Scalar(Mapping(collector, "env"), "OUTPUT_PATH"), StringComparison.Ordinal);
         Assert.Equal("/tmp/gh-aw/repo-memory/default/processed-runs.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_RUNS_PATH"));
         Assert.Equal("/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl", Scalar(Mapping(collector, "env"), "PROCESSED_BASELINE_PATH"));
+        Assert.Equal("/tmp/gh-aw/repo-memory/default/watchlist.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_PATH"));
+        Assert.Equal("/tmp/gh-aw/test-selection-audit/watchlist-before.jsonl", Scalar(Mapping(collector, "env"), "WATCHLIST_BASELINE_PATH"));
         Assert.Contains("MAX_COMPRESSED_BYTES", script, StringComparison.Ordinal);
         Assert.Contains("MAX_EXPANDED_BYTES", script, StringComparison.Ordinal);
         Assert.Contains("http.client.IncompleteRead", script, StringComparison.Ordinal);
@@ -157,6 +164,7 @@ public sealed class AgenticWorkflowTests
         Assert.Contains("normalized[\"sourceHeadSha\"] == head_sha", script, StringComparison.Ordinal);
         Assert.Contains("except Exception as error:", script, StringComparison.Ordinal);
         Assert.Contains("\"sourceBaseSha\": source_base_sha", script, StringComparison.Ordinal);
+        Assert.Contains("\"sourceHasDiff\": diff_match is not None", script, StringComparison.Ordinal);
         Assert.Contains("output_path.chmod(0o444)", script, StringComparison.Ordinal);
 
         if (extension == ".md")
@@ -182,11 +190,14 @@ public sealed class AgenticWorkflowTests
             Assert.Contains("entry.name === \".git\"", validation, StringComparison.Ordinal);
             Assert.Contains("does not match trusted selection evidence", validation, StringComparison.Ordinal);
             Assert.Contains("is not an unchanged baseline or trusted selection", validation, StringComparison.Ordinal);
+            Assert.Contains("changes a watch row without trusted current evidence", validation, StringComparison.Ordinal);
+            Assert.Contains("requires selection-time diff attribution", validation, StringComparison.Ordinal);
         }
         else
         {
             var mappings = Mappings(root).ToList();
-            Assert.True(mappings.IndexOf(Step(root, "Clone repo-memory branch (default)")) < mappings.IndexOf(prepareCollector));
+            Assert.True(mappings.IndexOf(Step(root, "Clone repo-memory branch (default)")) < mappings.IndexOf(compactMemory));
+            Assert.True(mappings.IndexOf(compactMemory) < mappings.IndexOf(prepareCollector));
             Assert.True(mappings.IndexOf(prepareCollector) < mappings.IndexOf(collector));
             var validation = Step(root, "Validate repo-memory domain content (default)");
             Assert.NotEmpty(Scalar(Mapping(validation, "env"), "VALIDATION_SCRIPT_B64"));
@@ -206,9 +217,11 @@ public sealed class AgenticWorkflowTests
 
         var evidencePath = Path.Combine(workspace.Path, "evidence.json");
         var baselinePath = Path.Combine(workspace.Path, "processed-runs-before.jsonl");
+        var watchBaselinePath = Path.Combine(workspace.Path, "watchlist-before.jsonl");
         validationScript = validationScript
             .Replace("\"/tmp/gh-aw/test-selection-audit/evidence.json\"", JsonSerializer.Serialize(evidencePath), StringComparison.Ordinal)
-            .Replace("\"/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl\"", JsonSerializer.Serialize(baselinePath), StringComparison.Ordinal);
+            .Replace("\"/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl\"", JsonSerializer.Serialize(baselinePath), StringComparison.Ordinal)
+            .Replace("\"/tmp/gh-aw/test-selection-audit/watchlist-before.jsonl\"", JsonSerializer.Serialize(watchBaselinePath), StringComparison.Ordinal);
         var validationPath = Path.Combine(workspace.Path, "validation.js");
         await File.WriteAllTextAsync(validationPath, validationScript);
         var harnessPath = Path.Combine(workspace.Path, "validate-memory.js");
@@ -250,7 +263,7 @@ public sealed class AgenticWorkflowTests
         };
         var processedPath = Path.Combine(memoryPath, "processed-runs.jsonl");
         var watchPath = Path.Combine(memoryPath, "watchlist.jsonl");
-        var evidence = new
+        object evidence = new
         {
             records = new[]
             {
@@ -264,13 +277,23 @@ public sealed class AgenticWorkflowTests
                         creditable = true,
                         run = 100,
                         attempt = 1,
-                        result = new { selectsAll = true }
+                        result = new
+                        {
+                            selectsAll = true,
+                            sourceHasDiff = true,
+                            changedFiles = new[] { ".gitattributes" },
+                            excludedFiles = Array.Empty<string>(),
+                            unattributedFiles = Array.Empty<string>(),
+                            testProjects = Array.Empty<string>(),
+                            jobs = Array.Empty<string>()
+                        }
                     }
                 }
             }
         };
         await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(evidence));
         await File.WriteAllTextAsync(baselinePath, "");
+        await File.WriteAllTextAsync(watchBaselinePath, "");
         await File.WriteAllTextAsync(processedPath, JsonSerializer.Serialize(processed) + Environment.NewLine);
         await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
 
@@ -312,10 +335,173 @@ public sealed class AgenticWorkflowTests
         Assert.Contains("is not an unchanged baseline or trusted selection", untrusted.Output, StringComparison.Ordinal);
 
         await File.WriteAllTextAsync(baselinePath, JsonSerializer.Serialize(processed) + Environment.NewLine);
+        watch["verdict"] = "correct-by-design";
+        await File.WriteAllTextAsync(watchBaselinePath, JsonSerializer.Serialize(new Dictionary<string, object?>(watch)
+        {
+            ["verdict"] = "watch"
+        }) + Environment.NewLine);
+        await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(watch) + Environment.NewLine);
+        var poisonedWatch = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.NotEqual(0, poisonedWatch.ExitCode);
+        Assert.Contains("changes a watch row without trusted current evidence", poisonedWatch.Output, StringComparison.Ordinal);
+
+        var pendingWatch = new Dictionary<string, object?>(watch)
+        {
+            ["verdict"] = "pending-filed",
+            ["note"] = "[test-selection-audit] Fix gitattributes selection",
+            ["ref"] = null
+        };
+        var filedWatch = new Dictionary<string, object?>(pendingWatch)
+        {
+            ["verdict"] = "filed",
+            ["ref"] = 123
+        };
+        filedWatch.Remove("note");
+        await File.WriteAllTextAsync(watchBaselinePath, JsonSerializer.Serialize(pendingWatch) + Environment.NewLine);
+        await File.WriteAllTextAsync(watchPath, JsonSerializer.Serialize(filedWatch) + Environment.NewLine);
+        var lifecycleTransition = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
+        Assert.True(lifecycleTransition.ExitCode == 0, lifecycleTransition.Output);
+
         await File.WriteAllTextAsync(processedPath, "");
         var missingBaseline = await command.ExecuteScriptAsync(harnessPath, memoryPath, validationPath);
         Assert.NotEqual(0, missingBaseline.ExitCode);
         Assert.Contains("missing baseline processed row", missingBaseline.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task TestSelectionAuditCompactsRawMemoryToTheLookbackWindow()
+    {
+        var root = LoadWorkflow("test-selection-audit.md");
+        var run = Scalar(Step(root, "Compact test-selection memory"), "run");
+        const string prefix = "node <<'JS'\n";
+        Assert.StartsWith(prefix, run, StringComparison.Ordinal);
+        var script = run[prefix.Length..run.LastIndexOf("\nJS", StringComparison.Ordinal)];
+
+        using var workspace = TemporaryWorkspace.Create(_testOutput);
+        var memoryPath = Path.Combine(workspace.Path, "memory");
+        Directory.CreateDirectory(memoryPath);
+        var scriptPath = Path.Combine(workspace.Path, "compact-memory.js");
+        await File.WriteAllTextAsync(scriptPath, script);
+
+        var recent = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        var expired = DateTime.UtcNow.AddDays(-20).ToString("yyyy-MM-dd");
+        var processed = new object[]
+        {
+            new
+            {
+                pr = 1,
+                sha = new string('a', 40),
+                run = 1,
+                attempt = 1,
+                all = true,
+                over_paths = new[] { "expired.txt" },
+                miss_edges = Array.Empty<object>(),
+                seen = expired
+            },
+            new
+            {
+                pr = 2,
+                sha = new string('b', 40),
+                run = 2,
+                attempt = 1,
+                all = true,
+                over_paths = new[] { "retained.txt" },
+                miss_edges = Array.Empty<object>(),
+                seen = recent
+            },
+            new
+            {
+                pr = 2,
+                sha = new string('c', 40),
+                run = 3,
+                attempt = 1,
+                all = true,
+                over_paths = new[] { "retained.txt" },
+                miss_edges = Array.Empty<object>(),
+                seen = recent
+            }
+        };
+        var watch = new object[]
+        {
+            new
+            {
+                path = "expired.txt",
+                rule = "expired.txt",
+                rule_ref = "eng/github-ci/test-trigger-map.yml@abcdef1",
+                path_ref = "expired.txt@abcdef1",
+                kind = "over-selection",
+                verdict = "watch",
+                all_runs = 1,
+                first_seen = expired,
+                last_seen = expired,
+                example_prs = new[] { 1 },
+                @ref = (int?)null
+            },
+            new
+            {
+                path = "retained.txt",
+                rule = "retained.txt",
+                rule_ref = "eng/github-ci/test-trigger-map.yml@abcdef1",
+                path_ref = "retained.txt@abcdef1",
+                kind = "over-selection",
+                verdict = "watch",
+                all_runs = 99,
+                first_seen = expired,
+                last_seen = expired,
+                example_prs = new[] { 1 },
+                @ref = (int?)null
+            },
+            new
+            {
+                path = "settled.txt",
+                rule = "settled.txt",
+                rule_ref = "eng/github-ci/test-trigger-map.yml@abcdef1",
+                path_ref = "settled.txt@abcdef1",
+                kind = "over-selection",
+                verdict = "correct-by-design",
+                all_runs = 4,
+                first_seen = expired,
+                last_seen = expired,
+                example_prs = new[] { 1 },
+                @ref = (int?)null
+            }
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(memoryPath, "processed-runs.jsonl"),
+            string.Join(Environment.NewLine, processed.Select(value => JsonSerializer.Serialize(value))) + Environment.NewLine);
+        await File.WriteAllTextAsync(
+            Path.Combine(memoryPath, "watchlist.jsonl"),
+            string.Join(Environment.NewLine, watch.Select(value => JsonSerializer.Serialize(value))) + Environment.NewLine);
+
+        using var command = new NodeCommand(_testOutput, "test-selection-memory-compaction");
+        command
+            .WithTimeout(TimeSpan.FromSeconds(30))
+            .WithEnvironmentVariable("MEMORY_ROOT", memoryPath)
+            .WithEnvironmentVariable("RETENTION_DAYS", "14");
+        var result = await command.ExecuteScriptAsync(scriptPath);
+        Assert.True(result.ExitCode == 0, result.Output);
+
+        var retainedProcessed = File.ReadLines(Path.Combine(memoryPath, "processed-runs.jsonl"))
+            .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+            .ToArray();
+        Assert.Equal(2, retainedProcessed.Length);
+        Assert.All(retainedProcessed, row => Assert.Equal(2, row.GetProperty("pr").GetInt32()));
+
+        var retainedWatch = File.ReadLines(Path.Combine(memoryPath, "watchlist.jsonl"))
+            .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+            .ToArray();
+        Assert.DoesNotContain(retainedWatch, row => row.GetProperty("path").GetString() == "expired.txt");
+        var active = Assert.Single(retainedWatch, row => row.GetProperty("path").GetString() == "retained.txt");
+        Assert.Equal(2, active.GetProperty("all_runs").GetInt32());
+        Assert.Equal([2], active.GetProperty("example_prs").EnumerateArray().Select(value => value.GetInt32()));
+        Assert.Equal(recent, active.GetProperty("first_seen").GetString());
+        Assert.Equal(recent, active.GetProperty("last_seen").GetString());
+
+        var settled = Assert.Single(retainedWatch, row => row.GetProperty("path").GetString() == "settled.txt");
+        Assert.Equal(0, settled.GetProperty("all_runs").GetInt32());
+        Assert.Empty(settled.GetProperty("example_prs").EnumerateArray());
+        Assert.Equal("correct-by-design", settled.GetProperty("verdict").GetString());
     }
 
     [Fact]

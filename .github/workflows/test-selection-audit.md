@@ -8,9 +8,8 @@ description: |
   classifies why, checks how similar cases were handled in the trigger
   map's own commit history, and files at most one issue per run for its
   single highest-confidence case where the selection could be made safer
-  or cheaper. Per-PR results and per-input/target verdicts persist across runs in
-  a memory branch, so escalation counts accumulate into cross-run
-  evidence without double-counting PR heads or their reruns.
+  or cheaper. Raw per-PR evidence is retained for a rolling 14-day window,
+  while settled per-input/target verdicts persist in a memory branch.
   The filed issue is assigned to the Copilot coding agent, which
   implements and validates the fix and opens a PR for human review. This
   workflow never edits the trigger map itself.
@@ -64,6 +63,107 @@ network:
     - defaults
 
 pre-agent-steps:
+  - name: Compact test-selection memory
+    env:
+      MEMORY_ROOT: /tmp/gh-aw/repo-memory/default
+      RETENTION_DAYS: "14"
+    run: |
+      node <<'JS'
+      const fs = require("fs");
+      const path = require("path");
+
+      const memoryRoot = process.env.MEMORY_ROOT;
+      const retentionText = process.env.RETENTION_DAYS || "14";
+      if (!/^[1-9][0-9]*$/.test(retentionText) || Number(retentionText) > 90) {
+        throw new Error("retention days must be between 1 and 90");
+      }
+      const cutoff = new Date(Date.now() - Number(retentionText) * 86400000)
+        .toISOString().slice(0, 10);
+      const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+      const readRows = fileName => {
+        const filePath = path.join(memoryRoot, fileName);
+        if (!fs.existsSync(filePath)) return { filePath, exists: false, rows: [] };
+        const text = fs.readFileSync(filePath, "utf8");
+        if (text && !text.endsWith("\n")) throw new Error(`${fileName} must end with a newline`);
+        return {
+          filePath,
+          exists: true,
+          rows: text ? text.trimEnd().split("\n").map(line => JSON.parse(line)) : []
+        };
+      };
+      const writeRows = ({ filePath, exists }, rows) => {
+        if (!exists && rows.length === 0) return;
+        const temporaryPath = `${filePath}.compact-${process.pid}`;
+        fs.writeFileSync(
+          temporaryPath,
+          rows.map(row => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
+        fs.renameSync(temporaryPath, filePath);
+      };
+
+      const processedFile = readRows("processed-runs.jsonl");
+      for (const [index, row] of processedFile.rows.entries()) {
+        if (!Number.isSafeInteger(row.pr) ||
+            typeof row.sha !== "string" ||
+            !datePattern.test(row.seen) ||
+            !Array.isArray(row.over_paths) ||
+            !Array.isArray(row.miss_edges)) {
+          throw new Error(`processed-runs.jsonl:${index + 1} has an invalid compaction shape`);
+        }
+      }
+      const retained = processedFile.rows.filter(row => row.seen >= cutoff);
+      const contributions = new Map();
+      const addContribution = (key, row) => {
+        let value = contributions.get(key);
+        if (!value) {
+          value = { identities: new Set(), prs: new Set(), dates: [] };
+          contributions.set(key, value);
+        }
+        value.identities.add(`${row.pr}:${row.sha}`);
+        value.prs.add(row.pr);
+        value.dates.push(row.seen);
+      };
+      for (const row of retained) {
+        for (const pathValue of row.over_paths) addContribution(`over\u0000${pathValue}`, row);
+        for (const edge of row.miss_edges) addContribution(`miss\u0000${edge.path}\u0000${edge.target}`, row);
+      }
+
+      const watchFile = readRows("watchlist.jsonl");
+      const watch = [];
+      for (const [index, existing] of watchFile.rows.entries()) {
+        const row = { ...existing };
+        if (row.kind !== "over-selection" && row.kind !== "under-selection") {
+          throw new Error(`watchlist.jsonl:${index + 1} has an invalid kind`);
+        }
+        if (!Array.isArray(row.example_prs) ||
+            !datePattern.test(row.first_seen) ||
+            !datePattern.test(row.last_seen)) {
+          throw new Error(`watchlist.jsonl:${index + 1} has an invalid compaction shape`);
+        }
+        const key = row.kind === "over-selection"
+          ? `over\u0000${row.path}`
+          : `miss\u0000${row.path}\u0000${row.target}`;
+        const contribution = contributions.get(key);
+        const count = contribution?.identities.size || 0;
+        if (count === 0 && row.verdict === "watch") continue;
+        if (row.kind === "over-selection") row.all_runs = count;
+        else row.miss_runs = count;
+        const priorExamples = row.example_prs.filter(pr => contribution?.prs.has(pr));
+        const remainingExamples = [...(contribution?.prs || [])]
+          .sort((left, right) => left - right)
+          .filter(pr => !priorExamples.includes(pr));
+        row.example_prs = [...priorExamples, ...remainingExamples].slice(0, 3);
+        if (count > 0) {
+          row.first_seen = contribution.dates.reduce((left, right) => left < right ? left : right);
+          row.last_seen = contribution.dates.reduce((left, right) => left > right ? left : right);
+        }
+        watch.push(row);
+      }
+
+      writeRows(processedFile, retained);
+      writeRows(watchFile, watch);
+      console.log(`Retained ${retained.length}/${processedFile.rows.length} processed rows since ${cutoff}.`);
+      JS
   - name: Prepare test-selection collector
     run: |
       mkdir -p /tmp/gh-aw/test-selection-audit
@@ -106,6 +206,7 @@ pre-agent-steps:
       repository = os.environ["REPOSITORY"]
       output_path = pathlib.Path(os.environ["OUTPUT_PATH"])
       baseline_path = pathlib.Path(os.environ["PROCESSED_BASELINE_PATH"])
+      watchlist_baseline_path = pathlib.Path(os.environ["WATCHLIST_BASELINE_PATH"])
       authorization_prefix = bytes((66, 101, 97, 114, 101, 114, 32)).decode("ascii")
 
       def parse_timestamp(value):
@@ -218,6 +319,7 @@ pre-agent-steps:
                   raise ValueError("selection artifact escalationReason is invalid")
           return {
               "selectsAll": selects_all,
+              "sourceHasDiff": diff_match is not None,
               "sourceBaseSha": source_base_sha,
               "sourceHeadSha": source_head_sha,
               "escalationReason": reason,
@@ -301,6 +403,8 @@ pre-agent-steps:
       OUTPUT_PATH: /tmp/gh-aw/test-selection-audit/evidence.json
       PROCESSED_RUNS_PATH: /tmp/gh-aw/repo-memory/default/processed-runs.jsonl
       PROCESSED_BASELINE_PATH: /tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl
+      WATCHLIST_PATH: /tmp/gh-aw/repo-memory/default/watchlist.jsonl
+      WATCHLIST_BASELINE_PATH: /tmp/gh-aw/test-selection-audit/watchlist-before.jsonl
     run: |
       cat >> /tmp/gh-aw/test-selection-audit/collector.py <<'PY'
       def list_pull_requests():
@@ -370,18 +474,18 @@ pre-agent-steps:
               truncated = True
           return pull_requests, truncated
 
+      def snapshot_file(source_path, destination_path):
+          destination_path.parent.mkdir(parents=True, exist_ok=True)
+          raw = source_path.read_bytes() if source_path.exists() else b""
+          if len(raw) > 2 * 1024 * 1024:
+              raise ValueError(f"{source_path.name} exceeds the configured memory limit")
+          destination_path.write_bytes(raw)
+          destination_path.chmod(0o444)
+          return raw
+
       def load_processed_index():
           processed_path = pathlib.Path(os.environ["PROCESSED_RUNS_PATH"])
-          baseline_path.parent.mkdir(parents=True, exist_ok=True)
-          if not processed_path.exists():
-              baseline_path.write_text("", encoding="utf-8")
-              baseline_path.chmod(0o444)
-              return {}
-          raw = processed_path.read_bytes()
-          if len(raw) > 2 * 1024 * 1024:
-              raise ValueError("processed-runs.jsonl exceeds the configured memory limit")
-          baseline_path.write_bytes(raw)
-          baseline_path.chmod(0o444)
+          raw = snapshot_file(processed_path, baseline_path)
           index = {}
           for line_number, line in enumerate(raw.decode("utf-8").splitlines(), 1):
               if not line:
@@ -545,7 +649,14 @@ pre-agent-steps:
               selection["error"] = type(error).__name__
               return record
 
-          source_head_matches = normalized["sourceHeadSha"] == head_sha
+          source_head_matches = (
+              normalized["sourceHeadSha"] == head_sha
+              or (
+                  normalized["sourceHeadSha"] is None
+                  and normalized["selectsAll"]
+                  and not normalized["sourceHasDiff"]
+              )
+          )
           selection["creditable"] = not is_fork and source_head_matches
           if is_fork:
               selection["status"] = "untrusted-fork-artifact"
@@ -575,6 +686,7 @@ pre-agent-steps:
 
       pull_requests, enumeration_truncated = list_pull_requests()
       processed_index = load_processed_index()
+      snapshot_file(pathlib.Path(os.environ["WATCHLIST_PATH"]), watchlist_baseline_path)
       with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
           records = list(executor.map(collect_selection_record, pull_requests))
       output = {
@@ -594,13 +706,11 @@ pre-agent-steps:
   # A selection is fixed for a particular CI run/attempt, not for a PR
   # head: re-runs can replace its result. `processed-runs.jsonl` retains
   # each head and its counted path contributions so a newer attempt can
-  # replace, rather than add to, its earlier counts. Do not prune identities:
-  # even an old head may be revisited by a focused dispatch or PR update.
+  # replace, rather than add to, its earlier counts. Deterministic compaction
+  # bounds this raw ledger to the configured lookback window.
   #
-  # `watchlist.jsonl` is the durable half. A rule that escalates to ALL a
-  # few times in one window is weak evidence, but the same rule accumulating
-  # escalations week after week is worth acting on -- and that is only
-  # visible if the counts survive across runs.
+  # `watchlist.jsonl` retains rolling counts plus settled dispositions, so
+  # known correct, filed, in-flight, and fixed cases survive raw-row expiry.
   #
   # Repo memory, not cache memory: GitHub Actions evicts unused caches after
   # 7 days, which is exactly this workflow's period, so a cache would
@@ -709,35 +819,54 @@ tools:
         const edgeAllowed = new Set(["path", "target"]);
         const processed = readJsonLines("processed-runs.jsonl");
         const evidencePath = "/tmp/gh-aw/test-selection-audit/evidence.json";
-        const baselinePath = "/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl";
-        const hasProvenance = fs.existsSync(evidencePath) && fs.existsSync(baselinePath);
+        const processedBaselinePath = "/tmp/gh-aw/test-selection-audit/processed-runs-before.jsonl";
+        const watchBaselinePath = "/tmp/gh-aw/test-selection-audit/watchlist-before.jsonl";
+        const hasProvenance = fs.existsSync(evidencePath) &&
+          fs.existsSync(processedBaselinePath) &&
+          fs.existsSync(watchBaselinePath);
         const canonical = value => {
           if (Array.isArray(value)) return value.map(canonical);
           if (!isObject(value)) return value;
           return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
         };
-        const baselineRows = new Map();
-        const trustedSelections = new Map();
-        if (hasProvenance) {
-          const baselineText = fs.readFileSync(baselinePath, "utf8");
-          for (const line of baselineText.split("\n")) {
+        const parseBaseline = filePath => {
+          const rows = new Map();
+          for (const line of fs.readFileSync(filePath, "utf8").split("\n")) {
             if (!line) continue;
             const row = JSON.parse(line);
-            baselineRows.set(`${row.pr}:${row.sha}`, JSON.stringify(canonical(row)));
+            rows.set(`${row.pr}:${row.sha}`, row);
           }
+          return rows;
+        };
+        let baselineRows = new Map();
+        const trustedSelections = new Map();
+        const recordedSelections = new Map();
+        if (hasProvenance) {
+          baselineRows = parseBaseline(processedBaselinePath);
           const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
           for (const record of evidence.records) {
             const selection = record.selection;
             if (selection.status === "resolved" && selection.creditable === true) {
               trustedSelections.set(`${record.pr}:${record.headSha}`, selection);
+            } else if (selection.status === "recorded") {
+              recordedSelections.set(`${record.pr}:${record.headSha}`, selection);
             }
           }
         }
         const processedKeys = new Set();
+        const affectedWatchKeys = new Set();
         const overCounts = new Map();
         const missCounts = new Map();
         const overPrs = new Map();
         const missPrs = new Map();
+        const addAffectedWatchKeys = row => {
+          for (const pathValue of row?.over_paths || []) {
+            affectedWatchKeys.add(`over\u0000${pathValue}`);
+          }
+          for (const edge of row?.miss_edges || []) {
+            affectedWatchKeys.add(`miss\u0000${edge.path}\u0000${edge.target}`);
+          }
+        };
         for (const [index, row] of processed.entries()) {
           const context = `processed-runs.jsonl:${index + 1}`;
           requireKeys(
@@ -754,15 +883,25 @@ tools:
           const identity = `${row.pr}:${row.sha}`;
           if (processedKeys.has(identity)) fail(`duplicate processed identity ${identity}`);
           processedKeys.add(identity);
+          const baselineRow = baselineRows.get(identity);
+          const selection = trustedSelections.get(identity);
+          const recordedSelection = recordedSelections.get(identity);
           if (hasProvenance) {
-            const selection = trustedSelections.get(identity);
             if (selection) {
               if (row.run !== selection.run ||
                   row.attempt !== selection.attempt ||
                   row.all !== selection.result.selectsAll) {
                 fail(`${context} does not match trusted selection evidence`);
               }
-            } else if (baselineRows.get(identity) !== JSON.stringify(canonical(row))) {
+            } else if (recordedSelection) {
+              if (!baselineRow ||
+                  baselineRow.run !== recordedSelection.run ||
+                  baselineRow.attempt !== recordedSelection.attempt ||
+                  JSON.stringify(canonical(baselineRow)) !== JSON.stringify(canonical(row))) {
+                fail(`${context} does not match its recorded baseline`);
+              }
+            } else if (!baselineRow ||
+                JSON.stringify(canonical(baselineRow)) !== JSON.stringify(canonical(row))) {
               fail(`${context} is not an unchanged baseline or trusted selection`);
             }
           }
@@ -793,6 +932,37 @@ tools:
             if (!missPrs.has(edgeKey)) missPrs.set(edgeKey, new Set());
             missPrs.get(edgeKey).add(row.pr);
           }
+
+          if (selection) {
+            const result = selection.result;
+            const inputPaths = new Set([
+              ...result.changedFiles,
+              ...result.excludedFiles,
+              ...result.unattributedFiles
+            ]);
+            const selectedTargets = new Set([
+              ...result.testProjects.map(name => `test:${name}`),
+              ...result.jobs
+            ]);
+            if (!result.sourceHasDiff && row.over_paths.length > 0) {
+              fail(`${context}.over_paths requires selection-time diff attribution`);
+            }
+            for (const pathValue of row.over_paths) {
+              if (!inputPaths.has(pathValue)) {
+                fail(`${context}.over_paths contains a path absent from trusted evidence`);
+              }
+            }
+            for (const edge of row.miss_edges) {
+              if (!inputPaths.has(edge.path)) {
+                fail(`${context}.miss_edges contains a path absent from trusted evidence`);
+              }
+              if (selectedTargets.has(edge.target)) {
+                fail(`${context}.miss_edges contains a target selected by trusted evidence`);
+              }
+            }
+            addAffectedWatchKeys(baselineRow);
+            addAffectedWatchKeys(row);
+          }
         }
         if (hasProvenance) {
           for (const identity of baselineRows.keys()) {
@@ -802,6 +972,32 @@ tools:
             if (!processedKeys.has(identity)) fail(`missing processed row for trusted selection ${identity}`);
           }
         }
+
+        const watchIdentity = row => row.kind === "over-selection"
+          ? `over\u0000${row.path}`
+          : `miss\u0000${row.path}\u0000${row.target}`;
+        const baselineWatchRows = new Map();
+        if (hasProvenance) {
+          for (const line of fs.readFileSync(watchBaselinePath, "utf8").split("\n")) {
+            if (!line) continue;
+            const row = JSON.parse(line);
+            baselineWatchRows.set(watchIdentity(row), row);
+          }
+        }
+        const withoutLifecycle = row => {
+          const value = { ...row };
+          delete value.verdict;
+          delete value.ref;
+          delete value.note;
+          return JSON.stringify(canonical(value));
+        };
+        const lifecycleTransitions = new Map([
+          ["pending-filed", new Set(["filed", "watch"])],
+          ["filed", new Set(["in-flight", "fixed", "watch"])],
+          ["in-flight", new Set(["fixed", "watch"])],
+          ["fixed", new Set(["watch"])],
+          ["correct-by-design", new Set(["watch"])]
+        ]);
 
         const watchAllowed = new Set([
           "path", "rule", "rule_ref", "path_ref", "consumer_refs", "target",
@@ -874,6 +1070,22 @@ tools:
           if (actualCount !== expectedCount) {
             fail(`${context} counter ${actualCount} does not match ${expectedCount} processed heads`);
           }
+          if (hasProvenance) {
+            const baseline = baselineWatchRows.get(key);
+            const current = JSON.stringify(canonical(row));
+            const baselineSerialized = baseline && JSON.stringify(canonical(baseline));
+            if (baselineSerialized !== current && !affectedWatchKeys.has(key)) {
+              const transitionAllowed = baseline &&
+                withoutLifecycle(baseline) === withoutLifecycle(row) &&
+                lifecycleTransitions.get(baseline.verdict)?.has(row.verdict);
+              if (!transitionAllowed) {
+                fail(`${context} changes a watch row without trusted current evidence`);
+              }
+            }
+            if (!baseline && actualCount === 0) {
+              fail(`${context} adds a zero-count watch row`);
+            }
+          }
           for (const pr of examples) {
             if (!contributingPrs.has(pr)) fail(`${context}.example_prs contains uncredited PR ${pr}`);
           }
@@ -892,6 +1104,11 @@ tools:
           }
         }
 
+        if (hasProvenance) {
+          for (const key of baselineWatchRows.keys()) {
+            if (!watchKeys.has(key)) fail(`missing baseline watch row ${key}`);
+          }
+        }
         for (const pathValue of overCounts.keys()) {
           if (!watchKeys.has(`over\u0000${pathValue}`)) fail(`missing watchlist row for ${pathValue}`);
         }
@@ -938,11 +1155,12 @@ code changes yourself.
 
 - Lookback: the last `${{ github.event.inputs.lookback_days }}` days of pull
   requests and CI runs, or **14 days** if that input is empty. The window is
-  deliberately wider than the weekly cadence: a single week's merges are
-  mostly routine and tend to surface only correct-by-design escalations, so
-  a one-week window produces empty runs. Overlapping windows are safe
-  because processed PR heads and their counted contributions are retained
-  and findings are deduplicated by title. If
+  deliberately wider than the weekly cadence so a late CI completion, a
+  rerun, or one missed audit receives another chance to be observed.
+  Before collection, deterministic compaction removes raw processed rows
+  observed more than 14 days ago and recomputes active watch counts, so
+  the default overlap does not double-count or grow raw memory indefinitely.
+  Settled dispositions remain durable. If
   `${{ github.event.inputs.pr_numbers }}` is set, analyze only those PRs
   (ignore the lookback window for both selecting PRs and finding their
   completed CI runs; still use it as context when useful).
@@ -1013,13 +1231,13 @@ code changes yourself.
      identity field is unavailable, leave the head unresolved rather
      than write an identity that could make a later run skip it.
 
-     Retain these rows even after their `seen` date ages out. This file
-     is read in full every run and has a 2 MiB limit: keep rows compact,
-     but **never prune or silently omit** an identity to make it fit.
+     A deterministic pre-agent step retains only rows whose `seen` date is
+     inside the current lookback window (14 days by default). Do not
+     manually prune or omit additional identities: the retained rows are
+     the exact source of truth for rolling counts and rerun replacement.
      If a write would exceed the configured size or patch limit, report
-     the capacity failure prominently, do not write incomplete ledgers or
-     claim exact cumulative counts, and file no issue until the memory
-     capacity is explicitly addressed.
+     the capacity failure prominently, do not write incomplete ledgers,
+     and file no issue until the memory capacity is explicitly addressed.
 
    - `watchlist.jsonl` — the rules worth continuing to watch. Key
      over-selection rows on the literal `path` plus `kind`. Key
@@ -1063,8 +1281,11 @@ code changes yourself.
      `verdict` is one of:
 
      - `watch` — a plausible candidate that has not yet cleared the
-       confidence bar. Keep accumulating evidence for it.
-     - `correct-by-design` — settled; stop re-deriving it.
+       confidence bar. Keep accumulating evidence within the rolling
+       lookback window; deterministic compaction removes it when no
+       credited observation remains.
+     - `correct-by-design` — settled; stop re-deriving it. Compaction
+       retains this disposition even after its rolling count reaches zero.
      - `pending-filed` — this run asked `create-issue` to file it, but
        `create-issue` runs in a separate job after this one finishes, so
        the agent never learns the resulting issue number or whether
@@ -1082,10 +1303,10 @@ code changes yourself.
        the PR number in `ref`. Do not record this as `filed`: the two
        decay differently, since an in-flight PR can be closed unmerged and
        the rule then returns to `watch`, whereas a filed issue stays ours.
-     - `fixed` — the referenced fix has merged. Retain the row and its
-       historical counters so a later CI attempt can reverse a credited
-       head's prior contribution. Put the merged fix's PR number in `ref`;
-       re-evaluate if the rule changes again.
+     - `fixed` — the referenced fix has merged. Retain the disposition and
+       source references even after its rolling count reaches zero. Put the
+       merged fix's PR number in `ref`; re-evaluate if the rule changes
+       again.
 
      Use `correct-by-design` for anything the prompt tells you to reject as
      intended behavior rather than as weak evidence — a file on the
@@ -1112,10 +1333,10 @@ code changes yourself.
      An unchanged CI rerun alone adds no new counter contribution.
 
    The watchlist is the point of this memory. A rule that escalates to ALL
-   a few times in one window is weak evidence and will not clear the
-   confidence bar — but the same rule accumulating escalations week after
-   week is exactly the signal worth acting on, and it is only visible if
-   the counts survive across runs.
+   once may be weak evidence, while repeated escalations across PR heads
+   in the rolling window are a stronger signal. Settled dispositions
+   survive after their raw observations expire so known cases are not
+   repeatedly re-investigated.
 2. **Use the collected evidence.** Read every record in
    `/tmp/gh-aw/test-selection-audit/evidence.json`; do not enumerate PRs,
    runs, jobs, comments, or artifacts again. The collector includes all PR
@@ -1153,12 +1374,13 @@ code changes yourself.
    generically.
 
    Stage each resolved head's distinct `over_paths` as proposed
-   contributions, and report the cumulative figure from `watchlist.jsonl`
+   contributions, and report the rolling retained-window figure from `watchlist.jsonl`
    alongside this window's. Do not increment the watchlist here:
    step 13 applies the difference from that head's prior contributions
    **after** step 7 determines `miss_edges`. An unchanged rerun contributes
    nothing new; an ALL-to-narrow rerun must remove its previous ALL
-   contribution. A merge-base fail-safe ALL result has no triggering path
+   contribution. A force-all result without a selection-time diff, including
+   a merge-base fail-safe, has no triggering path
    and must not be attributed to a rule just to make the totals grow.
 4. **Prefer safety over CI savings.** Do not propose narrowing a selection
    unless the file's real consumers are known and either existing tests
@@ -1435,10 +1657,11 @@ code changes yourself.
       lacks creditable deterministic selection or changed-file evidence, do not
       replace the head's prior row, adjust its counters, or treat an old
       result as current evidence. Do not write rows for unresolved heads.
-      Preserve older rows **indefinitely**: PR `updated` time can
-      bring an old head back into a scheduled window, and `pr_numbers`
-      can revisit one at any age. Pruning by `seen` would turn it into
-      a fresh head and add its existing contribution a second time.
+      The deterministic compactor has already removed rows observed more
+      than 14 days ago and recomputed rolling counts. Treat the compacted
+      files at the start of this run as the complete baseline; do not
+      restore expired rows unless the deterministic evidence in this run
+      resolves that head again.
     - Update `watchlist.jsonl` using those per-head deltas, plus any
       carried-forward rows. An unchanged rerun or repeated static gap
       has no delta: it must not refresh `last_seen` or increment a
@@ -1516,7 +1739,7 @@ The body must contain:
   pad the issue with additional PRs just to hit a count. Reach for more
   than one only when a single example leaves genuine room for doubt (for
   example, it could plausibly be a one-off rather than a repeating
-  pattern); in that case, pull the extra examples and the cumulative count
+  pattern); in that case, pull the extra examples and the rolling count
   from `watchlist.jsonl`'s history for this rule rather than searching for
   new ones. A rule that has been climbing for weeks is stronger evidence
   than one seen once — say which case this is. Link the specific
@@ -1574,9 +1797,9 @@ In your final response, report:
   yet (CI pending, `action_required`, or no selection job), so a quiet
   window is distinguishable from an unanalyzable one.
 - Total selection runs seen, how many were `ALL`, and the top `ALL` triggers
-  with counts — both for this window and cumulatively across runs.
+  with counts for the retained lookback window.
 - The current watchlist: each path and, for under-selection, each missing
-  target being tracked; its cumulative `all_runs` / `miss_runs` count,
+  target being tracked; its rolling `all_runs` / `miss_runs` count,
   and how that count moved this run. Do not sum edge counts and call them
   distinct PR heads: a head may miss more than one target. A rising
   count is the audit's main product even when nothing is filed.
