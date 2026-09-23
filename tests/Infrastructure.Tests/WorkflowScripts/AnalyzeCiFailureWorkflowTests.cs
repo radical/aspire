@@ -188,51 +188,6 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
     }
 
     [Fact]
-    [RequiresTools(["bash", "git"])]
-    public async Task AnalysisPublicationRetainsConcurrentMainRerunDecision()
-    {
-        var result = await RunProcessAsync(
-            "bash",
-            ["-c",
-                """
-                set -euo pipefail
-                git --no-pager init -q --bare "$ROOT/origin.git"
-                git --no-pager clone -q "$ROOT/origin.git" "$ROOT/analysis"
-                git --no-pager -C "$ROOT/analysis" switch -q -c memory/ci-failure-analysis
-                git --no-pager -C "$ROOT/analysis" config user.name "Test"
-                git --no-pager -C "$ROOT/analysis" config user.email "test@example.com"
-                echo seed > "$ROOT/analysis/seed"
-                git --no-pager -C "$ROOT/analysis" add seed
-                git --no-pager -C "$ROOT/analysis" commit -qm seed
-                git --no-pager -C "$ROOT/analysis" push -q -u origin memory/ci-failure-analysis
-                git --no-pager clone -q --branch memory/ci-failure-analysis "$ROOT/origin.git" "$ROOT/rerun"
-                git --no-pager -C "$ROOT/rerun" config user.name "Test"
-                git --no-pager -C "$ROOT/rerun" config user.email "test@example.com"
-
-                echo analysis > "$ROOT/analysis/analysis.json"
-                git --no-pager -C "$ROOT/analysis" add analysis.json
-                git --no-pager -C "$ROOT/analysis" commit -qm analysis
-                echo rerun > "$ROOT/rerun/rerun.json"
-                git --no-pager -C "$ROOT/rerun" add rerun.json
-                git --no-pager -C "$ROOT/rerun" commit -qm rerun
-                git --no-pager -C "$ROOT/rerun" push -q origin HEAD:memory/ci-failure-analysis
-
-                bash "$HELPER" push-memory-branch "$ROOT/analysis" memory/ci-failure-analysis
-                git --no-pager -C "$ROOT/analysis" show HEAD:analysis.json
-                git --no-pager -C "$ROOT/analysis" show HEAD:rerun.json
-                """],
-            new Dictionary<string, string>
-            {
-                ["ROOT"] = _workspace.Path,
-                ["HELPER"] = Path.Combine(RepoRoot.Path, PersistenceScriptRelativePath),
-            });
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("analysis\n", result.Output, StringComparison.Ordinal);
-        Assert.Contains("rerun\n", result.Output, StringComparison.Ordinal);
-    }
-
-    [Fact]
     [RequiresTools(["bash", "jq"])]
     public async Task ManualCollectionRejectsRunFromAnotherWorkflow()
     {
@@ -2914,7 +2869,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             Assert.Contains("$lines[1] == $type_marker", publisher, StringComparison.Ordinal);
             Assert.Contains("[\"**Type**: \" + $cause_type]", publisher, StringComparison.Ordinal);
             Assert.True(
-                publisher.IndexOf("push-memory-branch memory-repo \"$MEMORY_BRANCH\"", StringComparison.Ordinal) <
+                publisher.IndexOf("git -C memory-repo push origin \"HEAD:$MEMORY_BRANCH\"", StringComparison.Ordinal) <
                 publisher.IndexOf("# ── 2. Create or update issues for each cause ──", StringComparison.Ordinal));
             Assert.Contains(
                 "\"$ANALYSIS_FILE\" \"$TRUSTED_FAILED_JOBS_FILE\" \"$RUN_URL\" > \"$COMMENT_FILE\"",

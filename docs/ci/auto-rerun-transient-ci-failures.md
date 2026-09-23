@@ -51,7 +51,7 @@ Passes 1–2 are hardcoded because they target well-known infrastructure signatu
 | Trigger | Behavior |
 |---------|----------|
 | **Automatic PR rerun** (`workflow_run` on `CI` completion) | Runs whenever a `CI` pull request workflow concludes with failure. No manual action needed. |
-| **Automatic current-main rerun** (`workflow_run` on `CI` pushes to `main`) | Unconditionally reruns failed jobs for attempts 1–3 only while the failed run is still the latest run for the current `main` SHA. Failed attempt 4 records the cap; a successful retry records recovery. |
+| **Automatic current-main rerun** (`workflow_run` on `CI` pushes to `main`) | Unconditionally reruns failed jobs for attempts 1–3 only while the failed run is still the latest run for the current `main` SHA. No rerun is requested after attempt 4. |
 | **Manual** (`workflow_dispatch`) | Enter a `CI` run ID to analyze. Supports a `dry_run` option that produces the analysis summary without actually requesting a rerun. |
 
 The manual and automatic PR paths use the transient-failure analysis and its safety rails. Current-main reruns use deterministic live-state checks instead of failure classification.
@@ -202,7 +202,7 @@ Current-main reruns have additional fail-closed rails:
 - no main run for the same workflow may have a greater run number
 - only source attempts 1–3 may request another attempt
 
-The decision and outcome are stored separately from agentic failure analysis in `runs/<run-id>-attempt-<attempt>-rerun.json` on the `memory/ci-failure-analysis` branch. Stable fields distinguish requested reruns, policy skips such as `superseded` or `attempt-cap-reached`, failed state checks or API requests, and successful retries for external reporting. A conflicting record is never overwritten; concurrent branch updates are retried. The agentic analysis publisher likewise retries memory-branch pushes when these records arrive concurrently.
+Rerun decisions and skip reasons are reported in the workflow logs and job summary; the analyzer does not consume them.
 
 ## Force-rerun all failures (`FORCE_RERUN_ALL`)
 
@@ -238,7 +238,6 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 | [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | YAML workflow: orchestration, GitHub API calls, artifact download, TRX file I/O |
 | [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | JavaScript module: all testable logic — pattern matching, job classification, TRX parsing, promotion, summary formatting |
 | [`.github/workflows/analyze-ci-failure.md`](../../.github/workflows/analyze-ci-failure.md) | Independent failure classification and cause publication; never requests current-main reruns |
-| [`.github/workflows/analyze-ci-failure-persistence.sh`](../../.github/workflows/analyze-ci-failure-persistence.sh) | Retries analysis memory-branch pushes when a rerun decision is published concurrently |
 | [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) | Configuration: test failure and job failure patterns |
 | [`tests/.../auto-rerun-transient-ci-failures.harness.js`](../../tests/Infrastructure.Tests/WorkflowScripts/auto-rerun-transient-ci-failures.harness.js) | Node.js test harness: bridges C# xUnit tests to the JS module functions |
 | [`tests/.../AutoRerunTransientCiFailuresTests.cs`](../../tests/Infrastructure.Tests/WorkflowScripts/AutoRerunTransientCiFailuresTests.cs) | C# test class: behavior-focused tests covering all matcher logic |

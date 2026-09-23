@@ -1050,21 +1050,6 @@ trusted_pr_number()
 }
 
 case "$COMMAND" in
-  push-memory-branch)
-    MEMORY_REPO="${2:?memory checkout is required}"
-    MEMORY_BRANCH="${3:?memory branch is required}"
-    for attempt in 1 2 3 4 5; do
-      if git --no-pager -C "$MEMORY_REPO" push origin "HEAD:$MEMORY_BRANCH"; then
-        exit 0
-      fi
-      if [ "$attempt" -eq 5 ]; then
-        echo "::error::Could not publish to $MEMORY_BRANCH after five attempts" >&2
-        exit 1
-      fi
-      git --no-pager -C "$MEMORY_REPO" fetch origin "$MEMORY_BRANCH"
-      git --no-pager -C "$MEMORY_REPO" rebase FETCH_HEAD
-    done
-    ;;
   sanitize-cause)
     INPUT_FILE="${2:?input file is required}"
     OUTPUT_FILE="${3:?output file is required}"

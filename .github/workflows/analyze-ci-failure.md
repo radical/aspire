@@ -887,8 +887,7 @@ safe-outputs:
                 echo "No initial changes to memory branch"
               else
                 git -C memory-repo commit -m "Add CI failure analysis for run ${RUN_ID}"
-                bash .github/workflows/analyze-ci-failure-persistence.sh \
-                  push-memory-branch memory-repo "$MEMORY_BRANCH"
+                git -C memory-repo push origin "HEAD:$MEMORY_BRANCH"
                 echo "Memory branch updated with analysis for run ${RUN_ID}"
               fi
 
@@ -1170,8 +1169,7 @@ safe-outputs:
                 echo "No issue-link changes to memory branch"
               else
                 git -C memory-repo commit -m "Link CI failure issues for run ${RUN_ID}"
-                bash .github/workflows/analyze-ci-failure-persistence.sh \
-                  push-memory-branch memory-repo "$MEMORY_BRANCH"
+                git -C memory-repo push origin "HEAD:$MEMORY_BRANCH"
                 echo "Memory branch updated with issue links for run ${RUN_ID}"
               fi
             fi

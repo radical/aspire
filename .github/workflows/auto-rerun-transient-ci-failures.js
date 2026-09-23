@@ -1175,106 +1175,6 @@ async function rerunMatchedJobs({
     return mainRerunState;
 }
 
-async function recordSuccessfulMainRun({ github, owner, repo, sourceRunId, sourceRunAttempt, sourceHeadSha }) {
-    const { data: attempt } = await github.request(
-        'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}', {
-            owner,
-            repo,
-            run_id: sourceRunId,
-            attempt_number: sourceRunAttempt,
-        });
-    if (!attempt ||
-        attempt.id !== sourceRunId ||
-        attempt.run_attempt !== sourceRunAttempt ||
-        attempt.event !== 'push' ||
-        attempt.head_branch !== 'main' ||
-        attempt.head_sha !== sourceHeadSha ||
-        attempt.path !== '.github/workflows/ci.yml' ||
-        attempt.conclusion !== 'success') {
-        throw new Error('The completed attempt does not match the trusted successful main CI run.');
-    }
-
-    return {
-        policy: 'current-main-failed-jobs-v1',
-        decision: 'skip',
-        outcome: 'succeeded',
-        reason: 'successful-rerun',
-        source_run_id: sourceRunId,
-        source_run_attempt: sourceRunAttempt,
-        observed_run_attempt: sourceRunAttempt,
-        max_run_attempt: 3,
-        source_head_sha: sourceHeadSha,
-        current_main_sha: null,
-        superseding_run_id: null,
-        run_conclusion: 'success',
-    };
-}
-
-async function persistMainRerunState({ github, owner, repo, state }) {
-    if (!Number.isInteger(state?.source_run_id) || state.source_run_id <= 0 ||
-        !Number.isInteger(state.source_run_attempt) || state.source_run_attempt <= 0 ||
-        !['requested', 'not-requested', 'failed', 'succeeded'].includes(state.outcome)) {
-        throw new Error('Cannot persist an invalid main CI rerun decision.');
-    }
-
-    const branch = 'memory/ci-failure-analysis';
-    const path = `runs/${state.source_run_id}-attempt-${state.source_run_attempt}-rerun.json`;
-    const content = Buffer.from(`${JSON.stringify(state, null, 2)}\n`).toString('base64');
-
-    for (let attempt = 1; attempt <= 5; attempt++) {
-        try {
-            const { data: existing } = await github.request('GET /repos/{owner}/{repo}/contents/{path}', {
-                owner, repo, path, ref: branch,
-            });
-            if (!existing || existing.type !== 'file' ||
-                existing.content?.replace(/\s/g, '') !== content) {
-                throw new Error(`A different main CI decision is already stored at ${path}.`);
-            }
-            return path;
-        }
-        catch (error) {
-            if (error.status !== 404) {
-                throw error;
-            }
-        }
-
-        try {
-            await github.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-                owner, repo, path, branch, content,
-                message: `Record main CI rerun decision for run ${state.source_run_id} attempt ${state.source_run_attempt}`,
-            });
-            return path;
-        }
-        catch (error) {
-            // A concurrent memory-branch commit may have won; re-read the path
-            // before retrying so an existing decision is never overwritten.
-            if (error.status === 422) {
-                // Concurrent creation can return 422; only accept it if the
-                // other writer stored this exact decision.
-                let existing;
-                try {
-                    ({ data: existing } = await github.request('GET /repos/{owner}/{repo}/contents/{path}', {
-                        owner, repo, path, ref: branch,
-                    }));
-                }
-                catch (readError) {
-                    if (readError.status !== 404) {
-                        throw readError;
-                    }
-                    throw error;
-                }
-                if (existing?.type === 'file' && existing.content?.replace(/\s/g, '') === content) {
-                    return path;
-                }
-                throw error;
-            }
-            if (error.status !== 409 || attempt === 5) {
-                throw error;
-            }
-        }
-    }
-}
-
 // --- Test failure retry pattern matching ---
 
 const maxTestOutputLength = 10 * 1024; // 10KB cap for test output to prevent ReDoS
@@ -1730,8 +1630,6 @@ module.exports = {
     matchJobLogPattern,
     matchTestFailurePatterns,
     promoteTestExecutionFailureJobs,
-    persistMainRerunState,
-    recordSuccessfulMainRun,
     rerunMatchedJobs,
     selectTestResultsArtifact,
     testExecutionFailureStepPatterns,

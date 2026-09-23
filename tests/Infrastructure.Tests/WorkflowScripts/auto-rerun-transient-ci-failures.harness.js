@@ -167,38 +167,12 @@ async function dispatch(operation, payload) {
             return { requests, events: summary.events, returnValue };
         }
 
-        case 'recordSuccessfulMainRun': {
-            const requests = [];
-            const github = createGitHubRecorder(payload, requests);
-            try {
-                const state = await rerunWorkflow.recordSuccessfulMainRun({ ...payload, github });
-                return { state, requests };
-            }
-            catch (error) {
-                return { error: error.message, requests };
-            }
-        }
-
-        case 'persistMainRerunState': {
-            const requests = [];
-            const github = createGitHubRecorder(payload, requests);
-            try {
-                const storedPath = await rerunWorkflow.persistMainRerunState({ ...payload, github });
-                return { storedPath, requests };
-            }
-            catch (error) {
-                return { error: error.message, requests };
-            }
-        }
-
         default:
             throw new Error(`Unsupported operation '${operation}'.`);
     }
 }
 
 function createGitHubRecorder(payload, requests) {
-    let remainingPutConflicts = payload.putConflicts ?? 0;
-    let storedDecision = payload.storedDecision;
     return {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
@@ -226,33 +200,6 @@ function createGitHubRecorder(payload, requests) {
                         run_attempt: payload.latestRunAttempt ?? null,
                     },
                 };
-            }
-
-            if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}') {
-                return { data: payload.completedAttempt };
-            }
-
-            if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
-                if (!storedDecision) {
-                    throw Object.assign(new Error('Not Found'), { status: 404 });
-                }
-                return {
-                    data: {
-                        type: 'file',
-                        content: Buffer.from(`${JSON.stringify(storedDecision, null, 2)}\n`).toString('base64'),
-                    },
-                };
-            }
-
-            if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
-                if (remainingPutConflicts > 0) {
-                    remainingPutConflicts--;
-                    if (payload.storeDecisionOnPutConflict) {
-                        storedDecision = payload.state;
-                    }
-                    throw Object.assign(new Error('Conflict'), { status: payload.putConflictStatus ?? 409 });
-                }
-                return { data: { content: { path: requestPayload.path } } };
             }
 
             if (route === 'GET /repos/{owner}/{repo}/git/ref/{ref}') {

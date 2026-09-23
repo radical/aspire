@@ -884,11 +884,11 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Contains("github.repository == 'microsoft/aspire'", workflowText);
         Assert.Contains("github.event.workflow_run.event == 'push'", workflowText);
         Assert.Contains("github.event.workflow_run.head_branch == 'main'", workflowText);
-        Assert.Contains("github.event.workflow_run.run_attempt <= 4", workflowText);
-        Assert.Contains("github.event.workflow_run.run_attempt > 1", workflowText);
+        Assert.Equal(2, workflowText.Split("github.event.workflow_run.run_attempt <= 3", StringSplitOptions.None).Length - 1);
         Assert.Contains("sourceRunScope: 'main'", workflowText);
-        Assert.Contains("recordSuccessfulMainRun(details)", workflowText);
-        Assert.Contains("persistMainRerunState", workflowText);
+        Assert.Contains("actions: write", workflowText);
+        Assert.DoesNotContain("contents: write", workflowText);
+        Assert.DoesNotContain("persistMainRerunState", workflowText);
     }
 
     [Fact]
@@ -1570,151 +1570,6 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.DoesNotContain(
             result.Requests,
             r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
-    }
-
-    [Fact]
-    [RequiresTools(["node"])]
-    public async Task SuccessfulMainRerunRecordsTheCompletedAttemptWithoutRequestingAnotherRerun()
-    {
-        JsonElement result = await InvokeHarnessAsync<JsonElement>(
-            "recordSuccessfulMainRun",
-            new
-            {
-                owner = "microsoft",
-                repo = "aspire",
-                sourceRunId = 123,
-                sourceRunAttempt = 2,
-                sourceHeadSha = "main-sha",
-                completedAttempt = new
-                {
-                    id = 123,
-                    run_attempt = 2,
-                    @event = "push",
-                    head_branch = "main",
-                    head_sha = "main-sha",
-                    path = ".github/workflows/ci.yml",
-                    conclusion = "success"
-                }
-            });
-
-        Assert.Equal("succeeded", result.GetProperty("state").GetProperty("outcome").GetString());
-        Assert.Equal("success", result.GetProperty("state").GetProperty("run_conclusion").GetString());
-        JsonElement request = Assert.Single(result.GetProperty("requests").EnumerateArray());
-        Assert.Equal("GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}", request.GetProperty("route").GetString());
-        Assert.Equal(2, request.GetProperty("payload").GetProperty("attempt_number").GetInt32());
-    }
-
-    [Fact]
-    [RequiresTools(["node"])]
-    public async Task SuccessfulMainRerunRejectsAnAttemptWithADifferentSha()
-    {
-        JsonElement result = await InvokeHarnessAsync<JsonElement>(
-            "recordSuccessfulMainRun",
-            new
-            {
-                owner = "microsoft",
-                repo = "aspire",
-                sourceRunId = 123,
-                sourceRunAttempt = 2,
-                sourceHeadSha = "main-sha",
-                completedAttempt = new
-                {
-                    id = 123,
-                    run_attempt = 2,
-                    @event = "push",
-                    head_branch = "main",
-                    head_sha = "other-sha",
-                    path = ".github/workflows/ci.yml",
-                    conclusion = "success"
-                }
-            });
-
-        Assert.Contains("does not match", result.GetProperty("error").GetString());
-        Assert.False(result.TryGetProperty("state", out _));
-    }
-
-    [Fact]
-    [RequiresTools(["node"])]
-    public async Task MainRerunDecisionIsStoredUnderItsRunAndAttemptAfterAConcurrentCommit()
-    {
-        var state = new
-        {
-            policy = "current-main-failed-jobs-v1",
-            decision = "rerun",
-            outcome = "requested",
-            reason = "eligible",
-            source_run_id = 123,
-            source_run_attempt = 1,
-            source_head_sha = "main-sha",
-            run_conclusion = "failure"
-        };
-        JsonElement result = await InvokeHarnessAsync<JsonElement>(
-            "persistMainRerunState",
-            new { owner = "microsoft", repo = "aspire", state, putConflicts = 1 });
-
-        Assert.Equal("runs/123-attempt-1-rerun.json", result.GetProperty("storedPath").GetString());
-        Assert.Equal(2, result.GetProperty("requests").EnumerateArray().Count(
-            x => x.GetProperty("route").GetString() == "PUT /repos/{owner}/{repo}/contents/{path}"));
-    }
-
-    [Fact]
-    [RequiresTools(["node"])]
-    public async Task MainRerunDecisionDoesNotOverwriteAnExistingDifferentDecision()
-    {
-        var state = new
-        {
-            source_run_id = 123,
-            source_run_attempt = 1,
-            outcome = "not-requested",
-            reason = "superseded"
-        };
-        JsonElement result = await InvokeHarnessAsync<JsonElement>(
-            "persistMainRerunState",
-            new
-            {
-                owner = "microsoft",
-                repo = "aspire",
-                state,
-                storedDecision = new
-                {
-                    source_run_id = 123,
-                    source_run_attempt = 1,
-                    outcome = "requested",
-                    reason = "eligible"
-                }
-            });
-
-        Assert.Contains("different main CI decision", result.GetProperty("error").GetString());
-        Assert.DoesNotContain(result.GetProperty("requests").EnumerateArray(),
-            x => x.GetProperty("route").GetString() == "PUT /repos/{owner}/{repo}/contents/{path}");
-    }
-
-    [Fact]
-    [RequiresTools(["node"])]
-    public async Task DuplicateMainRerunDecisionIsAcceptedAfterConcurrentCreation()
-    {
-        var state = new
-        {
-            source_run_id = 123,
-            source_run_attempt = 1,
-            outcome = "requested",
-            reason = "eligible"
-        };
-        JsonElement result = await InvokeHarnessAsync<JsonElement>(
-            "persistMainRerunState",
-            new
-            {
-                owner = "microsoft",
-                repo = "aspire",
-                state,
-                putConflicts = 1,
-                putConflictStatus = 422,
-                storeDecisionOnPutConflict = true
-            });
-
-        Assert.Equal("runs/123-attempt-1-rerun.json", result.GetProperty("storedPath").GetString());
-        Assert.Single(result.GetProperty("requests").EnumerateArray(),
-            x => x.GetProperty("route").GetString() == "PUT /repos/{owner}/{repo}/contents/{path}");
     }
 
     [Fact]
