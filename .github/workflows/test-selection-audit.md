@@ -294,9 +294,17 @@ code changes yourself.
      few calls as possible — use `list_pull_requests`/`search_pull_requests`
      and reuse the metadata they already return — including each PR's
      **head SHA**, which you need both to skip already-resolved work and
-     to write the ledger later. Skip any PR whose current head SHA already
-     has a row in `processed-runs.jsonl`; a PR whose head has not moved
-     since you resolved it needs no calls at all. Then read only the
+     to write the ledger later. **Enumerate all PR states, not just
+     open** — `list_pull_requests` defaults to `state: open`, but most PRs
+     in a multi-week window are already merged or closed, and their
+     completed selection runs are exactly the evidence this audit exists
+     to accumulate. Pass `state: all` (or issue separate `open`/`closed`
+     calls) and bound the set by the window using each PR's own
+     created/updated/merged timestamp — do not rely on API result
+     ordering alone to decide when to stop paging. Skip any PR whose
+     current head SHA already has a row in `processed-runs.jsonl`; a PR
+     whose head has not moved since you resolved it needs no calls at
+     all. Then read only the
      **selection comment** for each remaining PR to decide whether it
      selected `ALL`. Do not fetch per-PR metadata or changed files in this
      pass; a PR that selected normally needs no further calls.
