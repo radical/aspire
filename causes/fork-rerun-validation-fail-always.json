@@ -1,0 +1,15 @@
+{
+  "id": "fork-rerun-validation-fail-always",
+  "type": "main-repository-breakage",
+  "title": "Fork rerun validation job configured with fail-always mode fails deterministically on every attempt",
+  "error_pattern": "Fork validation mode: fail-always\nExpected validation failure on every attempt\nProcess completed with exit code 1.",
+  "occurrences": [
+    {
+      "run_id": 36026528312,
+      "run_url": "https://github.com/radical/aspire/actions/runs/36026528312",
+      "job": "Fork rerun validation",
+      "pr_number": 0,
+      "observed_at": "2026-09-24T16:27:43Z"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "run_id": 36026528312,
+  "run_attempt": 4,
+  "run_url": "https://github.com/radical/aspire/actions/runs/36026528312",
+  "run_scope": "main",
+  "analyzed_at": "2026-09-24T16:27:43Z",
+  "verdict": "main-repository-breakage",
+  "pr": null,
+  "triggering_merge_pr": null,
+  "main_context": {
+    "last_successful_main_sha": "69d10ec1e915568aa120140e88fbe16865b33ae9",
+    "failed_sha": "b41051f4bcb55dc644fb4d03ae7732faba3e5229",
+    "candidate_merge_history_state": "incomplete",
+    "candidate_merges": null
+  },
+  "failed_jobs": [
+    {
+      "name": "Fork rerun validation",
+      "id": 107725016468,
+      "conclusion": "failure",
+      "url": "https://github.com/radical/aspire/actions/runs/36026528312/job/107725016468",
+      "classification": "main-repository-breakage",
+      "reason": "The job's 'Exercise configured failure mode' step is explicitly configured with 'fail-always' mode and deterministically fails on every attempt (including attempt 4) with 'Expected validation failure on every attempt'; this is a deterministic failure of a workflow step in the repository, not an infrastructure or flaky issue.",
+      "failed_steps": [
+        "Exercise configured failure mode"
+      ]
+    }
+  ],
+  "failed_tests": [],
+  "causes": [
+    "fork-rerun-validation-fail-always"
+  ]
+}
