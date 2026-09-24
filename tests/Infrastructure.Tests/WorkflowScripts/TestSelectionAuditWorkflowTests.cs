@@ -28,6 +28,34 @@ public sealed class TestSelectionAuditWorkflowTests
         Assert.Equal("600", Scalar(root, "max-daily-ai-credits"));
     }
 
+    [Fact]
+    public void TestSelectionAuditBlocksSafeOutputsWhenAgentFails()
+    {
+        const string guardName = "Require successful audit before safe outputs";
+        const string guardCondition = "needs.agent.result != 'success'";
+
+        var authoredRoot = LoadWorkflow("test-selection-audit.md");
+        var authoredGuard = Step(authoredRoot, guardName);
+        Assert.Equal(guardCondition, Scalar(authoredGuard, "if"));
+        Assert.Contains("exit 1", Scalar(authoredGuard, "run"), StringComparison.Ordinal);
+
+        var compiledRoot = LoadWorkflow("test-selection-audit.lock.yml");
+        var safeOutputs = Mapping(Mapping(compiledRoot, "jobs"), "safe_outputs");
+        var steps = Assert.IsType<YamlSequenceNode>(
+            safeOutputs.Children[new YamlScalarNode("steps")]);
+        var stepMappings = steps.Children.Select(Assert.IsType<YamlMappingNode>).ToList();
+        var guard = Assert.Single(stepMappings, step => Scalar(step, "name") == guardName);
+        var guardIndex = stepMappings.IndexOf(guard);
+        var processorIndex = stepMappings.FindIndex(
+            step => Scalar(step, "name") == "Process Safe Outputs");
+
+        Assert.Equal(guardCondition, Scalar(guard, "if"));
+        Assert.DoesNotContain(new YamlScalarNode("continue-on-error"), guard.Children.Keys);
+        Assert.True(
+            guardIndex >= 0 && processorIndex > guardIndex,
+            "The successful-agent guard must run before safe-output processing.");
+    }
+
     [Theory]
     [InlineData(".md")]
     [InlineData(".lock.yml")]

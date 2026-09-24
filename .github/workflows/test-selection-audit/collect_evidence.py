@@ -213,6 +213,11 @@ def normalize_named_items(value, pattern, context):
 def normalize_selection(payload, include_reason):
     if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
         raise ValueError("selection artifact has an unsupported schema")
+    # Audit mode reports the selection that would have been enforced, but the
+    # workflow actually runs every test and job. Treating that advisory result
+    # as enforced evidence could manufacture false under-selection findings.
+    if payload.get("mode") != "enforcing":
+        raise ValueError("selection artifact was not produced in enforcing mode")
     inputs = payload.get("inputs")
     if not isinstance(inputs, dict) or not isinstance(inputs.get("changeSource"), str):
         raise ValueError("selection artifact inputs are invalid")

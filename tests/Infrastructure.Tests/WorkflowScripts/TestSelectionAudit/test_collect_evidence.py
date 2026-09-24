@@ -30,6 +30,7 @@ _HEAD_SHA = "2" * 40
 def _payload(change_source: str) -> dict:
     return {
         "schemaVersion": 1,
+        "mode": "enforcing",
         "inputs": {"changeSource": change_source},
         "selectsAll": False,
         "escalationReason": "test reason",
@@ -88,6 +89,15 @@ class NormalizeSelectionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsupported schema"):
             collect_evidence.normalize_selection(payload, include_reason=True)
+
+    def test_rejects_non_enforcing_mode(self) -> None:
+        for mode in ("audit", "unknown", None):
+            with self.subTest(mode=mode):
+                payload = _payload(f"git diff {_BASE_SHA}..{_HEAD_SHA}")
+                payload["mode"] = mode
+
+                with self.assertRaisesRegex(ValueError, "not produced in enforcing mode"):
+                    collect_evidence.normalize_selection(payload, include_reason=True)
 
     def test_rejects_duplicate_paths(self) -> None:
         payload = _payload(f"git diff {_BASE_SHA}..{_HEAD_SHA}")

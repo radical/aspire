@@ -480,6 +480,15 @@ tools:
         }
 
 safe-outputs:
+  steps:
+    # gh-aw can run safe-output processing after the agent job fails. This
+    # audit must not file an issue unless memory validation and every other
+    # agent step completed successfully.
+    - name: Require successful audit before safe outputs
+      if: needs.agent.result != 'success'
+      run: |
+        echo "::error::Safe outputs are blocked because the audit agent did not complete successfully."
+        exit 1
   create-issue:
     title-prefix: "[test-selection-audit] "
     labels: [area-testing, area-pipelines]
