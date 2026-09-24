@@ -41,6 +41,26 @@ def _payload(change_source: str) -> dict:
         "jobs": [{"name": "job:z-job"}, {"name": "job:a-job"}],
     }
 
+
+def _scope_pull_request(
+    number: int,
+    *,
+    state: str,
+    updated_at: str,
+    created_at: str = "2026-08-01T00:00:00Z",
+    closed_at: str | None = None,
+    merged_at: str | None = None,
+) -> dict:
+    return {
+        "number": number,
+        "state": state,
+        "updated_at": updated_at,
+        "created_at": created_at,
+        "closed_at": closed_at,
+        "merged_at": merged_at,
+    }
+
+
 def _http_error(code: int, headers: dict[str, str] | None = None, message: str = ""):
     return urllib.error.HTTPError(
         "https://api.github.com/test",
@@ -585,6 +605,157 @@ class SelectionStatusTests(unittest.TestCase):
 class PullRequestScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         collect_evidence.repository = "microsoft/aspire"
+
+    def test_default_scope_filters_by_state_timestamp_and_stops_at_cutoff(self) -> None:
+        cutoff = datetime.datetime(2026, 9, 10, tzinfo=datetime.timezone.utc)
+        page_one = [
+            _scope_pull_request(
+                1,
+                state="open",
+                updated_at="2026-09-12T00:00:00Z",
+            ),
+            _scope_pull_request(
+                2,
+                state="closed",
+                updated_at="2026-09-12T00:00:00Z",
+                closed_at="2026-09-01T00:00:00Z",
+            ),
+            _scope_pull_request(
+                3,
+                state="closed",
+                updated_at="2026-09-12T00:00:00Z",
+                closed_at="2026-09-11T00:00:00Z",
+            ),
+            _scope_pull_request(
+                4,
+                state="closed",
+                updated_at="2026-09-12T00:00:00Z",
+                closed_at="2026-09-09T00:00:00Z",
+                merged_at="2026-09-10T00:00:00Z",
+            ),
+            _scope_pull_request(
+                5,
+                state="open",
+                updated_at="2026-09-10T00:00:00Z",
+            ),
+        ]
+        page_one.extend(
+            _scope_pull_request(
+                number,
+                state="open",
+                updated_at="2026-09-10T00:00:00Z",
+            )
+            for number in range(1000, 1095)
+        )
+        page_two = [
+            _scope_pull_request(
+                6,
+                state="open",
+                updated_at="2026-09-10T00:00:00Z",
+            ),
+            _scope_pull_request(
+                7,
+                state="closed",
+                updated_at="2026-09-10T00:00:00Z",
+                closed_at="2026-09-09T00:00:00Z",
+            ),
+        ]
+        page_two.extend(
+            _scope_pull_request(
+                number,
+                state="open",
+                updated_at="2026-09-09T00:00:00Z",
+            )
+            for number in range(2000, 2098)
+        )
+        pages = {1: page_one, 2: page_two}
+
+        with (
+            mock.patch.dict(os.environ, {"PR_NUMBERS": ""}, clear=False),
+            mock.patch.object(
+                collect_evidence,
+                "request",
+                side_effect=lambda _path, params: pages[params["page"]],
+            ) as request,
+        ):
+            pull_requests, truncated = collect_evidence.list_pull_requests(cutoff)
+
+        numbers = {pull_request["number"] for pull_request in pull_requests}
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual([call.args[1]["page"] for call in request.call_args_list], [1, 2])
+        self.assertEqual(len(numbers), 100)
+        self.assertTrue({1, 3, 4, 5, 6}.issubset(numbers))
+        self.assertTrue({2, 7, *range(2000, 2098)}.isdisjoint(numbers))
+        self.assertFalse(truncated)
+
+    def test_default_scope_stops_on_short_page_without_truncating(self) -> None:
+        cutoff = datetime.datetime(2026, 9, 10, tzinfo=datetime.timezone.utc)
+        page = [
+            _scope_pull_request(
+                1,
+                state="open",
+                updated_at="2026-09-11T00:00:00Z",
+            )
+        ]
+
+        with (
+            mock.patch.dict(os.environ, {"PR_NUMBERS": ""}, clear=False),
+            mock.patch.object(collect_evidence, "request", return_value=page) as request,
+        ):
+            pull_requests, truncated = collect_evidence.list_pull_requests(cutoff)
+
+        self.assertEqual([pull_request["number"] for pull_request in pull_requests], [1])
+        request.assert_called_once()
+        self.assertFalse(truncated)
+
+    def test_default_scope_marks_full_page_limit_as_truncated(self) -> None:
+        cutoff = datetime.datetime(2026, 9, 10, tzinfo=datetime.timezone.utc)
+
+        def request_page(_path, params):
+            page = params["page"]
+            return [
+                _scope_pull_request(
+                    page * 100 + index,
+                    state="open",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+                for index in range(100)
+            ]
+
+        with (
+            mock.patch.dict(os.environ, {"PR_NUMBERS": ""}, clear=False),
+            mock.patch.object(
+                collect_evidence,
+                "request",
+                side_effect=request_page,
+            ) as request,
+        ):
+            pull_requests, truncated = collect_evidence.list_pull_requests(cutoff)
+
+        self.assertEqual(len(pull_requests), 1000)
+        self.assertEqual(request.call_count, 10)
+        self.assertTrue(truncated)
+
+    def test_default_scope_marks_pr_limit_as_truncated(self) -> None:
+        cutoff = datetime.datetime(2026, 9, 10, tzinfo=datetime.timezone.utc)
+        page = [
+            _scope_pull_request(
+                number,
+                state="open",
+                updated_at="2026-09-11T00:00:00Z",
+            )
+            for number in (1, 2, 3)
+        ]
+
+        with (
+            mock.patch.dict(os.environ, {"PR_NUMBERS": ""}, clear=False),
+            mock.patch.object(collect_evidence, "MAX_PRS", 2),
+            mock.patch.object(collect_evidence, "request", return_value=page),
+        ):
+            pull_requests, truncated = collect_evidence.list_pull_requests(cutoff)
+
+        self.assertEqual([pull_request["number"] for pull_request in pull_requests], [1, 2])
+        self.assertTrue(truncated)
 
     def test_explicit_scope_rejects_excess_unique_numbers_before_requests(self) -> None:
         with (
