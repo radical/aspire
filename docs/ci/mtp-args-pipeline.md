@@ -90,7 +90,7 @@ and TRX reporting options. xUnit v4 uses `--report-xunit-xml` and
 `--report-xunit` options fail argument parsing before any tests execute.
 `MicrosoftTestingPlatformTests` checks these options against the current test host.
 
-Assembled in `eng/Testing.props` from:
+Assembled in `eng/Testing.targets` from:
 - `--filter-not-trait "category=failing"`
 - Filter args (quarantine/outerloop exclusions)
 - `_BlameArgs` (which equals `MtpBaseArgs` — diagnostic flags + timeouts)
@@ -143,4 +143,4 @@ MTP MSBuild integration injects `TestingPlatformCommandLineArguments` automatica
 
 ## Backward compatibility
 
-The `run-tests.yml` `mtpBaseArgs` input has a default value that includes diagnostic flags (crashdump, hangdump, exit-code handling) but does not include timeout arguments. Timeout values are baked into `mtpBaseArgs` at build time by MSBuild (via `eng/Testing.props`) and flow through the test matrix metadata. Callers that bypass the matrix and don't pass `mtpBaseArgs` should include the timeout arguments explicitly if needed.
+The `run-tests.yml` `mtpBaseArgs` input has a default value that includes diagnostic flags (crashdump, hangdump, exit-code handling) but does not include timeout arguments. Timeout values are baked into `mtpBaseArgs` at build time by MSBuild (via `eng/Testing.targets`) and flow through the test matrix metadata. Callers that bypass the matrix and don't pass `mtpBaseArgs` should include the timeout arguments explicitly if needed.
