@@ -1275,7 +1275,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
-    public async Task CurrentMainRerunSkipsWhenANewerMainCiRunExists()
+    public async Task CurrentMainRerunSkipsWhenANewerMainCiRunExistsEvenIfSourceIsMissing()
     {
         RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
             "rerunMatchedJobs",
@@ -1312,14 +1312,6 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
                         @event = "push",
                         head_branch = "main",
                         head_sha = "main-sha"
-                    },
-                    new
-                    {
-                        id = 123,
-                        run_number = 100,
-                        @event = "push",
-                        head_branch = "main",
-                        head_sha = "main-sha"
                     }
                 }
             });
@@ -1327,6 +1319,58 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.DoesNotContain(
             result.Requests,
             r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+        Assert.Equal("superseded", result.ReturnValue.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunSkipsWhenRunListDoesNotContainTrustedSource()
+    {
+        object[][] invalidRunLists =
+        [
+            [],
+            [new { id = 122, run_number = 99 }],
+            [new { id = 123, run_number = 99 }],
+            [new { id = 122, run_number = 100 }],
+        ];
+
+        foreach (object[] mainWorkflowRuns in invalidRunLists)
+        {
+            RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+                "rerunMatchedJobs",
+                new
+                {
+                    owner = "dotnet",
+                    repo = "aspire",
+                    retryableJobs = Array.Empty<RetryableJobInput>(),
+                    sourceRunId = 123,
+                    sourceRunAttempt = 1,
+                    sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                    sourceRunScope = "main",
+                    sourceHeadSha = "main-sha",
+                    maxRunAttempt = 3,
+                    forceRerunAll = true,
+                    currentRun = new
+                    {
+                        id = 123,
+                        run_attempt = 1,
+                        run_number = 100,
+                        workflow_id = 456,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha",
+                        path = ".github/workflows/ci.yml"
+                    },
+                    currentMainSha = "main-sha",
+                    mainWorkflowRuns
+                });
+
+            Assert.DoesNotContain(
+                result.Requests,
+                r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+            Assert.Equal("not-requested", result.ReturnValue.GetProperty("outcome").GetString());
+            Assert.Equal("invalid-main-run-list", result.ReturnValue.GetProperty("reason").GetString());
+        }
     }
 
     [Fact]

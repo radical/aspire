@@ -95,3 +95,9 @@ if jq -e --argjson id "$RUN_ID" --argjson number "$RUN_NUMBER" \
   echo "::notice::A newer main CI run supersedes run ${RUN_ID}. Skipping stale analysis."
   exit 2
 fi
+if ! jq -e --argjson id "$RUN_ID" --argjson number "$RUN_NUMBER" \
+  'any(.workflow_runs[]; .id == $id and .run_number == $number)' \
+  <<< "$MAIN_RUNS" >/dev/null; then
+  echo "::error::Could not verify the source main CI run in the workflow run list." >&2
+  exit 1
+fi

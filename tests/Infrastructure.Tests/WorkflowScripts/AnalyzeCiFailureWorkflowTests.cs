@@ -139,6 +139,50 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         }
     }
 
+    [Theory]
+    [InlineData("""{"workflow_runs":[]}""", 1)]
+    [InlineData("""{"workflow_runs":[{"id":122,"run_number":99}]}""", 1)]
+    [InlineData("""{"workflow_runs":[{"id":123,"run_number":99}]}""", 1)]
+    [InlineData("""{"workflow_runs":[{"id":122,"run_number":1}]}""", 1)]
+    [InlineData("""{"workflow_runs":[{"id":124,"run_number":101}]}""", 2)]
+    [RequiresTools(["bash", "jq", "node"])]
+    public async Task MainTerminalGuardRequiresTrustedSourceRun(string mainRunsResponse, int expectedExitCode)
+    {
+        int finalAnalysisAttempt = GetConfiguredMaxRunAttempt() + 1;
+        var contextPath = Path.Combine(_workspace.Path, "run-context.json");
+        await File.WriteAllTextAsync(
+            contextPath,
+            $$"""{"run_id":123,"run_attempt":{{finalAnalysisAttempt}},"run_scope":"main","head_sha":"trusted-failure","retry_request_failed":false}""");
+        var fakeGh = await CreateFakeGhAsync(
+            """
+            #!/usr/bin/env bash
+            case "$*" in
+              "api repos/microsoft/aspire/actions/runs/123")
+                printf '{"id":123,"run_attempt":%s,"run_number":100,"workflow_id":42,"event":"push","head_branch":"main","head_sha":"trusted-failure","path":".github/workflows/ci.yml","status":"completed","conclusion":"failure"}\n' "$FINAL_ANALYSIS_ATTEMPT"
+                ;;
+              "api repos/microsoft/aspire/git/ref/heads/main")
+                printf '{"object":{"sha":"trusted-failure"}}\n'
+                ;;
+              "api --method GET repos/microsoft/aspire/actions/workflows/42/runs -f branch=main -f event=push -f per_page=100")
+                printf '%s\n' "$MAIN_RUNS_RESPONSE"
+                ;;
+              *) exit 99 ;;
+            esac
+            """);
+
+        var result = await RunBashScriptAsync(
+            Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"),
+            [contextPath, "microsoft/aspire"],
+            new Dictionary<string, string>
+            {
+                ["FINAL_ANALYSIS_ATTEMPT"] = finalAnalysisAttempt.ToString(),
+                ["MAIN_RUNS_RESPONSE"] = mainRunsResponse,
+                ["PATH"] = $"{Path.GetDirectoryName(fakeGh)}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+            });
+
+        Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
     [Fact]
     public void RetryAttemptPolicyHasOneRuntimeSource()
     {
@@ -457,7 +501,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
                 echo '{"object":{"sha":"abc"}}'
                 ;;
               *"actions/workflows/1/runs"*)
-                echo '{"total_count":0,"workflow_runs":[]}'
+                echo '{"total_count":1,"workflow_runs":[{"id":123,"run_number":1}]}'
                 ;;
               *"actions/runs/123/attempts/4/jobs"*)
                 ;;

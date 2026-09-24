@@ -1065,6 +1065,14 @@ async function rerunMatchedJobs({
                 `Newer main CI run ${supersedingRun.id} superseded this run. No jobs were rerun.`);
         }
 
+        const sourceRunIsPresent = workflowRuns
+            .some(run => run.id === sourceRunId && run.run_number === currentRun.run_number);
+        if (!sourceRunIsPresent) {
+            return await skipMainRerun(
+                'invalid-main-run-list',
+                'The live main CI run list did not contain the trusted source run. No jobs were rerun.');
+        }
+
         mainRerunState = {
             ...state,
             decision: 'rerun',
