@@ -238,6 +238,7 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 | [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | YAML workflow: orchestration, GitHub API calls, artifact download, TRX file I/O |
 | [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | JavaScript module: all testable logic — pattern matching, job classification, TRX parsing, promotion, summary formatting |
 | [`.github/workflows/analyze-ci-failure.md`](../../.github/workflows/analyze-ci-failure.md) | Independent failure classification and cause publication; never requests current-main reruns |
+| [`.github/workflows/analyze-ci-failure-terminal.sh`](../../.github/workflows/analyze-ci-failure-terminal.sh) | Checks that the final failed main attempt is still current before analyzer collection and publication |
 | [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) | Configuration: test failure and job failure patterns |
 | [`tests/.../auto-rerun-transient-ci-failures.harness.js`](../../tests/Infrastructure.Tests/WorkflowScripts/auto-rerun-transient-ci-failures.harness.js) | Node.js test harness: bridges C# xUnit tests to the JS module functions |
 | [`tests/.../AutoRerunTransientCiFailuresTests.cs`](../../tests/Infrastructure.Tests/WorkflowScripts/AutoRerunTransientCiFailuresTests.cs) | C# test class: behavior-focused tests covering all matcher logic |

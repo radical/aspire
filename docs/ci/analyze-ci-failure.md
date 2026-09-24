@@ -26,10 +26,11 @@ The [CI auto-rerun workflow](auto-rerun-transient-ci-failures.md) handles
 current-main reruns independently of this analysis queue. Source attempts
 1–3 can request a rerun, producing at most four total attempts. A successful
 retry needs no failure analysis. If the retry request fails before attempt 4,
-the auto-rerun workflow fails and records the failure; an operator can inspect
-that workflow and request a failed-job retry with
+the auto-rerun workflow reports the failure in its logs and job summary; an
+operator can inspect that workflow and request a failed-job retry with
 `gh run rerun <run-id> --repo microsoft/aspire --failed` if appropriate. No
-main-breakage issue is filed for an unverified early attempt.
+analyzer cause issue is filed for an unverified early attempt; the separate
+`ci_failure_tracker` in `ci.yml` can still report the first failed push.
 
 ## Attribution
 
@@ -75,14 +76,15 @@ Immediately before the failed-job rerun request, it re-fetches the workflow
 run, `refs/heads/main`, and the workflow's main run list. It fails closed unless
 the trusted run is still the current `main` SHA, no newer main CI run has a
 greater run number, the attempt is unchanged, and the source attempt is at most
-3. The decision and request outcome are stored as a separate, attempt-scoped
-record on `memory/ci-failure-analysis`. Before collecting evidence and again
-before publication, the analyzer verifies that attempt 4 is completed and
-failed, belongs to the current `main` SHA, and has not been superseded by a
-newer main CI run. It repeats the check before updating each cause issue.
-Stale runs are skipped rather than canceled through the shared CI concurrency
-key, which would also cancel unrelated main builds. The analysis publisher
-retries concurrent memory-branch updates instead of losing its cause history.
+3. Rerun decisions and skip reasons appear in that workflow's logs and job
+summary; they are not stored on the analysis memory branch. The analyzer calls
+[`analyze-ci-failure-terminal.sh`](../../.github/workflows/analyze-ci-failure-terminal.sh)
+before collecting evidence, before publication, and before updating each cause
+issue. The helper checks that attempt 4 is completed and failed for the current
+`main` SHA and has not been superseded by a newer main CI run. It returns 2 to
+skip stale or nonfinal analysis; failed verification stops the workflow. Stale
+runs are skipped rather than canceled through the shared CI concurrency key,
+which would also cancel unrelated main builds.
 
 External and agent-supplied text is bounded and rendered inert before it is
 used in workflow diagnostics, Markdown comments, or issue bodies.
@@ -151,7 +153,9 @@ generated executable workflow is
 [`analyze-ci-failure.lock.yml`](../../.github/workflows/analyze-ci-failure.lock.yml).
 Collection and persistence helpers live beside the workflow as
 `analyze-ci-failure-*.sh`; final output validation is in
-`analyze-ci-failure-validation.sh`.
+`analyze-ci-failure-validation.sh`. The
+[`analyze-ci-failure-terminal.sh`](../../.github/workflows/analyze-ci-failure-terminal.sh)
+helper guards final-attempt `main` analysis before collection and publication.
 
 Focused coverage lives in
 [`AnalyzeCiFailureWorkflowTests`](../../tests/Infrastructure.Tests/WorkflowScripts/AnalyzeCiFailureWorkflowTests.cs).

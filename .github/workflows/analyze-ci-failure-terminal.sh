@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Check whether a failed main CI run is still the current, final automatic attempt.
+# The analyzer calls this before collecting evidence, publishing analysis, and
+# updating each cause issue so queued work cannot publish against a newer run.
+# Exit 0 when current, 2 when stale or not final, or fail if verification fails.
 set -euo pipefail
 
 RUN_CONTEXT_FILE="${1:?run context file is required}"
