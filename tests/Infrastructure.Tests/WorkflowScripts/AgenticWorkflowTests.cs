@@ -10,7 +10,6 @@ namespace Infrastructure.Tests;
 public sealed class AgenticWorkflowTests
 {
     private static readonly string s_workflowsPath = Path.Combine(RepoRoot.Path, ".github", "workflows");
-
     [Fact]
     public void GeneratedWorkflowsMatchBootstrapCompiler()
     {
