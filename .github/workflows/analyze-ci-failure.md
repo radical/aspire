@@ -29,7 +29,7 @@ jobs:
   collect-data:
     runs-on: ubuntu-latest
     if: >-
-      github.repository_owner == 'radical'
+      github.repository_owner == 'microsoft'
       && (
         github.event_name == 'workflow_dispatch'
         || (

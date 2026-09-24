@@ -506,7 +506,7 @@ jobs:
     name: Rerun current main CI failures
     if: >-
       ${{
-          github.repository == 'radical/aspire' &&
+          github.repository == 'microsoft/aspire' &&
           github.event_name == 'workflow_run' &&
           github.event.workflow_run.event == 'push' &&
           github.event.workflow_run.head_branch == 'main' &&
@@ -517,20 +517,6 @@ jobs:
       actions: write
       contents: read
     steps:
-      - name: Fork validation delay
-        if: ${{ vars.CI_RERUN_VALIDATION_DELAY_SECONDS != '' }}
-        shell: bash
-        env:
-          DELAY_SECONDS: ${{ vars.CI_RERUN_VALIDATION_DELAY_SECONDS }}
-        run: |
-          set -euo pipefail
-          if ! [[ "${DELAY_SECONDS}" =~ ^[0-9]+$ ]] || [ "${DELAY_SECONDS}" -gt 300 ]; then
-            echo "::error::CI_RERUN_VALIDATION_DELAY_SECONDS must be an integer from 0 through 300"
-            exit 1
-          fi
-          echo "Delaying current-main validation by ${DELAY_SECONDS} seconds"
-          sleep "${DELAY_SECONDS}"
-
       - name: Checkout rerun helper
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
