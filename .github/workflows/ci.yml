@@ -20,6 +20,42 @@ concurrency:
 
 jobs:
 
+  fork_rerun_validation:
+    name: Fork rerun validation
+    if: ${{ github.repository == 'radical/aspire' && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation mode
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Exercise configured failure mode
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mode=$(<.github/ci-rerun-validation-mode)
+          echo "Fork validation mode: ${mode}"
+          echo "Fork validation attempt: ${GITHUB_RUN_ATTEMPT}"
+
+          case "${mode}" in
+            pass)
+              ;;
+            pass-on-second)
+              if [ "${GITHUB_RUN_ATTEMPT}" -lt 2 ]; then
+                echo "::error::Expected validation failure before attempt 2"
+                exit 1
+              fi
+              ;;
+            fail-always)
+              echo "::error::Expected validation failure on every attempt"
+              exit 1
+              ;;
+            *)
+              echo "::error::Unknown fork validation mode '${mode}'"
+              exit 1
+              ;;
+          esac
+
   prepare_for_ci:
     runs-on: ubuntu-latest
     name: Prepare for CI
