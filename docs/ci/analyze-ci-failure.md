@@ -11,9 +11,12 @@ GitHub.
 
 ## Supported runs
 
-Automatic analysis runs only when a `CI` push to `main` fails on attempt 4,
-after the three automatic failed-job reruns. Manual dispatch can analyze a
-specific run, but early attempts cannot publish a main-breakage issue. The
+Automatic analysis runs only when a `CI` push to `main` fails on the attempt
+immediately after the configured automatic-rerun source-attempt cap. If GitHub
+rejects an otherwise eligible rerun request, the rerun workflow dispatches
+fallback analysis for that early attempt instead of leaving the failure
+unanalyzed. Manual dispatch can analyze a specific run, but an early attempt
+can publish only when the dispatch identifies the failed rerun request. The
 collector accepts `main` push runs and pull-request runs; other workflow
 paths, events, and branches are rejected or skipped.
 
@@ -23,14 +26,17 @@ path, event, branch, SHA, and failed jobs come from GitHub rather than from
 agent output.
 
 The [CI auto-rerun workflow](auto-rerun-transient-ci-failures.md) handles
-current-main reruns independently of this analysis queue. Source attempts
-1–3 can request a rerun, producing at most four total attempts. A successful
-retry needs no failure analysis. If the retry request fails before attempt 4,
-the auto-rerun workflow reports the failure in its logs and job summary; an
-operator can inspect that workflow and request a failed-job retry with
-`gh run rerun <run-id> --repo microsoft/aspire --failed` if appropriate. No
-analyzer cause issue is filed for an unverified early attempt; the separate
-`ci_failure_tracker` in `ci.yml` can still report the first failed push.
+current-main reruns independently of this analysis queue. The shared
+`defaultMaxRunAttempt` value in
+[`auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js)
+controls the last source attempt that may request a rerun; the analyzer derives
+its final attempt as the next attempt. A successful retry needs no failure
+analysis. If the retry request fails before that final attempt, the auto-rerun
+workflow remains failed for visibility and dispatches the analyzer with the
+failed CI run ID. The analyzer accepts that early attempt only while its failed
+SHA is still current `main`, its attempt is unchanged, and no newer main CI run
+supersedes it. The separate `ci_failure_tracker` in `ci.yml` can still report
+the first failed push.
 
 ## Attribution
 
@@ -75,16 +81,20 @@ The automatic `main` rerun is deterministic and does not consume agent output.
 Immediately before the failed-job rerun request, it re-fetches the workflow
 run, `refs/heads/main`, and the workflow's main run list. It fails closed unless
 the trusted run is still the current `main` SHA, no newer main CI run has a
-greater run number, the attempt is unchanged, and the source attempt is at most
-3. Rerun decisions and skip reasons appear in that workflow's logs and job
-summary; they are not stored on the analysis memory branch. The analyzer calls
+greater run number, the attempt is unchanged, and the source attempt does not
+exceed the shared `defaultMaxRunAttempt` policy. Rerun decisions and skip
+reasons appear in that workflow's logs and job summary; they are not stored on
+the analysis memory branch. The analyzer calls
 [`analyze-ci-failure-terminal.sh`](../../.github/workflows/analyze-ci-failure-terminal.sh)
 before collecting evidence, before publication, and before updating each cause
-issue. The helper checks that attempt 4 is completed and failed for the current
-`main` SHA and has not been superseded by a newer main CI run. It returns 2 to
-skip stale or nonfinal analysis; failed verification stops the workflow. Stale
-runs are skipped rather than canceled through the shared CI concurrency key,
-which would also cancel unrelated main builds.
+issue. The helper derives the final attempt from `defaultMaxRunAttempt` and
+checks that attempt is completed and failed for the current `main` SHA, or that
+an earlier failed attempt was dispatched after its rerun request failed. Both
+paths require the attempt to remain unchanged and not be superseded by a newer
+main CI run. The helper returns 2 to skip stale or ineligible analysis; failed
+verification stops the workflow. Stale runs are skipped rather than canceled
+through the shared CI concurrency key, which would also cancel unrelated main
+builds.
 
 External and agent-supplied text is bounded and rendered inert before it is
 used in workflow diagnostics, Markdown comments, or issue bodies.
@@ -155,7 +165,8 @@ Collection and persistence helpers live beside the workflow as
 `analyze-ci-failure-*.sh`; final output validation is in
 `analyze-ci-failure-validation.sh`. The
 [`analyze-ci-failure-terminal.sh`](../../.github/workflows/analyze-ci-failure-terminal.sh)
-helper guards final-attempt `main` analysis before collection and publication.
+helper guards final-attempt and failed-rerun fallback `main` analysis before
+collection and publication.
 
 Focused coverage lives in
 [`AnalyzeCiFailureWorkflowTests`](../../tests/Infrastructure.Tests/WorkflowScripts/AnalyzeCiFailureWorkflowTests.cs).

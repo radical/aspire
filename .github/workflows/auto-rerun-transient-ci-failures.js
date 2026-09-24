@@ -6,13 +6,9 @@
 // PR, it reruns the failed jobs — full stop. No job is fetched or classified, the
 // patterns config is not consulted, and there is no job-count cap.
 //
-// The two hard gates are already enforced by the YAML trigger `if`, so force mode does
-// not re-implement them:
-//   * "CI failed"      -> trigger only fires on `workflow_run.conclusion == 'failure'`,
-//                         which also means a run that was merely *cancelled* never
-//                         triggers a rerun (its conclusion is 'cancelled', not 'failure').
-//   * "max 3 reruns"   -> trigger gates on `run_attempt <= 3`; computeRerunEligibility
-//                         re-checks the same attempt cap for the manual-dispatch path.
+// The workflow trigger requires a failed CI run. The automatic-attempt cap is
+// enforced by computeRerunEligibility using defaultMaxRunAttempt so the retry
+// and final-analysis paths share one policy value.
 //
 // Force mode still KEEPS the open-PR requirement (no point spending CI on a run whose
 // PRs are all closed/merged). `forceRerunAll` defaults to false everywhere, so the
@@ -544,8 +540,8 @@ function computeRerunEligibility({
     maxRunAttempt = defaultMaxRunAttempt,
     forceRerunAll = false
 }) {
-    // The attempt cap applies in every mode: never rerun past maxRunAttempt source
-    // attempts (up to 3 auto-reruns / 4 total attempts).
+    // The attempt cap applies in every mode: never rerun past maxRunAttempt
+    // failed source attempts.
     if (runAttempt > maxRunAttempt) {
         return false;
     }
@@ -725,8 +721,7 @@ async function writeForceRerunSummary({
     // In force mode the only way to be ineligible is the attempt cap: this summary runs
     // after the open-PR gate (the zero-PR case returns earlier), and force-mode
     // computeRerunEligibility returns false solely when runAttempt > maxRunAttempt. The
-    // skipped case is reachable only via a manual workflow_dispatch on a run past the cap
-    // (the workflow_run trigger gates run_attempt <= 3, so the auto path is always eligible).
+    // The skipped case is reachable whenever an automatic or manual run is past the cap.
     const outcomeDetails = rerunEligible
         ? dryRun
             ? 'Force-rerun mode: the failed jobs would be rerun if dry run were disabled (transient-failure analysis bypassed).'
@@ -1175,6 +1170,35 @@ async function rerunMatchedJobs({
     return mainRerunState;
 }
 
+async function requestMainFailureAnalysis({
+    github,
+    owner,
+    repo,
+    sourceRunId,
+}) {
+    if (!Number.isInteger(sourceRunId) || sourceRunId <= 0) {
+        throw new Error('A positive source run ID is required to request fallback analysis.');
+    }
+
+    const { data } = await github.request(
+        'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+        {
+            owner,
+            repo,
+            workflow_id: 'analyze-ci-failure.lock.yml',
+            ref: 'main',
+            inputs: {
+                run_id: String(sourceRunId),
+                retry_request_failed: 'true',
+            },
+        });
+
+    return {
+        workflowRunId: data?.workflow_run_id ?? null,
+        workflowRunUrl: data?.html_url ?? null,
+    };
+}
+
 // --- Test failure retry pattern matching ---
 
 const maxTestOutputLength = 10 * 1024; // 10KB cap for test output to prevent ReDoS
@@ -1614,6 +1638,7 @@ module.exports = {
     computeRerunEligibility,
     computeRerunExecutionEligibility,
     decodeXmlEntities,
+    defaultMaxRunAttempt,
     defaultMaxRetryableJobs,
     extractFailedTestsFromTrx,
     extractMatchedSnippet,
@@ -1631,6 +1656,7 @@ module.exports = {
     matchTestFailurePatterns,
     promoteTestExecutionFailureJobs,
     rerunMatchedJobs,
+    requestMainFailureAnalysis,
     selectTestResultsArtifact,
     testExecutionFailureStepPatterns,
     validateRetryPatternsConfig,

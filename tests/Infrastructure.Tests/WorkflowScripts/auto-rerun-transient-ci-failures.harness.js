@@ -102,6 +102,9 @@ async function dispatch(operation, payload) {
         case 'computeRerunExecutionEligibility':
             return rerunWorkflow.computeRerunExecutionEligibility(payload);
 
+        case 'getDefaultMaxRunAttempt':
+            return rerunWorkflow.defaultMaxRunAttempt;
+
         case 'validateRetryPatternsConfig':
             return rerunWorkflow.validateRetryPatternsConfig(payload.config);
 
@@ -165,6 +168,17 @@ async function dispatch(operation, payload) {
             });
 
             return { requests, events: summary.events, returnValue };
+        }
+
+        case 'requestMainFailureAnalysis': {
+            const requests = [];
+            const github = createGitHubRecorder(payload, requests);
+            const returnValue = await rerunWorkflow.requestMainFailureAnalysis({
+                ...payload,
+                github,
+            });
+
+            return { requests, returnValue };
         }
 
         default:
@@ -237,6 +251,11 @@ function createGitHubRecorder(payload, requests) {
                     headers: {
                         link: hasNextPage ? '<https://api.github.com/next>; rel="next"' : '',
                     },
+                };
+            }
+            if (route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches') {
+                return {
+                    data: payload.workflowDispatchResponse ?? {},
                 };
             }
             if (route === 'POST /repos/{owner}/{repo}/issues/{issue_number}/comments') {

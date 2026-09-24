@@ -1,20 +1,46 @@
 #!/usr/bin/env bash
-# Check whether a failed main CI run is still the current, final automatic attempt.
+# Check whether a failed main CI run is still eligible for automatic analysis.
 # The analyzer calls this before collecting evidence, publishing analysis, and
 # updating each cause issue so queued work cannot publish against a newer run.
-# Exit 0 when current, 2 when stale or not final, or fail if verification fails.
+# Normal analysis requires the final automatic attempt. An early attempt is
+# eligible only when its automatic rerun request failed and requested fallback
+# analysis. Exit 0 when eligible, 2 when stale/ineligible, or fail if verification fails.
 set -euo pipefail
 
 RUN_CONTEXT_FILE="${1:?run context file is required}"
 REPO="${2:?repository is required}"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+MAX_RUN_ATTEMPT=$(node -e '
+  const policy = require(process.argv[1]);
+  if (!Number.isInteger(policy.defaultMaxRunAttempt) || policy.defaultMaxRunAttempt < 1) {
+    throw new Error("defaultMaxRunAttempt must be a positive integer");
+  }
+  process.stdout.write(String(policy.defaultMaxRunAttempt));
+' "${SCRIPT_DIR}/auto-rerun-transient-ci-failures.js")
+if ! [[ "$MAX_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::The maximum rerun source attempt must be a positive integer." >&2
+  exit 1
+fi
+FINAL_ANALYSIS_ATTEMPT=$((MAX_RUN_ATTEMPT + 1))
 
 RUN_ID=$(jq -er '.run_id | select(type == "number" and . > 0)' "$RUN_CONTEXT_FILE")
 RUN_ATTEMPT=$(jq -er '.run_attempt | select(type == "number" and . > 0)' "$RUN_CONTEXT_FILE")
 HEAD_SHA=$(jq -er '.head_sha | select(type == "string" and length > 0)' "$RUN_CONTEXT_FILE")
+RETRY_REQUEST_FAILED=$(jq -r '
+  (.retry_request_failed // false) as $fallback |
+  if ($fallback | type) == "boolean" then
+    $fallback
+  else
+    error("retry_request_failed must be a boolean")
+  end
+' "$RUN_CONTEXT_FILE")
 
-if [ "$RUN_ATTEMPT" -ne 4 ]; then
-  echo "::notice::Main CI run ${RUN_ID} attempt ${RUN_ATTEMPT} is not the final automatic attempt."
-  exit 2
+if [ "$RUN_ATTEMPT" -ne "$FINAL_ANALYSIS_ATTEMPT" ]; then
+  if [ "$RETRY_REQUEST_FAILED" != "true" ] || [ "$RUN_ATTEMPT" -gt "$MAX_RUN_ATTEMPT" ]; then
+    echo "::notice::Main CI run ${RUN_ID} attempt ${RUN_ATTEMPT} is not eligible for automatic analysis."
+    exit 2
+  fi
+  echo "::notice::Analyzing main CI run ${RUN_ID} attempt ${RUN_ATTEMPT} because its automatic rerun request failed."
 fi
 
 LIVE_RUN=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}")

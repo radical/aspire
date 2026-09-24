@@ -19,6 +19,11 @@ on:
         description: "CI workflow run ID to analyze"
         required: true
         type: number
+      retry_request_failed:
+        description: "Analyze an early current-main failure because its automatic rerun request failed"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   collect-data:
@@ -29,7 +34,6 @@ jobs:
         github.event_name == 'workflow_dispatch'
         || (
           github.event.workflow_run.conclusion == 'failure'
-          && github.event.workflow_run.run_attempt == 4
         )
       )
     permissions:
@@ -56,6 +60,7 @@ jobs:
             .github/workflows/analyze-ci-failure-candidates.sh
             .github/workflows/analyze-ci-failure-persistence.sh
             .github/workflows/analyze-ci-failure-terminal.sh
+            .github/workflows/auto-rerun-transient-ci-failures.js
           sparse-checkout-cone-mode: false
       - name: Collect CI failure data
         id: collect
@@ -65,6 +70,7 @@ jobs:
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
           WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           EVENT_NAME: ${{ github.event_name }}
+          RETRY_REQUEST_FAILED: ${{ inputs.retry_request_failed }}
         run: |
           set -euo pipefail
 
@@ -103,6 +109,18 @@ jobs:
           HEAD_BRANCH=$(jq -r '.head_branch // ""' ci-failure-data/run.json)
           RUN_URL=$(jq -r '.html_url // ""' ci-failure-data/run.json)
           CONCLUSION=$(jq -r '.conclusion // ""' ci-failure-data/run.json)
+          if ! [[ "${RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Run ${RUN_ID} did not provide a valid run attempt"
+            exit 1
+          fi
+          MAX_RUN_ATTEMPT=$(node -e '
+            const policy = require("./.github/workflows/auto-rerun-transient-ci-failures.js");
+            if (!Number.isInteger(policy.defaultMaxRunAttempt) || policy.defaultMaxRunAttempt < 1) {
+              throw new Error("defaultMaxRunAttempt must be a positive integer");
+            }
+            process.stdout.write(String(policy.defaultMaxRunAttempt));
+          ')
+          FINAL_ANALYSIS_ATTEMPT=$((MAX_RUN_ATTEMPT + 1))
           if [ "$RUN_WORKFLOW_PATH" != ".github/workflows/ci.yml" ]; then
             echo "::error::Run ${RUN_ID} belongs to workflow '${RUN_WORKFLOW_PATH}', not '.github/workflows/ci.yml'"
             exit 1
@@ -128,6 +146,13 @@ jobs:
           # Skip analysis if the run succeeded (e.g. manual dispatch on a passing run)
           if [ "${CONCLUSION}" = "success" ]; then
             echo "Run concluded with success. Nothing to analyze."
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${EVENT_NAME}" != "workflow_dispatch" ] &&
+             [ "${RUN_ATTEMPT}" -ne "${FINAL_ANALYSIS_ATTEMPT}" ]; then
+            echo "::notice::CI run ${RUN_ID} attempt ${RUN_ATTEMPT} is not the configured final analysis attempt ${FINAL_ANALYSIS_ATTEMPT}."
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -237,6 +262,7 @@ jobs:
             --arg head_sha "${HEAD_SHA}" \
             --arg run_scope "${RUN_SCOPE}" \
             --arg pr_numbers "${PR_NUMBERS}" \
+            --argjson retry_request_failed "${RETRY_REQUEST_FAILED:-false}" \
             '{
               run_id: $run_id,
               run_attempt: $run_attempt,
@@ -244,7 +270,8 @@ jobs:
               head_branch: $head_branch,
               head_sha: $head_sha,
               run_scope: $run_scope,
-              pr_numbers: $pr_numbers
+              pr_numbers: $pr_numbers,
+              retry_request_failed: $retry_request_failed
             }' > ci-failure-data/run-context.json
 
           if [ "$RUN_SCOPE" = "main" ]; then
@@ -747,6 +774,7 @@ safe-outputs:
               .github/workflows/analyze-ci-failure-comment.sh
               .github/workflows/analyze-ci-failure-issue.sh
               .github/workflows/analyze-ci-failure-terminal.sh
+              .github/workflows/auto-rerun-transient-ci-failures.js
             sparse-checkout-cone-mode: false
         - uses: actions/download-artifact@v8.0.1
           with:

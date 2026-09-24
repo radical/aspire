@@ -5,6 +5,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aspire.TestUtilities;
 using Xunit;
 
@@ -18,6 +19,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
     private const string IssueScriptRelativePath = ".github/workflows/analyze-ci-failure-issue.sh";
     private const string PersistenceScriptRelativePath = ".github/workflows/analyze-ci-failure-persistence.sh";
     private const string CommentScriptRelativePath = ".github/workflows/analyze-ci-failure-comment.sh";
+    private const string RetryPolicyScriptRelativePath = ".github/workflows/auto-rerun-transient-ci-failures.js";
 
     private static readonly string s_sourceWorkflow = ReadWorkflow("analyze-ci-failure.md");
     private static readonly string s_validationScript = File.ReadAllText(
@@ -67,63 +69,135 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         ForEachExecutableWorkflow(workflow =>
         {
             Assert.DoesNotContain("- name: Rerun failed jobs for current main", workflow, StringComparison.Ordinal);
-            Assert.Contains("github.event.workflow_run.run_attempt == 4", workflow, StringComparison.Ordinal);
+            Assert.DoesNotContain("github.event.workflow_run.run_attempt ==", workflow, StringComparison.Ordinal);
+            Assert.Contains("defaultMaxRunAttempt", workflow, StringComparison.Ordinal);
+            Assert.Contains("FINAL_ANALYSIS_ATTEMPT", workflow, StringComparison.Ordinal);
             Assert.Contains("Current-main reruns are handled by the automatic failed-job rerun policy.", workflow, StringComparison.Ordinal);
             Assert.Contains("analyze-ci-failure-terminal.sh", workflow, StringComparison.Ordinal);
+            Assert.Contains("retry_request_failed", workflow, StringComparison.Ordinal);
         });
     }
 
-    [Theory]
-    [InlineData(4, 4, "trusted-failure", 1, "failure", 0)]
-    [InlineData(3, 3, "trusted-failure", 1, "failure", 2)]
-    [InlineData(4, 3, "trusted-failure", 1, "failure", 2)]
-    [InlineData(4, 5, "trusted-failure", 1, "failure", 2)]
-    [InlineData(4, 4, "new-main", 1, "failure", 2)]
-    [InlineData(4, 4, "trusted-failure", 2, "failure", 2)]
-    [InlineData(4, 4, "trusted-failure", 1, "success", 2)]
-    [RequiresTools(["bash", "jq"])]
-    public async Task OnlyCurrentFailedFinalMainAttemptMayPublish(
-        int sourceAttempt,
-        int liveAttempt,
-        string mainSha,
-        int latestRunNumber,
-        string conclusion,
-        int expectedExitCode)
+    [Fact]
+    [RequiresTools(["bash", "jq", "node"])]
+    public async Task OnlyCurrentFailedFinalOrFallbackMainAttemptMayPublish()
     {
-        var contextPath = Path.Combine(_workspace.Path, "run-context.json");
-        await File.WriteAllTextAsync(
-            contextPath,
-            $$"""{"run_id":123,"run_attempt":{{sourceAttempt}},"run_scope":"main","head_sha":"trusted-failure"}""");
-        var fakeGh = await CreateFakeGhAsync(
-            """
+        int maxRunAttempt = GetConfiguredMaxRunAttempt();
+        int finalAnalysisAttempt = maxRunAttempt + 1;
+        var cases = new (int SourceAttempt, bool RetryRequestFailed, int LiveAttempt, string MainSha, int LatestRunNumber, string Conclusion, int ExpectedExitCode)[]
+        {
+            (finalAnalysisAttempt, false, finalAnalysisAttempt, "trusted-failure", 1, "failure", 0),
+            (maxRunAttempt, false, maxRunAttempt, "trusted-failure", 1, "failure", 2),
+            (maxRunAttempt, true, maxRunAttempt, "trusted-failure", 1, "failure", 0),
+            (maxRunAttempt, true, finalAnalysisAttempt, "trusted-failure", 1, "failure", 2),
+            (maxRunAttempt, true, maxRunAttempt, "new-main", 1, "failure", 2),
+            (maxRunAttempt, true, maxRunAttempt, "trusted-failure", 2, "failure", 2),
+            (finalAnalysisAttempt + 1, true, finalAnalysisAttempt + 1, "trusted-failure", 1, "failure", 2),
+            (finalAnalysisAttempt, false, maxRunAttempt, "trusted-failure", 1, "failure", 2),
+            (finalAnalysisAttempt, false, finalAnalysisAttempt + 1, "trusted-failure", 1, "failure", 2),
+            (finalAnalysisAttempt, false, finalAnalysisAttempt, "new-main", 1, "failure", 2),
+            (finalAnalysisAttempt, false, finalAnalysisAttempt, "trusted-failure", 2, "failure", 2),
+            (finalAnalysisAttempt, false, finalAnalysisAttempt, "trusted-failure", 1, "success", 2),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var contextPath = Path.Combine(_workspace.Path, "run-context.json");
+            await File.WriteAllTextAsync(
+                contextPath,
+                $$"""{"run_id":123,"run_attempt":{{testCase.SourceAttempt}},"run_scope":"main","head_sha":"trusted-failure","retry_request_failed":{{testCase.RetryRequestFailed.ToString().ToLowerInvariant()}}}""");
+            var fakeGh = await CreateFakeGhAsync(
+                """
+                #!/usr/bin/env bash
+                case "$*" in
+                  "api repos/microsoft/aspire/actions/runs/123")
+                    printf '{"id":123,"run_attempt":%s,"run_number":1,"workflow_id":42,"event":"push","head_branch":"main","head_sha":"trusted-failure","path":".github/workflows/ci.yml","status":"completed","conclusion":"%s"}\n' "$LIVE_ATTEMPT" "$LIVE_CONCLUSION"
+                    ;;
+                  "api repos/microsoft/aspire/git/ref/heads/main")
+                    printf '{"object":{"sha":"%s"}}\n' "$MAIN_SHA"
+                    ;;
+                  "api --method GET repos/microsoft/aspire/actions/workflows/42/runs -f branch=main -f event=push -f per_page=100")
+                    printf '{"workflow_runs":[{"id":123,"run_number":1},{"id":124,"run_number":%s}]}\n' "$LATEST_RUN_NUMBER"
+                    ;;
+                  *) exit 99 ;;
+                esac
+                """);
+
+            var result = await RunBashScriptAsync(
+                Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"),
+                [contextPath, "microsoft/aspire"],
+                new Dictionary<string, string>
+                {
+                    ["LIVE_ATTEMPT"] = testCase.LiveAttempt.ToString(),
+                    ["MAIN_SHA"] = testCase.MainSha,
+                    ["LATEST_RUN_NUMBER"] = testCase.LatestRunNumber.ToString(),
+                    ["LIVE_CONCLUSION"] = testCase.Conclusion,
+                    ["PATH"] = $"{Path.GetDirectoryName(fakeGh)}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+                });
+
+            Assert.Equal(testCase.ExpectedExitCode, result.ExitCode);
+        }
+    }
+
+    [Fact]
+    public void RetryAttemptPolicyHasOneRuntimeSource()
+    {
+        string rerunHelper = File.ReadAllText(Path.Combine(RepoRoot.Path, RetryPolicyScriptRelativePath));
+        string terminalGuard = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"));
+
+        Assert.Single(Regex.Matches(rerunHelper, @"const defaultMaxRunAttempt\s*=").OfType<Match>());
+        Assert.Contains("defaultMaxRunAttempt,", rerunHelper, StringComparison.Ordinal);
+        Assert.Contains("policy.defaultMaxRunAttempt", terminalGuard, StringComparison.Ordinal);
+        Assert.Contains("FINAL_ANALYSIS_ATTEMPT=$((MAX_RUN_ATTEMPT + 1))", terminalGuard, StringComparison.Ordinal);
+        Assert.DoesNotContain("[ \"$RUN_ATTEMPT\" -ne 4 ]", terminalGuard, StringComparison.Ordinal);
+        Assert.DoesNotContain("[ \"$RUN_ATTEMPT\" -gt 3 ]", terminalGuard, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "jq", "node"])]
+    public async Task AutomaticEarlyAttemptStopsBeforeFailureDataCollection()
+    {
+        int maxRunAttempt = GetConfiguredMaxRunAttempt();
+        string fakeBinDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "fake-bin")).FullName;
+        string callLogPath = Path.Combine(_workspace.Path, "gh-calls.log");
+        string githubOutputPath = Path.Combine(_workspace.Path, "github-output");
+        await WriteExecutableAsync(
+            Path.Combine(fakeBinDirectory, "gh"),
+            $$"""
             #!/usr/bin/env bash
-            case "$*" in
-              "api repos/microsoft/aspire/actions/runs/123")
-                printf '{"id":123,"run_attempt":%s,"run_number":1,"workflow_id":42,"event":"push","head_branch":"main","head_sha":"trusted-failure","path":".github/workflows/ci.yml","status":"completed","conclusion":"%s"}\n' "$LIVE_ATTEMPT" "$LIVE_CONCLUSION"
-                ;;
-              "api repos/microsoft/aspire/git/ref/heads/main")
-                printf '{"object":{"sha":"%s"}}\n' "$MAIN_SHA"
-                ;;
-              "api --method GET repos/microsoft/aspire/actions/workflows/42/runs -f branch=main -f event=push -f per_page=100")
-                printf '{"workflow_runs":[{"id":123,"run_number":1},{"id":124,"run_number":%s}]}\n' "$LATEST_RUN_NUMBER"
-                ;;
-              *) exit 99 ;;
-            esac
+            printf '%s\n' "$*" >> "$GH_CALL_LOG"
+            if [ "$*" = "api repos/microsoft/aspire/actions/runs/123/attempts/{{maxRunAttempt}}" ]; then
+              printf '{"id":123,"run_attempt":{{maxRunAttempt}},"event":"push","head_branch":"main","head_sha":"trusted-failure","path":".github/workflows/ci.yml","conclusion":"failure","html_url":"https://github.com/microsoft/aspire/actions/runs/123"}\n'
+              exit 0
+            fi
+            exit 99
             """);
 
-        var result = await RunBashScriptAsync(
-            Path.Combine(RepoRoot.Path, ".github/workflows/analyze-ci-failure-terminal.sh"),
-            [contextPath, "microsoft/aspire"],
+        string script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Collect CI failure data");
+        CommandResult result = await RunProcessAsync(
+            "bash",
+            ["-c", script],
             new Dictionary<string, string>
             {
-                ["LIVE_ATTEMPT"] = liveAttempt.ToString(),
-                ["MAIN_SHA"] = mainSha,
-                ["LATEST_RUN_NUMBER"] = latestRunNumber.ToString(),
-                ["LIVE_CONCLUSION"] = conclusion,
-                ["PATH"] = $"{Path.GetDirectoryName(fakeGh)}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+                ["EVENT_NAME"] = "workflow_run",
+                ["GITHUB_OUTPUT"] = githubOutputPath,
+                ["GH_CALL_LOG"] = callLogPath,
+                ["MANUAL_RUN_ID"] = string.Empty,
+                ["PATH"] = $"{fakeBinDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+                ["REPO"] = "microsoft/aspire",
+                ["RETRY_REQUEST_FAILED"] = "false",
+                ["WORKFLOW_RUN_ATTEMPT"] = maxRunAttempt.ToString(),
+                ["WORKFLOW_RUN_ID"] = "123",
             });
 
-        Assert.Equal(expectedExitCode, result.ExitCode);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(
+            $"is not the configured final analysis attempt {maxRunAttempt + 1}",
+            result.Output,
+            StringComparison.Ordinal);
+        Assert.Contains("has_work=false", await File.ReadAllLinesAsync(githubOutputPath));
+        Assert.Single(await File.ReadAllLinesAsync(callLogPath));
+        Assert.False(File.Exists(Path.Combine(_workspace.Path, "ci-failure-data", "all-jobs.json")));
     }
 
     [Fact]
@@ -182,7 +256,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             });
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("is not the final automatic attempt", result.Output, StringComparison.Ordinal);
+        Assert.Contains("is not eligible for automatic analysis", result.Output, StringComparison.Ordinal);
         Assert.False(File.Exists(callsPath));
         Assert.False(Directory.Exists(Path.Combine(_workspace.Path, "memory-repo")));
     }
@@ -7269,6 +7343,14 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         }
     }
 
+    private static int GetConfiguredMaxRunAttempt()
+    {
+        string helper = File.ReadAllText(Path.Combine(RepoRoot.Path, RetryPolicyScriptRelativePath));
+        Match match = Regex.Match(helper, @"const defaultMaxRunAttempt\s*=\s*(\d+)\s*;");
+        Assert.True(match.Success, "Could not find defaultMaxRunAttempt in the rerun helper.");
+        return int.Parse(match.Groups[1].Value);
+    }
+
     private static async Task WriteZipEntryAsync(ZipArchive archive, string name, string contents)
     {
         var entry = archive.CreateEntry(name);
@@ -7392,6 +7474,13 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
         IReadOnlyDictionary<string, string>? environment = null,
         string? standardInput = null)
     {
+        string retryPolicyTarget = Path.Combine(_workspace.Path, RetryPolicyScriptRelativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(retryPolicyTarget)!);
+        if (!File.Exists(retryPolicyTarget))
+        {
+            File.Copy(Path.Combine(RepoRoot.Path, RetryPolicyScriptRelativePath), retryPolicyTarget);
+        }
+
         using var process = new Process();
         process.StartInfo.FileName = fileName;
         foreach (var argument in arguments)

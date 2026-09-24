@@ -763,12 +763,12 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
         bool eligibleAttempt3 = await InvokeHarnessAsync<bool>(
             "computeRerunEligibility",
-            new { runAttempt = 3, forceRerunAll = true });
+            new { runAttempt = 3, maxRunAttempt = 3, forceRerunAll = true });
         Assert.True(eligibleAttempt3);
 
         bool eligibleAttempt4 = await InvokeHarnessAsync<bool>(
             "computeRerunEligibility",
-            new { runAttempt = 4, forceRerunAll = true });
+            new { runAttempt = 4, maxRunAttempt = 3, forceRerunAll = true });
         Assert.False(eligibleAttempt4);
     }
 
@@ -788,7 +788,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
         bool attemptCapBlocks = await InvokeHarnessAsync<bool>(
             "computeRerunExecutionEligibility",
-            new { dryRun = false, runAttempt = 4, forceRerunAll = true });
+            new { dryRun = false, runAttempt = 4, maxRunAttempt = 3, forceRerunAll = true });
         Assert.False(attemptCapBlocks);
     }
 
@@ -876,19 +876,23 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     }
 
     [Fact]
-    public async Task WorkflowRoutesMainRunsWithoutChangingThePullRequestGate()
+    public async Task WorkflowRoutesPullRequestAndMainRunsThroughSharedAttemptPolicy()
     {
         string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
         Assert.Contains("github.event.workflow_run.event == 'pull_request'", workflowText);
-        Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflowText);
         Assert.Contains("github.repository == 'microsoft/aspire'", workflowText);
         Assert.Contains("github.event.workflow_run.event == 'push'", workflowText);
         Assert.Contains("github.event.workflow_run.head_branch == 'main'", workflowText);
-        Assert.Equal(2, workflowText.Split("github.event.workflow_run.run_attempt <= 3", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("github.event.workflow_run.run_attempt <=", workflowText);
+        Assert.Contains("const maxRunAttempt = rerunWorkflow.defaultMaxRunAttempt;", workflowText);
+        Assert.Contains("maxRunAttempt: rerunWorkflow.defaultMaxRunAttempt", workflowText);
         Assert.Contains("sourceRunScope: 'main'", workflowText);
         Assert.Contains("actions: write", workflowText);
         Assert.DoesNotContain("contents: write", workflowText);
         Assert.DoesNotContain("persistMainRerunState", workflowText);
+        Assert.Contains("requestMainFailureAnalysis(details)", workflowText);
+        Assert.Contains("Fallback Copilot analysis was requested", workflowText);
+        Assert.Contains("Fallback Copilot analysis could not be requested", workflowText);
     }
 
     [Fact]
@@ -955,7 +959,8 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Contains("const dryRun = parseManualDryRun();", workflowText);
         Assert.Contains("computeRerunExecutionEligibility", workflowText);
         Assert.Contains("getAssociatedPullRequestNumbers", workflowText);
-        Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflowText);
+        Assert.DoesNotContain("github.event.workflow_run.run_attempt <=", workflowText);
+        Assert.Contains("defaultMaxRunAttempt", workflowText);
         Assert.Contains("group: ${{ github.workflow }}-${{ github.ref }}", ciWorkflowText);
         Assert.Contains("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", ciWorkflowText);
     }
@@ -1522,6 +1527,38 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Equal("rerun", result.ReturnValue.GetProperty("decision").GetString());
         Assert.Equal("failed", result.ReturnValue.GetProperty("outcome").GetString());
         Assert.Equal("request-failed", result.ReturnValue.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task FailedMainRerunRequestsFallbackAnalysis()
+    {
+        const string dispatchRoute = "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "requestMainFailureAnalysis",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                sourceRunId = 123,
+                workflowDispatchResponse = new
+                {
+                    workflow_run_id = 456,
+                    html_url = "https://github.com/dotnet/aspire/actions/runs/456",
+                },
+            });
+
+        RequestRecord request = Assert.Single(result.Requests);
+        Assert.Equal(dispatchRoute, request.Route);
+        Assert.Equal("analyze-ci-failure.lock.yml", request.Payload.GetProperty("workflow_id").GetString());
+        Assert.Equal("main", request.Payload.GetProperty("ref").GetString());
+        JsonElement inputs = request.Payload.GetProperty("inputs");
+        Assert.Equal("123", inputs.GetProperty("run_id").GetString());
+        Assert.Equal("true", inputs.GetProperty("retry_request_failed").GetString());
+        Assert.Equal(456, result.ReturnValue.GetProperty("workflowRunId").GetInt32());
+        Assert.Equal(
+            "https://github.com/dotnet/aspire/actions/runs/456",
+            result.ReturnValue.GetProperty("workflowRunUrl").GetString());
     }
 
     [Fact]
