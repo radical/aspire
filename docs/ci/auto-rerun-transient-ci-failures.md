@@ -6,7 +6,7 @@ This document explains how the automatic CI rerun system works and how to config
 
 When a `CI` pull request run fails on GitHub Actions, a companion workflow automatically analyzes the failure, determines whether it was caused by transient infrastructure or test issues, and — if safe — requests GitHub to rerun the failed jobs. It also posts a comment on the PR explaining what it did and why.
 
-A failed `push` run for the current `main` SHA uses the same failed-job rerun helper in this workflow, but does not wait for failure classification. Failed source attempts through the configured cap request an unconditional rerun; the next attempt is reserved for final failure analysis. Immediately before the request, the workflow re-fetches the run, `refs/heads/main`, and the workflow's main run list. It skips the write unless the run attempt is unchanged, the failed SHA is still current, no newer main CI run supersedes it, and the attempt cap is not exceeded. If GitHub rejects an otherwise eligible rerun request, the workflow remains failed and dispatches fallback Copilot analysis for that failed attempt.
+A failed `push` run for the current `main` SHA uses the same failed-job rerun helper in this workflow, but does not wait for failure classification. Failed source attempts through the configured cap request an unconditional rerun; the next attempt is reserved for final failure analysis. Immediately before the request, the workflow re-fetches the run, `refs/heads/main`, and the workflow's main run list. It skips the write unless the run attempt is unchanged, the failed SHA is still current, no newer main CI run supersedes it, and the attempt cap is not exceeded. If an otherwise eligible rerun request does not complete successfully, the workflow remains failed and dispatches fallback Copilot analysis pinned to that failed attempt and SHA. The analyzer skips the fallback if the live run has advanced, including when GitHub started the rerun but the request response was lost.
 
 **Scheduled `Outerloop Tests` runs use a separate, simpler workflow.** Outerloop runs have no associated PR, so they are rerun unconditionally (no analysis, no PR comment) with the same attempt cadence. See [Auto-rerun outerloop failures](auto-rerun-outerloop-failures.md).
 
@@ -209,7 +209,7 @@ Current-main reruns have additional fail-closed rails:
 - no main run for the same workflow may have a greater run number
 - the source attempt must not exceed the shared `defaultMaxRunAttempt` policy
 
-Rerun decisions and skip reasons are reported in the workflow logs and job summary. A rejected rerun request dispatches the analyzer with the failed run ID and an explicit fallback marker. The analyzer still requires that the attempt remain failed and unchanged for the current `main` SHA with no newer main run.
+Rerun decisions and skip reasons are reported in the workflow logs and job summary. A failed rerun request dispatches the analyzer with the failed run ID, attempt, SHA, and an explicit fallback marker. The analyzer fetches that immutable attempt and still requires that the live attempt remain failed and unchanged for the current `main` SHA with no newer main run.
 
 ## Force-rerun all failures (`FORCE_RERUN_ALL`)
 

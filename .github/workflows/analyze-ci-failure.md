@@ -19,6 +19,14 @@ on:
         description: "CI workflow run ID to analyze"
         required: true
         type: number
+      run_attempt:
+        description: "Trusted CI workflow run attempt for failed-rerun fallback analysis"
+        required: false
+        type: number
+      head_sha:
+        description: "Trusted CI workflow run SHA for failed-rerun fallback analysis"
+        required: false
+        type: string
       retry_request_failed:
         description: "Analyze an early current-main failure because its automatic rerun request failed"
         required: false
@@ -67,6 +75,8 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           MANUAL_RUN_ID: ${{ inputs.run_id }}
+          MANUAL_RUN_ATTEMPT: ${{ inputs.run_attempt }}
+          MANUAL_HEAD_SHA: ${{ inputs.head_sha }}
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
           WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           EVENT_NAME: ${{ github.event_name }}
@@ -75,6 +85,11 @@ jobs:
           set -euo pipefail
 
           mkdir -p ci-failure-data
+          RETRY_REQUEST_FAILED="${RETRY_REQUEST_FAILED:-false}"
+          if [ "$RETRY_REQUEST_FAILED" != "true" ] && [ "$RETRY_REQUEST_FAILED" != "false" ]; then
+            echo "::error::retry_request_failed must be true or false"
+            exit 1
+          fi
 
           # Resolve the run ID
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -87,10 +102,28 @@ jobs:
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
 
           # A workflow_run can wait behind another analysis, during which the source run may
-          # be rerun. Pin that event to its immutable attempt; manual dispatch intentionally
-          # analyzes the latest attempt.
+          # be rerun. Pin that event to its immutable attempt. A failed-rerun fallback also
+          # carries immutable identity from the rerun workflow. Other manual dispatches
+          # intentionally analyze the latest attempt.
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            RUN_METADATA_ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}"
+            if [ "${RETRY_REQUEST_FAILED}" = "true" ]; then
+              if ! [[ "${MANUAL_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "::error::Failed-rerun fallback requires a positive run_attempt"
+                exit 1
+              fi
+              if [ -z "${MANUAL_HEAD_SHA:-}" ]; then
+                echo "::error::Failed-rerun fallback requires head_sha"
+                exit 1
+              fi
+              RUN_METADATA_ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}/attempts/${MANUAL_RUN_ATTEMPT}"
+            else
+              if { [ -n "${MANUAL_RUN_ATTEMPT:-}" ] && [ "${MANUAL_RUN_ATTEMPT}" != "0" ]; } ||
+                 [ -n "${MANUAL_HEAD_SHA:-}" ]; then
+                echo "::error::run_attempt and head_sha are only valid with retry_request_failed"
+                exit 1
+              fi
+              RUN_METADATA_ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}"
+            fi
           else
             if ! [[ "${WORKFLOW_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
               echo "::error::The workflow_run event did not provide a valid run attempt"
@@ -109,6 +142,17 @@ jobs:
           HEAD_BRANCH=$(jq -r '.head_branch // ""' ci-failure-data/run.json)
           RUN_URL=$(jq -r '.html_url // ""' ci-failure-data/run.json)
           CONCLUSION=$(jq -r '.conclusion // ""' ci-failure-data/run.json)
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] &&
+             [ "${RETRY_REQUEST_FAILED}" = "true" ] &&
+             ! jq -e \
+               --argjson id "${RUN_ID}" \
+               --argjson attempt "${MANUAL_RUN_ATTEMPT}" \
+               --arg sha "${MANUAL_HEAD_SHA}" '
+                 .id == $id and .run_attempt == $attempt and .head_sha == $sha
+               ' ci-failure-data/run.json >/dev/null; then
+            echo "::error::Failed-rerun fallback metadata did not match the trusted run identity"
+            exit 1
+          fi
           if ! [[ "${RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Run ${RUN_ID} did not provide a valid run attempt"
             exit 1

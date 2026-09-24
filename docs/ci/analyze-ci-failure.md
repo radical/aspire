@@ -89,9 +89,11 @@ the analysis memory branch. The analyzer calls
 before collecting evidence, before publication, and before updating each cause
 issue. The helper derives the final attempt from `defaultMaxRunAttempt` and
 checks that attempt is completed and failed for the current `main` SHA, or that
-an earlier failed attempt was dispatched after its rerun request failed. Both
-paths require the attempt to remain unchanged and not be superseded by a newer
-main CI run. The helper returns 2 to skip stale or ineligible analysis; failed
+an earlier failed attempt was dispatched after its rerun request failed. The
+fallback dispatch includes the trusted attempt and SHA, and collection fetches
+that immutable attempt rather than the run's latest attempt. Both paths require
+the live attempt to remain unchanged and not be superseded by a newer main CI
+run. The helper returns 2 to skip stale or ineligible analysis; failed
 verification stops the workflow. Stale runs are skipped rather than canceled
 through the shared CI concurrency key, which would also cancel unrelated main
 builds.

@@ -79,6 +79,35 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
     }
 
     [Fact]
+    public void FailedRerunFallbackPinsTrustedAttemptAndSha()
+    {
+        ForEachExecutableWorkflow(workflow =>
+        {
+            Assert.Contains("run_attempt:", workflow, StringComparison.Ordinal);
+            Assert.Contains("head_sha:", workflow, StringComparison.Ordinal);
+
+            var collection = GetSection(
+                workflow,
+                "- name: Collect CI failure data",
+                "- name: Create analysis summary");
+            Assert.Contains("MANUAL_RUN_ATTEMPT: ${{ inputs.run_attempt }}", collection, StringComparison.Ordinal);
+            Assert.Contains("MANUAL_HEAD_SHA: ${{ inputs.head_sha }}", collection, StringComparison.Ordinal);
+            Assert.Contains(
+                "repos/${REPO}/actions/runs/${RUN_ID}/attempts/${MANUAL_RUN_ATTEMPT}",
+                collection,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                ".id == $id and .run_attempt == $attempt and .head_sha == $sha",
+                collection,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "run_attempt and head_sha are only valid with retry_request_failed",
+                collection,
+                StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     [RequiresTools(["bash", "jq", "node"])]
     public async Task OnlyCurrentFailedFinalOrFallbackMainAttemptMayPublish()
     {
@@ -353,7 +382,58 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
             "::error::Run 123 belongs to workflow '.github/workflows/tests.yml', not '.github/workflows/ci.yml'",
             result.Output,
             StringComparison.Ordinal);
-        Assert.Single(await File.ReadAllLinesAsync(callLogPath));
+        Assert.Equal(
+            "api repos/microsoft/aspire/actions/runs/123",
+            Assert.Single(await File.ReadAllLinesAsync(callLogPath)));
+    }
+
+    [Theory]
+    [InlineData("2", "different-sha")]
+    [InlineData("3", "trusted-failure")]
+    [RequiresTools(["bash", "jq"])]
+    public async Task FailedRerunFallbackRejectsMismatchedPinnedIdentity(
+        string manualRunAttempt,
+        string manualHeadSha)
+    {
+        var fakeBinDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "fake-bin")).FullName;
+        var callLogPath = Path.Combine(_workspace.Path, "gh-calls.log");
+        await WriteExecutableAsync(
+            Path.Combine(fakeBinDirectory, "gh"),
+            """
+            #!/usr/bin/env bash
+            echo "$*" >> "${GH_CALL_LOG}"
+            cat <<'JSON'
+            {"id":123,"path":".github/workflows/ci.yml","workflow_id":1,"run_number":100,"run_attempt":2,"run_started_at":"2026-08-31T12:00:00Z","updated_at":"2026-08-31T12:05:00Z","event":"push","head_sha":"trusted-failure","head_branch":"main","html_url":"https://github.com/microsoft/aspire/actions/runs/123","status":"completed","conclusion":"failure"}
+            JSON
+            """);
+
+        var script = ExtractWorkflowRunScript("analyze-ci-failure.lock.yml", "Collect CI failure data");
+        var result = await RunProcessAsync(
+            "bash",
+            ["-c", script],
+            new Dictionary<string, string>
+            {
+                ["EVENT_NAME"] = "workflow_dispatch",
+                ["GITHUB_OUTPUT"] = Path.Combine(_workspace.Path, "github-output"),
+                ["GH_CALL_LOG"] = callLogPath,
+                ["MANUAL_HEAD_SHA"] = manualHeadSha,
+                ["MANUAL_RUN_ATTEMPT"] = manualRunAttempt,
+                ["MANUAL_RUN_ID"] = "123",
+                ["PATH"] = $"{fakeBinDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
+                ["REPO"] = "microsoft/aspire",
+                ["RETRY_REQUEST_FAILED"] = "true",
+                ["WORKFLOW_RUN_ATTEMPT"] = string.Empty,
+                ["WORKFLOW_RUN_ID"] = string.Empty,
+            });
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            "::error::Failed-rerun fallback metadata did not match the trusted run identity",
+            result.Output,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            $"api repos/microsoft/aspire/actions/runs/123/attempts/{manualRunAttempt}",
+            Assert.Single(await File.ReadAllLinesAsync(callLogPath)));
     }
 
     [Fact]

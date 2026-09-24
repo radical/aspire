@@ -1098,7 +1098,7 @@ async function rerunMatchedJobs({
             sourceRunUrl,
             sourceRunAttempt,
             heading: 'Rerun request failed',
-            message: 'GitHub rejected the failed-job rerun request. No rerun was started.',
+            message: 'The failed-job rerun request did not complete successfully. GitHub may still have started a rerun.',
         });
         return {
             ...mainRerunState,
@@ -1183,9 +1183,17 @@ async function requestMainFailureAnalysis({
     owner,
     repo,
     sourceRunId,
+    sourceRunAttempt,
+    sourceHeadSha,
 }) {
     if (!Number.isInteger(sourceRunId) || sourceRunId <= 0) {
         throw new Error('A positive source run ID is required to request fallback analysis.');
+    }
+    if (!Number.isInteger(sourceRunAttempt) || sourceRunAttempt <= 0) {
+        throw new Error('A positive source run attempt is required to request fallback analysis.');
+    }
+    if (typeof sourceHeadSha !== 'string' || sourceHeadSha.length === 0) {
+        throw new Error('A source head SHA is required to request fallback analysis.');
     }
 
     const { data } = await github.request(
@@ -1197,6 +1205,8 @@ async function requestMainFailureAnalysis({
             ref: 'main',
             inputs: {
                 run_id: String(sourceRunId),
+                run_attempt: String(sourceRunAttempt),
+                head_sha: sourceHeadSha,
                 retry_request_failed: 'true',
             },
         });

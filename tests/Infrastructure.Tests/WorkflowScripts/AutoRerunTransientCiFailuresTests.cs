@@ -1585,6 +1585,8 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
                 owner = "dotnet",
                 repo = "aspire",
                 sourceRunId = 123,
+                sourceRunAttempt = 2,
+                sourceHeadSha = "main-sha",
                 workflowDispatchResponse = new
                 {
                     workflow_run_id = 456,
@@ -1598,11 +1600,32 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Equal("main", request.Payload.GetProperty("ref").GetString());
         JsonElement inputs = request.Payload.GetProperty("inputs");
         Assert.Equal("123", inputs.GetProperty("run_id").GetString());
+        Assert.Equal("2", inputs.GetProperty("run_attempt").GetString());
+        Assert.Equal("main-sha", inputs.GetProperty("head_sha").GetString());
         Assert.Equal("true", inputs.GetProperty("retry_request_failed").GetString());
         Assert.Equal(456, result.ReturnValue.GetProperty("workflowRunId").GetInt32());
         Assert.Equal(
             "https://github.com/dotnet/aspire/actions/runs/456",
             result.ReturnValue.GetProperty("workflowRunUrl").GetString());
+    }
+
+    [Theory]
+    [InlineData(0, "main-sha")]
+    [InlineData(1, "")]
+    [RequiresTools(["node"])]
+    public async Task FallbackAnalysisRequiresTrustedAttemptAndSha(int sourceRunAttempt, string sourceHeadSha)
+    {
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            InvokeHarnessAsync<object>(
+                "requestMainFailureAnalysis",
+                new
+                {
+                    owner = "dotnet",
+                    repo = "aspire",
+                    sourceRunId = 123,
+                    sourceRunAttempt,
+                    sourceHeadSha,
+                }));
     }
 
     [Fact]
