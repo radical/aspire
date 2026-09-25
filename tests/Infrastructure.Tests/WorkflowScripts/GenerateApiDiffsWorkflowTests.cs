@@ -9,6 +9,10 @@ namespace Infrastructure.Tests;
 public sealed class GenerateApiDiffsWorkflowTests
 {
     private const string PublishCondition = "${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}";
+    private const string WorkflowConcurrencyGroup = "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}";
+    private const string WorkflowCancelInProgressCondition = "${{ github.event_name == 'pull_request' }}";
+    private const string ConcurrencyGroup = "${{ format('{0}-{1}-{2}', github.workflow, matrix.target_branch, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true && 'dry-run') || 'publish') }}";
+    private const string CancelInProgressCondition = "${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true) }}";
 
     [Theory]
     [InlineData("generate-api-diffs.yml")]
@@ -44,13 +48,15 @@ public sealed class GenerateApiDiffsWorkflowTests
     [Theory]
     [InlineData("generate-api-diffs.yml")]
     [InlineData("generate-ats-diffs.yml")]
-    public void CheckoutUsesTrustedTargetAndMutationRequiresPublishingEvent(string fileName)
+    public void CheckoutUsesTrustedTargetAndConcurrencySeparatesPublishingFromDryRuns(string fileName)
     {
         var root = LoadWorkflow(fileName);
         var inputs = Mapping(Mapping(Mapping(root, "on"), "workflow_dispatch"), "inputs");
         var targetBranch = Mapping(inputs, "target_branch");
         var options = Sequence(targetBranch, "options").Children.Select(Scalar).ToList();
+        var workflowConcurrency = Mapping(root, "concurrency");
         var job = Mapping(Mapping(root, "jobs"), "generate-and-pr");
+        var concurrency = Mapping(job, "concurrency");
         var steps = Sequence(job, "steps").Children.Cast<YamlMappingNode>().ToList();
         var checkout = Assert.Single(steps, step => ScalarOrNull(step, "uses")?.StartsWith("actions/checkout@", StringComparison.Ordinal) == true);
         var appToken = Assert.Single(steps, step => ScalarOrNull(step, "name") == "Generate GitHub App Token");
@@ -58,14 +64,14 @@ public sealed class GenerateApiDiffsWorkflowTests
 
         Assert.Equal("choice", Scalar(targetBranch, "type"));
         Assert.Equal(["main", "release/13.6"], options);
+        Assert.Equal(WorkflowConcurrencyGroup, Scalar(workflowConcurrency, "group"));
+        Assert.Equal(WorkflowCancelInProgressCondition, Scalar(workflowConcurrency, "cancel-in-progress"));
+        Assert.Equal(ConcurrencyGroup, Scalar(concurrency, "group"));
+        Assert.Equal(CancelInProgressCondition, Scalar(concurrency, "cancel-in-progress"));
         Assert.Equal("${{ matrix.target_branch }}", Scalar(Mapping(checkout, "with"), "ref"));
         Assert.Equal("false", Scalar(Mapping(checkout, "with"), "persist-credentials"));
         Assert.Equal(PublishCondition, Scalar(appToken, "if"));
         Assert.Equal(PublishCondition, Scalar(createPullRequest, "if"));
-
-        var concurrency = Mapping(root, "concurrency");
-        Assert.Contains("github.event.pull_request.number", Scalar(concurrency, "group"), StringComparison.Ordinal);
-        Assert.Equal("${{ github.event_name == 'pull_request' }}", Scalar(concurrency, "cancel-in-progress"));
     }
 
     private static YamlMappingNode LoadWorkflow(string fileName)
