@@ -3,8 +3,6 @@
   "watched": [
     { "file": "generate-api-diffs.yml", "name": "Generate API Diffs" },
     { "file": "generate-ats-diffs.yml", "name": "Generate ATS Diffs" },
-    { "file": "generate-release-api-diffs.yml", "name": "Generate Release API Diffs" },
-    { "file": "generate-release-ats-diffs.yml", "name": "Generate Release ATS Diffs" },
     { "file": "refresh-manifests.yml", "name": "Refresh Manifests" },
     { "file": "update-dependencies.yml", "name": "Update Dependencies" },
     { "file": "update-ai-foundry-models.yml", "name": "Update AI Foundry Models" },
