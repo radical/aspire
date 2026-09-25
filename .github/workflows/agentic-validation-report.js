@@ -90,18 +90,21 @@ async function driftEvidence(cwd) {
     // --porcelain=v1 -z produces "XY path\0", including literal newlines in paths.
     // Disabling renames avoids the second NUL-delimited path of rename records.
     const records = status.text.split('\0').slice(0, -1);
-    const paths = records.slice(0, limits.paths);
-    const omitted = records.length - paths.length;
-    let text = `### Generated-file evidence\n\n${evidence(paths.join('\n'), 4 * 1024, 60)}\n`;
+    const selectedRecords = records.slice(0, limits.paths);
+    const omitted = records.length - selectedRecords.length;
+    let text = `### Generated-file evidence\n\n${evidence(selectedRecords.join('\n'), 4 * 1024, 60)}\n`;
     if (omitted || status.truncated) text += `\n${status.truncated ? 'At least ' : ''}${omitted} additional paths omitted; evidence truncated.\n`;
 
-    const diff = await capture('git', ['--no-pager', 'diff', '--no-ext-diff', '--no-textconv', '--no-color',
-        'HEAD', '--', ...generatedPaths], { cwd, maxBytes: limits.diff });
+    const trackedPaths = selectedRecords.filter(record => !record.startsWith('?? ')).map(record => record.slice(3));
+    const diff = trackedPaths.length === 0
+        ? { text: '', truncated: false }
+        : await capture('git', ['--literal-pathspecs', '--no-pager', 'diff', '--no-ext-diff', '--no-textconv',
+            '--no-color', 'HEAD', '--', ...trackedPaths], { cwd, maxBytes: limits.diff });
     let combined = diff.text;
     let clipped = diff.truncated;
     // git diff does not show untracked locks. --no-index displays their content
     // (or symlink target) without following a link outside the workspace.
-    for (const record of paths.filter(path => path.startsWith('?? '))) {
+    for (const record of selectedRecords.filter(record => record.startsWith('?? '))) {
         if (Buffer.byteLength(combined) >= limits.diff) {
             clipped = true;
             break;

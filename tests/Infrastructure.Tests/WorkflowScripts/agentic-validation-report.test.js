@@ -366,19 +366,31 @@ test('staged generated drift is included in evidence', async () => {
 });
 
 test('large generated changes are bounded and explicitly truncated', async () => {
-    const { cwd } = repository('large');
-    writeFileSync(join(cwd, '.github/workflows/changed.lock.yml'), 'large line\n'.repeat(10000));
-    for (let i = 0; i < 25; i++) writeFileSync(join(cwd, `.github/workflows/new-${i}.lock.yml`), 'new\n');
+    const { cwd, git } = repository('large');
+    for (let i = 0; i < 25; i++) writeFileSync(join(cwd, `.github/workflows/tracked-${i.toString().padStart(2, '0')}.lock.yml`), Buffer.from([0, i + 1]));
+    git('add', '.github/workflows');
+    git('commit', '-qm', 'Add generated files');
+    for (let i = 0; i < 25; i++) writeFileSync(join(cwd, `.github/workflows/tracked-${i.toString().padStart(2, '0')}.lock.yml`), Buffer.from([0, i + 2]));
     const text = await report.driftEvidence(cwd);
     assert.ok(Buffer.byteLength(text) < report.limits.summary);
-    assert.match(text, /6 additional paths omitted/);
+    assert.match(text, /5 additional paths omitted/);
     assert.match(text, /truncated/);
+    const lineLimit = report.limits.lines;
+    try {
+        report.limits.lines = 1000;
+        const expanded = await report.driftEvidence(cwd);
+        assert.match(expanded, /diff --git .*tracked-19\.lock\.yml/);
+        assert.doesNotMatch(expanded, /diff --git .*tracked-20\.lock\.yml/);
+    } finally {
+        report.limits.lines = lineLimit;
+    }
 });
 
 test('drift summary retains its primary diagnosis if evidence collection fails', async () => {
     const f = fixture();
+    const cwd = temporaryDirectory('not-a-repository');
     await assert.rejects(report.summarize({
-        core: f.core, context: f.context, configuredVersion: 'v0.89.17', cwd: process.cwd(),
+        core: f.core, context: f.context, configuredVersion: 'v0.89.17', cwd,
         steps: { compiler: { outcome: 'skipped' }, drift: { outcome: 'failure' } },
     }), /git diagnostic collection failed/);
     assert.equal(f.summaries.length, 1);
