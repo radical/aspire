@@ -2,11 +2,17 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 const assert = require('node:assert/strict');
-const { test } = require('node:test');
-const { mkdirSync, writeFileSync, unlinkSync, symlinkSync } = require('node:fs');
+const { after, test } = require('node:test');
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync, symlinkSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
 const report = require('../../../.github/workflows/agentic-validation-report.js');
+
+const temporaryDirectories = [];
+after(() => {
+    for (const path of temporaryDirectories) rmSync(path, { recursive: true, force: true });
+});
 
 const stageNames = [
     'Checkout validation sources', 'Install gh-aw extension (v0.89.17)',
@@ -269,8 +275,7 @@ for (const [name, command, expected] of [
     ['failed-version', 'exit 1', /version query failed/],
 ]) {
     test(`summary handles ${name} without losing the primary failure`, () => {
-        const cwd = join(process.cwd(), name);
-        mkdirSync(cwd);
+        const cwd = temporaryDirectory(name);
         writeFileSync(join(cwd, 'gh'), `#!/bin/sh\n${command}\n`, { mode: 0o755 });
         // Isolate PATH in a child, rather than mutating shared process state.
         const code = `
@@ -306,7 +311,7 @@ test('evidence escapes markup, redacts tokens, and truncates Unicode by byte and
 });
 
 function repository(name) {
-    const cwd = join(process.cwd(), name);
+    const cwd = temporaryDirectory(name);
     mkdirSync(join(cwd, '.github/workflows'), { recursive: true });
     mkdirSync(join(cwd, '.github/aw'), { recursive: true });
     const git = (...args) => execFileSync('git', ['--no-pager', ...args], { cwd, stdio: 'pipe' });
@@ -320,6 +325,12 @@ function repository(name) {
     git('add', '.github');
     git('commit', '-qm', 'Baseline');
     return { cwd, git };
+}
+
+function temporaryDirectory(name) {
+    const path = mkdtempSync(join(tmpdir(), `aspire-agentic-validation-${name}-`));
+    temporaryDirectories.push(path);
+    return path;
 }
 
 test('generated evidence includes modifications, deletions and untracked files, not unrelated files', async () => {
