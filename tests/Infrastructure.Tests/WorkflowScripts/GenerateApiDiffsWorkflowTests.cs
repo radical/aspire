@@ -11,6 +11,7 @@ public sealed class GenerateApiDiffsWorkflowTests
     private const string PublishCondition = "${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}";
     private const string WorkflowConcurrencyGroup = "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}";
     private const string WorkflowCancelInProgressCondition = "${{ github.event_name == 'pull_request' }}";
+    private const string TargetBranchMatrix = "${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{0}]', toJSON(inputs.target_branch)) || github.event_name == 'pull_request' && format('[{0}]', toJSON(github.base_ref)) || '[\"main\",\"release/13.6\"]') }}";
     private const string ConcurrencyGroup = "${{ format('{0}-{1}-{2}', github.workflow, matrix.target_branch, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true && 'dry-run') || 'publish') }}";
     private const string CancelInProgressCondition = "${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true) }}";
 
@@ -56,6 +57,7 @@ public sealed class GenerateApiDiffsWorkflowTests
         var options = Sequence(targetBranch, "options").Children.Select(Scalar).ToList();
         var workflowConcurrency = Mapping(root, "concurrency");
         var job = Mapping(Mapping(root, "jobs"), "generate-and-pr");
+        var matrix = Mapping(Mapping(job, "strategy"), "matrix");
         var concurrency = Mapping(job, "concurrency");
         var steps = Sequence(job, "steps").Children.Cast<YamlMappingNode>().ToList();
         var checkout = Assert.Single(steps, step => ScalarOrNull(step, "uses")?.StartsWith("actions/checkout@", StringComparison.Ordinal) == true);
@@ -66,6 +68,7 @@ public sealed class GenerateApiDiffsWorkflowTests
         Assert.Equal(["main", "release/13.6"], options);
         Assert.Equal(WorkflowConcurrencyGroup, Scalar(workflowConcurrency, "group"));
         Assert.Equal(WorkflowCancelInProgressCondition, Scalar(workflowConcurrency, "cancel-in-progress"));
+        Assert.Equal(TargetBranchMatrix, Scalar(matrix, "target_branch"));
         Assert.Equal(ConcurrencyGroup, Scalar(concurrency, "group"));
         Assert.Equal(CancelInProgressCondition, Scalar(concurrency, "cancel-in-progress"));
         Assert.Equal("${{ matrix.target_branch }}", Scalar(Mapping(checkout, "with"), "ref"));

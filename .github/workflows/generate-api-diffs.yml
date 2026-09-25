@@ -36,8 +36,8 @@ jobs:
     if: ${{ github.repository_owner == 'microsoft' }}
     strategy:
       matrix:
-        # Add active release branches here; do not run against historical releases automatically.
-        target_branch: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{0}]', toJSON(inputs.target_branch)) || '["main","release/13.6"]') }}
+        # Scheduled runs cover active branches; pull requests and manual runs validate one target.
+        target_branch: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{0}]', toJSON(inputs.target_branch)) || github.event_name == 'pull_request' && format('[{0}]', toJSON(github.base_ref)) || '["main","release/13.6"]') }}
     concurrency:
       group: ${{ format('{0}-{1}-{2}', github.workflow, matrix.target_branch, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true && 'dry-run') || 'publish') }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true) }}
