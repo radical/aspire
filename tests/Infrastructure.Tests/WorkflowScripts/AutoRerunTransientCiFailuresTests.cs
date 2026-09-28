@@ -1534,6 +1534,57 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task CurrentMainRerunRechecksMainShaImmediatelyBeforeRequest()
+    {
+        const string mainRefRoute = "GET /repos/{owner}/{repo}/git/ref/{ref}";
+        const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 1,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainShas = new[] { "main-sha", "new-main-sha" },
+                mainWorkflowRuns = new[]
+                {
+                    new
+                    {
+                        id = 123,
+                        run_number = 100,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha"
+                    }
+                }
+            });
+
+        Assert.Equal(2, result.Requests.Count(r => r.Route == mainRefRoute));
+        Assert.DoesNotContain(result.Requests, r => r.Route == rerunRoute);
+        Assert.Equal("not-requested", result.ReturnValue.GetProperty("outcome").GetString());
+        Assert.Equal("main-sha-changed", result.ReturnValue.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task CurrentMainRerunReturnsFailedOutcomeWhenRequestIsRejected()
     {
         const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";

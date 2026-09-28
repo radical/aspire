@@ -1073,6 +1073,23 @@ async function rerunMatchedJobs({
                 'The live main CI run list did not contain the trusted source run. No jobs were rerun.');
         }
 
+        // A push updates refs/heads/main before its workflow run necessarily appears in
+        // the run list, so recheck the ref after that slower API call and immediately
+        // before requesting the rerun.
+        const { data: finalMainRef } = await github.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+            owner,
+            repo,
+            ref: 'heads/main',
+        });
+        const finalMainSha = finalMainRef?.object?.sha;
+        state.current_main_sha = finalMainSha ?? null;
+
+        if (typeof finalMainSha !== 'string' || finalMainSha !== sourceHeadSha) {
+            return await skipMainRerun(
+                'main-sha-changed',
+                'The failed run SHA is no longer the current main SHA. No jobs were rerun.');
+        }
+
         mainRerunState = {
             ...state,
             decision: 'rerun',

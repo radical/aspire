@@ -187,6 +187,8 @@ async function dispatch(operation, payload) {
 }
 
 function createGitHubRecorder(payload, requests) {
+    let mainRefRequestCount = 0;
+
     return {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
@@ -217,10 +219,13 @@ function createGitHubRecorder(payload, requests) {
             }
 
             if (route === 'GET /repos/{owner}/{repo}/git/ref/{ref}') {
+                const currentMainSha = Array.isArray(payload.currentMainShas)
+                    ? payload.currentMainShas[Math.min(mainRefRequestCount++, payload.currentMainShas.length - 1)]
+                    : payload.currentMainSha;
                 return {
                     data: {
                         object: {
-                            sha: payload.currentMainSha ?? null,
+                            sha: currentMainSha ?? null,
                         },
                     },
                 };
