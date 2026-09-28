@@ -28,18 +28,18 @@ env:
   #   --filter-method "*.TestMethodName"
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.YourTestMethodName"'
+  TEST_FILTER: '--filter-trait "Partition=5"'
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "ubuntu-latest,windows-latest"
+  TARGET_OSES: "windows-latest"
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "3"
+  RUNNERS_PER_OS: "36"
 
   # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "3"
+  ITERATIONS_PER_RUNNER: "1"
 
 jobs:
 
@@ -83,7 +83,7 @@ jobs:
           fi
 
           # Validate TEST_FILTER is not the placeholder
-          if [[ "${{ env.TEST_FILTER }}" == *"YourTestMethodName"* ]]; then
+          if [[ "$TEST_FILTER" == *"YourTestMethodName"* ]]; then
             echo "::error::TEST_FILTER still contains the placeholder 'YourTestMethodName'. Configure it with the actual test to reproduce."
             ERRORS=1
           fi
@@ -244,6 +244,10 @@ jobs:
           /p:InstallBrowsersForPlaywright=false
           /p:RunQuarantinedTests=true
 
+      - name: Shutdown build server (Windows)
+        if: runner.os == 'Windows'
+        run: ${{ env.DOTNET_SCRIPT }} build-server shutdown
+
       - name: Run test iterations (Linux/macOS)
         if: runner.os != 'Windows'
         env:
@@ -321,6 +325,8 @@ jobs:
           TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: 'netaspireci.azurecr.io'
           # Skip default quarantine/outerloop exclusion filters so the target test can run
           SkipDefaultTestFilters: true
+          # Match the regular test workflow's mitigation for resource-constrained Windows runners.
+          UseSharedCompilation: false
         run: |
           $pass = 0
           $fail = 0
@@ -336,14 +342,25 @@ jobs:
 
             # Run test (capture output for zero-test detection)
             $iterOutput = Join-Path "${{ github.workspace }}" "iter-output-$i.log"
-            & ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" `
-              --no-restore `
-              --no-build `
-              -- `
-              --timeout 10m `
-              --results-directory "${{ github.workspace }}/testresults" `
-              ${{ env.TEST_FILTER }} *> $iterOutput
-            $result = $LASTEXITCODE
+            $heartbeatProcess = Start-Process -FilePath "dotnet" `
+              -ArgumentList "${{ github.workspace }}\tools\scripts\Heartbeat.cs 60" `
+              -NoNewWindow -PassThru
+
+            try {
+              & ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" `
+                --no-restore `
+                --no-build `
+                -- `
+                --results-directory "${{ github.workspace }}/testresults" `
+                ${{ env.TEST_FILTER }} *> $iterOutput
+              $result = $LASTEXITCODE
+            }
+            finally {
+              if ($heartbeatProcess -and !$heartbeatProcess.HasExited) {
+                $heartbeatProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+              }
+            }
+
             Get-Content $iterOutput
 
             # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
