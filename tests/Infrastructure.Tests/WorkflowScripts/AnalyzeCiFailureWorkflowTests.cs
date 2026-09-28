@@ -3218,6 +3218,55 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
 
     [Fact]
     [RequiresTools(["bash", "jq"])]
+    public async Task PublicationOccurrenceRejectsStoredUrlForDifferentAttemptWithoutBashDiagnostic()
+    {
+        var causePath = Path.Combine(_workspace.Path, "cause.json");
+        var storedCausePath = Path.Combine(_workspace.Path, "stored-cause.json");
+        var jobsPath = Path.Combine(_workspace.Path, "failed-jobs.json");
+        await File.WriteAllTextAsync(
+            causePath,
+            """{"id":"runner-timeout","type":"infra-failure","job_ids":[456]}""");
+        await File.WriteAllTextAsync(
+            storedCausePath,
+            """
+            {
+              "id":"runner-timeout",
+              "type":"infra-failure",
+              "occurrences":[{
+                "run_id":123,
+                "run_attempt":2,
+                "run_url":"https://github.com/microsoft/aspire/actions/runs/123/attempts/3",
+                "observed_at":"2026-08-01T12:00:00Z",
+                "run_scope":"main",
+                "job_ids":[456]
+              }]
+            }
+            """);
+        await File.WriteAllTextAsync(jobsPath, """[{"id":456,"name":"Tests"}]""");
+
+        var result = await RunBashScriptAsync(
+            Path.Combine(RepoRoot.Path, PersistenceScriptRelativePath),
+            [
+                "publication-occurrence",
+                causePath,
+                storedCausePath,
+                jobsPath,
+                "123",
+                "2",
+                "https://github.com/microsoft/aspire/actions/runs/123",
+                "2026-09-23T12:00:00Z",
+                "main",
+                "0",
+            ]);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(
+            "::error::Stored occurrence URL does not identify the selected run attempt\n",
+            result.Output);
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "jq"])]
     public async Task PublicationOccurrencePreservesStoredLegacyGroupedLabelOnIssueRecreation()
     {
         var causePath = Path.Combine(_workspace.Path, "cause.json");
@@ -3974,6 +4023,7 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
     [InlineData("""{"run_id":"123","run_scope":"main"}""")]
     [InlineData("""{"run_id":123,"run_scope":"unexpected"}""")]
     [InlineData("{}")]
+    [InlineData("{malformed")]
     [RequiresTools(["bash", "jq"])]
     public async Task StoredOccurrenceRowsIgnoreUntrustedLegacyRunScopeRecovery(string runSummary)
     {
@@ -4006,6 +4056,132 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
                 "| 2026-08-01 | [123](https://github.com/microsoft/aspire/actions/runs/123) | ` Tests ` | unavailable |",
             ],
             Assert.IsType<string[]>(JsonSerializer.Deserialize<string[]>(result.Output)));
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "jq"])]
+    public async Task StoredOccurrenceRowsDoNotInferMainScopeFromCauseType()
+    {
+        var causePath = Path.Combine(_workspace.Path, "cause.json");
+        await File.WriteAllTextAsync(
+            causePath,
+            """
+            {
+              "id":"repository-build-failure",
+              "type":"main-repository-breakage",
+              "occurrences":[{
+                "run_id":123,
+                "run_url":"https://github.com/microsoft/aspire/actions/runs/123",
+                "observed_at":"2026-08-01T12:00:00Z",
+                "pr_number":0,
+                "job":"Tests"
+              }]
+            }
+            """);
+
+        var result = await RunBashScriptAsync(
+            Path.Combine(RepoRoot.Path, PersistenceScriptRelativePath),
+            ["stored-occurrence-rows", causePath]);
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.Equal(
+            [
+                "| 2026-08-01 | [123](https://github.com/microsoft/aspire/actions/runs/123) | ` Tests ` | unavailable |",
+            ],
+            Assert.IsType<string[]>(JsonSerializer.Deserialize<string[]>(result.Output)));
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "jq"])]
+    public async Task StoredOccurrenceRowsReadsOnlySummariesNeededForMissingScope()
+    {
+        var causePath = Path.Combine(_workspace.Path, "cause.json");
+        var runsDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "runs")).FullName;
+        var toolsDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, "tools")).FullName;
+        var jqLogPath = Path.Combine(_workspace.Path, "jq.log");
+        var jqPathResult = await RunProcessAsync("bash", ["-c", "command -v jq"]);
+        Assert.Equal(0, jqPathResult.ExitCode);
+        var realJqPath = jqPathResult.Output.Trim();
+        var fakeJqPath = Path.Combine(toolsDirectory, "jq");
+        await File.WriteAllTextAsync(
+            fakeJqPath,
+            """
+            #!/usr/bin/env bash
+            printf '%s\n' "$*" >> "$JQ_LOG"
+            exec "$REAL_JQ" "$@"
+            """);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                fakeJqPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await File.WriteAllTextAsync(
+            causePath,
+            """
+            {
+              "id":"runner-timeout",
+              "type":"infra-failure",
+              "occurrences":[
+                {
+                  "run_id":123,
+                  "run_url":"https://github.com/microsoft/aspire/actions/runs/123",
+                  "observed_at":"2026-08-01T12:00:00Z",
+                  "pr_number":0,
+                  "job":"Missing scope"
+                },
+                {
+                  "run_id":124,
+                  "run_url":"https://github.com/microsoft/aspire/actions/runs/124",
+                  "observed_at":"2026-08-02T12:00:00Z",
+                  "pr_number":0,
+                  "run_scope":null,
+                  "job":"Invalid scope"
+                },
+                {
+                  "run_id":125,
+                  "run_url":"https://github.com/microsoft/aspire/actions/runs/125",
+                  "observed_at":"2026-08-03T12:00:00Z",
+                  "pr_number":42,
+                  "run_scope":"pull-request",
+                  "job":"Known scope"
+                }
+              ]
+            }
+            """);
+        foreach (var runId in new[] { 123, 124, 125, 999 })
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(runsDirectory, $"{runId}.json"),
+                $$"""{"run_id":{{runId}},"run_scope":"main"}""");
+        }
+
+        var result = await RunBashScriptAsync(
+            Path.Combine(RepoRoot.Path, PersistenceScriptRelativePath),
+            ["stored-occurrence-rows", causePath, runsDirectory],
+            new Dictionary<string, string>
+            {
+                ["JQ_LOG"] = jqLogPath,
+                ["PATH"] = toolsDirectory + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"),
+                ["REAL_JQ"] = realJqPath,
+            });
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.Equal(
+            [
+                "| 2026-08-01 | [123](https://github.com/microsoft/aspire/actions/runs/123) | ` Missing scope ` | main |",
+                "| 2026-08-02 | [124](https://github.com/microsoft/aspire/actions/runs/124) | ` Invalid scope ` | unavailable |",
+                "| 2026-08-03 | [125](https://github.com/microsoft/aspire/actions/runs/125) | ` Known scope ` | #42 |",
+            ],
+            Assert.IsType<string[]>(JsonSerializer.Deserialize<string[]>(result.Output)));
+        var jqLog = await File.ReadAllTextAsync(jqLogPath);
+        var runSummaryInvocations = jqLog
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(runsDirectory, StringComparison.Ordinal))
+            .ToArray();
+        var invocation = Assert.Single(runSummaryInvocations);
+        Assert.Contains(Path.Combine(runsDirectory, "123.json"), invocation, StringComparison.Ordinal);
     }
 
     [Theory]

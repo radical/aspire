@@ -926,6 +926,7 @@ stored_occurrence_rows()
   local runs_directory="${2:-}"
   local expected_repository="${GITHUB_REPOSITORY:-microsoft/aspire}"
   local trusted_main_runs='{}'
+  local -a run_summary_arguments=()
 
   if [ ! -f "$cause_file" ]; then
     echo "::error::Stored cause file is required" >&2
@@ -933,24 +934,46 @@ stored_occurrence_rows()
   fi
 
   if [ -n "$runs_directory" ] && [ -d "$runs_directory" ]; then
+    local run_id
     local run_summary
-    for run_summary in "$runs_directory"/*.json; do
+    while IFS= read -r run_id; do
+      run_summary="$runs_directory/$run_id.json"
       [ -f "$run_summary" ] || continue
-      local run_file_name
-      run_file_name=$(basename "$run_summary")
-      if [[ "$run_file_name" =~ ^([1-9][0-9]*)\.json$ ]]; then
-        local file_run_id="${BASH_REMATCH[1]}"
-        if jq -e --argjson file_run_id "$file_run_id" '
-            (.run_id | type) == "number" and
-            .run_id == $file_run_id and
-            .run_scope == "main"
-          ' "$run_summary" >/dev/null 2>&1; then
-          trusted_main_runs=$(jq -c \
-            --arg run_id "$file_run_id" \
-            '. + {($run_id): "main"}' <<< "$trusted_main_runs")
-        fi
-      fi
-    done
+      run_summary_arguments+=(--rawfile "run_$run_id" "$run_summary")
+    done < <(jq -r '
+      [
+        (.occurrences // [])[] |
+        select(
+          (has("run_scope") | not) and
+          ((.run_id | type) == "number") and
+          (.run_id > 0) and
+          (.run_id == (.run_id | floor))
+        ) |
+        .run_id
+      ] |
+      unique[]
+    ' "$cause_file")
+
+    if [ "${#run_summary_arguments[@]}" -gt 0 ]; then
+      trusted_main_runs=$(jq -nc "${run_summary_arguments[@]}" '
+        $ARGS.named |
+        to_entries |
+        map(
+          (.key | ltrimstr("run_") | tonumber) as $file_run_id |
+          (.value | fromjson?) as $summary |
+          select(
+            (($summary.run_id | type) == "number") and
+            ($summary.run_id == $file_run_id) and
+            ($summary.run_scope == "main")
+          ) |
+          {
+            key: ($file_run_id | tostring),
+            value: "main"
+          }
+        ) |
+        from_entries
+      ')
+    fi
   fi
 
   jq \
@@ -1057,8 +1080,7 @@ stored_occurrence_rows()
         else
           error("stored occurrence is missing displayable jobs")
         end) as $jobs_table |
-        (if $effective_run_scope == "main" or
-            $cause.type == "main-repository-breakage" then
+        (if $effective_run_scope == "main" then
           "main"
         elif $effective_run_scope == "pull-request" then
           (if (($occurrence.issue_context | type) == "string") and
@@ -1839,7 +1861,7 @@ case "$COMMAND" in
         else
           echo "::error::Stored occurrence URL does not identify the selected run attempt" >&2
           rm -f "$STORED_OCCURRENCE_FILE"
-          return 1
+          exit 1
         fi
         STORED_PR_NUMBER=$(jq -r '
           if ((.pr_number | type) == "number") and
