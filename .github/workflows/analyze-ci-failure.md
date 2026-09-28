@@ -10,7 +10,8 @@ on:
     workflows: ["CI"]
     types:
       - completed
-    # Intentional for now: only analyze CI runs for builds against main while this workflow is being validated.
+    # workflow_run executes trusted default-branch code. Treat the triggering run as untrusted
+    # data and revalidate its live identity before collecting or publishing analysis.
     branches:
       - main
   workflow_dispatch:

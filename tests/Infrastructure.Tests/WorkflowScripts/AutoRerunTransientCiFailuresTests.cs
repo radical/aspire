@@ -949,7 +949,12 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
         string ciWorkflowText = await ReadRepoFileAsync(".github/workflows/ci.yml");
 
+        int checkoutCount = workflowText.Split("uses: actions/checkout@").Length - 1;
+        int checkoutWithoutCredentialsCount = workflowText.Split("persist-credentials: false").Length - 1;
+        Assert.Equal(checkoutCount, checkoutWithoutCredentialsCount);
+
         Assert.Contains("workflow_dispatch:", workflowText);
+        Assert.Contains("# zizmor: ignore[dangerous-triggers]", workflowText);
         Assert.Contains("dry_run:", workflowText);
         Assert.Contains("default: false", workflowText);
         Assert.Contains("rerun_execution_eligible", workflowText);
@@ -1324,17 +1329,22 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
-    public async Task CurrentMainRerunSkipsWhenRunListDoesNotContainTrustedSource()
+    public async Task CurrentMainRerunRejectsInvalidOrMissingTrustedSourceRunList()
     {
-        object[][] invalidRunLists =
+        object?[] invalidRunLists =
         [
-            [],
-            [new { id = 122, run_number = 99 }],
-            [new { id = 123, run_number = 99 }],
-            [new { id = 122, run_number = 100 }],
+            null,
+            Array.Empty<object>(),
+            new[] { new { id = 122, run_number = 99 } },
+            new[] { new { id = 123, run_number = 99 } },
+            new[] { new { id = 122, run_number = 100 } },
+            new { id = 123, run_number = 100 },
+            "invalid",
+            new[] { new { id = "123", run_number = 100 } },
+            new[] { new { id = 123, run_number = "100" } },
         ];
 
-        foreach (object[] mainWorkflowRuns in invalidRunLists)
+        foreach (object? mainWorkflowRuns in invalidRunLists)
         {
             RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
                 "rerunMatchedJobs",

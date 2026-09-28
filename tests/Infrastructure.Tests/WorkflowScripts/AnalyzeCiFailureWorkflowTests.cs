@@ -169,7 +169,12 @@ public sealed class AnalyzeCiFailureWorkflowTests(ITestOutputHelper output) : ID
     }
 
     [Theory]
+    [InlineData("""{}""", 1)]
+    [InlineData("""{"workflow_runs":null}""", 1)]
+    [InlineData("""{"workflow_runs":"invalid"}""", 1)]
     [InlineData("""{"workflow_runs":[]}""", 1)]
+    [InlineData("""{"workflow_runs":[{"id":"123","run_number":100}]}""", 1)]
+    [InlineData("""{"workflow_runs":[{"id":123,"run_number":"100"}]}""", 1)]
     [InlineData("""{"workflow_runs":[{"id":122,"run_number":99}]}""", 1)]
     [InlineData("""{"workflow_runs":[{"id":123,"run_number":99}]}""", 1)]
     [InlineData("""{"workflow_runs":[{"id":122,"run_number":1}]}""", 1)]
