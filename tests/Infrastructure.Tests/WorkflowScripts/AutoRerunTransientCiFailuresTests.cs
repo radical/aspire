@@ -1331,20 +1331,20 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     [RequiresTools(["node"])]
     public async Task CurrentMainRerunRejectsInvalidOrMissingTrustedSourceRunList()
     {
-        object?[] invalidRunLists =
+        (object? MainWorkflowRuns, int ExpectedRequests)[] invalidRunLists =
         [
-            null,
-            Array.Empty<object>(),
-            new[] { new { id = 122, run_number = 99 } },
-            new[] { new { id = 123, run_number = 99 } },
-            new[] { new { id = 122, run_number = 100 } },
-            new { id = 123, run_number = 100 },
-            "invalid",
-            new[] { new { id = "123", run_number = 100 } },
-            new[] { new { id = 123, run_number = "100" } },
+            (null, 4),
+            (Array.Empty<object>(), 4),
+            (new[] { new { id = 122, run_number = 99 } }, 4),
+            (new[] { new { id = 123, run_number = 99 } }, 4),
+            (new[] { new { id = 122, run_number = 100 } }, 4),
+            (new { id = 123, run_number = 100 }, 1),
+            ("invalid", 1),
+            (new[] { new { id = "123", run_number = 100 } }, 1),
+            (new[] { new { id = 123, run_number = "100" } }, 1),
         ];
 
-        foreach (object? mainWorkflowRuns in invalidRunLists)
+        foreach ((object? mainWorkflowRuns, int expectedRequests) in invalidRunLists)
         {
             RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
                 "rerunMatchedJobs",
@@ -1378,6 +1378,10 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             Assert.DoesNotContain(
                 result.Requests,
                 r => r.Route == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+            Assert.Equal(
+                expectedRequests,
+                result.Requests.Count(
+                    r => r.Route == "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"));
             Assert.Equal("not-requested", result.ReturnValue.GetProperty("outcome").GetString());
             Assert.Equal("invalid-main-run-list", result.ReturnValue.GetProperty("reason").GetString());
         }
@@ -1635,6 +1639,62 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Equal(4, result.Requests.Count(r => r.Route == runListRoute));
         Assert.Single(result.Requests, r => r.Route == rerunRoute);
         Assert.Equal("requested", result.ReturnValue.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRerunStopsRunListRetriesWhenLaterResponseIsIneligible()
+    {
+        const string runListRoute = "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs";
+        const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";
+        object?[][] responses =
+        [
+            [
+                Array.Empty<object>(),
+                new[] { new { id = 124, run_number = 101 } },
+            ],
+            [
+                Array.Empty<object>(),
+                "invalid",
+            ],
+        ];
+        string[] expectedReasons = ["superseded", "invalid-main-run-list"];
+
+        for (var i = 0; i < responses.Length; i++)
+        {
+            RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+                "rerunMatchedJobs",
+                new
+                {
+                    owner = "dotnet",
+                    repo = "aspire",
+                    retryableJobs = Array.Empty<RetryableJobInput>(),
+                    sourceRunId = 123,
+                    sourceRunAttempt = 1,
+                    sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                    sourceRunScope = "main",
+                    sourceHeadSha = "main-sha",
+                    maxRunAttempt = 3,
+                    forceRerunAll = true,
+                    currentRun = new
+                    {
+                        id = 123,
+                        run_attempt = 1,
+                        run_number = 100,
+                        workflow_id = 456,
+                        @event = "push",
+                        head_branch = "main",
+                        head_sha = "main-sha",
+                        path = ".github/workflows/ci.yml"
+                    },
+                    currentMainSha = "main-sha",
+                    mainWorkflowRunResponses = responses[i],
+                });
+
+            Assert.Equal(2, result.Requests.Count(r => r.Route == runListRoute));
+            Assert.DoesNotContain(result.Requests, r => r.Route == rerunRoute);
+            Assert.Equal(expectedReasons[i], result.ReturnValue.GetProperty("reason").GetString());
+        }
     }
 
     [Fact]
