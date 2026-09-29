@@ -1,0 +1,5338 @@
+{
+  "now": "2026-09-29T03:58:53+00:00",
+  "windows": {
+    "72h": "2026-09-26T03:58:53+00:00",
+    "current": "2026-09-22T03:58:53+00:00",
+    "prior": "2026-09-15T03:58:53+00:00",
+    "lookback": "2026-09-08T03:58:53+00:00"
+  },
+  "lanes": {
+    "main": {
+      "recent": [
+        1,
+        12
+      ],
+      "current": [
+        7,
+        62
+      ],
+      "prior": [
+        5,
+        50
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 1.3,
+        "meaningful": false
+      },
+      "latest": {
+        "id": 36493702243,
+        "created_at": "2026-09-28T22:39:41Z",
+        "initial_conclusion": "success",
+        "final_conclusion": "success"
+      },
+      "excluded": 13
+    },
+    "release/17.0": {
+      "recent": [
+        0,
+        1
+      ],
+      "current": [
+        0,
+        1
+      ],
+      "prior": [
+        0,
+        0
+      ],
+      "change": {
+        "label": "\u2014",
+        "delta": null,
+        "meaningful": false
+      },
+      "latest": {
+        "id": 36498322933,
+        "created_at": "2026-09-28T23:30:02Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      },
+      "excluded": 1
+    },
+    "release/14.0": {
+      "recent": [
+        0,
+        0
+      ],
+      "current": [
+        0,
+        1
+      ],
+      "prior": [
+        0,
+        2
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "latest": {
+        "id": 35820895178,
+        "created_at": "2026-09-23T05:04:22Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      },
+      "excluded": 1
+    },
+    "release/13.6": {
+      "recent": [
+        0,
+        3
+      ],
+      "current": [
+        0,
+        13
+      ],
+      "prior": [
+        0,
+        0
+      ],
+      "change": {
+        "label": "\u2014",
+        "delta": null,
+        "meaningful": false
+      },
+      "latest": {
+        "id": 36498816522,
+        "created_at": "2026-09-28T23:35:32Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      },
+      "excluded": 16
+    }
+  },
+  "reruns": {
+    "runs": 3,
+    "recovered": 0,
+    "human": 3,
+    "bot": 0,
+    "unrecovered": 3
+  },
+  "category_trends": {
+    "runner_infrastructure": {
+      "label": "Runner infrastructure",
+      "current": [
+        0,
+        77
+      ],
+      "prior": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "network_external": {
+      "label": "Network / external service",
+      "current": [
+        19,
+        77
+      ],
+      "prior": [
+        15,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -4.2,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "test": {
+      "label": "Test",
+      "current": [
+        62,
+        77
+      ],
+      "prior": [
+        42,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -0.2,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "build": {
+      "label": "Build / tooling",
+      "current": [
+        11,
+        77
+      ],
+      "prior": [
+        13,
+        52
+      ],
+      "change": {
+        "label": "\u2193 11 pts",
+        "delta": -10.7,
+        "meaningful": true,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "workflow": {
+      "label": "Workflow machinery",
+      "current": [
+        1,
+        77
+      ],
+      "prior": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -0.6,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "unclassified": {
+      "label": "Unknown cause",
+      "current": [
+        0,
+        77
+      ],
+      "prior": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "missing_evidence": {
+      "label": "Missing evidence",
+      "current": [
+        0,
+        77
+      ],
+      "prior": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    }
+  },
+  "multi_category_runs": {
+    "current": 20,
+    "prior": 21
+  },
+  "coverage": {
+    "current_examined": 70,
+    "current_total": 70,
+    "prior_examined": 47,
+    "prior_total": 47,
+    "current_percent": 100
+  },
+  "families": [
+    {
+      "id": "test:tests-run-vs-code-extension-e2e-tests-vs-code-extension-e2e-windows-browser-debugger",
+      "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, browser-debugger)",
+      "class": "test",
+      "current_runs": 38,
+      "prior_runs": 17,
+      "current_rate": [
+        38,
+        77
+      ],
+      "prior_rate": [
+        17,
+        52
+      ],
+      "change": {
+        "label": "\u2191 17 pts",
+        "delta": 16.7,
+        "meaningful": true,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:35:32Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498816522"
+    },
+    {
+      "id": "network_external:job-level-runner-or-infrastructure-failure-matched-the-transient-allowlist",
+      "name": "Job-level runner or infrastructure failure matched the transient allowlist.",
+      "class": "network_external",
+      "current_runs": 18,
+      "prior_runs": 13,
+      "current_rate": [
+        18,
+        77
+      ],
+      "prior_rate": [
+        13,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -1.6,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      },
+      "last_seen": "2026-09-28T21:36:05Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36487182672"
+    },
+    {
+      "id": "test:tests-run-vs-code-extension-e2e-tests-vs-code-extension-e2e-linux-browser-debugger",
+      "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Linux, browser-debugger)",
+      "class": "test",
+      "current_runs": 16,
+      "prior_runs": 5,
+      "current_rate": [
+        16,
+        77
+      ],
+      "prior_rate": [
+        5,
+        52
+      ],
+      "change": {
+        "label": "\u2191 11 pts",
+        "delta": 11.2,
+        "meaningful": true,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:35:32Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498816522"
+    },
+    {
+      "id": "test:aspire-hosting-azure-tests-azurefunctionstests-addazurefunctionsproject-workswithmultipleprojects",
+      "name": "Aspire.Hosting.Azure.Tests.AzureFunctionsTests.AddAzureFunctionsProject_WorksWithMultipleProjects",
+      "class": "test",
+      "current_runs": 6,
+      "prior_runs": 3,
+      "current_rate": [
+        6,
+        77
+      ],
+      "prior_rate": [
+        3,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.0,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:infrastructure-tests-hex1bnativepublishingtests-nativeassetskeeptheirlayoutandcontents",
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents",
+      "class": "test",
+      "current_runs": 4,
+      "prior_runs": 1,
+      "current_rate": [
+        4,
+        77
+      ],
+      "prior_rate": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.3,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T20:23:25Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36478836475"
+    },
+    {
+      "id": "test:aspire-hosting-javascript-tests-nodefunctionaltests-verifynpmappworks",
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNpmAppWorks",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 1,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.0,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-26T00:56:37Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36206679371"
+    },
+    {
+      "id": "test:aspire-hosting-javascript-tests-nodefunctionaltests-verifynodeappworks",
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNodeAppWorks",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 1,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.0,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-26T00:56:37Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36206679371"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoresolvewithoutkey",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-optionstypeissealed",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disablet",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disableh",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-canregistermultipleinstancesusingdifferentkeys",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-cli-tests-nuget-nugetpackageprefetchertests-prefetchingcancellationduetoshutdownlogscleanmessage",
+      "name": "Aspire.Cli.Tests.NuGet.NuGetPackagePrefetcherTests.PrefetchingCancellationDueToShutdownLogsCleanMessage",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T03:59:44Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36375862100"
+    },
+    {
+      "id": "test:aspire-hosting-mongodb-tests-mongodbreplicasetfunctionaltests-verifymongodbmultinodereplicawithdatashouldworkacrossusage",
+      "name": "Aspire.Hosting.MongoDB.Tests.MongoDbReplicaSetFunctionalTests.VerifyMongoDBMultiNodeReplicaWithDataShouldWorkAcrossUsages",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-27T12:14:54Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36318348933"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-1-hosting-1-tests-aspire-hosting-te-hosting-1-windows-lat",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-1, Hosting-1, tests/Aspire.Hosting.Te\u2026 / Hosting-1 (windows-latest)",
+      "class": "build",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-26T01:14:57Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36207777000"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-remotehost-tests-hosting-remotehost-hosting-remotehos-hosting-remotehost-w",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.RemoteHost.Tests, Hosting.RemoteHost, Hosting.RemoteHos\u2026 / Hosting.RemoteHost (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 7,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        7,
+        52
+      ],
+      "change": {
+        "label": "\u2193 11 pts",
+        "delta": -10.9,
+        "meaningful": true,
+        "direction": "\ud83d\udfe2 Improving"
+      },
+      "last_seen": "2026-09-22T16:45:48Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35756256834"
+    },
+    {
+      "id": "test:tests-run-vs-code-extension-e2e-tests-vs-code-extension-e2e-windows-apphost-tree",
+      "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, apphost-tree)",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 2,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        2,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -1.2,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      },
+      "last_seen": "2026-09-24T23:54:34Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36075041661"
+    },
+    {
+      "id": "test:aspire-hosting-azure-kusto-tests-kustofunctionaltests-kustoemulator-withdatabasethatalreadyexists-errorisignored",
+      "name": "Aspire.Hosting.Azure.Kusto.Tests.KustoFunctionalTests.KustoEmulator_WithDatabaseThatAlreadyExists_ErrorIsIgnored",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:35:32Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498816522"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-workswithopentelemetrytracing",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.WorksWithOpenTelemetryTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-whenkeyedregistrationisusedthenitsimpossiblet",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-optionstypeissealed",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-favorsnamedconfigurationovertoplevelconfigura",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-stackexchange-redis-outputcaching-tests-outputcacheconformancetests-canregistermultipleinstancesusingdifferentkey",
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-whenkeyedregistrationisusedthenit",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-tracingregisterstraceprovider",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-tracingenablestherightactivitysou",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingEnablesTheRightActivitySource",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-servicelifetimeisasexpected",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-optionstypeissealed",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-metricsregistersmeterprovider",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-loggerfactoryisusedbyregisteredcl",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-healthchecksregistershealthchecks",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-healthcheckreportsexpectedstatus",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-favorsnamedconfigurationovertople",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-eachkeyedcomponentregistersitsown",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-dbcontextpoolingregistersidbconte",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextPoolingRegistersIDbContextPool",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-dbcontextcanbealwaysresolved",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextCanBeAlwaysResolved",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-connectioninformationisdelayvalid",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-configurationschemavalidjsonconfi",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-configurationschemainvalidjsoncon",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-canregistermultipleinstancesusing",
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-registersinatsclient",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.RegistersINatsClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-readsfromconnectionstringscorrectly",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ReadsFromConnectionStringsCorrectly",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-natsinstrumentationendtoend",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.NatsInstrumentationEndToEnd",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-connectionstringcancontainuserandpassword",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionStringCanContainUserAndPassword",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-connectionstringcanbesetincode",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionStringCanBeSetInCode",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-connectionnamewinsoverconfigsection",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionNameWinsOverConfigSection",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-canaddmultiplekeyedservices",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.CanAddMultipleKeyedServices",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-addnatsclient-healthcheckshouldnotberegisteredwhendisabled",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckShouldNotBeRegisteredWhenDisabled",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-addnatsclient-healthcheckshouldberegisteredbydefault",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckShouldBeRegisteredByDefault",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-nats-net-tests-aspirenatsclientextensionstests-addnatsclient-healthcheckreportsconnectionfailuredescription",
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckReportsConnectionFailureDescription",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoresolvewithoutkey",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-optionstypeissealed",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disabletr",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disablehe",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-clientanddatabaseinstancesshouldberesolved",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ClientAndDatabaseInstancesShouldBeResolved",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-mongodb-driver-tests-conformancetests-canregistermultipleinstancesusingdifferentkeys",
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoresolvewithoutkey",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-optionstypeissealed",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disabletra",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disablehea",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-canregistermultipleinstancesusingdifferentkeys",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-milvus-client-tests-conformancetests-canaddmultiplekeyedservices",
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.CanAddMultipleKeyedServices",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoreso",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-tracingenablestherightactivitysource",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-optionstypeissealed",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationw",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-dbcontextpoolingregistersidbcontextpool",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.DbContextPoolingRegistersIDbContextPool",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-dbcontextcanbealwaysresolved",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.DbContextCanBeAlwaysResolved",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-microsoft-entityframeworkcore-sqlserver-tests-conformancetests-canregistermultipleinstancesusingdifferentkeys",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-confluent-kafka-tests-oteltracestests-ensuretracesareproducedasync",
+      "name": "Aspire.Confluent.Kafka.Tests.OtelTracesTests.EnsureTracesAreProducedAsync",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-confluent-kafka-tests-otelmetricstests-ensuremetricsareproducedasync",
+      "name": "Aspire.Confluent.Kafka.Tests.OtelMetricsTests.EnsureMetricsAreProducedAsync",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-whenkeyedregistrationisused",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-tracingregisterstraceprovid",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-tracingenablestherightactiv",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingEnablesTheRightActivitySource",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-servicelifetimeisasexpected",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-optionstypeissealed",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-metricsregistersmeterprovid",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-loggerfactoryisusedbyregist",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-healthchecksregistershealth",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-healthcheckreportsexpecteds",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-favorsnamedconfigurationove",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-eachkeyedcomponentregisters",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-dbcontextpoolingregistersid",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextPoolingRegistersIDbContextPool",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-dbcontextcanbealwaysresolve",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextCanBeAlwaysResolved",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-connectioninformationisdela",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-configurationschemavalidjso",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-configurationschemainvalidj",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-azure-npgsql-entityframeworkcore-postgresql-tests-conformancetests-typespecificconfig-canregistermultipleinstance",
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-devtunnels-tests-hosting-devtunnels-hosting-devtunnel-hosting-devtunnels-w",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.DevTunnels.Tests, Hosting.DevTunnels, Hosting.DevTunnel\u2026 / Hosting.DevTunnels (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T20:53:49Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36482407854"
+    },
+    {
+      "id": "test:tests-no-package-tests-regular-aspire-cli-tests-cli-cli-tests-aspire-cli-tests-aspire-cli-tests-cs-cli-macos-latest",
+      "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs\u2026 / Cli (macos-latest)",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T13:21:24Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36428029876"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoresolvewithoutkey",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-tracingenablestherightactivitysource-keyed",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingEnablesTheRightActivitySource_Keyed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-tracingenablestherightactivitysource",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-optionstypeissealed",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disabletracing",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disablehealthchec",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-canregistermultipleinstancesusingdifferentkeys",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-npgsql-tests-conformancetests-bothdatasourceandconnectioncanberesolved",
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.BothDataSourceAndConnectionCanBeResolved",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoresolvewithoutkey",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-optionstypeissealed",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-metricsregistersmeterprovider",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-loggerfactoryisusedbyregisteredclient",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-healthchecksregistershealthcheckservice",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-healthcheckreportsexpectedstatus",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disabletra",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-favorsnamedconfigurationovertoplevelconfigurationwhenbothprovided-disablehea",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-eachkeyedcomponentregistersitsownhealthcheck",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-connectioninformationisdelayvalidated",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-configurationschemavalidjsonconfigtest",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-configurationschemainvalidjsonconfigtest",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-qdrant-client-tests-conformancetests-canregistermultipleinstancesusingdifferentkeys",
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T00:47:00Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36363480255"
+    },
+    {
+      "id": "test:aspire-hosting-javascript-tests-denotelemetryfunctionaltests-verifydenoappexportsnativetelemetrytodashboard",
+      "name": "Aspire.Hosting.JavaScript.Tests.DenoTelemetryFunctionalTests.VerifyDenoAppExportsNativeTelemetryToDashboard",
+      "class": "test",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-24T21:31:26Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36062018654"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-radius-tests-hosting-radius-hosting-radius-tests-asp-hosting-radius-window",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Radius.Tests, Hosting.Radius, Hosting.Radius, tests/Asp\u2026 / Hosting.Radius (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-radius-tests-hosting-radius-hosting-radius-tests-asp-hosting-radius-ubuntu",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Radius.Tests, Hosting.Radius, Hosting.Radius, tests/Asp\u2026 / Hosting.Radius (ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-dotnet-tests-hosting-dotnet-hosting-dotnet-tests-asp-hosting-dotnet-window",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Dotnet.Tests, Hosting.Dotnet, Hosting.Dotnet, tests/Asp\u2026 / Hosting.Dotnet (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-dotnet-tests-hosting-dotnet-hosting-dotnet-tests-asp-hosting-dotnet-ubuntu",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Dotnet.Tests, Hosting.Dotnet, Hosting.Dotnet, tests/Asp\u2026 / Hosting.Dotnet (ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-blazor-tests-hosting-blazor-hosting-blazor-tests-asp-hosting-blazor-window",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Blazor.Tests, Hosting.Blazor, Hosting.Blazor, tests/Asp\u2026 / Hosting.Blazor (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-blazor-tests-hosting-blazor-hosting-blazor-tests-asp-hosting-blazor-ubuntu",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Blazor.Tests, Hosting.Blazor, Hosting.Blazor, tests/Asp\u2026 / Hosting.Blazor (ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-azure-tests-hosting-azure-hosting-azure-tests-aspire-hosting-azure-windows",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire\u2026 / Hosting.Azure (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-azure-tests-hosting-azure-hosting-azure-tests-aspire-hosting-azure-ubuntu-",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire\u2026 / Hosting.Azure (ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-regular-aspire-hosting-azure-kubernetes-tests-hosting-azure-kubernetes-hosti-hosting-azure-kubern",
+      "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Kubernetes.Tests, Hosting.Azure.Kubernetes, Hosti\u2026 / Hosting.Azure.Kubernetes (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-hosting-tests-aspire-hosting-tests-hosting-windows-latest",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting, Hosting, tests/Aspire.Hosting.Tests/\u2026 / Hosting (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-hosting-tests-aspire-hosting-tests-hosting-8-core-ubuntu-",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting, Hosting, tests/Aspire.Hosting.Tests/\u2026 / Hosting (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-6-hosting-6-tests-aspire-hosting-te-hosting-6-windows-lat",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-6, Hosting-6, tests/Aspire.Hosting.Te\u2026 / Hosting-6 (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-6-hosting-6-tests-aspire-hosting-te-hosting-6-8-core-ubun",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-6, Hosting-6, tests/Aspire.Hosting.Te\u2026 / Hosting-6 (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-5-hosting-5-tests-aspire-hosting-te-hosting-5-windows-lat",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-5, Hosting-5, tests/Aspire.Hosting.Te\u2026 / Hosting-5 (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-5-hosting-5-tests-aspire-hosting-te-hosting-5-8-core-ubun",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-5, Hosting-5, tests/Aspire.Hosting.Te\u2026 / Hosting-5 (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-4-hosting-4-tests-aspire-hosting-te-hosting-4-windows-lat",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-4, Hosting-4, tests/Aspire.Hosting.Te\u2026 / Hosting-4 (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-4-hosting-4-tests-aspire-hosting-te-hosting-4-8-core-ubun",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-4, Hosting-4, tests/Aspire.Hosting.Te\u2026 / Hosting-4 (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-3-hosting-3-tests-aspire-hosting-te-hosting-3-windows-lat",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-3, Hosting-3, tests/Aspire.Hosting.Te\u2026 / Hosting-3 (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-3-hosting-3-tests-aspire-hosting-te-hosting-3-8-core-ubun",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-3, Hosting-3, tests/Aspire.Hosting.Te\u2026 / Hosting-3 (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-2-hosting-2-tests-aspire-hosting-te-hosting-2-windows-lat",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-2, Hosting-2, tests/Aspire.Hosting.Te\u2026 / Hosting-2 (windows-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-2-hosting-2-tests-aspire-hosting-te-hosting-2-8-core-ubun",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-2, Hosting-2, tests/Aspire.Hosting.Te\u2026 / Hosting-2 (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "build:tests-no-package-tests-collection-aspire-hosting-tests-hosting-1-hosting-1-tests-aspire-hosting-te-hosting-1-8-core-ubun",
+      "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-1, Hosting-1, tests/Aspire.Hosting.Te\u2026 / Hosting-1 (8-core-ubuntu-latest)",
+      "class": "build",
+      "current_runs": 2,
+      "prior_runs": 0,
+      "current_rate": [
+        2,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.6,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-22T21:27:18Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/35786739288"
+    },
+    {
+      "id": "test:tests-run-vs-code-extension-e2e-tests-vs-code-extension-e2e-windows-dynamic-debug-configuration",
+      "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, dynamic-debug-configuration)",
+      "class": "test",
+      "current_runs": 1,
+      "prior_runs": 20,
+      "current_rate": [
+        1,
+        77
+      ],
+      "prior_rate": [
+        20,
+        52
+      ],
+      "change": {
+        "label": "\u2193 37 pts",
+        "delta": -37.2,
+        "meaningful": true,
+        "direction": "\ud83d\udfe2 Improving"
+      },
+      "last_seen": "2026-09-25T23:34:54Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36201574198"
+    }
+  ],
+  "top_families": [
+    {
+      "id": "test:tests-run-vs-code-extension-e2e-tests-vs-code-extension-e2e-windows-browser-debugger",
+      "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, browser-debugger)",
+      "class": "test",
+      "current_runs": 38,
+      "prior_runs": 17,
+      "current_rate": [
+        38,
+        77
+      ],
+      "prior_rate": [
+        17,
+        52
+      ],
+      "change": {
+        "label": "\u2191 17 pts",
+        "delta": 16.7,
+        "meaningful": true,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:35:32Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498816522"
+    },
+    {
+      "id": "network_external:job-level-runner-or-infrastructure-failure-matched-the-transient-allowlist",
+      "name": "Job-level runner or infrastructure failure matched the transient allowlist.",
+      "class": "network_external",
+      "current_runs": 18,
+      "prior_runs": 13,
+      "current_rate": [
+        18,
+        77
+      ],
+      "prior_rate": [
+        13,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -1.6,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      },
+      "last_seen": "2026-09-28T21:36:05Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36487182672"
+    },
+    {
+      "id": "test:tests-run-vs-code-extension-e2e-tests-vs-code-extension-e2e-linux-browser-debugger",
+      "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Linux, browser-debugger)",
+      "class": "test",
+      "current_runs": 16,
+      "prior_runs": 5,
+      "current_rate": [
+        16,
+        77
+      ],
+      "prior_rate": [
+        5,
+        52
+      ],
+      "change": {
+        "label": "\u2191 11 pts",
+        "delta": 11.2,
+        "meaningful": true,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:35:32Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498816522"
+    },
+    {
+      "id": "test:aspire-hosting-azure-tests-azurefunctionstests-addazurefunctionsproject-workswithmultipleprojects",
+      "name": "Aspire.Hosting.Azure.Tests.AzureFunctionsTests.AddAzureFunctionsProject_WorksWithMultipleProjects",
+      "class": "test",
+      "current_runs": 6,
+      "prior_runs": 3,
+      "current_rate": [
+        6,
+        77
+      ],
+      "prior_rate": [
+        3,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.0,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T02:46:55Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36371135786"
+    },
+    {
+      "id": "test:infrastructure-tests-hex1bnativepublishingtests-nativeassetskeeptheirlayoutandcontents",
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents",
+      "class": "test",
+      "current_runs": 4,
+      "prior_runs": 1,
+      "current_rate": [
+        4,
+        77
+      ],
+      "prior_rate": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.3,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T20:23:25Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36478836475"
+    },
+    {
+      "id": "test:aspire-hosting-javascript-tests-nodefunctionaltests-verifynpmappworks",
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNpmAppWorks",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 1,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.0,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-26T00:56:37Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36206679371"
+    },
+    {
+      "id": "test:aspire-hosting-javascript-tests-nodefunctionaltests-verifynodeappworks",
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNodeAppWorks",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 1,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        1,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.0,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-26T00:56:37Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36206679371"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-whenkeyedregistrationisusedthenitsimpossibletoresolvewithoutkey",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-tracingregisterstraceprovider",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.TracingRegistersTraceProvider",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    },
+    {
+      "id": "test:aspire-rabbitmq-client-tests-conformancetests-servicelifetimeisasexpected",
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected",
+      "class": "test",
+      "current_runs": 3,
+      "prior_runs": 0,
+      "current_rate": [
+        3,
+        77
+      ],
+      "prior_rate": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 3.9,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      },
+      "last_seen": "2026-09-28T23:30:02Z",
+      "representative_run": "https://github.com/microsoft/aspire/actions/runs/36498322933"
+    }
+  ],
+  "chart": [
+    {
+      "day": "2026-09-09",
+      "success": 5,
+      "failed": 25,
+      "total": 30,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 4,
+        "test": 10,
+        "build": 1,
+        "workflow": 2,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-10",
+      "success": 4,
+      "failed": 26,
+      "total": 30,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 6,
+        "test": 15,
+        "build": 6,
+        "workflow": 4,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-11",
+      "success": 3,
+      "failed": 26,
+      "total": 29,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 8,
+        "test": 21,
+        "build": 9,
+        "workflow": 4,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-12",
+      "success": 3,
+      "failed": 27,
+      "total": 30,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 8,
+        "test": 22,
+        "build": 9,
+        "workflow": 4,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-13",
+      "success": 3,
+      "failed": 33,
+      "total": 36,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 12,
+        "test": 28,
+        "build": 9,
+        "workflow": 4,
+        "unclassified": 4,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-14",
+      "success": 4,
+      "failed": 45,
+      "total": 49,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 15,
+        "test": 40,
+        "build": 11,
+        "workflow": 4,
+        "unclassified": 6,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-15",
+      "success": 5,
+      "failed": 48,
+      "total": 53,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 14,
+        "test": 43,
+        "build": 15,
+        "workflow": 2,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-16",
+      "success": 5,
+      "failed": 49,
+      "total": 54,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 16,
+        "test": 42,
+        "build": 15,
+        "workflow": 2,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-17",
+      "success": 5,
+      "failed": 47,
+      "total": 52,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 16,
+        "test": 43,
+        "build": 11,
+        "workflow": 0,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-18",
+      "success": 6,
+      "failed": 50,
+      "total": 56,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 19,
+        "test": 46,
+        "build": 12,
+        "workflow": 1,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-19",
+      "success": 5,
+      "failed": 50,
+      "total": 55,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 20,
+        "test": 45,
+        "build": 12,
+        "workflow": 1,
+        "unclassified": 3,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-20",
+      "success": 5,
+      "failed": 44,
+      "total": 49,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 16,
+        "test": 39,
+        "build": 12,
+        "workflow": 1,
+        "unclassified": 2,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-21",
+      "success": 5,
+      "failed": 42,
+      "total": 47,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 14,
+        "test": 37,
+        "build": 13,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-22",
+      "success": 3,
+      "failed": 46,
+      "total": 49,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 16,
+        "test": 39,
+        "build": 13,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-23",
+      "success": 4,
+      "failed": 51,
+      "total": 55,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 14,
+        "test": 44,
+        "build": 14,
+        "workflow": 2,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-24",
+      "success": 7,
+      "failed": 52,
+      "total": 59,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 15,
+        "test": 45,
+        "build": 14,
+        "workflow": 2,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-25",
+      "success": 7,
+      "failed": 55,
+      "total": 62,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 15,
+        "test": 49,
+        "build": 11,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-26",
+      "success": 7,
+      "failed": 57,
+      "total": 64,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 14,
+        "test": 52,
+        "build": 12,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-27",
+      "success": 7,
+      "failed": 58,
+      "total": 65,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 14,
+        "test": 53,
+        "build": 12,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-28",
+      "success": 7,
+      "failed": 58,
+      "total": 65,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 15,
+        "test": 51,
+        "build": 10,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    },
+    {
+      "day": "2026-09-29",
+      "success": 7,
+      "failed": 55,
+      "total": 62,
+      "categories": {
+        "runner_infrastructure": 0,
+        "network_external": 15,
+        "test": 48,
+        "build": 10,
+        "workflow": 1,
+        "unclassified": 0,
+        "missing_evidence": 0
+      }
+    }
+  ],
+  "verdict": "holding",
+  "rules_version": "rolling-v3:7c6ab2ff50a952d91bfecf99d713a5e85733fa2d829c928379b858e9732c7b8d:b81e72bb4becf5679e2a2b23d42d40526e04983e4dbee08c7f63d63bcf69caaf:b574ce57cfa7555ab0792c14d9e3fbabf3480db35fa57e1f723c872ec5fcde9b:e94dc869f2425b0c8adcab977fd91ed769cbf3125930dcef64fcdbace0f21c0d"
+}
