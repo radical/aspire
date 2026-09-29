@@ -1585,6 +1585,60 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task CurrentMainRerunRetriesUntilTrustedSourceAppearsInRunList()
+    {
+        const string runListRoute = "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs";
+        const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";
+        var sourceRun = new
+        {
+            id = 123,
+            run_number = 100,
+            @event = "push",
+            head_branch = "main",
+            head_sha = "main-sha"
+        };
+        RerunMatchedJobsResult result = await InvokeHarnessAsync<RerunMatchedJobsResult>(
+            "rerunMatchedJobs",
+            new
+            {
+                owner = "dotnet",
+                repo = "aspire",
+                retryableJobs = Array.Empty<RetryableJobInput>(),
+                sourceRunId = 123,
+                sourceRunAttempt = 1,
+                sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
+                sourceRunScope = "main",
+                sourceHeadSha = "main-sha",
+                maxRunAttempt = 3,
+                forceRerunAll = true,
+                currentRun = new
+                {
+                    id = 123,
+                    run_attempt = 1,
+                    run_number = 100,
+                    workflow_id = 456,
+                    @event = "push",
+                    head_branch = "main",
+                    head_sha = "main-sha",
+                    path = ".github/workflows/ci.yml"
+                },
+                currentMainSha = "main-sha",
+                mainWorkflowRunResponses = new object?[]
+                {
+                    Array.Empty<object>(),
+                    Array.Empty<object>(),
+                    Array.Empty<object>(),
+                    new[] { sourceRun },
+                }
+            });
+
+        Assert.Equal(4, result.Requests.Count(r => r.Route == runListRoute));
+        Assert.Single(result.Requests, r => r.Route == rerunRoute);
+        Assert.Equal("requested", result.ReturnValue.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task CurrentMainRerunReturnsFailedOutcomeWhenRequestIsRejected()
     {
         const string rerunRoute = "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs";

@@ -165,6 +165,7 @@ async function dispatch(operation, payload) {
                 ...payload,
                 github,
                 summary,
+                delay: async () => {},
             });
 
             return { requests, events: summary.events, returnValue };
@@ -188,6 +189,7 @@ async function dispatch(operation, payload) {
 
 function createGitHubRecorder(payload, requests) {
     let mainRefRequestCount = 0;
+    let mainWorkflowRunsRequestCount = 0;
 
     return {
         request: async (route, requestPayload) => {
@@ -232,9 +234,13 @@ function createGitHubRecorder(payload, requests) {
             }
 
             if (route === 'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs') {
+                const workflowRuns = Array.isArray(payload.mainWorkflowRunResponses)
+                    ? payload.mainWorkflowRunResponses[
+                        Math.min(mainWorkflowRunsRequestCount++, payload.mainWorkflowRunResponses.length - 1)]
+                    : payload.mainWorkflowRuns;
                 return {
                     data: {
-                        workflow_runs: payload.mainWorkflowRuns ?? [],
+                        workflow_runs: workflowRuns ?? [],
                     },
                 };
             }

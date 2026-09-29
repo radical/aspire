@@ -23,6 +23,9 @@ const failureConclusions = new Set(['failure', 'cancelled', 'timed_out', 'startu
 const ignoredJobs = new Set(['Final Results', 'Tests / Final Test Results']);
 const defaultMaxRetryableJobs = 5;
 const defaultMaxRunAttempt = 3;
+const mainRunListMaxAttempts = 4;
+const mainRunListRetryDelayMs = 5000;
+const defaultDelay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 const retryableWithAnnotationStepPatterns = [
     /^Set up job$/i,
@@ -919,6 +922,7 @@ async function rerunMatchedJobs({
     maxRunAttempt,
     testPatternMatchedTests = [],
     forceRerunAll = false,
+    delay = defaultDelay,
 }) {
     // Normal mode lists retry-safe jobs first; an empty list means nothing to rerun.
     // Force mode is a short-circuit that does not enumerate jobs (retryableJobs is
@@ -1035,38 +1039,50 @@ async function rerunMatchedJobs({
                 'The failed run SHA is no longer the current main SHA. No jobs were rerun.');
         }
 
-        const { data: mainRuns } = await github.request(
-            'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
-            {
-                owner,
-                repo,
-                workflow_id: currentRun.workflow_id,
-                branch: 'main',
-                event: 'push',
-                per_page: 100,
-            });
-        const workflowRuns = mainRuns?.workflow_runs;
-        if (!Array.isArray(workflowRuns) ||
-            !workflowRuns.every(run => run &&
-                Number.isInteger(run.id) &&
-                Number.isInteger(run.run_number))) {
-            return await skipMainRerun(
-                'invalid-main-run-list',
-                'The live main CI run list was incomplete or invalid. No jobs were rerun.');
+        // A workflow_run event can arrive before the workflow-runs list includes
+        // the completed source run. Retry only that propagation gap; malformed
+        // responses and superseding runs still fail closed immediately.
+        let sourceRunIsPresent = false;
+        for (let attempt = 1; attempt <= mainRunListMaxAttempts; attempt++) {
+            const { data: mainRuns } = await github.request(
+                'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
+                {
+                    owner,
+                    repo,
+                    workflow_id: currentRun.workflow_id,
+                    branch: 'main',
+                    event: 'push',
+                    per_page: 100,
+                });
+            const workflowRuns = mainRuns?.workflow_runs;
+            if (!Array.isArray(workflowRuns) ||
+                !workflowRuns.every(run => run &&
+                    Number.isInteger(run.id) &&
+                    Number.isInteger(run.run_number))) {
+                return await skipMainRerun(
+                    'invalid-main-run-list',
+                    'The live main CI run list was incomplete or invalid. No jobs were rerun.');
+            }
+
+            const supersedingRun = workflowRuns
+                .find(run => run.id !== sourceRunId && run.run_number > currentRun.run_number);
+
+            if (supersedingRun) {
+                state.superseding_run_id = supersedingRun.id;
+                return await skipMainRerun(
+                    'superseded',
+                    `Newer main CI run ${supersedingRun.id} superseded this run. No jobs were rerun.`);
+            }
+
+            sourceRunIsPresent = workflowRuns
+                .some(run => run.id === sourceRunId && run.run_number === currentRun.run_number);
+            if (sourceRunIsPresent || attempt === mainRunListMaxAttempts) {
+                break;
+            }
+
+            await delay(mainRunListRetryDelayMs);
         }
 
-        const supersedingRun = workflowRuns
-            .find(run => run.id !== sourceRunId && run.run_number > currentRun.run_number);
-
-        if (supersedingRun) {
-            state.superseding_run_id = supersedingRun.id;
-            return await skipMainRerun(
-                'superseded',
-                `Newer main CI run ${supersedingRun.id} superseded this run. No jobs were rerun.`);
-        }
-
-        const sourceRunIsPresent = workflowRuns
-            .some(run => run.id === sourceRunId && run.run_number === currentRun.run_number);
         if (!sourceRunIsPresent) {
             return await skipMainRerun(
                 'invalid-main-run-list',
