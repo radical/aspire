@@ -58,7 +58,7 @@ The manual and automatic PR paths use the broad transient-failure analysis when 
 
 The pull request attempt cap is defined in
 [`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js), and the
-current-main cap is defined in [`auto-rerun/main.js`](../../.github/workflows/auto-rerun/main.js).
+current-main cap is defined in [`auto-rerun/rerun-main.js`](../../.github/workflows/auto-rerun/rerun-main.js).
 `defaultMaxRunAttempt` remains 3 for pull request runs. `mainMaxRunAttempt` is 1,
 so only the first failed rolling `main` attempt can request a retry.
 
@@ -205,7 +205,7 @@ The policies deliberately apply different rails:
 
 | Rail | Scope | Detail |
 |------|-------|--------|
-| **Attempt limit** | All paths | Pull request source attempts use `defaultMaxRunAttempt` (3), defined in [`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js). Current-`main` source attempts use `mainMaxRunAttempt` (1), defined in [`auto-rerun/main.js`](../../.github/workflows/auto-rerun/main.js), allowing exactly one retry. |
+| **Attempt limit** | All paths | Pull request source attempts use `defaultMaxRunAttempt` (3), defined in [`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js). Current-`main` source attempts use `mainMaxRunAttempt` (1), defined in [`auto-rerun/rerun-main.js`](../../.github/workflows/auto-rerun/rerun-main.js), allowing exactly one retry. |
 | **Open PR** | Pull request and manual paths | At least one associated pull request must still be open, including in force mode. |
 | **Retryable job cap** | Normal PR analysis and current-main | At least 1 but no more than 5 retryable jobs (default). Pull request attempts after the first use the existing stricter count rule. Current-main only considers source attempt 1 and requires every real failed job to match. Force mode bypasses this cap because it does not enumerate jobs. |
 | **Non-aggregator** | Normal PR analysis and current-main | Aggregator jobs (`Final Results`, `Tests / Final Test Results`) are excluded from analysis. Force mode bypasses analysis and lets GitHub rerun the failed set. |
@@ -259,8 +259,8 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 |------|------|
 | [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | Two thin callers: read-only analysis and write-capable execution |
 | [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | Dispatcher: validates source context and selects the PR or current-main policy for each phase |
-| [`.github/workflows/auto-rerun/pull-request.js`](../../.github/workflows/auto-rerun/pull-request.js) | PR/manual policy: force mode, broad classification, configurable patterns, and TRX artifact analysis |
-| [`.github/workflows/auto-rerun/main.js`](../../.github/workflows/auto-rerun/main.js) | Current-main policy: narrow allowlist, one retry, and final freshness checks |
+| [`.github/workflows/auto-rerun/rerun-pull-request.js`](../../.github/workflows/auto-rerun/rerun-pull-request.js) | PR/manual policy: force mode, broad classification, configurable patterns, TRX artifact analysis, and rerun execution |
+| [`.github/workflows/auto-rerun/rerun-main.js`](../../.github/workflows/auto-rerun/rerun-main.js) | Current-main policy: narrow allowlist, one retry, final freshness checks, and rerun execution |
 | [`.github/workflows/auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js) | Shared diagnostics, eligibility primitives, failed-job rerun request, and reporting |
 | [`.github/workflows/auto-rerun/github.js`](../../.github/workflows/auto-rerun/github.js) | Shared attempt-scoped job, annotation, and log access |
 | [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) | Configuration: test failure and job failure patterns |

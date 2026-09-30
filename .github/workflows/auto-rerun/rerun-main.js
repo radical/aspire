@@ -23,7 +23,7 @@ const mainAcrTransportFailurePatterns = [
     /\bconnect: connection refused\b/i,
     /\bConnection reset by peer\b/i,
 ];
-const mainAcrFailurePatterns = createBoundedDiagnosticPairPatterns(
+const mainAcrFailurePatterns = common.createBoundedDiagnosticPairPatterns(
     mainAcrRegistryPattern,
     mainAcrTransportFailurePatterns,
     mainDiagnosticPairMaxDistance);
@@ -32,7 +32,7 @@ const mainMcrServiceUnavailablePatterns = [
     /\bHTTP(?:\/[0-9.]+)?(?: status)?[: ]+503\b/i,
     /\bServiceUnavailable\b/i,
 ];
-const mainMcrFailurePatterns = createBoundedDiagnosticPairPatterns(
+const mainMcrFailurePatterns = common.createBoundedDiagnosticPairPatterns(
     mainMcrRegistryPattern,
     mainMcrServiceUnavailablePatterns,
     mainDiagnosticPairMaxDistance);
@@ -99,13 +99,6 @@ function classifyMainFailedJob(job, annotationsOrText, jobLogText = '') {
         failedSteps,
         reason: 'The job did not match the narrow current-main transient infrastructure allowlist.',
     };
-}
-
-function createBoundedDiagnosticPairPatterns(firstPattern, secondPatterns, maxDistance) {
-    return secondPatterns.flatMap(secondPattern => [
-        new RegExp(`${firstPattern.source}[\\s\\S]{0,${maxDistance}}${secondPattern.source}`, 'i'),
-        new RegExp(`${secondPattern.source}[\\s\\S]{0,${maxDistance}}${firstPattern.source}`, 'i'),
-    ]);
 }
 
 async function analyzeMainFailedJobs({
@@ -398,7 +391,6 @@ async function rerunMainFailures(options) {
 module.exports = {
     mainMaxRunAttempt,
     classifyMainFailedJob,
-    createBoundedDiagnosticPairPatterns,
     analyzeMainFailedJobs,
     analyzeMainFailures,
     rerunMainFailures,

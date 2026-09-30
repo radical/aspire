@@ -26,6 +26,13 @@ function findMatchingPattern(value, patterns) {
     return patterns.find(pattern => pattern.test(value)) ?? null;
 }
 
+function createBoundedDiagnosticPairPatterns(firstPattern, secondPatterns, maxDistance) {
+    return secondPatterns.flatMap(secondPattern => [
+        new RegExp(`${firstPattern.source}[\\s\\S]{0,${maxDistance}}${secondPattern.source}`, 'i'),
+        new RegExp(`${secondPattern.source}[\\s\\S]{0,${maxDistance}}${firstPattern.source}`, 'i'),
+    ]);
+}
+
 function parseCheckRunId(checkRunUrl) {
     if (typeof checkRunUrl !== 'string') {
         return null;
@@ -720,6 +727,7 @@ module.exports = {
     windowsProcessInitializationFailurePatterns,
     matchesAny,
     findMatchingPattern,
+    createBoundedDiagnosticPairPatterns,
     parseCheckRunId,
     getPullRequestNumbers,
     getHeadRepositoryOwnerLogin,

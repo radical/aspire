@@ -6,8 +6,8 @@
 // PR/manual analysis currently enables force mode: no classification, an open PR,
 // and at most three automatic retries. Main never uses force mode: every real
 // failure must match its narrow allowlist, with at most one retry of current main.
-const pullRequest = require('./auto-rerun/pull-request.js');
-const main = require('./auto-rerun/main.js');
+const pullRequest = require('./auto-rerun/rerun-pull-request.js');
+const main = require('./auto-rerun/rerun-main.js');
 
 function selectPolicy({ eventName, owner, repo, workflowRun }) {
     if (owner !== 'microsoft' || !workflowRun || (workflowRun.name && workflowRun.name !== 'CI')) {
