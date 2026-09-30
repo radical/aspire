@@ -1,0 +1,747 @@
+{
+  "now": "2026-09-30T18:19:23+00:00",
+  "windows": {
+    "current": {
+      "start": "2026-09-23",
+      "end": "2026-09-29"
+    },
+    "prior": {
+      "start": "2026-09-16",
+      "end": "2026-09-22"
+    },
+    "last_five_weekdays": [
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29"
+    ]
+  },
+  "config": {
+    "rolling_window_days": 7,
+    "graph_history_days": 30,
+    "history_retention_days": 180,
+    "health_thresholds": {
+      "green": 90,
+      "yellow": 75
+    },
+    "primary_lane": "github-ci-main",
+    "diagnostics_lane": "github-ci-main",
+    "lanes": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "label": "GitHub CI \u2014 main",
+        "primary": true,
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "label": "GitHub outerloop \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "label": "AzDO internal \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      }
+    ]
+  },
+  "history": {
+    "lane_identity": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "branch": "main",
+        "definition_id": null
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "branch": "main",
+        "definition_id": null
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "branch": "refs/heads/main",
+        "definition_id": 1602
+      }
+    ],
+    "coverage": {
+      "start": "2026-09-16",
+      "end": "2026-09-29",
+      "days": 14,
+      "reduced": true,
+      "refresh_days": 14
+    },
+    "lanes": {
+      "github-ci-main": [
+        {
+          "date": "2026-09-16",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 13,
+          "rolling_pass_rate": 6.1,
+          "rolling_passed": 3,
+          "rolling_failed": 46
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 2,
+          "failed": 11,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 4,
+          "rolling_failed": 51
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 3,
+          "failed": 7,
+          "rolling_pass_rate": 11.9,
+          "rolling_passed": 7,
+          "rolling_failed": 52
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 1,
+          "failed": 13,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 7,
+          "rolling_failed": 55
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 10.9,
+          "rolling_passed": 7,
+          "rolling_failed": 57
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 12.5,
+          "rolling_passed": 7,
+          "rolling_failed": 49
+        }
+      ],
+      "github-outerloop-main": [
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        }
+      ],
+      "azdo-internal-main": [
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 9,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 40
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 2,
+          "failed": 1,
+          "rolling_pass_rate": 5.0,
+          "rolling_passed": 2,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 3,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 6,
+          "failed": 1,
+          "rolling_pass_rate": 22.0,
+          "rolling_passed": 9,
+          "rolling_failed": 32
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 3,
+          "failed": 1,
+          "rolling_pass_rate": 31.6,
+          "rolling_passed": 12,
+          "rolling_failed": 26
+        }
+      ]
+    }
+  },
+  "lanes": {
+    "github-ci-main": {
+      "id": "github-ci-main",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "branch": "main",
+      "label": "GitHub CI \u2014 main",
+      "primary": true,
+      "diagnostics": true,
+      "recent": [
+        7,
+        52
+      ],
+      "current": [
+        7,
+        56
+      ],
+      "prior": [
+        3,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 6.4,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 36636729143,
+        "identity": "github:36636729143",
+        "source": "github",
+        "created_at": "2026-09-29T21:58:37Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "github-outerloop-main": {
+      "id": "github-outerloop-main",
+      "provider": "github-actions",
+      "workflow": "tests-outerloop.yml",
+      "event": "schedule",
+      "branch": "main",
+      "label": "GitHub outerloop \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        0,
+        5
+      ],
+      "current": [
+        0,
+        7
+      ],
+      "prior": [
+        0,
+        7
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 36511652601,
+        "identity": "github:36511652601",
+        "source": "github",
+        "created_at": "2026-09-29T02:14:21Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "azdo-internal-main": {
+      "id": "azdo-internal-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1602,
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "batchedCI",
+        "individualCI"
+      ],
+      "label": "AzDO internal \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        9,
+        34
+      ],
+      "current": [
+        12,
+        38
+      ],
+      "prior": [
+        0,
+        28
+      ],
+      "change": {
+        "label": "\u2191 32 pts",
+        "delta": 31.6,
+        "meaningful": true
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 3090968,
+        "identity": "azure-devops:3090968",
+        "source": "azure-devops",
+        "created_at": "2026-09-29T19:26:50.7338444Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    }
+  },
+  "reruns": {
+    "runs": 1,
+    "recovered": 0,
+    "human": 1,
+    "bot": 0,
+    "unrecovered": 1
+  },
+  "category_trends": {
+    "test": {
+      "label": "Test",
+      "current": [
+        49,
+        56
+      ],
+      "prior": [
+        46,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -6.4,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "build": {
+      "label": "Build / tooling",
+      "current": [
+        0,
+        56
+      ],
+      "prior": [
+        0,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "workflow": {
+      "label": "Workflow / other",
+      "current": [
+        0,
+        56
+      ],
+      "prior": [
+        0,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    }
+  },
+  "multi_category_runs": {
+    "current": 0,
+    "prior": 0
+  },
+  "chart": [
+    {
+      "date": "2026-09-16",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null
+    },
+    {
+      "date": "2026-09-17",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null
+    },
+    {
+      "date": "2026-09-18",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null
+    },
+    {
+      "date": "2026-09-19",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null
+    },
+    {
+      "date": "2026-09-20",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null
+    },
+    {
+      "date": "2026-09-21",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null
+    },
+    {
+      "date": "2026-09-22",
+      "passed": 0,
+      "failed": 13,
+      "rolling_pass_rate": 6.1,
+      "rolling_passed": 3,
+      "rolling_failed": 46
+    },
+    {
+      "date": "2026-09-23",
+      "passed": 2,
+      "failed": 11,
+      "rolling_pass_rate": 7.3,
+      "rolling_passed": 4,
+      "rolling_failed": 51
+    },
+    {
+      "date": "2026-09-24",
+      "passed": 3,
+      "failed": 7,
+      "rolling_pass_rate": 11.9,
+      "rolling_passed": 7,
+      "rolling_failed": 52
+    },
+    {
+      "date": "2026-09-25",
+      "passed": 1,
+      "failed": 13,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 7,
+      "rolling_failed": 55
+    },
+    {
+      "date": "2026-09-26",
+      "passed": 0,
+      "failed": 3,
+      "rolling_pass_rate": 10.9,
+      "rolling_passed": 7,
+      "rolling_failed": 57
+    },
+    {
+      "date": "2026-09-27",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58
+    },
+    {
+      "date": "2026-09-28",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58
+    },
+    {
+      "date": "2026-09-29",
+      "passed": 0,
+      "failed": 4,
+      "rolling_pass_rate": 12.5,
+      "rolling_passed": 7,
+      "rolling_failed": 49
+    }
+  ],
+  "verdict": "holding"
+}
