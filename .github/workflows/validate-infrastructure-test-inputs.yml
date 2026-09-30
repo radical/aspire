@@ -1,0 +1,63 @@
+name: Validate Infrastructure Test Inputs
+
+on:
+  pull_request:
+    paths:
+      # Pipeline inputs read directly by Infrastructure.Tests. Keep this list exact so unrelated
+      # Azure DevOps changes do not trigger the semantic test lane.
+      - eng/pipelines/azure-pipelines.yml
+      - eng/pipelines/common-variables.yml
+      - eng/pipelines/release-publish-nuget.yml
+      - eng/pipelines/templates/build_sign_native.yml
+      - eng/pipelines/templates/prepare-npm-cli-packages.yml
+      - eng/pipelines/templates/prepare-winget-manifest.yml
+      - eng/pipelines/templates/publish-winget.yml
+      - docs/specs/npm-cli-package.md
+      - docs/release-process.md
+
+      # These workflows are skipped by the main CI gate but are still semantic inputs to
+      # Infrastructure.Tests. Generated agentic workflows remain owned by validate-agentic-workflows.
+      - .github/workflows/apply-test-attributes.yml
+      - .github/workflows/backmerge-release.yml
+      - .github/workflows/backport.yml
+      - .github/workflows/dogfood-comment.yml
+      - .github/workflows/generate-api-diffs.yml
+      - .github/workflows/generate-ats-diffs.yml
+      - .github/workflows/labeler-*.yml
+      - .github/workflows/markdownlint*.yml
+      - .github/workflows/pr-review-needed.yml
+      - .github/workflows/refresh-manifests.yml
+      - .github/workflows/release-github-tasks.yml
+      - .github/workflows/reproduce-flaky-tests.yml
+      - .github/workflows/specialized-test-runner.yml
+      - .github/workflows/tests-outerloop.yml
+      - .github/workflows/tests-quarantine.yml
+      - .github/workflows/update-*.yml
+      - .github/workflows/auto-rerun-transient-ci-failures.*
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Run semantic infrastructure tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: ./restore.sh
+
+      - name: Run Infrastructure.Tests
+        run: |
+          dotnet test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj \
+            --no-launch-profile -- \
+            --filter-not-trait "quarantined=true" \
+            --filter-not-trait "outerloop=true"

@@ -43,6 +43,7 @@ src/Components/*/api/*.ats.txt
 
 # Engineering pipeline scripts (Azure DevOps, not used in the GitHub CI build)
 eng/pipelines/**
+eng/Publishing.props
 eng/test-configuration.json
 
 Aspire-Core.slnf
