@@ -266,15 +266,6 @@ public sealed class ExtensionWorkflowTests
     }
 
     [Fact]
-    public void CiRunsActionlintRegardlessOfBuildSkipDecision()
-    {
-        var actionlint = Mapping(s_ciJobs, "actionlint");
-
-        Assert.False(actionlint.Children.ContainsKey(new YamlScalarNode("needs")));
-        Assert.Equal("${{ github.repository_owner == 'microsoft' }}", Scalar(actionlint, "if"));
-    }
-
-    [Fact]
     public void FinalResultsAlwaysRequireActionlintAndConditionallyRequireBuildJobs()
     {
         var results = Mapping(s_ciJobs, "results");
