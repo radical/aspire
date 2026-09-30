@@ -155,6 +155,12 @@ public sealed class InfrastructureTestInputRoutingTests(ITestOutputHelper output
         Assert.Contains("needs.tests.result != 'success'", condition, StringComparison.Ordinal);
         Assert.Contains("needs.prepare_for_ci.outputs.stabilization_required == 'true'", condition, StringComparison.Ordinal);
         Assert.Contains("needs.stabilization_check.result != 'success'", condition, StringComparison.Ordinal);
+
+        if (jobs.Children.ContainsKey(new YamlScalarNode("actionlint")))
+        {
+            Assert.Contains("actionlint", Sequence(results, "needs").Children.Select(node => node.ToString()));
+            Assert.Contains("needs.actionlint.result != 'success'", condition, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
