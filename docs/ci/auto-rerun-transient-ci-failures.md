@@ -56,8 +56,9 @@ Passes 1–2 are hardcoded because they target well-known infrastructure signatu
 
 The manual and automatic PR paths use the broad transient-failure analysis when force mode is disabled. Current-main reruns always use the separate policy below and do not consult the configurable PR job-log or TRX retry patterns.
 
-The automatic-attempt policies are exported from
-[`auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js).
+The pull request attempt cap is defined in
+[`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js), and the
+current-main cap is defined in [`auto-rerun/main.js`](../../.github/workflows/auto-rerun/main.js).
 `defaultMaxRunAttempt` remains 3 for pull request runs. `mainMaxRunAttempt` is 1,
 so only the first failed rolling `main` attempt can request a retry.
 
@@ -204,7 +205,7 @@ The policies deliberately apply different rails:
 
 | Rail | Scope | Detail |
 |------|-------|--------|
-| **Attempt limit** | All paths | Pull request source attempts use `defaultMaxRunAttempt` (3). Current-`main` source attempts use `mainMaxRunAttempt` (1), allowing exactly one retry. Both constants are defined in [`auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js). |
+| **Attempt limit** | All paths | Pull request source attempts use `defaultMaxRunAttempt` (3), defined in [`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js). Current-`main` source attempts use `mainMaxRunAttempt` (1), defined in [`auto-rerun/main.js`](../../.github/workflows/auto-rerun/main.js), allowing exactly one retry. |
 | **Open PR** | Pull request and manual paths | At least one associated pull request must still be open, including in force mode. |
 | **Retryable job cap** | Normal PR analysis and current-main | At least 1 but no more than 5 retryable jobs (default). Pull request attempts after the first use the existing stricter count rule. Current-main only considers source attempt 1 and requires every real failed job to match. Force mode bypasses this cap because it does not enumerate jobs. |
 | **Non-aggregator** | Normal PR analysis and current-main | Aggregator jobs (`Final Results`, `Tests / Final Test Results`) are excluded from analysis. Force mode bypasses analysis and lets GitHub rerun the failed set. |
@@ -229,7 +230,7 @@ Rerun decisions and skip reasons are reported in the workflow logs and job summa
 
 > **For-now behavior:** the workflow reruns the failed CI jobs on any failed run with an open PR, without analyzing the failure. This stays in place until CI auto-rerun patterns are improved (e.g. agents curating the transient-failure rules). Disable it by flipping the flag (see below); the classification rules are kept intact behind it.
 
-The pull request and manual-dispatch paths currently run in **force mode**, enabled by the `FORCE_RERUN_ALL: 'true'` environment variable passed through the pull request analysis and rerun jobs in [`auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml). Force mode is a **short-circuit**: as soon as the run is eligible (failed run, attempt within the configured cap, open PR), it requests a rerun of the failed jobs and stops. It does not look at individual jobs at all. The current-main path does not use force mode.
+The pull request and manual-dispatch paths currently run in **force mode**, enabled by the `FORCE_RERUN_ALL: 'true'` environment variable on the analysis job in [`auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml). The analyzed policy carries this flag into execution, so it has one source of truth. Force mode is a **short-circuit**: as soon as the run is eligible (failed run, attempt within the configured cap, open PR), it requests a rerun of the failed jobs and stops. It does not look at individual jobs at all. The current-main path does not use force mode.
 
 **Force mode bypasses:**
 
@@ -246,7 +247,7 @@ Because the rerun uses GitHub's `rerun-failed-jobs` API — which reruns **all**
 
 The classification rules and [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) config are left fully intact; force mode is gated behind an optional `forceRerunAll` flag (default `false`), so the normal behavior is preserved when it is off.
 
-**To disable:** set `FORCE_RERUN_ALL: 'true'` to `'false'` (or remove the env var) on both jobs in the YAML.
+**To disable:** set `FORCE_RERUN_ALL: 'true'` to `'false'` (or remove the env var) on the analysis job in the YAML.
 
 ### PR association
 
@@ -256,13 +257,30 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 
 | File | Role |
 |------|------|
-| [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | YAML workflow: orchestration, GitHub API calls, artifact download, TRX file I/O |
-| [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | JavaScript module: all testable logic — pattern matching, job classification, TRX parsing, promotion, summary formatting |
+| [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | Two thin callers: read-only analysis and write-capable execution |
+| [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | Dispatcher: validates source context and selects the PR or current-main policy for each phase |
+| [`.github/workflows/auto-rerun/pull-request.js`](../../.github/workflows/auto-rerun/pull-request.js) | PR/manual policy: force mode, broad classification, configurable patterns, and TRX artifact analysis |
+| [`.github/workflows/auto-rerun/main.js`](../../.github/workflows/auto-rerun/main.js) | Current-main policy: narrow allowlist, one retry, and final freshness checks |
+| [`.github/workflows/auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js) | Shared diagnostics, eligibility primitives, failed-job rerun request, and reporting |
+| [`.github/workflows/auto-rerun/github.js`](../../.github/workflows/auto-rerun/github.js) | Shared attempt-scoped job, annotation, and log access |
 | [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) | Configuration: test failure and job failure patterns |
 | [`tests/.../auto-rerun-transient-ci-failures.harness.js`](../../tests/Infrastructure.Tests/WorkflowScripts/auto-rerun-transient-ci-failures.harness.js) | Node.js test harness: bridges C# xUnit tests to the JS module functions |
 | [`tests/.../AutoRerunTransientCiFailuresTests.cs`](../../tests/Infrastructure.Tests/WorkflowScripts/AutoRerunTransientCiFailuresTests.cs) | C# test class: behavior-focused tests covering all matcher logic |
 
-The JS module is intentionally separated from the YAML workflow so that all classification, matching, and formatting logic can be tested via the Node.js harness without mocking GitHub APIs. The YAML workflow only handles orchestration: fetching jobs, downloading artifacts, and calling the GitHub rerun API.
+The YAML passes GitHub context, the manual run ID, dry-run and force-mode flags,
+and the phase to the same JavaScript dispatcher. The scripts own policy routing,
+GitHub API access, artifact analysis, and rerun execution.
+
+The two jobs are separate to keep the analysis job's `GITHUB_TOKEN` read-only.
+GitHub Actions permissions are fixed per job: permission levels cannot use
+expressions, and a token cannot be escalated between steps. Only the execution
+job gets rerun and PR-comment write permissions. See
+[GitHub's job permissions reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idpermissions).
+
+Analysis emits a serialized decision. Execution selects the same policy from
+that decision, checks eligibility, and invokes its handler. The PR handler
+rechecks open PRs; the main handler revalidates the live run and branch state
+immediately before the shared failed-job rerun request.
 
 ## Tests
 
@@ -279,6 +297,7 @@ They are intentionally behavior-focused rather than regex-focused:
 - they test TRX parsing, output capping, XML entity decoding, and the `analyzeTrxFiles` deduplication
 - they test the `promoteTestExecutionFailureJobs` promotion logic and `selectTestResultsArtifact` selection
 - they test the `analyzeFailedJobs` integration with `retryPatternsConfig` for job log pattern matching
+- they exercise dispatcher routing, manual dry-run handling, PR force-mode job-read bypass, and main freshness checks across both phases
 
 ### Running the tests
 

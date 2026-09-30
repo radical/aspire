@@ -1,6 +1,16 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const rerunWorkflow = require('../../../.github/workflows/auto-rerun-transient-ci-failures.js');
+const dispatcher = require('../../../.github/workflows/auto-rerun-transient-ci-failures.js');
+const pullRequest = require('../../../.github/workflows/auto-rerun/pull-request.js');
+const mainPolicy = require('../../../.github/workflows/auto-rerun/main.js');
+const common = require('../../../.github/workflows/auto-rerun/common.js');
+const rerunWorkflow = {
+    ...common, ...pullRequest, ...mainPolicy, ...dispatcher,
+    // Existing fixtures cover each policy's execution independently.
+    rerunMatchedJobs: options => options.sourceRunScope === 'main'
+        ? mainPolicy.rerunMainFailures(options)
+        : pullRequest.rerunPullRequestFailures(options),
+};
 
 class SummaryRecorder {
     constructor() {
@@ -51,6 +61,53 @@ async function main() {
 
 async function dispatch(operation, payload) {
     switch (operation) {
+        case 'selectPolicy':
+            return rerunWorkflow.selectPolicy(payload);
+
+        case 'dispatchWorkflow': {
+            const requests = [];
+            const outputs = {};
+            const messages = [];
+            const summary = new SummaryRecorder();
+            const github = createGitHubRecorder(payload, requests);
+            github.rest = {
+                actions: {
+                    getWorkflowRun: async options => {
+                        requests.push({ route: 'getWorkflowRun', payload: options });
+                        return { data: payload.workflowRun };
+                    },
+                },
+            };
+            const core = {
+                summary,
+                setOutput: (name, value) => { outputs[name] = value; },
+                info: message => messages.push(message),
+                warning: message => messages.push(message),
+                setFailed: message => messages.push(message),
+            };
+            const context = {
+                repo: { owner: payload.owner ?? 'microsoft', repo: payload.repo ?? 'aspire' },
+                eventName: payload.eventName ?? 'workflow_run',
+                payload: { workflow_run: payload.workflowRun },
+            };
+            const analysis = await dispatcher.run({
+                phase: 'analyze',
+                github, core, context,
+                runId: payload.runId,
+                dryRun: payload.dryRun ?? false,
+                forceRerunAll: payload.forceRerunAll ?? false,
+                workspace: path.resolve(__dirname, '../../..'),
+            });
+            const analysisRequests = [...requests];
+            if (analysis?.executionEligible && payload.execute) {
+                await dispatcher.run({
+                    phase: 'execute', github, core, context,
+                    analysis: JSON.parse(outputs.analysis),
+                });
+            }
+            return { analysis, analysisRequests, requests, outputs, messages, events: summary.events };
+        }
+
         case 'analyzeFailedJobs':
             {
                 const logRequestJobIds = [];
@@ -208,6 +265,13 @@ function createGitHubRecorder(payload, requests) {
     return {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
+
+            if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs') {
+                return { data: { jobs: payload.jobs ?? [] }, headers: {} };
+            }
+            if (route === 'GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations') {
+                return { data: payload.annotations ?? [], headers: {} };
+            }
 
             if (payload.failedRequestRoutes?.includes(route)) {
                 throw new Error(`Simulated request failure for ${route}`);
