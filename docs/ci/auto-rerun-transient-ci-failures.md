@@ -6,7 +6,7 @@ This document explains how the automatic CI rerun system works and how to config
 
 When a `CI` pull request run fails on GitHub Actions, a companion workflow automatically analyzes the failure, determines whether it was caused by transient infrastructure or test issues, and — if safe — requests GitHub to rerun the failed jobs. It also posts a comment on the PR explaining what it did and why.
 
-A failed `push` run for the current `main` SHA uses the same failed-job rerun helper in this workflow, but does not wait for failure classification. Failed source attempts through the configured cap request an unconditional rerun; the next attempt is reserved for final failure analysis. Immediately before the request, the workflow re-fetches the run, `refs/heads/main`, and the workflow's main run list. It skips the write unless the run attempt is unchanged, the failed SHA is still current, no newer main CI run supersedes it, and the attempt cap is not exceeded. If an otherwise eligible rerun request does not complete successfully, the workflow remains failed and dispatches fallback Copilot analysis pinned to that failed attempt and SHA. The analyzer skips the fallback if the live run has advanced, including when GitHub started the rerun but the request response was lost.
+A failed `push` run for the current `main` SHA uses the same failed-job rerun helper in this workflow, but does not wait for failure classification. Source attempt 1 requests one unconditional retry; attempt 2 remains failed if it does not pass. Before the request, the workflow re-fetches the run, `refs/heads/main`, and the workflow's main run list. It skips the write unless the run is still the same completed failed attempt, the failed SHA is still current, no newer main CI run supersedes it, and the attempt cap is not exceeded. The GitHub API has no atomic expected-attempt precondition, so the final run revalidation minimizes but cannot eliminate the check-to-write race.
 
 **Scheduled `Outerloop Tests` runs use a separate, simpler workflow.** Outerloop runs have no associated PR, so they are rerun unconditionally (no analysis, no PR comment) with the same attempt cadence. See [Auto-rerun outerloop failures](auto-rerun-outerloop-failures.md).
 
@@ -51,17 +51,15 @@ Passes 1–2 are hardcoded because they target well-known infrastructure signatu
 | Trigger | Behavior |
 |---------|----------|
 | **Automatic PR rerun** (`workflow_run` on `CI` completion) | Runs whenever a `CI` pull request workflow concludes with failure. No manual action needed. |
-| **Automatic current-main rerun** (`workflow_run` on `CI` pushes to `main`) | Unconditionally reruns failed jobs through the configured source-attempt cap while the failed run is still the latest run for the current `main` SHA. The following attempt is analyzed instead of rerun. |
+| **Automatic current-main rerun** (`workflow_run` on `CI` pushes to `main`) | Unconditionally reruns failed jobs once from source attempt 1 while the failed run is still the latest run for the current `main` SHA. |
 | **Manual** (`workflow_dispatch`) | Enter a `CI` run ID to analyze. Supports a `dry_run` option that produces the analysis summary without actually requesting a rerun. |
 
 The manual and automatic PR paths use the transient-failure analysis and its safety rails. Current-main reruns use deterministic live-state checks instead of failure classification.
 
-The automatic-attempt policy has one runtime source:
-`defaultMaxRunAttempt` in
+The automatic-attempt policies are exported from
 [`auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js).
-Change that constant to change how many failed source attempts may request a
-rerun. The analyzer derives its final attempt as the following attempt; the
-workflows and terminal guard do not carry separate numeric copies.
+`defaultMaxRunAttempt` remains 3 for pull request runs. `mainMaxRunAttempt` is 1,
+so only the first failed rolling `main` attempt can request a retry.
 
 ## Configuring test failure retry patterns
 
@@ -193,7 +191,7 @@ The workflow is intentionally conservative. All of these conditions must be met 
 
 | Rail | Detail |
 |------|--------|
-| **Attempt limit** | The source attempt must not exceed `defaultMaxRunAttempt` in [`auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js). That single value controls both PR and current-`main` automatic reruns; the next attempt is the analyzer's final attempt. |
+| **Attempt limit** | Pull request source attempts use `defaultMaxRunAttempt` (3). Current-`main` source attempts use `mainMaxRunAttempt` (1), allowing exactly one retry. Both constants are defined in [`auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js). |
 | **Retryable job cap** | At least 1 but no more than 5 retryable jobs (default). On attempts > 1, the cap is stricter: the count must be *strictly less than* 5. |
 | **Open PR** | At least one associated pull request must still be open. |
 | **Non-aggregator** | Aggregator jobs (`Final Results`, `Tests / Final Test Results`) are excluded from analysis. |
@@ -204,12 +202,13 @@ When a rerun is requested, GitHub reruns **all** failed jobs for that attempt �
 Current-main reruns have additional fail-closed rails:
 
 - the live run must still be a `push` of `.github/workflows/ci.yml` on `main` for the trusted SHA
-- the live attempt must equal the attempt that triggered analysis
+- the live run must still be completed with a failure conclusion
+- the live attempt, run number, and workflow identity must equal the values validated before polling
 - `refs/heads/main` must still point to the failed SHA
 - no main run for the same workflow may have a greater run number
-- the source attempt must not exceed the shared `defaultMaxRunAttempt` policy
+- the source attempt must not exceed the `mainMaxRunAttempt` policy
 
-Rerun decisions and skip reasons are reported in the workflow logs and job summary. A failed rerun request dispatches the analyzer with the failed run ID, attempt, SHA, and an explicit fallback marker. The analyzer fetches that immutable attempt and still requires that the live attempt remain failed and unchanged for the current `main` SHA with no newer main run.
+Rerun decisions and skip reasons are reported in the workflow logs and job summary. If GitHub rejects the rerun request, the workflow fails directly so the request failure remains visible.
 
 ## Force-rerun all failures (`FORCE_RERUN_ALL`)
 
@@ -227,7 +226,7 @@ Because the rerun uses GitHub's `rerun-failed-jobs` API — which reruns **all**
 **Force mode keeps:**
 
 - **The open-PR requirement** — a rerun only fires for a run that has a currently-open associated PR. Runs with no associated PR, or where every associated PR is closed/merged, are still skipped. There is no value in spending CI on an inactive PR, so force mode does not bypass this.
-- **The attempt cap** — reruns still stop after the shared `defaultMaxRunAttempt` policy is exceeded.
+- **The attempt cap** — pull request reruns still stop after the `defaultMaxRunAttempt` policy is exceeded.
 - **Failed-run-only triggering** — the workflow only fires on `workflow_run.conclusion == 'failure'`. A `cancelled` run (which is what you get when a run is cancelled, or when fail-fast cancels siblings) has conclusion `cancelled`, not `failure`, so it never triggers a rerun. Cancellation is excluded for free by the trigger; force mode adds nothing here.
 
 The classification rules and [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) config are left fully intact; force mode is gated behind an optional `forceRerunAll` flag (default `false`), so the normal behavior is preserved when it is off.
@@ -244,8 +243,6 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 |------|------|
 | [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | YAML workflow: orchestration, GitHub API calls, artifact download, TRX file I/O |
 | [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | JavaScript module: all testable logic — pattern matching, job classification, TRX parsing, promotion, summary formatting |
-| [`.github/workflows/analyze-ci-failure.md`](../../.github/workflows/analyze-ci-failure.md) | Independent failure classification and cause publication; never requests current-main reruns |
-| [`.github/workflows/analyze-ci-failure-terminal.sh`](../../.github/workflows/analyze-ci-failure-terminal.sh) | Checks that a final failed attempt or failed-rerun fallback is still current before analyzer collection and publication |
 | [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) | Configuration: test failure and job failure patterns |
 | [`tests/.../auto-rerun-transient-ci-failures.harness.js`](../../tests/Infrastructure.Tests/WorkflowScripts/auto-rerun-transient-ci-failures.harness.js) | Node.js test harness: bridges C# xUnit tests to the JS module functions |
 | [`tests/.../AutoRerunTransientCiFailuresTests.cs`](../../tests/Infrastructure.Tests/WorkflowScripts/AutoRerunTransientCiFailuresTests.cs) | C# test class: behavior-focused tests covering all matcher logic |

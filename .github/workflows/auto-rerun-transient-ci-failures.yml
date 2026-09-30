@@ -71,7 +71,7 @@ jobs:
           # Short-circuit the analysis: if a CI run failed and has a currently-open
           # associated PR, rerun its failed jobs — no job is fetched or classified, and
           # there is no job-count cap. The "CI failed" gate comes from the job-level `if`
-          # above; the shared defaultMaxRunAttempt policy, open-PR requirement, and
+          # above; the defaultMaxRunAttempt policy, open-PR requirement, and
           # manual-dispatch attempt cap are preserved. This is a for-now measure until CI
           # auto-rerun patterns are improved; disable by setting this to 'false' (or
           # removing it) on both jobs. See docs/ci/auto-rerun-transient-ci-failures.md.
@@ -547,22 +547,10 @@ jobs:
               sourceRunUrl: run.html_url,
               summary: core.summary,
               retryableJobs: [],
-              maxRunAttempt: rerunWorkflow.defaultMaxRunAttempt,
+              maxRunAttempt: rerunWorkflow.mainMaxRunAttempt,
               forceRerunAll: true,
             });
             core.info(`Current-main rerun: ${state.outcome} (${state.reason}).`);
             if (state.outcome === 'failed') {
-              try {
-                const fallback = await rerunWorkflow.requestMainFailureAnalysis(details);
-                const fallbackReference = fallback.workflowRunUrl
-                  ? ` Fallback analysis: ${fallback.workflowRunUrl}.`
-                  : '';
-                core.setFailed(
-                  `Current-main rerun failed: ${state.reason}. ` +
-                  `Fallback Copilot analysis was requested for CI run ${run.id}.${fallbackReference}`);
-              } catch (error) {
-                core.setFailed(
-                  `Current-main rerun failed: ${state.reason}. ` +
-                  `Fallback Copilot analysis could not be requested: ${error.message}`);
-              }
+              core.setFailed(`Current-main rerun failed: ${state.reason}.`);
             }

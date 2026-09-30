@@ -10,8 +10,7 @@ on:
     workflows: ["CI"]
     types:
       - completed
-    # workflow_run executes trusted default-branch code. Treat the triggering run as untrusted
-    # data and revalidate its live identity before collecting or publishing analysis.
+    # Intentional for now: only analyze CI runs for builds against main while this workflow is being validated.
     branches:
       - main
   workflow_dispatch:
@@ -20,19 +19,6 @@ on:
         description: "CI workflow run ID to analyze"
         required: true
         type: number
-      run_attempt:
-        description: "Trusted CI workflow run attempt for failed-rerun fallback analysis"
-        required: false
-        type: number
-      head_sha:
-        description: "Trusted CI workflow run SHA for failed-rerun fallback analysis"
-        required: false
-        type: string
-      retry_request_failed:
-        description: "Analyze an early current-main failure because its automatic rerun request failed"
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   collect-data:
@@ -43,6 +29,7 @@ jobs:
         github.event_name == 'workflow_dispatch'
         || (
           github.event.workflow_run.conclusion == 'failure'
+          && github.event.workflow_run.run_attempt <= 3
         )
       )
     permissions:
@@ -68,20 +55,15 @@ jobs:
             .github/workflows/analyze-ci-failure-history.sh
             .github/workflows/analyze-ci-failure-candidates.sh
             .github/workflows/analyze-ci-failure-persistence.sh
-            .github/workflows/analyze-ci-failure-terminal.sh
-            .github/workflows/auto-rerun-transient-ci-failures.js
           sparse-checkout-cone-mode: false
       - name: Collect CI failure data
         id: collect
         env:
           REPO: ${{ github.repository }}
           MANUAL_RUN_ID: ${{ inputs.run_id }}
-          MANUAL_RUN_ATTEMPT: ${{ inputs.run_attempt }}
-          MANUAL_HEAD_SHA: ${{ inputs.head_sha }}
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
           WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           EVENT_NAME: ${{ github.event_name }}
-          RETRY_REQUEST_FAILED: ${{ inputs.retry_request_failed }}
         run: |
           set -euo pipefail
 
@@ -91,11 +73,6 @@ jobs:
           }
 
           mkdir -p ci-failure-data
-          RETRY_REQUEST_FAILED="${RETRY_REQUEST_FAILED:-false}"
-          if [ "$RETRY_REQUEST_FAILED" != "true" ] && [ "$RETRY_REQUEST_FAILED" != "false" ]; then
-            echo "::error::retry_request_failed must be true or false"
-            exit 1
-          fi
 
           # Resolve the run ID
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -108,28 +85,10 @@ jobs:
           set_output "run_id=${RUN_ID}"
 
           # A workflow_run can wait behind another analysis, during which the source run may
-          # be rerun. Pin that event to its immutable attempt. A failed-rerun fallback also
-          # carries immutable identity from the rerun workflow. Other manual dispatches
-          # intentionally analyze the latest attempt.
+          # be rerun. Pin that event to its immutable attempt; manual dispatch intentionally
+          # analyzes the latest attempt.
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            if [ "${RETRY_REQUEST_FAILED}" = "true" ]; then
-              if ! [[ "${MANUAL_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]; then
-                echo "::error::Failed-rerun fallback requires a positive run_attempt"
-                exit 1
-              fi
-              if [ -z "${MANUAL_HEAD_SHA:-}" ]; then
-                echo "::error::Failed-rerun fallback requires head_sha"
-                exit 1
-              fi
-              RUN_METADATA_ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}/attempts/${MANUAL_RUN_ATTEMPT}"
-            else
-              if { [ -n "${MANUAL_RUN_ATTEMPT:-}" ] && [ "${MANUAL_RUN_ATTEMPT}" != "0" ]; } ||
-                 [ -n "${MANUAL_HEAD_SHA:-}" ]; then
-                echo "::error::run_attempt and head_sha are only valid with retry_request_failed"
-                exit 1
-              fi
-              RUN_METADATA_ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}"
-            fi
+            RUN_METADATA_ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}"
           else
             if ! [[ "${WORKFLOW_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
               echo "::error::The workflow_run event did not provide a valid run attempt"
@@ -148,29 +107,6 @@ jobs:
           HEAD_BRANCH=$(jq -r '.head_branch // ""' ci-failure-data/run.json)
           RUN_URL=$(jq -r '.html_url // ""' ci-failure-data/run.json)
           CONCLUSION=$(jq -r '.conclusion // ""' ci-failure-data/run.json)
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ] &&
-             [ "${RETRY_REQUEST_FAILED}" = "true" ] &&
-             ! jq -e \
-               --argjson id "${RUN_ID}" \
-               --argjson attempt "${MANUAL_RUN_ATTEMPT}" \
-               --arg sha "${MANUAL_HEAD_SHA}" '
-                 .id == $id and .run_attempt == $attempt and .head_sha == $sha
-               ' ci-failure-data/run.json >/dev/null; then
-            echo "::error::Failed-rerun fallback metadata did not match the trusted run identity"
-            exit 1
-          fi
-          if ! [[ "${RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::Run ${RUN_ID} did not provide a valid run attempt"
-            exit 1
-          fi
-          MAX_RUN_ATTEMPT=$(node -e '
-            const policy = require("./.github/workflows/auto-rerun-transient-ci-failures.js");
-            if (!Number.isInteger(policy.defaultMaxRunAttempt) || policy.defaultMaxRunAttempt < 1) {
-              throw new Error("defaultMaxRunAttempt must be a positive integer");
-            }
-            process.stdout.write(String(policy.defaultMaxRunAttempt));
-          ')
-          FINAL_ANALYSIS_ATTEMPT=$((MAX_RUN_ATTEMPT + 1))
           if [ "$RUN_WORKFLOW_PATH" != ".github/workflows/ci.yml" ]; then
             echo "::error::Run ${RUN_ID} belongs to workflow '${RUN_WORKFLOW_PATH}', not '.github/workflows/ci.yml'"
             exit 1
@@ -197,13 +133,6 @@ jobs:
           if [ "${CONCLUSION}" = "success" ]; then
             echo "Run concluded with success. Nothing to analyze."
             set_output "has_work=false"
-            exit 0
-          fi
-
-          if [ "${EVENT_NAME}" != "workflow_dispatch" ] &&
-             [ "${RUN_ATTEMPT}" -ne "${FINAL_ANALYSIS_ATTEMPT}" ]; then
-            echo "::notice::CI run ${RUN_ID} attempt ${RUN_ATTEMPT} is not the configured final analysis attempt ${FINAL_ANALYSIS_ATTEMPT}."
-            echo "has_work=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -312,7 +241,6 @@ jobs:
             --arg head_sha "${HEAD_SHA}" \
             --arg run_scope "${RUN_SCOPE}" \
             --arg pr_numbers "${PR_NUMBERS}" \
-            --argjson retry_request_failed "${RETRY_REQUEST_FAILED:-false}" \
             '{
               run_id: $run_id,
               run_attempt: $run_attempt,
@@ -320,23 +248,8 @@ jobs:
               head_branch: $head_branch,
               head_sha: $head_sha,
               run_scope: $run_scope,
-              pr_numbers: $pr_numbers,
-              retry_request_failed: $retry_request_failed
+              pr_numbers: $pr_numbers
             }' > ci-failure-data/run-context.json
-
-          if [ "$RUN_SCOPE" = "main" ]; then
-            if bash .github/workflows/analyze-ci-failure-terminal.sh \
-                ci-failure-data/run-context.json "$REPO"; then
-              echo "Analyzing the final failed attempt for current main."
-            else
-              STATUS=$?
-              if [ "$STATUS" -eq 2 ]; then
-                echo "has_work=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              exit "$STATUS"
-            fi
-          fi
 
           # Fetch all jobs for this run attempt.
           # Use --jq '.jobs[]' to emit individual job objects (handles pagination
@@ -787,8 +700,7 @@ safe-outputs:
         The agent must write:
           - /tmp/gh-aw/agent/analysis-result.json (run summary)
           - /tmp/gh-aw/agent/causes/*.json (one file per failure cause)
-        Emit exactly one `publish_data` item with run_id. Include pr_numbers
-        only for pull-request scope.
+        Emit exactly one `publish_data` item with run_id and pr_numbers.
       runs-on: ubuntu-latest
       needs: [safe_outputs]
       if: needs.detection.result == 'success' && needs.detection.outputs.detection_success == 'true' && needs.safe_outputs.result == 'success'
@@ -803,7 +715,8 @@ safe-outputs:
           required: true
           type: number
         pr_numbers:
-          description: "The unambiguous subject PR number for pull-request scope."
+          description: "The unambiguous subject PR number, or an empty string."
+          required: true
           type: string
       env:
         GH_TOKEN: ${{ github.token }}
@@ -823,8 +736,6 @@ safe-outputs:
               .github/workflows/analyze-ci-failure-persistence.sh
               .github/workflows/analyze-ci-failure-comment.sh
               .github/workflows/analyze-ci-failure-issue.sh
-              .github/workflows/analyze-ci-failure-terminal.sh
-              .github/workflows/auto-rerun-transient-ci-failures.js
             sparse-checkout-cone-mode: false
         - uses: actions/download-artifact@v8.0.1
           with:
@@ -837,7 +748,6 @@ safe-outputs:
         - name: Publish analysis data and comment on PR
           env:
             ANALYSIS_DIR: ${{ steps.download-analysis.outputs.download-path }}
-            REPO: ${{ github.repository }}
           run: |
             set -euo pipefail
 
@@ -854,6 +764,7 @@ safe-outputs:
             TRUSTED_RUN_SCOPE=$(jq -r '.run_scope' "$RUN_CONTEXT_FILE")
             VERDICT=$(jq -r '.verdict' "$ANALYSIS_FILE")
 
+            REPO="${{ github.repository }}"
             MEMORY_BRANCH="memory/ci-failure-analysis"
 
             # Read fields from the analysis JSON
@@ -862,18 +773,6 @@ safe-outputs:
             RUN_URL=$(jq -r '.html_url // ""' ci-failure-data/run.json)
             ANALYZED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             PR_NUMBER=$(bash .github/workflows/analyze-ci-failure-persistence.sh pr-number)
-
-            if [ "$RUN_SCOPE" = "main" ]; then
-              if bash .github/workflows/analyze-ci-failure-terminal.sh "$RUN_CONTEXT_FILE" "$REPO"; then
-                echo "Publishing the final failed attempt for current main."
-              else
-                STATUS=$?
-                if [ "$STATUS" -eq 2 ]; then
-                  exit 0
-                fi
-                exit "$STATUS"
-              fi
-            fi
 
             # ── 1. Set up memory branch and merge cause data ──
             # Skip persisting data for code-issue verdicts — these are not
@@ -1087,18 +986,6 @@ safe-outputs:
                   # Check if the stored issue is closed (may need reopening)
                   if [ "$ISSUE_STATE" = "closed" ]; then
                     REOPEN="true"
-                  fi
-                fi
-
-                if [ "$RUN_SCOPE" = "main" ]; then
-                  if bash .github/workflows/analyze-ci-failure-terminal.sh "$RUN_CONTEXT_FILE" "$REPO"; then
-                    echo "Main CI run is still current before issue publication."
-                  else
-                    STATUS=$?
-                    if [ "$STATUS" -eq 2 ]; then
-                      exit 0
-                    fi
-                    exit "$STATUS"
                   fi
                 fi
 
@@ -1457,10 +1344,6 @@ safe-outputs:
               }
               if (trustedRunScope !== 'main' && trustedRunScope !== 'pull-request') {
                 core.setFailed(`Unsupported trusted run scope: ${trustedRunScope}`);
-                return;
-              }
-              if (trustedRunScope === 'main') {
-                core.info('Current-main reruns are handled by the automatic failed-job rerun policy.');
                 return;
               }
               if (!Array.isArray(analysis.failed_jobs) ||
@@ -1877,7 +1760,7 @@ After writing the JSON files (summary + per-cause), take action based on the ver
 
 Set `verdict` to `"transient-infra"` in the JSON. Set `failed_tests` to an empty array for `transient-infra`; a run with any reported failed test must use `flaky-test`, `code-issue`, or `mixed` according to the evidence. Check the `ENABLE_RERUN` environment variable (set in the workflow `env:` block).
 
-**For pull-request scope, if `ENABLE_RERUN` is `'true'`:** Emit the `rerun-failed-jobs` safe output to rerun the failed CI jobs. Current-main failed-job reruns are handled independently by the automatic CI rerun workflow; do not emit this safe output for main scope.
+**If `ENABLE_RERUN` is `'true'`:** Emit the `rerun-failed-jobs` safe output to rerun the failed CI jobs.
 
 **Regardless of `ENABLE_RERUN`:** Emit the `publish-data` safe output so the analysis is pushed to the memory branch and a PR comment is posted.
 
@@ -1910,8 +1793,8 @@ Emit the `publish-data` safe output. Do NOT emit `rerun-failed-jobs`.
 ## Important Rules
 
 1. **Always write the run summary** — every analysis must produce `/tmp/gh-aw/agent/analysis-result.json`. Write cause files in `/tmp/gh-aw/agent/causes/` for `flaky-test`, `infra-failure`, and `main-repository-breakage` causes (NOT for pull-request `code-issue`).
-2. **Always emit the `publish-data` safe output** — include `run_id` for every scope and `pr_numbers` only for pull-request scope so the publish-data job can push the data and publish the result.
-3. **Never rerun when there are code issues** — only emit `rerun-failed-jobs` for pure pull-request infrastructure failures with `ENABLE_RERUN` set to `'true'`. Main reruns are handled by the automatic current-main policy.
+2. **Always emit the `publish-data` safe output** — with `run_id` and `pr_numbers` so the publish-data job can push the data and post a comment.
+3. **Never rerun when there are code issues** — only emit `rerun-failed-jobs` for pure infrastructure failures with `ENABLE_RERUN` set to `'true'`.
 4. **Be specific** — include actual error messages and job/test names in the JSON fields.
 5. **Use scope-appropriate history** — cross-reference PR files only for pull-request scope; for main scope, consider every candidate merge since the last successful main run.
 6. **PR-directed effects require an open, unlocked PR** — for pull-request scope, use the "Pull Request" section as analysis context even when the PR is closed or locked. Still emit `publish-data` so run-scoped persistence can continue; the publication and rerun jobs recheck live PR state immediately before any PR-directed mutation.

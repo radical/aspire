@@ -105,6 +105,9 @@ async function dispatch(operation, payload) {
         case 'getDefaultMaxRunAttempt':
             return rerunWorkflow.defaultMaxRunAttempt;
 
+        case 'getMainMaxRunAttempt':
+            return rerunWorkflow.mainMaxRunAttempt;
+
         case 'validateRetryPatternsConfig':
             return rerunWorkflow.validateRetryPatternsConfig(payload.config);
 
@@ -171,23 +174,13 @@ async function dispatch(operation, payload) {
             return { requests, events: summary.events, returnValue };
         }
 
-        case 'requestMainFailureAnalysis': {
-            const requests = [];
-            const github = createGitHubRecorder(payload, requests);
-            const returnValue = await rerunWorkflow.requestMainFailureAnalysis({
-                ...payload,
-                github,
-            });
-
-            return { requests, returnValue };
-        }
-
         default:
             throw new Error(`Unsupported operation '${operation}'.`);
     }
 }
 
 function createGitHubRecorder(payload, requests) {
+    let currentRunRequestCount = 0;
     let mainRefRequestCount = 0;
     let mainWorkflowRunsRequestCount = 0;
 
@@ -213,8 +206,16 @@ function createGitHubRecorder(payload, requests) {
             }
 
             if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}') {
+                const currentRun = Array.isArray(payload.currentRunResponses)
+                    ? payload.currentRunResponses[
+                        Math.min(currentRunRequestCount++, payload.currentRunResponses.length - 1)]
+                    : payload.currentRun;
                 return {
-                    data: payload.currentRun ?? {
+                    data: currentRun ? {
+                        status: 'completed',
+                        conclusion: 'failure',
+                        ...currentRun,
+                    } : {
                         run_attempt: payload.latestRunAttempt ?? null,
                     },
                 };
@@ -262,11 +263,6 @@ function createGitHubRecorder(payload, requests) {
                     headers: {
                         link: hasNextPage ? '<https://api.github.com/next>; rel="next"' : '',
                     },
-                };
-            }
-            if (route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches') {
-                return {
-                    data: payload.workflowDispatchResponse ?? {},
                 };
             }
             if (route === 'POST /repos/{owner}/{repo}/issues/{issue_number}/comments') {
