@@ -20,6 +20,36 @@ concurrency:
 
 jobs:
 
+  actionlint:
+    name: Lint handwritten workflows
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'microsoft' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          # https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
+          ACTIONLINT_LINUX_AMD64_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_LINUX_AMD64_SHA256}  ${archive}" | sha256sum --check -
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Lint handwritten workflow files
+        run: |
+          find .github/workflows -maxdepth 1 -type f \
+            \( -name '*.yml' -o -name '*.yaml' \) \
+            ! -name '*.lock.yml' \
+            ! -name 'agentics-maintenance*.yml' \
+            -exec actionlint -shellcheck= -pyflakes= {} +
+
   prepare_for_ci:
     runs-on: ubuntu-latest
     name: Prepare for CI
@@ -188,18 +218,19 @@ jobs:
     if: ${{ always() && github.repository_owner == 'microsoft' }}
     runs-on: ubuntu-latest
     name: Final Results
-    needs: [prepare_for_ci, tests, stabilization_check]
+    needs: [actionlint, prepare_for_ci, tests, stabilization_check]
 
     steps:
       - name: Fail if any of the dependent jobs failed
-        # Don't fail if the workflow is being skipped.
+        # Build and test jobs may be skipped, but handwritten workflow lint remains required.
         if: >-
           ${{ always() &&
-              needs.prepare_for_ci.outputs.skip_workflow != 'true' &&
-              (contains(needs.*.result, 'failure') ||
-               contains(needs.*.result, 'cancelled') ||
-               needs.tests.result != 'success' ||
-               needs.stabilization_check.result != 'success') }}
+              (needs.actionlint.result != 'success' ||
+               (needs.prepare_for_ci.outputs.skip_workflow != 'true' &&
+                (contains(needs.*.result, 'failure') ||
+                 contains(needs.*.result, 'cancelled') ||
+                 needs.tests.result != 'success' ||
+                 needs.stabilization_check.result != 'success'))) }}
         run: |
           echo "One or more dependent jobs failed."
           exit 1
@@ -214,12 +245,12 @@ jobs:
   # CI_RED / CI_GREEN are derived from explicit needs.*.result checks rather than
   # failure()/success() because tests/stabilization_check are *skipped* on the
   # no-relevant-changes path (skip_workflow): a skipped run is neither red nor green,
-  # so the script leaves any open issue untouched (no CI signal). Requiring all
-  # three to have *succeeded* for CI_GREEN means a docs-only push never closes a
-  # still-red issue without actually re-running CI.
+  # so the script leaves any open issue untouched (no CI signal). Requiring actionlint
+  # and all three build/test dependencies to have succeeded for CI_GREEN means a
+  # docs-only push never closes a still-red issue without actually re-running CI.
   ci_failure_tracker:
     name: Track CI Failure
-    needs: [prepare_for_ci, tests, stabilization_check]
+    needs: [actionlint, prepare_for_ci, tests, stabilization_check]
     if: ${{ always() && github.event_name == 'push' && github.repository_owner == 'microsoft' }}
     runs-on: ubuntu-latest
     permissions:
@@ -236,7 +267,8 @@ jobs:
           REF: ${{ github.ref_name }}
           CI_RED: ${{ contains(needs.*.result, 'failure') }}
           CI_GREEN: >-
-            ${{ needs.prepare_for_ci.result == 'success' &&
+            ${{ needs.actionlint.result == 'success' &&
+                needs.prepare_for_ci.result == 'success' &&
                 needs.tests.result == 'success' &&
                 needs.stabilization_check.result == 'success' }}
         with:

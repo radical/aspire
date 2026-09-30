@@ -40,7 +40,7 @@ workflow sources still trigger it even before their generated locks exist.
 Compile-time lint diagnostics alone are not a blocking gate. The lint command
 owns the actionlint image and compatibility exceptions; `.github/actionlint.yaml`
 only scopes the known stale-check output workaround to the affected generated
-workflows.
+workflows. Main CI separately runs pinned core actionlint over handwritten workflows and their local actions.
 
 Explicit action versions in Markdown survive recompilation, so update deprecated
 inputs and action runtimes in the sources, not just the generated YAML. The
