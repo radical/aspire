@@ -7,16 +7,16 @@
 // patterns config is not consulted, and there is no job-count cap.
 //
 // The workflow trigger requires a failed CI run. Pull request runs retain the
-// defaultMaxRunAttempt policy, while rolling main runs use mainMaxRunAttempt to
-// request exactly one retry.
+// defaultMaxRunAttempt policy and broad matcher, while rolling main runs use
+// mainMaxRunAttempt and a separate narrow allowlist to request at most one retry.
 //
 // Force mode still KEEPS the open-PR requirement (no point spending CI on a run whose
 // PRs are all closed/merged). `forceRerunAll` defaults to false everywhere, so the
 // normal transient-failure classification/eligibility path — and its tests — are
 // unchanged when the flag is off.
 //
-// To disable: flip FORCE_RERUN_ALL to 'false' (or remove the env var) on both jobs in
-// the YAML. See docs/ci/auto-rerun-transient-ci-failures.md.
+// To disable: flip FORCE_RERUN_ALL to 'false' (or remove the env var) on both pull
+// request jobs in the YAML. See docs/ci/auto-rerun-transient-ci-failures.md.
 const fs = require('node:fs');
 
 const failureConclusions = new Set(['failure', 'cancelled', 'timed_out', 'startup_failure']);
@@ -100,6 +100,36 @@ const postTestCleanupFailureStepPatterns = [
 const windowsProcessInitializationFailurePatterns = [
     /Process completed with exit code -1073741502/i,
     /\b0xC0000142\b/i,
+];
+
+const mainExcludedJobPatterns = [
+    /(?:^|\/ )Hosting-(?:1|5)(?: \(|$)/i,
+];
+
+const mainHostedRunnerLossPattern =
+    /The hosted runner lost communication with the server\./i;
+const mainDiagnosticPairMaxDistance = 500;
+const mainAcrRegistryPattern = /\bnetaspireci\.azurecr\.io\b/i;
+const mainAcrTransportFailurePatterns = [
+    /\bconnect: connection refused\b/i,
+    /\bConnection reset by peer\b/i,
+];
+const mainAcrFailurePatterns = createBoundedDiagnosticPairPatterns(
+    mainAcrRegistryPattern,
+    mainAcrTransportFailurePatterns,
+    mainDiagnosticPairMaxDistance);
+const mainMcrRegistryPattern = /\bmcr\.microsoft\.com\b/i;
+const mainMcrServiceUnavailablePatterns = [
+    /\bHTTP(?:\/[0-9.]+)?(?: status)?[: ]+503\b/i,
+    /\bServiceUnavailable\b/i,
+];
+const mainMcrFailurePatterns = createBoundedDiagnosticPairPatterns(
+    mainMcrRegistryPattern,
+    mainMcrServiceUnavailablePatterns,
+    mainDiagnosticPairMaxDistance);
+const mainPostTestReportingFailureStepPatterns = [
+    /^Check for hang dump files$/i,
+    ...postTestCleanupFailureStepPatterns,
 ];
 
 const infrastructureNetworkFailureLogOverridePatterns = [
@@ -535,6 +565,133 @@ async function analyzeFailedJobs({
     }
 
     return { failedJobs, retryableJobs, skippedJobs };
+}
+
+function classifyMainFailedJob(job, annotationsOrText, jobLogText = '') {
+    const failedSteps = getFailedSteps(job);
+    const failedStepText = failedSteps.join(' | ');
+
+    if (matchesAny(job?.name || '', mainExcludedJobPatterns)) {
+        return {
+            retryable: false,
+            failedSteps,
+            reason: 'Hosting-1 and Hosting-5 are excluded from automatic main reruns because their runner-loss failures can mask DCP or process-lifecycle failures.',
+        };
+    }
+
+    const annotationsText = toAnnotationText(annotationsOrText);
+    const diagnosticTexts = [annotationsText, jobLogText].filter(Boolean);
+    const diagnosticsText = diagnosticTexts.join('\n');
+
+    if (mainHostedRunnerLossPattern.test(annotationsText)) {
+        return {
+            retryable: true,
+            failedSteps,
+            reason: 'The job annotation matched GitHub\'s hosted-runner communication-loss signal.',
+        };
+    }
+
+    if (diagnosticTexts.some(text => matchesAny(text, mainAcrFailurePatterns))) {
+        return {
+            retryable: true,
+            failedSteps,
+            reason: 'The job log matched an Azure Container Registry transport failure.',
+        };
+    }
+
+    if (diagnosticTexts.some(text => matchesAny(text, mainMcrFailurePatterns))) {
+        return {
+            retryable: true,
+            failedSteps,
+            reason: 'The job log matched a Microsoft Container Registry service-unavailable response.',
+        };
+    }
+
+    const hasOnlyPostTestReportingFailures = failedSteps.length > 0 &&
+        failedSteps.every(step => matchesAny(step, mainPostTestReportingFailureStepPatterns));
+    const matchesWindowsProcessInitializationFailure =
+        windowsProcessInitializationFailurePatterns.some(pattern => pattern.test(diagnosticsText));
+
+    if (hasOnlyPostTestReportingFailures && matchesWindowsProcessInitializationFailure) {
+        return {
+            retryable: true,
+            failedSteps,
+            reason: `Post-test/reporting steps '${failedStepText}' matched the Windows process initialization failure signal.`,
+        };
+    }
+
+    return {
+        retryable: false,
+        failedSteps,
+        reason: 'The job did not match the narrow current-main transient infrastructure allowlist.',
+    };
+}
+
+function createBoundedDiagnosticPairPatterns(firstPattern, secondPatterns, maxDistance) {
+    return secondPatterns.flatMap(secondPattern => [
+        new RegExp(`${firstPattern.source}[\\s\\S]{0,${maxDistance}}${secondPattern.source}`, 'i'),
+        new RegExp(`${secondPattern.source}[\\s\\S]{0,${maxDistance}}${firstPattern.source}`, 'i'),
+    ]);
+}
+
+async function analyzeMainFailedJobs({
+    jobs,
+    getAnnotationsForJob,
+    getJobLogTextForJob,
+    maxRetryableJobs = defaultMaxRetryableJobs,
+    runAttempt = 1,
+}) {
+    const normalizedMaxRetryableJobs =
+        Number.isInteger(maxRetryableJobs) && maxRetryableJobs >= 0
+            ? maxRetryableJobs
+            : defaultMaxRetryableJobs;
+    const failedJobs = (jobs || []).filter(job => failureConclusions.has(job.conclusion) && !ignoredJobs.has(job.name));
+    const retryableJobs = [];
+    const skippedJobs = [];
+
+    for (const job of failedJobs) {
+        let classification = classifyMainFailedJob(job, '');
+
+        if (!matchesAny(job?.name || '', mainExcludedJobPatterns)) {
+            const annotations = getAnnotationsForJob
+                ? await getAnnotationsForJob(job)
+                : '';
+            classification = classifyMainFailedJob(job, annotations);
+
+            if (!classification.retryable && getJobLogTextForJob) {
+                const jobLogText = await getJobLogTextForJob(job);
+                classification = classifyMainFailedJob(job, annotations, jobLogText);
+            }
+        }
+
+        const jobResult = {
+            id: job.id,
+            name: job.name,
+            htmlUrl: job.html_url || null,
+            failedSteps: classification.failedSteps,
+            reason: classification.reason,
+        };
+
+        if (classification.retryable) {
+            retryableJobs.push(jobResult);
+        }
+        else {
+            skippedJobs.push(jobResult);
+        }
+    }
+
+    const rerunEligible =
+        failedJobs.length > 0 &&
+        skippedJobs.length === 0 &&
+        retryableJobs.length === failedJobs.length &&
+        computeRerunEligibility({
+            retryableCount: retryableJobs.length,
+            maxRetryableJobs: normalizedMaxRetryableJobs,
+            runAttempt,
+            maxRunAttempt: mainMaxRunAttempt,
+        });
+
+    return { failedJobs, retryableJobs, skippedJobs, rerunEligible };
 }
 
 function computeRerunEligibility({
@@ -1668,6 +1825,7 @@ function selectTestResultsArtifact(artifacts) {
 module.exports = {
     addPullRequestComments,
     analyzeFailedJobs,
+    analyzeMainFailedJobs,
     analyzeTrxFiles,
     annotationText,
     buildPullRequestCommentBody,

@@ -349,6 +349,313 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task CurrentMainRetriesExactHostedRunnerLossOutsideExcludedHostingShards()
+    {
+        WorkflowJob job = CreateJob(
+            name: "Tests / No-package tests / Hosting-6 (windows-latest)",
+            failedSteps: []);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string>
+            {
+                ["1"] = "The hosted runner lost communication with the server. Anything in your workflow that terminates the runner process can cause this error."
+            });
+
+        Assert.True(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+        Assert.Equal("The job annotation matched GitHub's hosted-runner communication-loss signal.", result.RetryableJobs[0].Reason);
+        Assert.Equal([1], result.AnnotationRequestJobIds);
+        Assert.Empty(result.LogRequestJobIds);
+    }
+
+    [Theory]
+    [InlineData("connect: connection refused")]
+    [InlineData("Connection reset by peer")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRetriesOnlyNarrowAzureContainerRegistryTransportFailures(string transportFailure)
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Run tests (Linux/macOS)"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code 1." },
+            new Dictionary<string, string>
+            {
+                ["1"] = $"failed to pull netaspireci.azurecr.io/aspire/testimage:latest: {transportFailure}"
+            });
+
+        Assert.True(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+        Assert.Equal("The job log matched an Azure Container Registry transport failure.", result.RetryableJobs[0].Reason);
+        Assert.Equal([1], result.LogRequestJobIds);
+    }
+
+    [Theory]
+    [InlineData("HTTP 503")]
+    [InlineData("ServiceUnavailable")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRetriesMicrosoftContainerRegistryOnlyWithServiceUnavailableStatus(string serviceUnavailable)
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Run tests (Linux/macOS)"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code 1." },
+            new Dictionary<string, string>
+            {
+                ["1"] = $"CONTAINER1014: failed to pull mcr.microsoft.com/dotnet/aspnet:latest: {serviceUnavailable}"
+            });
+
+        Assert.True(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+        Assert.Equal("The job log matched a Microsoft Container Registry service-unavailable response.", result.RetryableJobs[0].Reason);
+    }
+
+    [Theory]
+    [InlineData(
+        "connect: connection refused while contacting netaspireci.azurecr.io/aspire/testimage:latest",
+        "The job log matched an Azure Container Registry transport failure.")]
+    [InlineData(
+        "ServiceUnavailable response from mcr.microsoft.com/dotnet/aspnet:latest",
+        "The job log matched a Microsoft Container Registry service-unavailable response.")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainMatchesBoundedRegistryFailureWhenSignalPrecedesHostname(string jobLogText, string expectedReason)
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Run tests (Linux/macOS)"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code 1." },
+            new Dictionary<string, string> { ["1"] = jobLogText });
+
+        Assert.True(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+        Assert.Equal(expectedReason, result.RetryableJobs[0].Reason);
+    }
+
+    [Theory]
+    [InlineData("-1073741502")]
+    [InlineData("0xC0000142")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRetriesWindowsProcessInitializationFailureOnlyAfterTestsCompleted(string exitCode)
+    {
+        WorkflowJob job = CreateJob(failedSteps:
+        [
+            "Check for hang dump files",
+            "Upload logs, and test results",
+            "Copy CLI E2E recordings for upload",
+            "Upload CLI E2E recordings",
+            "Generate test results summary",
+            "Post Checkout code"
+        ]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = $"Process completed with exit code {exitCode}." });
+
+        Assert.True(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+        Assert.Equal(
+            "Post-test/reporting steps 'Check for hang dump files | Upload logs, and test results | Copy CLI E2E recordings for upload | Upload CLI E2E recordings | Generate test results summary | Post Checkout code' matched the Windows process initialization failure signal.",
+            result.RetryableJobs[0].Reason);
+        Assert.Empty(result.LogRequestJobIds);
+    }
+
+    [Theory]
+    [InlineData("Hosting-1")]
+    [InlineData("Hosting-5")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainNeverRetriesRunnerLossForExcludedHostingShards(string hostingShard)
+    {
+        WorkflowJob job = CreateJob(
+            name: $"Tests / No-package tests / {hostingShard} (windows-latest)",
+            failedSteps: []);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string>
+            {
+                ["1"] = "The hosted runner lost communication with the server. Anything in your workflow that terminates the runner process can cause this error."
+            });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+        Assert.Contains("excluded from automatic main reruns", result.SkippedJobs[0].Reason);
+        Assert.Empty(result.AnnotationRequestJobIds);
+        Assert.Empty(result.LogRequestJobIds);
+    }
+
+    [Theory]
+    [InlineData("netaspireci.azurecr.io/aspire/testimage:latest: Operation timed out")]
+    [InlineData("CONTAINER1014: failed to pull mcr.microsoft.com/dotnet/aspnet:latest")]
+    [InlineData("CONTAINER1014: ServiceUnavailable while pulling docker.io/library/redis:latest")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRejectsGenericRegistryAndContainerFailures(string jobLogText)
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Run tests (Linux/macOS)"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code 1." },
+            new Dictionary<string, string> { ["1"] = jobLogText });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainDoesNotCorrelateDistantAcrHostnameWithAnotherEndpointsTransportFailure()
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Run tests (Linux/macOS)"]);
+        string jobLogText =
+            $"Successfully authenticated to netaspireci.azurecr.io.{new string('x', 501)}" +
+            "Failed to pull docker.io/library/redis:latest: connect: connection refused";
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code 1." },
+            new Dictionary<string, string> { ["1"] = jobLogText });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainDoesNotCorrelateAnotherEndpointsServiceFailureWithDistantMcrHostname()
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Run tests (Linux/macOS)"]);
+        string jobLogText =
+            $"docker.io/library/redis:latest returned HTTP 503.{new string('x', 501)}" +
+            "Successfully pulled mcr.microsoft.com/dotnet/aspnet:latest";
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code 1." },
+            new Dictionary<string, string> { ["1"] = jobLogText });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRejectsWindowsProcessInitializationFailureDuringTestExecution()
+    {
+        WorkflowJob job = CreateJob(failedSteps:
+        [
+            "Run tests (Windows)",
+            "Upload logs, and test results"
+        ]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code -1073741502." });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainVetoesWholeRunWhenTransientInfrastructureAndRealTestFailuresAreMixed()
+    {
+        WorkflowJob infrastructureFailure = CreateJob(
+            id: 1,
+            name: "Tests / No-package tests / Hosting-6 (windows-latest)",
+            failedSteps: []);
+        WorkflowJob testFailure = CreateJob(
+            id: 2,
+            name: "Tests / No-package tests / Sample (ubuntu-latest)",
+            failedSteps: ["Run tests (Linux/macOS)"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [infrastructureFailure, testFailure],
+            new Dictionary<string, string>
+            {
+                ["1"] = "The hosted runner lost communication with the server. Anything in your workflow that terminates the runner process can cause this error.",
+                ["2"] = "Process completed with exit code 1."
+            },
+            new Dictionary<string, string>
+            {
+                ["2"] = "Test Run Failed. Failed: 1."
+            });
+
+        Assert.False(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+        Assert.Equal(2, result.SkippedJobs[0].Id);
+    }
+
+    [Theory]
+    [InlineData("Final Results")]
+    [InlineData("Tests / Final Test Results")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRequiresRealFailedJobsAfterIgnoringAggregateResults(string aggregateJobName)
+    {
+        WorkflowJob job = CreateJob(name: aggregateJobName, failedSteps: ["Set up job"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string>
+            {
+                ["1"] = "The hosted runner lost communication with the server."
+            });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.FailedJobs);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Empty(result.SkippedJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainPreservesRetryableJobCapForStrictWholeRunEligibility()
+    {
+        WorkflowJob[] jobs = Enumerable.Range(1, 6)
+            .Select(id => CreateJob(
+                id: id,
+                name: $"Tests / No-package tests / Sample-{id} (ubuntu-latest)",
+                failedSteps: []))
+            .ToArray();
+        Dictionary<string, string> annotations = jobs.ToDictionary(
+            job => job.Id.ToString(),
+            _ => "The hosted runner lost communication with the server.");
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(jobs, annotations, maxRetryableJobs: 5);
+
+        Assert.False(result.RerunEligible);
+        Assert.Equal(6, result.RetryableJobs.Length);
+        Assert.Empty(result.SkippedJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainSourceAttemptTwoCannotBecomeEligibleAfterClassification()
+    {
+        WorkflowJob job = CreateJob(failedSteps: []);
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string>
+            {
+                ["1"] = "The hosted runner lost communication with the server."
+            },
+            runAttempt: 2);
+
+        Assert.False(result.RerunEligible);
+        Assert.Single(result.RetryableJobs);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task GetCheckRunIdForJobParsesCheckRunIdFromWorkflowJobPayload()
     {
         int? checkRunId = await InvokeHarnessAsync<int?>(
@@ -898,6 +1205,12 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.Contains("const maxRunAttempt = rerunWorkflow.defaultMaxRunAttempt;", workflowText);
         Assert.Contains("maxRunAttempt: rerunWorkflow.mainMaxRunAttempt", workflowText);
         Assert.Contains("sourceRunScope: 'main'", workflowText);
+        string mainJobText = workflowText[workflowText.IndexOf("  rerun-main-failures:", StringComparison.Ordinal)..];
+        Assert.Contains("rerunWorkflow.analyzeMainFailedJobs", mainJobText);
+        Assert.Contains("if (!analysis.rerunEligible)", mainJobText);
+        Assert.Contains("retryableJobs: analysis.retryableJobs", mainJobText);
+        Assert.DoesNotContain("forceRerunAll: true", mainJobText);
+        Assert.Contains("checks: read", mainJobText);
         Assert.Contains("actions: write", workflowText);
         Assert.DoesNotContain("contents: write", workflowText);
         Assert.DoesNotContain("persistMainRerunState", workflowText);
@@ -1299,14 +1612,13 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             {
                 owner = "dotnet",
                 repo = "aspire",
-                retryableJobs = Array.Empty<RetryableJobInput>(),
+                retryableJobs = CreateMainRetryableJobs(),
                 sourceRunId = 123,
                 sourceRunAttempt = 1,
                 sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
                 sourceRunScope = "main",
                 sourceHeadSha = "main-sha",
                 maxRunAttempt = 1,
-                forceRerunAll = true,
                 currentRun = new
                 {
                     id = 123,
@@ -1363,14 +1675,13 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
                 {
                     owner = "dotnet",
                     repo = "aspire",
-                    retryableJobs = Array.Empty<RetryableJobInput>(),
+                    retryableJobs = CreateMainRetryableJobs(),
                     sourceRunId = 123,
                     sourceRunAttempt = 1,
                     sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
                     sourceRunScope = "main",
                     sourceHeadSha = "main-sha",
                     maxRunAttempt = 1,
-                    forceRerunAll = true,
                     currentRun = new
                     {
                         id = 123,
@@ -1505,14 +1816,13 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             {
                 owner = "dotnet",
                 repo = "aspire",
-                retryableJobs = Array.Empty<RetryableJobInput>(),
+                retryableJobs = CreateMainRetryableJobs(),
                 sourceRunId = 123,
                 sourceRunAttempt = 1,
                 sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
                 sourceRunScope = "main",
                 sourceHeadSha = "main-sha",
                 maxRunAttempt = 1,
-                forceRerunAll = true,
                 currentRun = new
                 {
                     id = 123,
@@ -1618,14 +1928,13 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             {
                 owner = "dotnet",
                 repo = "aspire",
-                retryableJobs = Array.Empty<RetryableJobInput>(),
+                retryableJobs = CreateMainRetryableJobs(),
                 sourceRunId = 123,
                 sourceRunAttempt = 1,
                 sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
                 sourceRunScope = "main",
                 sourceHeadSha = "main-sha",
                 maxRunAttempt = 1,
-                forceRerunAll = true,
                 currentRunResponses = new[]
                 {
                     new
@@ -1839,14 +2148,13 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             {
                 owner = "dotnet",
                 repo = "aspire",
-                retryableJobs = Array.Empty<RetryableJobInput>(),
+                retryableJobs = CreateMainRetryableJobs(),
                 sourceRunId = 123,
                 sourceRunAttempt = 1,
                 sourceRunUrl = "https://github.com/microsoft/aspire/actions/runs/123",
                 sourceRunScope = "main",
                 sourceHeadSha = "main-sha",
                 maxRunAttempt = 1,
-                forceRerunAll = true,
                 failedRequestRoutes = new[] { rerunRoute },
                 currentRun = new
                 {
@@ -2942,6 +3250,23 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
                 RetryPatternsConfig = retryPatternsConfig
             });
 
+    private Task<AnalyzeFailedJobsResult> AnalyzeMainJobsAsync(
+        WorkflowJob[] jobs,
+        Dictionary<string, string> annotationTextByJobId,
+        Dictionary<string, string>? jobLogTextByJobId = null,
+        int? maxRetryableJobs = null,
+        int runAttempt = 1)
+        => InvokeHarnessAsync<AnalyzeFailedJobsResult>(
+            "analyzeMainFailedJobs",
+            new AnalyzeFailedJobsRequest
+            {
+                Jobs = jobs,
+                AnnotationTextByJobId = annotationTextByJobId,
+                JobLogTextByJobId = jobLogTextByJobId,
+                MaxRetryableJobs = maxRetryableJobs,
+                RunAttempt = runAttempt
+            });
+
     private async Task<T> InvokeHarnessAsync<T>(string operation, object payload)
     {
         string inputPath = Path.Combine(_workspace.Path, $"{Guid.NewGuid():N}.json");
@@ -2978,6 +3303,16 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             }).ToArray()
         };
 
+    private static RetryableJobInput[] CreateMainRetryableJobs() =>
+    [
+        new()
+        {
+            Id = 1,
+            Name = "Tests / Sample / Sample (ubuntu-latest)",
+            Reason = "Matched the current-main transient infrastructure allowlist."
+        }
+    ];
+
     private Task<string> ReadRepoFileAsync(string relativePath)
         => File.ReadAllTextAsync(Path.Combine(_repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
 
@@ -2998,6 +3333,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         public Dictionary<string, string> AnnotationTextByJobId { get; init; } = [];
         public Dictionary<string, string>? JobLogTextByJobId { get; init; }
         public int? MaxRetryableJobs { get; init; }
+        public int RunAttempt { get; init; } = 1;
         public object? RetryPatternsConfig { get; init; }
     }
 
@@ -3006,6 +3342,8 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         public AnalyzedJob[] FailedJobs { get; init; } = [];
         public AnalyzedJob[] RetryableJobs { get; init; } = [];
         public AnalyzedJob[] SkippedJobs { get; init; } = [];
+        public bool RerunEligible { get; init; }
+        public int[] AnnotationRequestJobIds { get; init; } = [];
         public int[] LogRequestJobIds { get; init; } = [];
     }
 

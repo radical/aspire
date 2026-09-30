@@ -68,6 +68,27 @@ async function dispatch(operation, payload) {
                 return { ...result, logRequestJobIds };
             }
 
+        case 'analyzeMainFailedJobs':
+            {
+                const annotationRequestJobIds = [];
+                const logRequestJobIds = [];
+                const result = await rerunWorkflow.analyzeMainFailedJobs({
+                    jobs: payload.jobs ?? [],
+                    getAnnotationsForJob: async job => {
+                        annotationRequestJobIds.push(job.id);
+                        return payload.annotationTextByJobId?.[String(job.id)] ?? '';
+                    },
+                    getJobLogTextForJob: async job => {
+                        logRequestJobIds.push(job.id);
+                        return payload.jobLogTextByJobId?.[String(job.id)] ?? '';
+                    },
+                    maxRetryableJobs: payload.maxRetryableJobs,
+                    runAttempt: payload.runAttempt,
+                });
+
+                return { ...result, annotationRequestJobIds, logRequestJobIds };
+            }
+
         case 'formatMatchedPatternForMarkdown':
             return rerunWorkflow.formatMatchedPatternForMarkdown(payload.matchedPattern);
 
