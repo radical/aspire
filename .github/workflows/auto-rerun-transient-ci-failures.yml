@@ -1,5 +1,6 @@
-# Analyzes failed CI PR runs for retry-safe transient failures and reruns failed
-# current-main CI jobs unconditionally while the run is still current.
+# Reruns failed CI pull request jobs unconditionally while temporary force mode
+# is enabled. Failed current-main jobs are rerun once only when every failure
+# matches the narrow main infrastructure allowlist and the run is still current.
 # For the supported behaviors and safety rails, see
 # docs/ci/auto-rerun-transient-ci-failures.md.
 name: Auto rerun transient CI failures

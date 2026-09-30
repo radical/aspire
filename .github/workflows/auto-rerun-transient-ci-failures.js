@@ -1,4 +1,12 @@
-// Shared matcher, summary, and rerun helpers for the transient CI rerun workflow.
+// Shared policy, matcher, summary, and rerun helpers for the transient CI rerun workflow.
+//
+// Event routing lives in auto-rerun-transient-ci-failures.yml, not this module:
+// - Failed pull request runs and manual dispatches use the pull request jobs. Those
+//   jobs currently enable FORCE_RERUN_ALL, so they bypass classification and rerun
+//   all failed jobs when an associated pull request is open and the attempt cap allows it.
+// - Failed pushes to main use the current-main job. It calls analyzeMainFailedJobs
+//   with a narrow infrastructure allowlist and calls rerunMatchedJobs with
+//   sourceRunScope set to 'main' for the final live-run and branch freshness checks.
 //
 // TEMPORARY — FORCE_RERUN_ALL (revert when no longer needed):
 // When the YAML `FORCE_RERUN_ALL` env var is 'true', the workflow runs in force mode:
@@ -6,9 +14,10 @@
 // PR, it reruns the failed jobs — full stop. No job is fetched or classified, the
 // patterns config is not consulted, and there is no job-count cap.
 //
-// The workflow trigger requires a failed CI run. Pull request runs retain the
-// defaultMaxRunAttempt policy and broad matcher, while rolling main runs use
-// mainMaxRunAttempt and a separate narrow allowlist to request at most one retry.
+// Pull request force mode retains the defaultMaxRunAttempt policy but bypasses the
+// broad matcher. The broad matcher remains available when force mode is disabled.
+// Rolling main runs never use force mode; they use mainMaxRunAttempt and the separate
+// narrow allowlist to request at most one retry.
 //
 // Force mode still KEEPS the open-PR requirement (no point spending CI on a run whose
 // PRs are all closed/merged). `forceRerunAll` defaults to false everywhere, so the
