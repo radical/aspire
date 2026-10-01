@@ -8,15 +8,18 @@
 // failure must match its narrow allowlist, with at most one retry of current main.
 const pullRequest = require('./auto-rerun/rerun-pull-request.js');
 const main = require('./auto-rerun/rerun-main.js');
+const common = require('./auto-rerun/common.js');
 
 function selectPolicy({ eventName, owner, repo, workflowRun }) {
     if (owner !== 'microsoft' || !workflowRun || (workflowRun.name && workflowRun.name !== 'CI')) {
         return null;
     }
 
-    // Manual dispatch retains the PR-associated policy, even when a supplied run
-    // originated from a push. It must not enable the automatic current-main policy.
-    if (eventName === 'workflow_dispatch') {
+    // Manual dispatch retains the PR-associated policy, even when a supplied failed
+    // run originated from a push. It must not enable the automatic current-main policy.
+    if (eventName === 'workflow_dispatch' &&
+        workflowRun.status === 'completed' &&
+        workflowRun.conclusion === 'failure') {
         return 'pull-request';
     }
 
@@ -42,7 +45,14 @@ async function analyze({ github, core, context, runId, dryRun, forceRerunAll, wo
         : context.payload.workflow_run;
     const policy = selectPolicy({ ...context.repo, eventName: context.eventName, workflowRun });
     if (!policy) {
-        core.info('The source run does not match a supported CI rerun policy. Skipping.');
+        const message = 'The source run is not a supported completed failed CI run. No jobs were rerun.';
+        core.info(message);
+        await common.writeRerunOutcomeSummary({
+            summary: core.summary,
+            sourceRunUrl: workflowRun.html_url,
+            sourceRunAttempt: workflowRun.run_attempt,
+            message,
+        });
         core.setOutput('rerun_execution_eligible', 'false');
         return;
     }
@@ -75,6 +85,7 @@ async function execute({ github, core, context, analysis }) {
 
     const options = {
         github, owner, repo, summary: core.summary,
+        log: message => core.info(message),
         sourceRunId: analysis.run.id,
         sourceRunUrl: analysis.run.html_url,
         sourceRunAttempt: analysis.run.run_attempt,

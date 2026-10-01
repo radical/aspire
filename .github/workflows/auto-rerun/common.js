@@ -560,6 +560,8 @@ async function requestFailedJobsRerun({
     mainRerunState,
     testPatternMatchedTests = [],
     forceRerunAll = false,
+    revalidateSourceAttempt = false,
+    log = () => {},
 }) {
     // Normal mode lists retry-safe jobs first; an empty list means nothing to rerun.
     // Force mode is a short-circuit that does not enumerate jobs (retryableJobs is
@@ -579,6 +581,7 @@ async function requestFailedJobsRerun({
     // skipped when every associated PR is closed. There is no value in spending CI on
     // a closed/merged PR, so force mode does NOT bypass this.
     if (pullRequestNumbers.length > 0 && openPullRequestNumbers.length === 0) {
+        log('All associated pull requests are closed. No jobs were rerun.');
         const failedAttemptReference = buildWorkflowRunReference(sourceRunUrl, sourceRunAttempt);
         await summary
             .addHeading('Rerun skipped');
@@ -596,6 +599,32 @@ async function requestFailedJobsRerun({
             ])
             .write();
         return;
+    }
+
+    if (revalidateSourceAttempt) {
+        const response = await github.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
+            owner,
+            repo,
+            run_id: sourceRunId,
+        });
+        const liveRun = response.data;
+        const liveAttempt = Number(liveRun.run_attempt);
+        const sourceAttempt = Number(sourceRunAttempt);
+        if (liveRun.status !== 'completed' ||
+            liveRun.conclusion !== 'failure' ||
+            liveAttempt !== sourceAttempt) {
+            const liveState = liveAttempt !== sourceAttempt
+                ? `The workflow run advanced from attempt ${sourceAttempt} to attempt ${liveAttempt}.`
+                : `The workflow run is ${liveRun.status || 'in an unknown state'} with conclusion ${liveRun.conclusion || 'none'}.`;
+            log(`${liveState} No jobs were rerun.`);
+            await writeRerunOutcomeSummary({
+                summary,
+                sourceRunUrl,
+                sourceRunAttempt,
+                message: `${liveState} No jobs were rerun.`,
+            });
+            return;
+        }
     }
 
 

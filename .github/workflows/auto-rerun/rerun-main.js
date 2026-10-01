@@ -69,7 +69,7 @@ function classifyMainFailedJob(job, annotationsOrText, jobLogText = '') {
         return {
             retryable: true,
             failedSteps,
-            reason: 'The job log matched an Azure Container Registry transport failure.',
+            reason: 'The job diagnostics matched an Azure Container Registry transport failure.',
         };
     }
 
@@ -77,7 +77,7 @@ function classifyMainFailedJob(job, annotationsOrText, jobLogText = '') {
         return {
             retryable: true,
             failedSteps,
-            reason: 'The job log matched a Microsoft Container Registry service-unavailable response.',
+            reason: 'The job diagnostics matched a Microsoft Container Registry service-unavailable response.',
         };
     }
 
@@ -172,6 +172,9 @@ async function analyzeMainFailures({ github, core, owner, repo, workflowRun: run
         retryableJobs: [],
     };
     if (run.run_attempt > mainMaxRunAttempt) {
+        core.info(
+            `Source attempt ${run.run_attempt} exceeds the current-main policy limit of ${mainMaxRunAttempt}. ` +
+            'No jobs were inspected or rerun.');
         await core.summary
             .addHeading('Rerun skipped')
             .addRaw(`Source attempt ${run.run_attempt} exceeds the current-main policy limit of ${mainMaxRunAttempt}. No jobs were inspected or rerun.`)
@@ -189,6 +192,12 @@ async function analyzeMainFailures({ github, core, owner, repo, workflowRun: run
         maxRetryableJobs: defaultMaxRetryableJobs,
         runAttempt: run.run_attempt,
     });
+    if (!analysis.rerunEligible) {
+        const reasons = analysis.skippedJobs.length > 0
+            ? analysis.skippedJobs.map(job => `${job.name}: ${job.reason}`).join(' ')
+            : 'No retry-safe failed jobs were found.';
+        core.info(`Current-main rerun is not eligible. ${reasons}`);
+    }
     await common.writeAnalysisSummary({
         summary: core.summary,
         ...analysis,

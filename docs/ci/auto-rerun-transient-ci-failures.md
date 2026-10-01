@@ -4,7 +4,7 @@ This document explains how the automatic CI rerun system works and how to config
 
 ## How it works at a glance
 
-When a `CI` pull request run fails on GitHub Actions, a companion workflow can analyze the failure, determine whether it was caused by transient infrastructure or test issues, and — if safe — request GitHub to rerun the failed jobs. That broad analysis remains available, but the pull request and manual-dispatch paths currently run in temporary force mode: they skip classification and rerun all failed jobs when an associated pull request is open and the attempt cap allows it. The workflow posts a comment on the PR explaining what it did.
+When a `CI` pull request run fails on GitHub Actions, a companion workflow can analyze the failure, determine whether it was caused by transient infrastructure or test issues, and — if safe — request GitHub to rerun the failed jobs. That broad analysis remains available, but the pull request and manual-dispatch paths currently run in temporary force mode: they skip classification and rerun all failed jobs when an associated pull request is open and the attempt cap allows it. Immediately before the request, the workflow verifies that the selected run is still the same completed failed attempt. The workflow posts a comment on the PR explaining what it did.
 
 A failed `push` run for the current `main` SHA uses a separate, narrow infrastructure allowlist. Source attempt 1 may request one retry only when every non-aggregate failed job matches that allowlist; attempt 2 remains failed if it does not pass. Before the request, the workflow re-fetches the run, `refs/heads/main`, and the workflow's main run list. It skips the write unless the run is still the same completed failed attempt, the failed SHA is still current, no newer main CI run supersedes it, and the attempt cap is not exceeded. The GitHub API has no atomic expected-attempt precondition, so the final run revalidation minimizes but cannot eliminate the check-to-write race.
 
@@ -52,7 +52,7 @@ Passes 1–2 are hardcoded because they target well-known infrastructure signatu
 |---------|----------|
 | **Automatic PR rerun** (`workflow_run` on `CI` completion) | Currently reruns all failed jobs without classification when the run has an open associated PR and is within the three-attempt cap. |
 | **Automatic current-main rerun** (`workflow_run` on `CI` pushes to `main`) | Selectively reruns failed jobs once from source attempt 1 when every real failed job matches the narrow current-main infrastructure allowlist and the failed run is still the latest run for the current `main` SHA. |
-| **Manual** (`workflow_dispatch`) | Enter a PR `CI` run ID. It currently uses the same force-mode policy as automatic PR reruns; `dry_run` reports eligibility without requesting a rerun. |
+| **Manual** (`workflow_dispatch`) | Enter a completed, failed PR `CI` run ID. It currently uses the same force-mode policy as automatic PR reruns; `dry_run` reports eligibility without requesting a rerun. |
 
 The manual and automatic PR paths use the broad transient-failure analysis when force mode is disabled. Current-main reruns always use the separate policy below and do not consult the configurable PR job-log or TRX retry patterns.
 
@@ -207,6 +207,7 @@ The policies deliberately apply different rails:
 |------|-------|--------|
 | **Attempt limit** | All paths | Pull request source attempts use `defaultMaxRunAttempt` (3), defined in [`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js). Current-`main` source attempts use `mainMaxRunAttempt` (1), defined in [`auto-rerun/rerun-main.js`](../../.github/workflows/auto-rerun/rerun-main.js), allowing exactly one retry. |
 | **Open PR** | Pull request and manual paths | At least one associated pull request must still be open, including in force mode. |
+| **Live source attempt** | Pull request and manual execution | Immediately before the write, the selected run must still be a completed failure at the source attempt analyzed earlier. |
 | **Retryable job cap** | Normal PR analysis and current-main | At least 1 but no more than 5 retryable jobs (default). Pull request attempts after the first use the existing stricter count rule. Current-main only considers source attempt 1 and requires every real failed job to match. Force mode bypasses this cap because it does not enumerate jobs. |
 | **Non-aggregator** | Normal PR analysis and current-main | Aggregator jobs (`Final Results`, `Tests / Final Test Results`) are excluded from analysis. Force mode bypasses analysis and lets GitHub rerun the failed set. |
 | **Mixed-failure veto** | Normal PR analysis | A job with both a test execution failure (`Run tests*`) and unrelated transient post-step noise is *not* retried on infrastructure grounds alone — the test execution failure must match a pattern (pass 3 or 4) to qualify. |
@@ -243,7 +244,7 @@ Because the rerun uses GitHub's `rerun-failed-jobs` API — which reruns **all**
 
 - **The open-PR requirement** — a rerun only fires for a run that has a currently-open associated PR. Runs with no associated PR, or where every associated PR is closed/merged, are still skipped. There is no value in spending CI on an inactive PR, so force mode does not bypass this.
 - **The attempt cap** — pull request reruns still stop after the `defaultMaxRunAttempt` policy is exceeded.
-- **Failed-run-only triggering** — the workflow only fires on `workflow_run.conclusion == 'failure'`. A `cancelled` run (which is what you get when a run is cancelled, or when fail-fast cancels siblings) has conclusion `cancelled`, not `failure`, so it never triggers a rerun. Cancellation is excluded for free by the trigger; force mode adds nothing here.
+- **Failed-run-only triggering** — automatic execution only fires on `workflow_run.conclusion == 'failure'`, and manual execution validates that the selected run is completed with conclusion `failure`. A `cancelled` run (which is what you get when a run is cancelled, or when fail-fast cancels siblings) has conclusion `cancelled`, not `failure`, so it never triggers a rerun.
 
 The classification rules and [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) config are left fully intact; force mode is gated behind an optional `forceRerunAll` flag (default `false`), so the normal behavior is preserved when it is off.
 
@@ -279,8 +280,11 @@ job gets rerun and PR-comment write permissions. See
 
 Analysis emits a serialized decision. Execution selects the same policy from
 that decision, checks eligibility, and invokes its handler. The PR handler
-rechecks open PRs; the main handler revalidates the live run and branch state
-immediately before the shared failed-job rerun request.
+rechecks open PRs and the exact source attempt; the main handler revalidates the
+live run, current `main` SHA, and run-list ordering immediately before the shared
+failed-job rerun request. GitHub's API has no atomic expected-attempt
+precondition, so these final reads minimize but cannot eliminate the
+check-to-write window.
 
 ## Tests
 
@@ -291,7 +295,7 @@ They are intentionally behavior-focused rather than regex-focused:
 - they use representative fixtures for each supported behavior
 - they keep representative job and step fixtures anchored to the current CI workflow names so matcher coverage does not drift from the implementation
 - they cover the mixed-failure veto and ignored-step override explicitly
-- they keep only a minimal set of YAML contract checks for safety rails such as the optional manual `dry_run` override, up-to-three-attempt automatic reruns, enabling manual reruns through `workflow_dispatch`, and gating the rerun job on `rerun_execution_eligible`
+- they invoke the dispatcher and policy modules through the Node.js harness, including manual selection, attempt caps, execution freshness checks, dry-run handling, and rerun-request outcomes
 - they validate the `eng/test-retry-patterns.json` config structure and regex compilation in Node.js (V8)
 - they test pattern matching functions (substring, regex, AND/OR logic, disabled rules)
 - they test TRX parsing, output capping, XML entity decoding, and the `analyzeTrxFiles` deduplication

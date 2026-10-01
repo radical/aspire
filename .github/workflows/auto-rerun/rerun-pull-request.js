@@ -800,9 +800,16 @@ async function analyzePullRequestFailures({
             maxRunAttempt,
             forceRerunAll: true,
         })) {
-            core.info(
+            const message =
                 `Automatic rerun attempt cap reached at source attempt ${workflowRun.run_attempt}; ` +
-                `the configured cap is ${maxRunAttempt}. Skipping.`);
+                `the configured cap is ${maxRunAttempt}. No jobs were inspected or rerun.`;
+            core.info(message);
+            await rerunWorkflow.writeRerunOutcomeSummary({
+                summary: core.summary,
+                sourceRunUrl,
+                sourceRunAttempt: workflowRun.run_attempt,
+                message,
+            });
             return;
         }
 
@@ -819,7 +826,14 @@ async function analyzePullRequestFailures({
         // associated PR. Force mode does not bypass this — there is no value in
         // spending CI on a run that has no open PR behind it.
         if (pullRequestNumbers.length === 0) {
-            core.info('No associated pull request could be resolved for this workflow run. Skipping.');
+            const message = 'No associated pull request could be resolved for this workflow run. No jobs were rerun.';
+            core.info(message);
+            await rerunWorkflow.writeRerunOutcomeSummary({
+                summary: core.summary,
+                sourceRunUrl,
+                sourceRunAttempt: workflowRun.run_attempt,
+                message,
+            });
             return;
         }
 
@@ -1024,7 +1038,10 @@ async function analyzePullRequestFailures({
 }
 
 async function rerunPullRequestFailures(options) {
-    return common.requestFailedJobsRerun(options);
+    return common.requestFailedJobsRerun({
+        ...options,
+        revalidateSourceAttempt: true,
+    });
 }
 
 module.exports = {

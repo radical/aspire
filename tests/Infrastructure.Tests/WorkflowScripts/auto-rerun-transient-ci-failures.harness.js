@@ -90,22 +90,41 @@ async function dispatch(operation, payload) {
                 eventName: payload.eventName ?? 'workflow_run',
                 payload: { workflow_run: payload.workflowRun },
             };
-            const analysis = await dispatcher.run({
-                phase: 'analyze',
-                github, core, context,
-                runId: payload.runId,
-                dryRun: payload.dryRun ?? false,
-                forceRerunAll: payload.forceRerunAll ?? false,
-                workspace: path.resolve(__dirname, '../../..'),
-            });
-            const analysisRequests = [...requests];
-            if (analysis?.executionEligible && payload.execute) {
-                await dispatcher.run({
-                    phase: 'execute', github, core, context,
-                    analysis: JSON.parse(outputs.analysis),
+            const originalFetch = global.fetch;
+            global.fetch = async url => {
+                const match = String(url).match(/\/actions\/jobs\/(\d+)\/logs$/);
+                if (!match) {
+                    throw new Error(`Unexpected fetch request: ${url}`);
+                }
+
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => payload.jobLogTextByJobId?.[match[1]] ?? '',
+                };
+            };
+
+            try {
+                const analysis = await dispatcher.run({
+                    phase: 'analyze',
+                    github, core, context,
+                    runId: payload.runId,
+                    dryRun: payload.dryRun ?? false,
+                    forceRerunAll: payload.forceRerunAll ?? false,
+                    workspace: path.resolve(__dirname, '../../..'),
                 });
+                const analysisRequests = [...requests];
+                if (analysis?.executionEligible && payload.execute) {
+                    await dispatcher.run({
+                        phase: 'execute', github, core, context,
+                        analysis: JSON.parse(outputs.analysis),
+                    });
+                }
+                return { analysis, analysisRequests, requests, outputs, messages, events: summary.events };
             }
-            return { analysis, analysisRequests, requests, outputs, messages, events: summary.events };
+            finally {
+                global.fetch = originalFetch;
+            }
         }
 
         case 'analyzeFailedJobs':
