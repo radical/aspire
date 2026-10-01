@@ -1445,6 +1445,393 @@ function selectTestResultsArtifact(artifacts) {
     return selected;
 }
 
+async function runAnalysis({ github, context, core }) {
+    const path = require('node:path');
+    const fs = require('node:fs');
+    const { execSync } = require('node:child_process');
+    const os = require('node:os');
+    const owner = context.repo.owner;
+    const repo = context.repo.repo;
+    const isWorkflowDispatch = context.eventName === 'workflow_dispatch';
+    const maxRetryableJobs = defaultMaxRetryableJobs;
+    const maxJobLogInspectionBytes = 256 * 1024;
+    // FORCE_RERUN_ALL: see env comment above.
+    const forceRerunAll = String(process.env.FORCE_RERUN_ALL).toLowerCase() === 'true';
+
+    async function paginate(route, parameters, selectItems) {
+      const items = [];
+
+      for (let page = 1; ; page++) {
+        const response = await github.request(route, {
+          ...parameters,
+          per_page: 100,
+          page,
+        });
+
+        items.push(...selectItems(response.data));
+
+        if (!response.headers.link || !response.headers.link.includes('rel="next"')) {
+          return items;
+        }
+      }
+    }
+
+    async function getWorkflowRun() {
+      if (!isWorkflowDispatch) {
+        return context.payload.workflow_run;
+      }
+
+      const runId = Number(process.env.MANUAL_RUN_ID);
+
+      if (!Number.isInteger(runId) || runId <= 0) {
+        throw new Error('workflow_dispatch requires a valid run_id input.');
+      }
+
+      const response = await github.rest.actions.getWorkflowRun({
+        owner,
+        repo,
+        run_id: runId,
+      });
+
+      return response.data;
+    }
+
+    function parseManualDryRun() {
+      if (!isWorkflowDispatch) {
+        return false;
+      }
+
+      return String(process.env.MANUAL_DRY_RUN).toLowerCase() === 'true';
+    }
+
+    async function listJobsForAttempt(runId, attemptNumber) {
+      return paginate(
+        'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs',
+        {
+          owner,
+          repo,
+          run_id: runId,
+          attempt_number: attemptNumber,
+        },
+        data => data.jobs || []);
+    }
+
+    async function listAnnotations(job) {
+      try {
+        const checkRunId = await getCheckRunIdForJob({
+          job,
+          getJobForWorkflowRun: async jobId => {
+            const response = await github.rest.actions.getJobForWorkflowRun({
+              owner,
+              repo,
+              job_id: jobId,
+            });
+
+            return response.data;
+          },
+        });
+
+        if (!checkRunId) {
+          core.warning(`Unable to resolve a check run id for job ${job.id}.`);
+          return [];
+        }
+
+        return await paginate(
+          'GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations',
+          {
+            owner,
+            repo,
+            check_run_id: checkRunId,
+          },
+          data => Array.isArray(data) ? data : []);
+      }
+      catch (error) {
+        core.warning(`Failed to list annotations for job ${job.id}: ${error.message}`);
+        return [];
+      }
+    }
+
+    async function getJobLogText(jobId) {
+      try {
+        const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`, {
+          headers: {
+            authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+            accept: 'application/vnd.github+json',
+            'x-github-api-version': '2022-11-28',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        return (await response.text()).slice(-maxJobLogInspectionBytes);
+      }
+      catch (error) {
+        core.warning(`Failed to fetch logs for job ${jobId}: ${error.message}`);
+        return '';
+      }
+    }
+
+    const workflowRun = await getWorkflowRun();
+    const dryRun = parseManualDryRun();
+    const sourceRunUrl = workflowRun.html_url || `https://github.com/${owner}/${repo}/actions/runs/${workflowRun.id}`;
+
+    core.setOutput('source_run_id', String(workflowRun.id));
+    core.setOutput('source_run_attempt', String(workflowRun.run_attempt || ''));
+    core.setOutput('source_run_url', sourceRunUrl);
+    core.setOutput('dry_run', String(dryRun));
+    core.setOutput('max_retryable_jobs', String(maxRetryableJobs));
+    core.setOutput('retryable_jobs', '[]');
+    core.setOutput('pull_request_numbers', '[]');
+    core.setOutput('retryable_count', '0');
+    core.setOutput('skipped_count', '0');
+    core.setOutput('rerun_eligible', 'false');
+    core.setOutput('rerun_execution_eligible', 'false');
+    core.setOutput('test_pattern_matched_tests', '[]');
+
+    if (workflowRun.name && workflowRun.name !== 'CI') {
+      console.log(`Workflow run ${workflowRun.id} is '${workflowRun.name}', not 'CI'. Skipping.`);
+      return;
+    }
+
+    const pullRequestNumbers = await getAssociatedPullRequestNumbers({
+      github,
+      owner,
+      repo,
+      workflowRun,
+      warn: message => core.warning(message),
+    });
+    core.setOutput('pull_request_numbers', JSON.stringify(pullRequestNumbers));
+
+    // The open-PR requirement applies in all modes: skip runs with no
+    // associated PR. Force mode does not bypass this — there is no value in
+    // spending CI on a run that has no open PR behind it.
+    if (pullRequestNumbers.length === 0) {
+      console.log('No associated pull request could be resolved for this workflow run. Skipping.');
+      return;
+    }
+
+    // TEMPORARY — FORCE_RERUN_ALL short-circuit (revert when no longer needed):
+    // The run failed (job-level `if`) and has an associated PR (checked above),
+    // so request a rerun without fetching or classifying any jobs. Only the
+    // attempt cap is re-checked here (it matters for the manual-dispatch path,
+    // which bypasses the trigger's run_attempt gate). The retryable_jobs output
+    // stays '[]' on purpose: the rerun job uses GitHub's rerun-failed-jobs API,
+    // which reruns every failed job regardless of this list, and the final
+    // open-PR state is re-checked there. See the JS file-level comment.
+    if (forceRerunAll) {
+      const forceRunAttempt = workflowRun.run_attempt;
+      const forceRerunEligible = computeRerunEligibility({
+        runAttempt: forceRunAttempt,
+        forceRerunAll: true,
+      });
+      const forceRerunExecutionEligible = computeRerunExecutionEligibility({
+        dryRun,
+        runAttempt: forceRunAttempt,
+        forceRerunAll: true,
+      });
+
+      core.setOutput('rerun_eligible', String(forceRerunEligible));
+      core.setOutput('rerun_execution_eligible', String(forceRerunExecutionEligible));
+
+      await writeForceRerunSummary({
+        summary: core.summary,
+        rerunEligible: forceRerunEligible,
+        dryRun,
+        sourceRunUrl,
+        sourceRunAttempt: forceRunAttempt,
+        runAttempt: forceRunAttempt,
+        openPullRequestNumbers: pullRequestNumbers,
+      });
+
+      if (!forceRerunEligible) {
+        console.log(`Force-rerun mode: attempt cap reached (attempt ${forceRunAttempt}). Skipping.`);
+      }
+
+      return;
+    }
+
+    const runId = workflowRun.id;
+    const runAttempt = workflowRun.run_attempt;
+    const jobs = await listJobsForAttempt(runId, runAttempt);
+
+    // Load test retry patterns config
+    const configPath = path.join(process.env.GITHUB_WORKSPACE, 'eng', 'test-retry-patterns.json');
+    const { config: retryPatternsConfig, errors: configErrors } = loadRetryPatternsConfig(configPath);
+    if (configErrors.length > 0) {
+      core.warning(`Test retry patterns config has errors: ${configErrors.join('; ')}`);
+    }
+
+    let { failedJobs, retryableJobs, skippedJobs } = await analyzeFailedJobs({
+      jobs,
+      getAnnotationsForJob: async job => listAnnotations(job),
+      getJobLogTextForJob: async job => getJobLogText(job.id),
+      maxRetryableJobs,
+      retryPatternsConfig,
+    });
+
+    // TRX-based analysis: check test output for transient patterns.
+    let testPatternMatchedTests = [];
+    const hasSkippedTestExecJobs = skippedJobs.some(job =>
+      hasTestExecutionFailureStep(job.failedSteps)
+    );
+    const testFailurePatterns = retryPatternsConfig?.testFailurePatterns;
+
+    if (hasSkippedTestExecJobs && Array.isArray(testFailurePatterns) && testFailurePatterns.length > 0) {
+      try {
+        const artifacts = await paginate(
+          'GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts',
+          { owner, repo, run_id: runId },
+          data => data.artifacts || []);
+        const testArtifact = selectTestResultsArtifact(artifacts);
+
+        if (testArtifact) {
+          console.log(`Downloading test results artifact '${testArtifact.name}' (${testArtifact.size_in_bytes} bytes)...`);
+          const download = await github.rest.actions.downloadArtifact({
+            owner,
+            repo,
+            artifact_id: testArtifact.id,
+            archive_format: 'zip',
+          });
+
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-results-'));
+          try {
+            const zipPath = path.join(tmpDir, 'test-results.zip');
+            fs.writeFileSync(zipPath, Buffer.from(download.data));
+            const trxDir = path.join(tmpDir, 'trx');
+            fs.mkdirSync(trxDir, { recursive: true });
+            execSync(`unzip -qo "${zipPath}" -d "${trxDir}"`, { timeout: 30_000 });
+
+            const trxFileContents = [];
+            const maxTrxFiles = 200;
+            const maxTrxFileBytes = 50 * 1024 * 1024; // 50MB per file cap
+            const resolvedTrxDir = fs.realpathSync(trxDir);
+            const findTrxFiles = (dir) => {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (entry.isSymbolicLink()) {
+                  continue;
+                }
+                const fullPath = path.join(dir, entry.name);
+                const resolvedPath = fs.realpathSync(fullPath);
+                if (!resolvedPath.startsWith(resolvedTrxDir + path.sep) && resolvedPath !== resolvedTrxDir) {
+                  continue;
+                }
+                if (entry.isDirectory()) {
+                  findTrxFiles(fullPath);
+                } else if (entry.name.endsWith('.trx') && trxFileContents.length < maxTrxFiles) {
+                  const stat = fs.statSync(fullPath);
+                  if (stat.size <= maxTrxFileBytes) {
+                    trxFileContents.push({
+                      fileName: entry.name,
+                      content: fs.readFileSync(fullPath, 'utf8'),
+                    });
+                  }
+                }
+              }
+            };
+            findTrxFiles(trxDir);
+
+            if (trxFileContents.length > 0) {
+              const { allMatchedTests } = analyzeTrxFiles(trxFileContents, testFailurePatterns);
+              if (allMatchedTests.length > 0) {
+                console.log(`Found ${allMatchedTests.length} test(s) matching transient failure patterns.`);
+                const promoted = promoteTestExecutionFailureJobs(retryableJobs, skippedJobs, allMatchedTests);
+                retryableJobs = promoted.retryableJobs;
+                skippedJobs = promoted.skippedJobs;
+                testPatternMatchedTests = allMatchedTests;
+              }
+            }
+          } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          }
+        }
+      } catch (trxError) {
+        core.warning(`TRX analysis failed (non-fatal): ${trxError.message}`);
+      }
+    }
+
+    core.setOutput('retryable_jobs', JSON.stringify(retryableJobs.map(job => ({
+      id: job.id,
+      name: job.name,
+      htmlUrl: job.htmlUrl,
+      reason: job.reason,
+    }))));
+    core.setOutput('retryable_count', String(retryableJobs.length));
+    core.setOutput('skipped_count', String(skippedJobs.length));
+
+    const rerunEligible = computeRerunEligibility({
+      retryableCount: retryableJobs.length,
+      maxRetryableJobs,
+      runAttempt,
+    });
+    const rerunExecutionEligible = computeRerunExecutionEligibility({
+      dryRun,
+      retryableCount: retryableJobs.length,
+      maxRetryableJobs,
+      runAttempt,
+    });
+    core.setOutput('rerun_eligible', String(rerunEligible));
+    core.setOutput('rerun_execution_eligible', String(rerunExecutionEligible));
+    core.setOutput('test_pattern_matched_tests', JSON.stringify(testPatternMatchedTests.slice(0, 50).map(t => ({
+      testName: t.testName,
+      reason: t.reason,
+    }))));
+
+    await writeAnalysisSummary({
+      summary: core.summary,
+      failedJobs,
+      retryableJobs,
+      skippedJobs,
+      maxRetryableJobs,
+      dryRun,
+      rerunEligible,
+      sourceRunUrl,
+      sourceRunAttempt: runAttempt,
+      testPatternMatchedTests,
+    });
+
+    if (retryableJobs.length === 0) {
+      console.log('No retryable failed jobs were detected.');
+      return;
+    }
+}
+
+async function runRerun({ github, context, core }) {
+    const owner = context.repo.owner;
+    const repo = context.repo.repo;
+    const retryableJobs = JSON.parse(process.env.RETRYABLE_JOBS || '[]');
+    const pullRequestNumbers = JSON.parse(process.env.PULL_REQUEST_NUMBERS || '[]');
+    const sourceRunId = Number(process.env.SOURCE_RUN_ID);
+    const sourceRunAttempt = Number(process.env.SOURCE_RUN_ATTEMPT);
+    const sourceRunUrl = process.env.SOURCE_RUN_URL;
+    const testPatternMatchedTests = JSON.parse(process.env.TEST_PATTERN_MATCHED_TESTS || '[]');
+    // FORCE_RERUN_ALL: see env comment above.
+    const forceRerunAll = String(process.env.FORCE_RERUN_ALL).toLowerCase() === 'true';
+
+    // Normal mode passes the retry-safe job list; an empty list means nothing to
+    // rerun. Force mode intentionally passes an empty list (no enumeration), so it
+    // must proceed to the rerun.
+    if (!forceRerunAll && retryableJobs.length === 0) {
+      console.log('No retryable jobs were provided to the rerun job.');
+      return;
+    }
+
+    await rerunMatchedJobs({
+      github,
+      owner,
+      repo,
+      retryableJobs,
+      pullRequestNumbers,
+      summary: core.summary,
+      sourceRunId,
+      sourceRunAttempt,
+      sourceRunUrl,
+      testPatternMatchedTests,
+      forceRerunAll,
+    });
+}
+
 module.exports = {
     addPullRequestComments,
     analyzeFailedJobs,
@@ -1473,6 +1860,8 @@ module.exports = {
     matchTestFailurePatterns,
     promoteTestExecutionFailureJobs,
     rerunMatchedJobs,
+    runAnalysis,
+    runRerun,
     selectTestResultsArtifact,
     testExecutionFailureStepPatterns,
     validateRetryPatternsConfig,

@@ -121,9 +121,19 @@ The source workflow is
 [`analyze-ci-failure.md`](../../.github/workflows/analyze-ci-failure.md). Its
 generated executable workflow is
 [`analyze-ci-failure.lock.yml`](../../.github/workflows/analyze-ci-failure.lock.yml).
-Collection and persistence helpers live beside the workflow as
-`analyze-ci-failure-*.sh`; final output validation is in
-`analyze-ci-failure-validation.sh`.
+Executable programs live beside the workflow:
+
+- `analyze-ci-failure-collect.sh` collects and binds GitHub evidence.
+- `analyze-ci-failure-summary.sh` prepares the bounded analysis input.
+- `analyze-ci-failure-validation.sh` validates the agent output.
+- `analyze-ci-failure-publish.sh` persists recurring causes and updates issues.
+- `analyze-ci-failure-publish-comment.sh` publishes the validated PR comment.
+- `analyze-ci-failure-rerun.js` validates trusted rerun inputs and requests the
+  rerun.
+
+The generated workflow checks out and invokes these files; imperative behavior
+is kept out of the generated YAML so it can be executed directly by focused
+tests.
 
 Focused coverage lives in
 [`AnalyzeCiFailureWorkflowTests`](../../tests/Infrastructure.Tests/WorkflowScripts/AnalyzeCiFailureWorkflowTests.cs).

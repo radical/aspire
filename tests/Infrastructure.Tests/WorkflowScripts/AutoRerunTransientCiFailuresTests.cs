@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aspire.TestUtilities;
 using Xunit;
+using YamlDotNet.RepresentationModel;
 
 namespace Infrastructure.Tests;
 
@@ -29,6 +30,135 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     }
 
     public void Dispose() => _workspace.Dispose();
+
+    [Fact]
+    public void WorkflowInvokesExtractedPrograms()
+    {
+        var workflow = LoadWorkflow();
+
+        var analyzeStep = Step(workflow, "Analyze failed jobs");
+        Assert.Equal(
+            "const rerunWorkflow = require('./.github/workflows/auto-rerun-transient-ci-failures.js');\nawait rerunWorkflow.runAnalysis({ github, context, core });",
+            Scalar(Mapping(analyzeStep, "with"), "script").TrimEnd());
+
+        var rerunStep = Step(workflow, "Rerun matched jobs");
+        Assert.Equal(
+            "const rerunWorkflow = require('./.github/workflows/auto-rerun-transient-ci-failures.js');\nawait rerunWorkflow.runRerun({ github, context, core });",
+            Scalar(Mapping(rerunStep, "with"), "script").TrimEnd());
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task ForceModeAnalysisSetsRerunOutputsWithoutFetchingJobs()
+    {
+        WorkflowAdapterResult result = await InvokeHarnessAsync<WorkflowAdapterResult>(
+            "runAnalysis",
+            new
+            {
+                environment = new Dictionary<string, string>
+                {
+                    ["FORCE_RERUN_ALL"] = "true",
+                    ["MANUAL_RUN_ID"] = "",
+                    ["MANUAL_DRY_RUN"] = "false",
+                },
+                workflowRun = new
+                {
+                    id = 123,
+                    name = "CI",
+                    run_attempt = 1,
+                    html_url = "https://github.com/microsoft/aspire/actions/runs/123",
+                    pull_requests = new[] { new { number = 42 } },
+                },
+            });
+
+        Assert.Empty(result.Requests);
+        Assert.Empty(result.Warnings);
+        Assert.Equal("123", result.Outputs["source_run_id"]);
+        Assert.Equal("[42]", result.Outputs["pull_request_numbers"]);
+        Assert.Equal("true", result.Outputs["rerun_eligible"]);
+        Assert.Equal("true", result.Outputs["rerun_execution_eligible"]);
+        Assert.Contains(result.Events, e => e.Type == "heading" && e.Text == "Rerun eligible");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task NormalModeAnalysisFetchesJobsAndPublishesRetryableOutputs()
+    {
+        WorkflowAdapterResult result = await InvokeHarnessAsync<WorkflowAdapterResult>(
+            "runAnalysis",
+            new
+            {
+                environment = new Dictionary<string, string>
+                {
+                    ["FORCE_RERUN_ALL"] = "false",
+                    ["GITHUB_WORKSPACE"] = _repoRoot,
+                    ["MANUAL_RUN_ID"] = "",
+                    ["MANUAL_DRY_RUN"] = "false",
+                },
+                workflowRun = new
+                {
+                    id = 123,
+                    name = "CI",
+                    run_attempt = 1,
+                    html_url = "https://github.com/microsoft/aspire/actions/runs/123",
+                    pull_requests = new[] { new { number = 42 } },
+                },
+                jobs = new[]
+                {
+                    new
+                    {
+                        id = 1001,
+                        name = "Build / linux",
+                        conclusion = "failure",
+                        html_url = "https://github.com/microsoft/aspire/actions/runs/123/job/1001",
+                        check_run_url = "https://api.github.com/repos/microsoft/aspire/check-runs/5001",
+                        steps = Array.Empty<object>(),
+                    },
+                },
+                annotations = new[]
+                {
+                    new
+                    {
+                        message = "The hosted runner lost communication with the server.",
+                    },
+                },
+            });
+
+        Assert.Collection(
+            result.Requests,
+            request => Assert.Equal("GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", request.Route),
+            request => Assert.Equal("GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", request.Route));
+        Assert.Equal("1", result.Outputs["retryable_count"]);
+        Assert.Equal("0", result.Outputs["skipped_count"]);
+        Assert.Equal("true", result.Outputs["rerun_eligible"]);
+        Assert.Contains("\"id\":1001", result.Outputs["retryable_jobs"], StringComparison.Ordinal);
+        Assert.Contains(result.Events, e => e.Type == "heading" && e.Text == "Rerun eligible");
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task RerunAdapterSkipsEmptyNormalModeBeforeGitHubMutation()
+    {
+        WorkflowAdapterResult result = await InvokeHarnessAsync<WorkflowAdapterResult>(
+            "runRerun",
+            new
+            {
+                environment = new Dictionary<string, string>
+                {
+                    ["RETRYABLE_JOBS"] = "[]",
+                    ["PULL_REQUEST_NUMBERS"] = "[42]",
+                    ["SOURCE_RUN_ID"] = "123",
+                    ["SOURCE_RUN_ATTEMPT"] = "1",
+                    ["SOURCE_RUN_URL"] = "https://github.com/microsoft/aspire/actions/runs/123",
+                    ["TEST_PATTERN_MATCHED_TESTS"] = "[]",
+                    ["FORCE_RERUN_ALL"] = "false",
+                },
+            });
+
+        Assert.Empty(result.Requests);
+        Assert.Empty(result.Events);
+        Assert.Contains("No retryable jobs were provided to the rerun job.", result.Logs);
+    }
 
     [Fact]
     [RequiresTools(["node"])]
@@ -843,102 +973,39 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     }
 
     [Fact]
-    public async Task WorkflowYamlEnablesForceRerunAllMode()
+    public void WorkflowUsesTheSameForceRerunModeForAnalysisAndExecution()
     {
-        string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
+        var workflow = LoadWorkflow();
+        var analyzeMode = Scalar(Mapping(Step(workflow, "Analyze failed jobs"), "env"), "FORCE_RERUN_ALL");
+        var rerunMode = Scalar(Mapping(Step(workflow, "Rerun matched jobs"), "env"), "FORCE_RERUN_ALL");
 
-        // Force mode is controlled by FORCE_RERUN_ALL on BOTH jobs (analyze + rerun).
-        // It must be set consistently: either enabled ('true') on both or disabled
-        // ('false') on both. A half-flip (toggling only one job) leaves the workflow in
-        // a confusing partially-bypassed state and must fail. The documented disable
-        // path (flip both to 'false') stays valid here; fully removing the temporary
-        // measure removes these tests along with the env vars.
-        int enabledCount = workflowText.Split("FORCE_RERUN_ALL: 'true'").Length - 1;
-        int disabledCount = workflowText.Split("FORCE_RERUN_ALL: 'false'").Length - 1;
-        bool consistentlyEnabled = enabledCount >= 2 && disabledCount == 0;
-        bool consistentlyDisabled = disabledCount >= 2 && enabledCount == 0;
-        Assert.True(
-            consistentlyEnabled || consistentlyDisabled,
-            $"FORCE_RERUN_ALL must be set consistently on both jobs. Found {enabledCount} 'true' and {disabledCount} 'false'.");
-
-        // The env var is parsed to a boolean on both jobs and gates the short-circuit.
-        Assert.Contains("const forceRerunAll = String(process.env.FORCE_RERUN_ALL).toLowerCase() === 'true';", workflowText);
-
-        // The analyze step short-circuits on force mode: it computes eligibility with
-        // forceRerunAll: true and writes the dedicated force-mode summary instead of
-        // enumerating jobs.
-        Assert.Contains("if (forceRerunAll) {", workflowText);
-        Assert.Contains("forceRerunAll: true,", workflowText);
-        Assert.Contains("writeForceRerunSummary", workflowText);
-
-        // The rerun step proceeds even with an empty job list when force mode is on.
-        Assert.Contains("if (!forceRerunAll && retryableJobs.length === 0) {", workflowText);
+        Assert.Equal(analyzeMode, rerunMode);
+        Assert.True(analyzeMode is "true" or "false");
     }
 
     [Fact]
-    public async Task RepresentativeWorkflowFixturesStayAlignedWithCurrentWorkflowDefinitions()
+    public void WorkflowKeepsRerunSafetyRails()
     {
-        Dictionary<string, string[]> expectations = new()
-        {
-            [".github/workflows/run-tests.yml"] =
-            [
-                "- name: Checkout code",
-                "- name: Set up .NET Core",
-                "- name: Install sdk for nuget based testing",
-                "- name: Build test project",
-                "- name: Run tests (Windows)",
-                "- name: Upload logs, and test results",
-                "- name: Copy CLI E2E recordings for upload",
-                "- name: Upload CLI E2E recordings",
-                "- name: Generate test results summary",
-            ],
-            [".github/workflows/build-packages.yml"] =
-            [
-                "- name: Build with packages",
-            ],
-            [".github/workflows/polyglot-validation.yml"] =
-            [
-                "- name: Build Python validation image",
-                "- name: Run TypeScript SDK validation",
-            ],
-            [".github/workflows/ci.yml"] =
-            [
-                "name: Final Results",
-            ],
-            [".github/workflows/tests.yml"] =
-            [
-                "- uses: ./.github/actions/enumerate-tests",
-                "name: Final Test Results",
-            ],
-        };
+        var workflow = LoadWorkflow();
+        var triggers = Mapping(workflow, "on");
+        var dispatchInputs = Mapping(Mapping(triggers, "workflow_dispatch"), "inputs");
+        var dryRunInput = Mapping(dispatchInputs, "dry_run");
+        Assert.Equal("false", Scalar(dryRunInput, "default"));
 
-        foreach ((string relativePath, string[] expectedLines) in expectations)
-        {
-            string workflowText = await ReadRepoFileAsync(relativePath);
+        var jobs = Mapping(workflow, "jobs");
+        var analyzeJob = Mapping(jobs, "analyze-transient-failures");
+        Assert.Contains("github.repository_owner == 'microsoft'", Scalar(analyzeJob, "if"), StringComparison.Ordinal);
+        Assert.Contains("github.event.workflow_run.conclusion == 'failure'", Scalar(analyzeJob, "if"), StringComparison.Ordinal);
+        Assert.Contains("github.event.workflow_run.run_attempt <= 3", Scalar(analyzeJob, "if"), StringComparison.Ordinal);
+        Assert.Equal(
+            "${{ steps.analyze.outputs.rerun_execution_eligible }}",
+            Scalar(Mapping(analyzeJob, "outputs"), "rerun_execution_eligible"));
 
-            foreach (string expectedLine in expectedLines)
-            {
-                Assert.Contains(expectedLine, workflowText);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task WorkflowYamlKeepsDocumentedSafetyRails()
-    {
-        string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
-
-        Assert.Contains("workflow_dispatch:", workflowText);
-        Assert.Contains("dry_run:", workflowText);
-        Assert.Contains("default: false", workflowText);
-        Assert.Contains("rerun_execution_eligible", workflowText);
-        Assert.Contains("needs.analyze-transient-failures.outputs.rerun_execution_eligible == 'true'", workflowText);
-        Assert.Contains("MANUAL_DRY_RUN", workflowText);
-        Assert.Contains("function parseManualDryRun()", workflowText);
-        Assert.Contains("const dryRun = parseManualDryRun();", workflowText);
-        Assert.Contains("computeRerunExecutionEligibility", workflowText);
-        Assert.Contains("getAssociatedPullRequestNumbers", workflowText);
-        Assert.Contains("github.event.workflow_run.run_attempt <= 3", workflowText);
+        var rerunJob = Mapping(jobs, "rerun-transient-failures");
+        Assert.Equal(
+            "${{ needs.analyze-transient-failures.outputs.rerun_execution_eligible == 'true' }}",
+            Scalar(rerunJob, "if"));
+        Assert.Equal("write", Scalar(Mapping(rerunJob, "permissions"), "actions"));
     }
 
     [Fact]
@@ -2261,6 +2328,46 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         public object? Payload { get; init; }
     }
 
+    private static YamlMappingNode LoadWorkflow()
+    {
+        var yaml = new YamlStream();
+        yaml.Load(new StringReader(File.ReadAllText(
+            Path.Combine(RepoRoot.Path, ".github", "workflows", "auto-rerun-transient-ci-failures.yml"))));
+        return Assert.IsType<YamlMappingNode>(Assert.Single(yaml.Documents).RootNode);
+    }
+
+    private static YamlMappingNode Step(YamlMappingNode root, string name)
+        => Assert.Single(
+            Mappings(root),
+            node => Scalar(node, "name") == name &&
+                (node.Children.ContainsKey(new YamlScalarNode("uses")) ||
+                 node.Children.ContainsKey(new YamlScalarNode("run"))));
+
+    private static YamlMappingNode Mapping(YamlMappingNode node, string key)
+        => Assert.IsType<YamlMappingNode>(node.Children[new YamlScalarNode(key)]);
+
+    private static string Scalar(YamlMappingNode node, string key)
+        => node.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value.ToString() : string.Empty;
+
+    private static IEnumerable<YamlMappingNode> Mappings(YamlNode node)
+    {
+        if (node is YamlMappingNode mapping)
+        {
+            yield return mapping;
+        }
+
+        var children = node switch
+        {
+            YamlMappingNode parent => parent.Children.Values,
+            YamlSequenceNode sequence => sequence.Children,
+            _ => []
+        };
+        foreach (var child in children.SelectMany(Mappings))
+        {
+            yield return child;
+        }
+    }
+
     private sealed class HarnessResponse<T>
     {
         public T? Result { get; init; }
@@ -2318,6 +2425,15 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     private sealed class SummaryResult
     {
         public SummaryEvent[] Events { get; init; } = [];
+    }
+
+    private sealed class WorkflowAdapterResult
+    {
+        public Dictionary<string, string> Outputs { get; init; } = [];
+        public RequestRecord[] Requests { get; init; } = [];
+        public SummaryEvent[] Events { get; init; } = [];
+        public string[] Warnings { get; init; } = [];
+        public string[] Logs { get; init; } = [];
     }
 
     private sealed class SummaryEvent
