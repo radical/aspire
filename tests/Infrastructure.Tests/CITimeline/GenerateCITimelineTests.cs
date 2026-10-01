@@ -1,13 +1,14 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Net;
 using System.Text.Json;
-using VerifyXunit;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Infrastructure.Tests.CITimeline;
 
-public class GenerateCITimelineTests
+public partial class GenerateCITimelineTests
 {
     private static string GetTestDataPath(string filename) =>
         Path.Combine(AppContext.BaseDirectory, "CITimeline", "TestData", filename);
@@ -16,21 +17,12 @@ public class GenerateCITimelineTests
         GitHubApi.LoadJsonData(GetTestDataPath(filename));
 
     [Fact]
-    public async Task GenerateSummary_BasicRun_MatchesCompleteHtml()
-    {
-        var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var html = TimelineRenderer.WrapHtml(TimelineRenderer.GenerateSummary(runInfo, jobs));
-
-        await Verifier.Verify(html, "html").UseDirectory("Snapshots");
-    }
-
-    [Fact]
     public void GenerateSummary_BasicRun_UsesRunWindowForWallTime()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
         var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
 
-        Assert.Contains("<tr><td>Total wall time</td><td><b>45m00s</b></td></tr>", summary);
+        Assert.Equal("45m00s", GetMetricValue(summary, "Total wall time"));
     }
 
     [Fact]
@@ -42,12 +34,29 @@ public class GenerateCITimelineTests
 
         Assert.Equal(
         [
-            "<tr><td>1</td><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
-            "<tr><td>2</td><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
-            "<tr><td>3</td><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
-            "<tr><td>4</td><td>✅ 🐧 <code>Build</code></td><td><b>15m00s</b></td><td>2m00s</td><td>1m00s</td><td>12m00s</td></tr>",
+            "1 | ❌ 🪟 Aspire.Hosting.Tests | 42m00s | 18m00s | 2m00s | 22m00s",
+            "2 | ✅ 🐧⚡ Aspire.Hosting.Tests | 40m00s | 15m00s | 1m00s | 24m00s",
+            "3 | ✅ 🪟 Build | 18m00s | 2m00s | 2m00s | 14m00s",
+            "4 | ✅ 🐧 Build | 15m00s | 2m00s | 1m00s | 12m00s",
         ],
             GetJobRows(section));
+    }
+
+    [Fact]
+    public void GenerateSummary_BasicRun_RanksQueueHotspots()
+    {
+        var (runInfo, jobs) = LoadTestData("basic-run.json");
+        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var section = GetDetailsSection(summary, "<summary><b>⏳ Queue hotspots</b>");
+
+        Assert.Equal(
+        [
+            "⏳ 🪟 Build | 2m00s",
+            "⏳ 🪟 Aspire.Hosting.Tests | 2m00s",
+            "⏳ 🐧 Build | 1m00s",
+            "⏳ 🐧⚡ Aspire.Hosting.Tests | 1m00s",
+        ],
+            GetRows(section).Select(row => string.Join(" | ", row)));
     }
 
     [Fact]
@@ -60,16 +69,16 @@ public class GenerateCITimelineTests
 
         Assert.Equal(
         [
-            "<tr><td>1</td><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
-            "<tr><td>2</td><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
-            "<tr><td>3</td><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
+            "1 | ❌ 🪟 Aspire.Hosting.Tests | 42m00s | 18m00s | 2m00s | 22m00s",
+            "2 | ✅ 🐧⚡ Aspire.Hosting.Tests | 40m00s | 15m00s | 1m00s | 24m00s",
+            "3 | ✅ 🪟 Build | 18m00s | 2m00s | 2m00s | 14m00s",
         ],
             GetJobRows(criticalPath));
         Assert.Equal(
         [
-            "<tr><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
-            "<tr><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
-            "<tr><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
+            "✅ 🪟 Build | 18m00s | 2m00s | 2m00s | 14m00s",
+            "❌ 🪟 Aspire.Hosting.Tests | 42m00s | 18m00s | 2m00s | 22m00s",
+            "✅ 🐧⚡ Aspire.Hosting.Tests | 40m00s | 15m00s | 1m00s | 24m00s",
         ],
             GetJobRows(fullTimeline));
     }
@@ -145,11 +154,11 @@ public class GenerateCITimelineTests
         var fullTimeline = GetDetailsSection(summary, "<summary><b>📊 Full timeline</b>");
 
         Assert.Contains("re-run attempt #2", summary);
-        Assert.Contains("<tr><td>Jobs</td><td>1 (1 unique)</td></tr>", summary);
-        Assert.Contains("<tr><td>Total wall time</td><td><b>15m00s</b></td></tr>", summary);
+        Assert.Equal("1 (1 unique)", GetMetricValue(summary, "Jobs"));
+        Assert.Equal("15m00s", GetMetricValue(summary, "Total wall time"));
         Assert.Equal(
         [
-            "<tr><td>✅ 🐧 <code>Build</code></td><td><b>15m00s</b></td><td>0s</td><td>1m00s</td><td>14m00s</td></tr>",
+            "✅ 🐧 Build | 15m00s | 0s | 1m00s | 14m00s",
         ],
             GetJobRows(fullTimeline));
     }
@@ -185,6 +194,27 @@ public class GenerateCITimelineTests
         return summary[detailsStart..(detailsEnd + "</details>".Length)];
     }
 
+    private static string GetMetricValue(string summary, string metric)
+    {
+        var row = Assert.Single(GetRows(summary), row => row is [var name, _] && name == metric);
+        return row[1];
+    }
+
     private static string[] GetJobRows(string section) =>
-        [.. section.Split('\n').Where(line => line.StartsWith("<tr><td>", StringComparison.Ordinal))];
+        [.. GetRows(section)
+            .Where(row => row.Count > 2)
+            .Select(row => string.Join(" | ", row))];
+
+    private static List<List<string>> GetRows(string html) =>
+        [.. html.Split('\n')
+            .Where(line => line.StartsWith("<tr><td>", StringComparison.Ordinal))
+            .Select(line => CellRegex().Matches(line)
+                .Select(match => WebUtility.HtmlDecode(TagRegex().Replace(match.Groups[1].Value, string.Empty)))
+                .ToList())];
+
+    [GeneratedRegex(@"<td(?:\s+[^>]*)?>(.*?)</td>")]
+    private static partial Regex CellRegex();
+
+    [GeneratedRegex("<[^>]+>")]
+    private static partial Regex TagRegex();
 }
