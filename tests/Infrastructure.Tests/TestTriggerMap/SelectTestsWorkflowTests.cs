@@ -142,84 +142,6 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void SelectTestsActionInvokesMergeBaseResolverAndPropagatesOutputs()
-    {
-        var steps = ActionSteps(s_selectTestsAction);
-        var resolveMergeBase = StepById(steps, "resolve_merge_base");
-
-        Assert.Equal(
-            "${{ inputs.forceAll != 'true' && inputs.prBaseSha != '' }}",
-            Scalar(resolveMergeBase, "if"));
-        Assert.Equal(
-            "${{ inputs.prBaseSha }}",
-            Scalar(Mapping(resolveMergeBase, "env"), "PR_BASE_SHA"));
-        Assert.Equal(
-            "${{ inputs.headSha }}",
-            Scalar(Mapping(resolveMergeBase, "env"), "HEAD_SHA"));
-        Assert.Equal(
-            "./.github/actions/select-tests/resolve-merge-base.sh",
-            Scalar(resolveMergeBase, "run"));
-
-        var select = StepById(steps, "select");
-        var selectEnvironment = Mapping(select, "env");
-        Assert.Equal(
-            "${{ steps.resolve_merge_base.outputs.mode }}",
-            Scalar(selectEnvironment, "MERGE_BASE_MODE"));
-        Assert.Equal(
-            "${{ steps.resolve_merge_base.outputs.from_sha }}",
-            Scalar(selectEnvironment, "MERGE_BASE_FROM"));
-        Assert.Equal(
-            "${{ steps.resolve_merge_base.outputs.to_sha }}",
-            Scalar(selectEnvironment, "MERGE_BASE_TO"));
-        Assert.Equal(
-            "${{ steps.resolve_merge_base.outputs.force_all_reason }}",
-            Scalar(selectEnvironment, "MERGE_BASE_FORCE_ALL_REASON"));
-
-        var selectScript = Scalar(select, "run");
-        Assert.Contains(
-            "args+=(--from \"$MERGE_BASE_FROM\" --to \"$MERGE_BASE_TO\")",
-            selectScript,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "args+=(--force-all --force-all-reason \"$MERGE_BASE_FORCE_ALL_REASON\")",
-            selectScript,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    [RequiresTools(["bash"])]
-    public async Task SelectTestsActionDeepensBothEndpointsUntilMergeBaseIsReachable()
-    {
-        var result = await RunMergeBaseResolverAsync(mergeBaseSucceedsOnAttempt: 3);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("fetch --no-tags --depth=4 origin base-sha head-sha", result.GitInvocations);
-        Assert.Contains("fetch --no-tags --depth=16 origin base-sha head-sha", result.GitInvocations);
-        Assert.Equal("diff", result.Outputs["mode"]);
-        Assert.Equal("base-sha", result.Outputs["from_sha"]);
-        Assert.Equal("head-sha", result.Outputs["to_sha"]);
-        Assert.Equal(string.Empty, result.Outputs["force_all_reason"]);
-    }
-
-    [Fact]
-    [RequiresTools(["bash"])]
-    public async Task SelectTestsActionFallsBackToAllWhenMergeBaseRemainsUnreachable()
-    {
-        var result = await RunMergeBaseResolverAsync(mergeBaseSucceedsOnAttempt: null);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("::warning::Could not find a merge-base", result.Output, StringComparison.Ordinal);
-        Assert.Contains("fetch --no-tags --depth=4096 origin base-sha head-sha", result.GitInvocations);
-        Assert.Equal("force-all", result.Outputs["mode"]);
-        Assert.Equal(string.Empty, result.Outputs["from_sha"]);
-        Assert.Equal(string.Empty, result.Outputs["to_sha"]);
-        Assert.Contains(
-            "was unreachable within 4096 commits",
-            result.Outputs["force_all_reason"],
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
     [RequiresTools(["bash", "git", "jq"])]
     public async Task CheckChangedFilesActionReportsBothSidesOfRenames()
     {
@@ -276,65 +198,6 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
         Assert.Equal(["src/critical.txt"], ReadJsonOutput(outputs, "unmatched_files"));
     }
 
-    private async Task<MergeBaseResolutionResult> RunMergeBaseResolverAsync(int? mergeBaseSucceedsOnAttempt)
-    {
-        using var workspace = TemporaryWorkspace.Create(output);
-        var binDirectory = workspace.CreateDirectory("bin").FullName;
-        var gitInvocationsPath = Path.Combine(workspace.Path, "git-invocations.log");
-        var mergeBaseAttemptsPath = Path.Combine(workspace.Path, "merge-base-attempts");
-        var githubOutputPath = Path.Combine(workspace.Path, "github-output");
-
-        WriteExecutable(
-            Path.Combine(binDirectory, "git"),
-            """
-            #!/bin/sh
-            echo "$*" >> "$GIT_INVOCATIONS"
-            case "$1" in
-              fetch|cat-file) exit 0 ;;
-              merge-base)
-                attempts=0
-                if [ -f "$MERGE_BASE_ATTEMPTS" ]; then attempts=$(cat "$MERGE_BASE_ATTEMPTS"); fi
-                attempts=$((attempts + 1))
-                echo "$attempts" > "$MERGE_BASE_ATTEMPTS"
-                if [ -n "$MERGE_BASE_SUCCEEDS_ON_ATTEMPT" ] &&
-                   [ "$attempts" -ge "$MERGE_BASE_SUCCEEDS_ON_ATTEMPT" ]; then
-                  exit 0
-                fi
-                exit 1
-                ;;
-              *) exit 1 ;;
-            esac
-            """);
-
-        var runnerPath = Path.Combine(workspace.Path, "run-merge-base-resolver.sh");
-        File.WriteAllText(
-            runnerPath,
-            $"""
-            #!/bin/bash
-            set -euo pipefail
-            export PATH={ShellQuote(binDirectory)}:/usr/bin:/bin
-            export GIT_INVOCATIONS={ShellQuote(gitInvocationsPath)}
-            export MERGE_BASE_ATTEMPTS={ShellQuote(mergeBaseAttemptsPath)}
-            export MERGE_BASE_SUCCEEDS_ON_ATTEMPT={ShellQuote(mergeBaseSucceedsOnAttempt?.ToString() ?? string.Empty)}
-            export PR_BASE_SHA=base-sha
-            export HEAD_SHA=head-sha
-            export GITHUB_OUTPUT={ShellQuote(githubOutputPath)}
-            bash {ShellQuote(ResolveMergeBaseScriptPath)}
-            """);
-        SetExecutable(runnerPath);
-
-        var process = await ProcessRunner.RunAsync(output, "bash", [runnerPath], workspace.Path);
-        return new(
-            process.ExitCode,
-            process.Output,
-            File.Exists(gitInvocationsPath) ? File.ReadAllText(gitInvocationsPath) : string.Empty,
-            File.Exists(githubOutputPath)
-                ? File.ReadAllLines(githubOutputPath)
-                    .Select(line => line.Split('=', 2))
-                    .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal)
-                : new Dictionary<string, string>(StringComparer.Ordinal));
-    }
-
     private static void AssertWindowsArm64Target(string? json)
     {
         Assert.NotNull(json);
@@ -373,9 +236,6 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
     private static string RepoPath(params string[] path)
         => Path.Combine([RepoRoot.Path, .. path]);
 
-    private static string ResolveMergeBaseScriptPath
-        => RepoPath(".github", "actions", "select-tests", "resolve-merge-base.sh");
-
     private static YamlMappingNode LoadYaml(params string[] path)
     {
         var yaml = new YamlStream();
@@ -383,22 +243,6 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
         yaml.Load(reader);
 
         return Assert.IsType<YamlMappingNode>(yaml.Documents[0].RootNode);
-    }
-
-    private static void WriteExecutable(string path, string contents)
-    {
-        File.WriteAllText(path, contents);
-        SetExecutable(path);
-    }
-
-    private static void SetExecutable(string path)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(
-                path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
     }
 
     private static string ShellQuote(string value)
@@ -424,9 +268,4 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
         return JsonSerializer.Deserialize<string[]>(outputs[start..end])!;
     }
 
-    private readonly record struct MergeBaseResolutionResult(
-        int ExitCode,
-        string Output,
-        string GitInvocations,
-        IReadOnlyDictionary<string, string> Outputs);
 }

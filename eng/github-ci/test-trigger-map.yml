@@ -327,7 +327,6 @@ path_rules:
       - .github/workflows/tests.yml
       - .github/workflows/extension-unit-tests.yml
       - .github/workflows/extension-e2e-tests.yml
-      - .github/workflows/extension-e2e/**
       - .github/workflows/build-packages.yml
       - .github/workflows/build-cli-native-archives.yml
     targets: [job:extension-e2e]
@@ -432,7 +431,6 @@ path_rules:
   - paths:
       - eng/scripts/download-native-archives.ps1
       - eng/scripts/stage-native-cli-tool-packages.ps1
-      - eng/scripts/prepare-npm-cli-packages.sh
       - eng/scripts/validate-npm-package-signatures.ps1
       - eng/scripts/validate-npm-release-aliases.ps1
     targets: [test:Infrastructure.Tests]

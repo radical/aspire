@@ -12,8 +12,6 @@ namespace Infrastructure.Tests;
 public sealed class ExtensionReleaseWorkflowTests(ITestOutputHelper testOutput)
 {
     private static readonly string s_releaseWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-release.yml");
-    private static readonly string s_changelogWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-changelog.md");
-    private static readonly string s_changelogWorkflowLockPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-changelog.lock.yml");
     private static readonly string s_releaseNotesGeneratorPath = Path.Combine(
         RepoRoot.Path,
         ".github",
@@ -32,12 +30,48 @@ public sealed class ExtensionReleaseWorkflowTests(ITestOutputHelper testOutput)
         "workflows",
         "extension-release",
         "validate_github_pr_body.py");
-    private static readonly string s_preloadChangelogRangeScriptPath = Path.Combine(
-        RepoRoot.Path,
-        ".github",
-        "workflows",
-        "extension-changelog",
-        "preload-authoritative-range.sh");
+
+    [Fact]
+    public void ExtensionReleaseWorkflowUsesSharedGeneratorWithoutSilentCapsOrTruncation()
+    {
+        var workflow = File.ReadAllText(s_releaseWorkflowPath);
+
+        Assert.Contains("generate_deterministic_release_notes.py", workflow, StringComparison.Ordinal);
+        Assert.False(
+            workflow.Contains("""printf '%.8000s'""", StringComparison.Ordinal),
+            "The workflow must not silently truncate the fallback release notes.");
+        Assert.False(
+            workflow.Contains("""if [ "$NOTE_COUNT" -ge 8 ]""", StringComparison.Ordinal),
+            "The workflow must not silently stop after eight accepted entries.");
+    }
+
+    [Fact]
+    public void ExtensionChangelogPromptRequiresLocalFullRangeEnumerationAndRejectsPrBodyAsAuthority()
+    {
+        var prompt = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-changelog.md"));
+        var compiledWorkflow = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-changelog.lock.yml"));
+
+        Assert.Contains("The PR body, description, and deterministic fallback notes are presentation-only", prompt, StringComparison.Ordinal);
+        Assert.Contains("MUST NOT be used to discover the change set.", prompt, StringComparison.Ordinal);
+        Assert.Contains("Each line contains the 40-character commit SHA", prompt, StringComparison.Ordinal);
+        Assert.Contains("Count every line and keep that exact candidate count", prompt, StringComparison.Ordinal);
+        Assert.Contains("Consider and classify **every** candidate", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"git\"", GetSection(prompt, "^tools:", "^pre-agent-steps:"), StringComparison.Ordinal);
+        Assert.Contains("--mount \"${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro\"", compiledWorkflow, StringComparison.Ordinal);
+        Assert.Contains("{{#runtime-import .github/workflows/extension-changelog.md}}", compiledWorkflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExtensionReleaseWorkflowValidatesPrBodyLengthAndRelabelsAtomically()
+    {
+        var workflow = File.ReadAllText(s_releaseWorkflowPath);
+
+        Assert.Contains("validate_github_pr_body.py", workflow, StringComparison.Ordinal);
+        Assert.Contains("apply_extension_release_trigger_label.sh", workflow, StringComparison.Ordinal);
+        Assert.False(
+            workflow.Contains("""gh pr edit "$PR_NUMBER" --remove-label vscode-extension-release >/dev/null 2>&1 || true""", StringComparison.Ordinal),
+            "The workflow must not swallow a failed label removal before re-adding the trigger label.");
+    }
 
     [Fact]
     public void ExtensionReleaseWorkflowLoadsHelpersFromWorkflowDefinitionCommit()
@@ -82,214 +116,6 @@ public sealed class ExtensionReleaseWorkflowTests(ITestOutputHelper testOutput)
             step => Scalar(step, "run")?.Contains(
                 "bash .extension-release-workflow-source/.github/workflows/extension-release/apply_extension_release_trigger_label.sh",
                 StringComparison.Ordinal) == true);
-    }
-
-    [Fact]
-    public void ChangelogWorkflowExecutesTrustedPreloadBeforeCredentialCleanup()
-    {
-        var sourceRoot = LoadAgenticWorkflowSource(s_changelogWorkflowPath);
-        var sourceSteps = Sequence(sourceRoot, "pre-agent-steps").Children.Cast<YamlMappingNode>().ToList();
-        var helperCheckout = Assert.Single(
-            sourceSteps,
-            step => Scalar(step, "name") == "Check out changelog workflow helper");
-        var helperCheckoutWith = Assert.IsType<YamlMappingNode>(helperCheckout.Children[new YamlScalarNode("with")]);
-        Assert.Equal("${{ github.workflow_sha }}", Scalar(helperCheckoutWith, "ref"));
-        Assert.Equal(".extension-changelog-workflow-source", Scalar(helperCheckoutWith, "path"));
-        Assert.Equal("false", Scalar(helperCheckoutWith, "persist-credentials"));
-        Assert.Equal(
-            ".github/workflows/extension-changelog\n",
-            Scalar(helperCheckoutWith, "sparse-checkout")?.ReplaceLineEndings("\n"));
-        var sourcePreload = Assert.Single(
-            sourceSteps,
-            step => Scalar(step, "name") == "Preload authoritative marker range for local changelog enumeration");
-        Assert.True(sourceSteps.IndexOf(sourcePreload) > sourceSteps.IndexOf(helperCheckout));
-        Assert.Equal(
-            "bash .extension-changelog-workflow-source/.github/workflows/extension-changelog/preload-authoritative-range.sh",
-            Scalar(sourcePreload, "run"));
-
-        var compiledRoot = LoadYamlWorkflow(s_changelogWorkflowLockPath);
-        var compiledSteps = GetJobSteps(compiledRoot, "agent");
-        var compiledHelperCheckout = Step(compiledSteps, "Check out changelog workflow helper");
-        var preload = Step(compiledSteps, "Preload authoritative marker range for local changelog enumeration");
-        var preloadIndex = compiledSteps.IndexOf(preload);
-        var configureIndex = compiledSteps.FindLastIndex(
-            preloadIndex,
-            step => Scalar(step, "name") == "Configure Git credentials");
-        var checkoutPrIndex = compiledSteps.FindLastIndex(
-            preloadIndex,
-            step => Scalar(step, "name") == "Checkout PR branch");
-        var cleanIndex = compiledSteps.FindIndex(
-            preloadIndex + 1,
-            step => Scalar(step, "name") == "Clean credentials");
-        Assert.True(configureIndex >= 0);
-        Assert.True(checkoutPrIndex >= 0);
-        Assert.True(cleanIndex > preloadIndex);
-        Assert.True(compiledSteps.IndexOf(compiledHelperCheckout) > checkoutPrIndex);
-        Assert.True(preloadIndex > configureIndex);
-        Assert.True(preloadIndex > checkoutPrIndex);
-        Assert.True(compiledSteps.IndexOf(preload) > compiledSteps.IndexOf(compiledHelperCheckout));
-        Assert.True(preloadIndex < cleanIndex);
-        Assert.Equal(
-            "bash .extension-changelog-workflow-source/.github/workflows/extension-changelog/preload-authoritative-range.sh",
-            Scalar(preload, "run"));
-    }
-
-    [Theory]
-    [InlineData("materializes-range")]
-    [InlineData("no-marker")]
-    [InlineData("invalid-marker")]
-    [RequiresTools(["bash", "git"])]
-    public async Task ChangelogRangePreloadUsesRepositoryHistory(string scenario)
-    {
-        using var workspace = TemporaryWorkspace.Create(testOutput);
-        GitCli.Run(workspace.Path, "init", "-q", "-b", "main");
-        GitCli.Run(workspace.Path, "config", "user.email", "test@example.com");
-        GitCli.Run(workspace.Path, "config", "user.name", "Test");
-        GitCli.Run(workspace.Path, "config", "commit.gpgsign", "false");
-        Directory.CreateDirectory(Path.Combine(workspace.Path, "extension"));
-        await File.WriteAllTextAsync(Path.Combine(workspace.Path, "extension", "feature.txt"), "baseline\n");
-        GitCli.Run(workspace.Path, "add", "extension/feature.txt");
-        GitCli.Run(workspace.Path, "commit", "-q", "-m", "Baseline");
-        var fromSha = GitCli.Run(workspace.Path, "rev-parse", "HEAD").Trim();
-        await File.AppendAllTextAsync(Path.Combine(workspace.Path, "extension", "feature.txt"), "changed\n");
-        GitCli.Run(workspace.Path, "add", "extension/feature.txt");
-        GitCli.Run(workspace.Path, "commit", "-q", "-m", "feat: Add extension behavior");
-        var toSha = GitCli.Run(workspace.Path, "rev-parse", "HEAD").Trim();
-
-        var marker = scenario switch
-        {
-            "materializes-range" => $"<!-- aspire-ext-changelog from={fromSha} to={toSha} base=1.0.0 -->",
-            "invalid-marker" => "<!-- aspire-ext-changelog from=invalid to=invalid base=1.0.0 -->",
-            _ => "## v1.0.0",
-        };
-        await File.WriteAllTextAsync(Path.Combine(workspace.Path, "extension", "CHANGELOG.md"), marker + "\n");
-
-        var runnerTemp = workspace.CreateDirectory("runner").FullName;
-        var result = await RunBashScriptAsync(
-            s_preloadChangelogRangeScriptPath,
-            [],
-            new Dictionary<string, string?> { ["RUNNER_TEMP"] = runnerTemp },
-            workspace.Path);
-
-        if (scenario == "invalid-marker")
-        {
-            Assert.NotEqual(0, result.ExitCode);
-            Assert.Contains("Could not parse authoritative marker", result.Output, StringComparison.Ordinal);
-            return;
-        }
-
-        Assert.Equal(0, result.ExitCode);
-        var candidatesPath = Path.Combine(runnerTemp, "gh-aw", "extension-changelog-candidates.tsv");
-        if (scenario == "no-marker")
-        {
-            Assert.False(File.Exists(candidatesPath));
-            Assert.Contains("No pending aspire-ext-changelog marker", result.Output, StringComparison.Ordinal);
-            return;
-        }
-
-        Assert.Equal(
-            $"{toSha}\tfeat: Add extension behavior\n",
-            (await File.ReadAllTextAsync(candidatesPath)).ReplaceLineEndings("\n"));
-    }
-
-    [Fact]
-    [RequiresTools(["bash", "git"])]
-    public async Task ChangelogRangePreloadDeepensShallowCheckout()
-    {
-        using var workspace = TemporaryWorkspace.Create(testOutput);
-        var sourcePath = workspace.CreateDirectory("source").FullName;
-        GitCli.Run(sourcePath, "init", "-q", "-b", "main");
-        GitCli.Run(sourcePath, "config", "user.email", "test@example.com");
-        GitCli.Run(sourcePath, "config", "user.name", "Test");
-        GitCli.Run(sourcePath, "config", "commit.gpgsign", "false");
-        Directory.CreateDirectory(Path.Combine(sourcePath, "extension"));
-        await File.WriteAllTextAsync(Path.Combine(sourcePath, "extension", "feature.txt"), "baseline\n");
-        GitCli.Run(sourcePath, "add", "extension/feature.txt");
-        GitCli.Run(sourcePath, "commit", "-q", "-m", "Baseline");
-        var fromSha = GitCli.Run(sourcePath, "rev-parse", "HEAD").Trim();
-        await File.AppendAllTextAsync(Path.Combine(sourcePath, "extension", "feature.txt"), "changed\n");
-        GitCli.Run(sourcePath, "add", "extension/feature.txt");
-        GitCli.Run(sourcePath, "commit", "-q", "-m", "feat: Add extension behavior");
-        var toSha = GitCli.Run(sourcePath, "rev-parse", "HEAD").Trim();
-        await File.WriteAllTextAsync(
-            Path.Combine(sourcePath, "extension", "CHANGELOG.md"),
-            $"<!-- aspire-ext-changelog from={fromSha} to={toSha} base=1.0.0 -->\n");
-        GitCli.Run(sourcePath, "add", "extension/CHANGELOG.md");
-        GitCli.Run(sourcePath, "commit", "-q", "-m", "Add pending changelog marker");
-
-        var originPath = Path.Combine(workspace.Path, "origin.git");
-        GitCli.Run(workspace.Path, "clone", "-q", "--bare", sourcePath, originPath);
-        var checkoutPath = Path.Combine(workspace.Path, "checkout");
-        GitCli.Run(
-            workspace.Path,
-            "clone",
-            "-q",
-            "--depth",
-            "1",
-            "--branch",
-            "main",
-            new Uri(originPath).AbsoluteUri,
-            checkoutPath);
-        Assert.Equal("true", GitCli.Run(checkoutPath, "rev-parse", "--is-shallow-repository").Trim());
-
-        var runnerTemp = workspace.CreateDirectory("runner").FullName;
-        var result = await RunBashScriptAsync(
-            s_preloadChangelogRangeScriptPath,
-            [],
-            new Dictionary<string, string?> { ["RUNNER_TEMP"] = runnerTemp },
-            checkoutPath);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("Deepening main by 128 commits", result.Output, StringComparison.Ordinal);
-        Assert.Contains("Preloaded authoritative marker range", result.Output, StringComparison.Ordinal);
-        var candidatesPath = Path.Combine(runnerTemp, "gh-aw", "extension-changelog-candidates.tsv");
-        Assert.Equal(
-            $"{toSha}\tfeat: Add extension behavior\n",
-            (await File.ReadAllTextAsync(candidatesPath)).ReplaceLineEndings("\n"));
-    }
-
-    [Fact]
-    [RequiresTools(["bash", "git"])]
-    public async Task ChangelogRangePreloadFailsWhenRangeIsAbsentFromOrigin()
-    {
-        using var workspace = TemporaryWorkspace.Create(testOutput);
-        var sourcePath = workspace.CreateDirectory("source").FullName;
-        GitCli.Run(sourcePath, "init", "-q", "-b", "main");
-        GitCli.Run(sourcePath, "config", "user.email", "test@example.com");
-        GitCli.Run(sourcePath, "config", "user.name", "Test");
-        GitCli.Run(sourcePath, "config", "commit.gpgsign", "false");
-        Directory.CreateDirectory(Path.Combine(sourcePath, "extension"));
-        await File.WriteAllTextAsync(Path.Combine(sourcePath, "extension", "feature.txt"), "baseline\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(sourcePath, "extension", "CHANGELOG.md"),
-            $"<!-- aspire-ext-changelog from={new string('1', 40)} to={new string('2', 40)} base=1.0.0 -->\n");
-        GitCli.Run(sourcePath, "add", "extension");
-        GitCli.Run(sourcePath, "commit", "-q", "-m", "Add pending changelog marker");
-
-        var originPath = Path.Combine(workspace.Path, "origin.git");
-        GitCli.Run(workspace.Path, "clone", "-q", "--bare", sourcePath, originPath);
-        var checkoutPath = Path.Combine(workspace.Path, "checkout");
-        GitCli.Run(
-            workspace.Path,
-            "clone",
-            "-q",
-            "--depth",
-            "1",
-            "--branch",
-            "main",
-            new Uri(originPath).AbsoluteUri,
-            checkoutPath);
-
-        var runnerTemp = workspace.CreateDirectory("runner").FullName;
-        var result = await RunBashScriptAsync(
-            s_preloadChangelogRangeScriptPath,
-            [],
-            new Dictionary<string, string?> { ["RUNNER_TEMP"] = runnerTemp },
-            checkoutPath);
-
-        Assert.NotEqual(0, result.ExitCode);
-        Assert.Contains("Failed to preload authoritative marker range", result.Output, StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(runnerTemp, "gh-aw", "extension-changelog-candidates.tsv")));
     }
 
     [Fact]
@@ -690,40 +516,6 @@ public sealed class ExtensionReleaseWorkflowTests(ITestOutputHelper testOutput)
         return new CommandResult(process.ExitCode, output);
     }
 
-    private static YamlMappingNode LoadAgenticWorkflowSource(string path)
-    {
-        var contents = File.ReadAllText(path);
-        const string delimiter = "---";
-        var end = contents.IndexOf($"\n{delimiter}", delimiter.Length, StringComparison.Ordinal);
-        Assert.StartsWith(delimiter, contents, StringComparison.Ordinal);
-        Assert.True(end > delimiter.Length);
-        return LoadYaml(contents[delimiter.Length..end]);
-    }
-
-    private static YamlMappingNode LoadYamlWorkflow(string path)
-        => LoadYaml(File.ReadAllText(path));
-
-    private static YamlMappingNode LoadYaml(string contents)
-    {
-        var yaml = new YamlStream();
-        using var reader = new StringReader(contents);
-        yaml.Load(reader);
-        return Assert.IsType<YamlMappingNode>(Assert.Single(yaml.Documents).RootNode);
-    }
-
-    private static List<YamlMappingNode> GetJobSteps(YamlMappingNode root, string jobName)
-        => Sequence(
-                Assert.IsType<YamlMappingNode>(
-                    Assert.IsType<YamlMappingNode>(root.Children[new YamlScalarNode("jobs")])
-                        .Children[new YamlScalarNode(jobName)]),
-                "steps")
-            .Children
-            .Cast<YamlMappingNode>()
-            .ToList();
-
-    private static YamlMappingNode Step(IReadOnlyList<YamlMappingNode> steps, string name)
-        => Assert.Single(steps, step => Scalar(step, "name") == name);
-
     private async Task<CommandResult> RunBashScriptAsync(
         string scriptPath,
         IEnumerable<string> args,
@@ -836,8 +628,15 @@ public sealed class ExtensionReleaseWorkflowTests(ITestOutputHelper testOutput)
             ? scalar.Value
             : null;
 
-    private static YamlSequenceNode Sequence(YamlMappingNode node, string key)
-        => Assert.IsType<YamlSequenceNode>(node.Children[new YamlScalarNode(key)]);
+    private static string GetSection(string text, string startPattern, string endPattern)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            text,
+            $"(?ms){startPattern}\\r?\\n.*?(?={endPattern})",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"Could not find workflow section starting with '{startPattern}'.");
+        return match.Value;
+    }
 
     private sealed record FakeGhFixture(string CallLogPath, string PathEnvironment);
     private sealed record CommandResult(int ExitCode, string Output);

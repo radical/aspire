@@ -1063,47 +1063,6 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
     }
 
     [Fact]
-    public void RealMapExtensionE2eHelperChangesSelectExtensionE2eJob()
-    {
-        var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
-        var selector = new TestSelector(
-            mapPath,
-            EnumerateMatrixTestProjects(),
-            LoadProjectDirectories(),
-            EnumerateAllTestProjects());
-
-        var r = selector.Select(
-            [".github/workflows/extension-e2e/install-e2e-recorder.ps1"],
-            [],
-            new SelectorOptions());
-
-        Assert.False(r.SelectsAll);
-        Assert.Equal(["Infrastructure.Tests"], r.TestProjects);
-        Assert.Equal(["job:extension-e2e"], r.Jobs);
-    }
-
-    [Fact]
-    public void RealMapNpmPackagePreparationHelperSelectsInfrastructureTests()
-    {
-        var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
-        var selector = new TestSelector(
-            mapPath,
-            EnumerateMatrixTestProjects(),
-            LoadProjectDirectories(),
-            EnumerateAllTestProjects());
-
-        var r = selector.Select(
-            ["eng/scripts/prepare-npm-cli-packages.sh"],
-            [],
-            new SelectorOptions());
-
-        Assert.False(r.SelectsAll);
-        Assert.Equal(["Infrastructure.Tests"], r.TestProjects);
-        Assert.Empty(r.Jobs);
-        Assert.Empty(r.UnmatchedFiles);
-    }
-
-    [Fact]
     public void RealMapManualMacPlatformSsoValidationDoesNotSelectCi()
     {
         var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");

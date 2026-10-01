@@ -222,17 +222,13 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 
 | File | Role |
 |------|------|
-| [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | YAML workflow: triggers, permissions, conditions, environment wiring, and output propagation |
-| [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | JavaScript program: GitHub API orchestration, artifact and TRX handling, classification, rerun decisions, side effects, and summary formatting |
+| [`.github/workflows/auto-rerun-transient-ci-failures.yml`](../../.github/workflows/auto-rerun-transient-ci-failures.yml) | YAML workflow: orchestration, GitHub API calls, artifact download, TRX file I/O |
+| [`.github/workflows/auto-rerun-transient-ci-failures.js`](../../.github/workflows/auto-rerun-transient-ci-failures.js) | JavaScript module: all testable logic — pattern matching, job classification, TRX parsing, promotion, summary formatting |
 | [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json) | Configuration: test failure and job failure patterns |
 | [`tests/.../auto-rerun-transient-ci-failures.harness.js`](../../tests/Infrastructure.Tests/WorkflowScripts/auto-rerun-transient-ci-failures.harness.js) | Node.js test harness: bridges C# xUnit tests to the JS module functions |
 | [`tests/.../AutoRerunTransientCiFailuresTests.cs`](../../tests/Infrastructure.Tests/WorkflowScripts/AutoRerunTransientCiFailuresTests.cs) | C# test class: behavior-focused tests covering all matcher logic |
 
-The JS program is intentionally separated from the YAML workflow so the GitHub
-API orchestration and rerun side effects can be executed with fake clients, and
-the classification, parsing, sanitization, and formatting helpers can be tested
-through the same Node.js harness. The YAML workflow contains only the trusted
-invocation boundary and declarative workflow contracts.
+The JS module is intentionally separated from the YAML workflow so that all classification, matching, and formatting logic can be tested via the Node.js harness without mocking GitHub APIs. The YAML workflow only handles orchestration: fetching jobs, downloading artifacts, and calling the GitHub rerun API.
 
 ## Tests
 

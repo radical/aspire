@@ -1,7 +1,6 @@
 // Test harness for the rerun_failed_jobs safe-output handler compiled into
 // .github/workflows/analyze-ci-failure.lock.yml.
 const fs = require('node:fs/promises');
-const path = require('node:path');
 
 async function main() {
     const inputPath = process.argv[2];
@@ -41,8 +40,9 @@ async function main() {
         warning: message => { calls.warnings.push(String(message)); },
     };
 
-    const rerun = require(path.resolve(request.scriptPath));
-    await rerun.run({ github, context, core });
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const run = new AsyncFunction('require', 'process', 'github', 'context', 'core', request.script);
+    await run(require, process, github, context, core);
 
     await fs.writeFile(outputPath, JSON.stringify({
         Failed: calls.failed,

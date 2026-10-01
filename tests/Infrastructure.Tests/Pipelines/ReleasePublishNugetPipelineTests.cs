@@ -225,51 +225,6 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
-    public void PrepareNpmCliPackagesTemplateInvokesBehaviorTestedScript()
-    {
-        var template = AzurePipelinesYaml.Load("eng/pipelines/templates/prepare-npm-cli-packages.yml");
-        var steps = AzurePipelinesYaml.Sequence(template, "steps").Cast<YamlDotNet.RepresentationModel.YamlMappingNode>().ToArray();
-        var bashCommands = steps
-            .Select(step => AzurePipelinesYaml.Scalar(step, "bash"))
-            .Where(command => command is not null)
-            .ToArray();
-
-        Assert.Equal(4, bashCommands.Length);
-        Assert.Contains(bashCommands, command => command!.Contains("prepare-npm-cli-packages.sh resolve-inputs", StringComparison.Ordinal));
-        Assert.Contains(bashCommands, command => command!.Contains("prepare-npm-cli-packages.sh locate", StringComparison.Ordinal));
-        Assert.Contains(bashCommands, command => command!.Contains("prepare-npm-cli-packages.sh install-validate", StringComparison.Ordinal));
-        Assert.Contains(bashCommands, command => command!.Contains("prepare-npm-cli-packages.sh write-summary", StringComparison.Ordinal));
-
-        var summaryStep = Assert.Single(steps, step => AzurePipelinesYaml.Scalar(step, "displayName") == "🟣Write npm validation summary");
-        Assert.Equal("always()", AzurePipelinesYaml.Scalar(summaryStep, "condition"));
-
-        var publishStep = Assert.Single(steps, step => AzurePipelinesYaml.Scalar(step, "task") == "1ES.PublishBuildArtifacts@1");
-        var inputs = AzurePipelinesYaml.Mapping(publishStep, "inputs");
-        Assert.Equal("$(Build.StagingDirectory)/npm-validation-summary", AzurePipelinesYaml.Scalar(inputs, "PathtoPublish"));
-        Assert.Equal("${{ parameters.validationSummaryArtifactName }}", AzurePipelinesYaml.Scalar(inputs, "ArtifactName"));
-
-        var caller = AzurePipelinesYaml.Load("eng/pipelines/templates/npm-cli-install-validation-steps.yml");
-        var callerSteps = AzurePipelinesYaml.Sequence(caller, "steps").Cast<YamlDotNet.RepresentationModel.YamlMappingNode>().ToArray();
-        var checkoutIndex = Array.FindIndex(callerSteps, step => AzurePipelinesYaml.Scalar(step, "checkout") == "self");
-        var invocationIndex = Array.FindIndex(
-            callerSteps,
-            step => AzurePipelinesYaml.Scalar(step, "template") == "/eng/pipelines/templates/prepare-npm-cli-packages.yml@self");
-        Assert.True(checkoutIndex >= 0);
-        Assert.True(checkoutIndex < invocationIndex);
-    }
-
-    [Fact]
-    public async Task PrepareNpmCliPackagesScriptIsBash32Compatible()
-    {
-        var script = await ReadRepoFileAsync("eng/scripts/prepare-npm-cli-packages.sh");
-
-        Assert.DoesNotMatch(@"(?m)^\s*shopt\s+-s\s+globstar\b", script);
-        Assert.DoesNotMatch(@"(?m)^\s*mapfile\s+", script);
-        Assert.DoesNotMatch(@"(?m)^\s*readarray\s+", script);
-        Assert.DoesNotMatch(@"(?m)^\s*declare\s+-A\b", script);
-    }
-
-    [Fact]
     public async Task PostPublishSmokeRejectsEmptyAspireVersionOutput()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");

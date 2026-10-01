@@ -167,61 +167,8 @@ async function dispatch(operation, payload) {
             return { requests, events: summary.events };
         }
 
-        case 'runAnalysis':
-        case 'runRerun':
-            return runWorkflowAdapter(operation, payload);
-
         default:
             throw new Error(`Unsupported operation '${operation}'.`);
-    }
-}
-
-async function runWorkflowAdapter(operation, payload) {
-    const requests = [];
-    const summary = new SummaryRecorder();
-    const outputs = {};
-    const warnings = [];
-    const logs = [];
-    const originalEnvironment = {};
-    const originalConsoleLog = console.log;
-
-    try {
-        for (const [name, value] of Object.entries(payload.environment ?? {})) {
-            originalEnvironment[name] = process.env[name];
-            process.env[name] = value;
-        }
-
-        console.log = (...values) => logs.push(values.join(' '));
-
-        const github = createGitHubRecorder(payload, requests);
-        const context = {
-            eventName: payload.workflowRun ? 'workflow_run' : 'workflow_dispatch',
-            repo: {
-                owner: payload.owner ?? 'microsoft',
-                repo: payload.repo ?? 'aspire',
-            },
-            payload: payload.workflowRun ? { workflow_run: payload.workflowRun } : {},
-        };
-        const core = {
-            summary,
-            setOutput: (name, value) => outputs[name] = String(value),
-            warning: message => warnings.push(message),
-        };
-
-        await rerunWorkflow[operation]({ github, context, core });
-        return { outputs, requests, events: summary.events, warnings, logs };
-    }
-    finally {
-        console.log = originalConsoleLog;
-        for (const name of Object.keys(payload.environment ?? {})) {
-            const originalValue = originalEnvironment[name];
-            if (originalValue === undefined) {
-                delete process.env[name];
-            }
-            else {
-                process.env[name] = originalValue;
-            }
-        }
     }
 }
 
@@ -229,26 +176,6 @@ function createGitHubRecorder(payload, requests) {
     return {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
-
-            if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs') {
-                return {
-                    data: {
-                        jobs: payload.jobs ?? [],
-                    },
-                    headers: {
-                        link: '',
-                    },
-                };
-            }
-
-            if (route === 'GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations') {
-                return {
-                    data: payload.annotations ?? [],
-                    headers: {
-                        link: '',
-                    },
-                };
-            }
 
             if (route === 'GET /repos/{owner}/{repo}/issues/{issue_number}') {
                 const issueNumber = String(requestPayload.issue_number);
@@ -302,18 +229,6 @@ function createGitHubRecorder(payload, requests) {
             }
 
             return { data: {} };
-        },
-        rest: {
-            actions: {
-                getWorkflowRun: async ({ run_id }) => ({
-                    data: payload.workflowRun ?? {
-                        id: run_id,
-                        name: 'CI',
-                        run_attempt: 1,
-                        pull_requests: [],
-                    },
-                }),
-            },
         },
     };
 }
