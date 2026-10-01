@@ -16,7 +16,7 @@ namespace Infrastructure.Tests;
 /// </summary>
 public sealed class UpdateActionlintTests : IDisposable
 {
-    private const string PinnedSha256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8";
+    private const string FixtureSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string NewArchiveContent = "actionlint 1.7.13 archive bytes";
 
     private static readonly JsonSerializerOptions s_jsonOptions = new(JsonSerializerDefaults.Web);
@@ -42,10 +42,14 @@ public sealed class UpdateActionlintTests : IDisposable
     public async Task ReadPinParsesCommittedPinFile()
     {
         var content = await File.ReadAllTextAsync(Path.Combine(_repoRoot, ".github", "actionlint-version.json"));
+        using var document = JsonDocument.Parse(content);
+        var expectedPin = new Pin(
+            document.RootElement.GetProperty("version").GetString()!,
+            document.RootElement.GetProperty("linuxAmd64Sha256").GetString()!);
 
         var pin = await InvokeAsync<Pin>("readPin", new { content });
 
-        Assert.Equal(new Pin("1.7.12", PinnedSha256), pin);
+        Assert.Equal(expectedPin, pin);
     }
 
     [Theory]
@@ -90,7 +94,7 @@ public sealed class UpdateActionlintTests : IDisposable
     [RequiresTools(["node"])]
     public async Task ApplyPinRewritesAllFieldsTogether()
     {
-        var content = await File.ReadAllTextAsync(Path.Combine(_repoRoot, ".github", "actionlint-version.json"));
+        var content = PinContent("1.7.12");
 
         var updated = await InvokeAsync<string>("applyPin", new { content, version = "1.7.13", sha256 = s_newArchiveSha256 });
 
@@ -184,7 +188,7 @@ public sealed class UpdateActionlintTests : IDisposable
     [RequiresTools(["node"])]
     public async Task CheckIsNoOpWhenPinIsLatest()
     {
-        var result = await InvokeAsync<CheckResult>("check", new { pinContent = PinContent("1.7.12"), release = Release("1.7.12", $"sha256:{PinnedSha256}"), archive = "" });
+        var result = await InvokeAsync<CheckResult>("check", new { pinContent = PinContent("1.7.12"), release = Release("1.7.12", $"sha256:{FixtureSha256}"), archive = "" });
 
         Assert.False(result.Updated);
         Assert.Equal("1.7.12", result.PreviousVersion);
@@ -226,7 +230,7 @@ public sealed class UpdateActionlintTests : IDisposable
     [RequiresTools(["node"])]
     public async Task CheckRefusesToDowngrade()
     {
-        var error = await InvokeExpectingErrorAsync("check", new { pinContent = PinContent("1.7.12"), release = Release("1.7.11", $"sha256:{PinnedSha256}"), archive = "" });
+        var error = await InvokeExpectingErrorAsync("check", new { pinContent = PinContent("1.7.12"), release = Release("1.7.11", $"sha256:{FixtureSha256}"), archive = "" });
 
         Assert.Equal("Latest actionlint release 1.7.11 is older than the pinned 1.7.12; refusing to downgrade.", error);
     }
@@ -261,7 +265,7 @@ public sealed class UpdateActionlintTests : IDisposable
         JsonSerializer.Serialize(new Dictionary<string, string>
         {
             ["version"] = version,
-            ["linuxAmd64Sha256"] = PinnedSha256,
+            ["linuxAmd64Sha256"] = FixtureSha256,
         });
 
     private static object Release(string version, string? digest) => new

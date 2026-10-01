@@ -39,8 +39,10 @@ workflow sources still trigger it even before their generated locks exist.
 
 Compile-time lint diagnostics alone are not a blocking gate. The lint command
 owns the actionlint image and compatibility exceptions; `.github/actionlint.yaml`
-only scopes the known stale-check output workaround to the affected generated
-workflows. Main CI separately runs pinned core actionlint over handwritten workflows and their local actions.
+is shared by both lint paths: it configures the runner label for handwritten
+workflow linting and scopes the known stale-check output workaround to the
+affected generated workflows. Main CI separately runs pinned core actionlint
+over handwritten workflows and their local actions.
 The version and linux_amd64 archive SHA-256 are pinned in `.github/actionlint-version.json`,
 outside `.github/workflows`, so the Aspire bot can update them without workflow-write access.
 The weekly `update-actionlint.yml` workflow opens a draft PR when a newer release exists. It
