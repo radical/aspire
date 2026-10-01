@@ -1,0 +1,98 @@
+name: Update actionlint
+
+# Proposes a draft PR when rhysd/actionlint publishes a newer release than the
+# pin in .github/actionlint-version.json (consumed by ci.yml). Schedule-only, so
+# it always runs the default-branch definition. The PR only touches the pin file,
+# so the bot token does not need workflow-write access.
+on:
+  schedule:
+    - cron: '0 16 * * 1' # Mondays 16:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  # Downloads and runs the candidate binary without secrets or write credentials.
+  check:
+    name: Check for a newer actionlint
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'microsoft' }}
+    outputs:
+      updated: ${{ steps.check.outputs.updated }}
+      previous-version: ${{ steps.check.outputs.previous-version }}
+      version: ${{ steps.check.outputs.version }}
+      sha256: ${{ steps.check.outputs.sha256 }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check latest actionlint release
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/workflows/update-actionlint.js check
+
+      - name: Install candidate actionlint
+        if: ${{ steps.check.outputs.updated == 'true' }}
+        env:
+          ARCHIVE_PATH: ${{ steps.check.outputs.archive-path }}
+        run: |
+          tar -xzf "${ARCHIVE_PATH}" -C "${RUNNER_TEMP}" actionlint
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      # Must match the ci.yml lint step so the candidate is proven against the gated file set.
+      - name: Lint handwritten workflow files
+        if: ${{ steps.check.outputs.updated == 'true' }}
+        run: |
+          find .github/workflows -maxdepth 1 -type f \
+            \( -name '*.yml' -o -name '*.yaml' \) \
+            ! -name '*.lock.yml' \
+            ! -name 'agentics-maintenance*.yml' \
+            -exec actionlint -shellcheck= -pyflakes= {} +
+
+  update:
+    name: Propose actionlint update
+    needs: check
+    runs-on: ubuntu-latest
+    if: ${{ needs.check.outputs.updated == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Update actionlint pin
+        env:
+          ACTIONLINT_VERSION: ${{ needs.check.outputs.version }}
+          ACTIONLINT_SHA256: ${{ needs.check.outputs.sha256 }}
+        run: node .github/workflows/update-actionlint.js apply "${ACTIONLINT_VERSION}" "${ACTIONLINT_SHA256}"
+
+      - name: Generate GitHub App Token for pull request
+        id: pr-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
+          private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create or update pull request
+        uses: ./.github/actions/create-pull-request
+        with:
+          token: ${{ steps.pr-token.outputs.token }}
+          branch: update-actionlint
+          base: main
+          draft: true
+          commit-message: "[Automated] Update actionlint to v${{ needs.check.outputs.version }}"
+          labels: |
+            area-engineering-systems
+          title: "[Automated] Update actionlint to v${{ needs.check.outputs.version }}"
+          body: |
+            Updates the actionlint pin in `.github/actionlint-version.json` from v${{ needs.check.outputs.previous-version }} to v${{ needs.check.outputs.version }}.
+
+            - Release: https://github.com/rhysd/actionlint/releases/tag/v${{ needs.check.outputs.version }}
+            - `actionlint_${{ needs.check.outputs.version }}_linux_amd64.tar.gz` SHA-256: `${{ needs.check.outputs.sha256 }}`
+
+            The archive was downloaded and verified against the release API asset digest, and the candidate passed the handwritten-workflow lint before this PR was opened. The digest is published by the same upstream release, so review the release notes before merging.

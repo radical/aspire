@@ -30,12 +30,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The pin lives outside .github/workflows so the scheduled updater
+      # (update-actionlint.yml) can propose bumps without workflow-write access.
       - name: Install actionlint
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-          # https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
-          ACTIONLINT_LINUX_AMD64_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
+          ACTIONLINT_VERSION=$(jq -er '.version' .github/actionlint-version.json)
+          ACTIONLINT_LINUX_AMD64_SHA256=$(jq -er '.linuxAmd64Sha256' .github/actionlint-version.json)
+          if [[ ! "${ACTIONLINT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid actionlint version '${ACTIONLINT_VERSION}' in .github/actionlint-version.json"
+            exit 1
+          fi
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl --fail --location --retry 3 --retry-all-errors \
             --output "${archive}" \

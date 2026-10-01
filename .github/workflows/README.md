@@ -41,6 +41,13 @@ Compile-time lint diagnostics alone are not a blocking gate. The lint command
 owns the actionlint image and compatibility exceptions; `.github/actionlint.yaml`
 only scopes the known stale-check output workaround to the affected generated
 workflows. Main CI separately runs pinned core actionlint over handwritten workflows and their local actions.
+The version and linux_amd64 archive SHA-256 are pinned in `.github/actionlint-version.json`,
+outside `.github/workflows`, so the Aspire bot can update them without workflow-write access.
+The weekly `update-actionlint.yml` workflow opens a draft PR when a newer release exists. It
+verifies the downloaded archive against the release API `sha256:` digest and lints the
+handwritten workflows with the candidate before proposing the bump. That digest comes from the
+same upstream release, so review the release notes; the committed hash then makes CI detect any
+later substitution of the archive.
 
 Explicit action versions in Markdown survive recompilation, so update deprecated
 inputs and action runtimes in the sources, not just the generated YAML. The
