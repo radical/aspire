@@ -28,6 +28,7 @@ namespace Infrastructure.Tests.Pipelines;
 public sealed class ExtensionE2eRecorderStepTests(ITestOutputHelper testOutput)
 {
     private const string RecorderStepName = "Install E2E recorder";
+    private const string RecorderScriptRelativePath = ".github/workflows/extension-e2e/install-e2e-recorder.ps1";
 
     /// <summary>Exit code the apt-get stub uses for a failed install, distinct from the 124 that a real timeout returns.</summary>
     private const int StubAptFailureExitCode = 100;
@@ -41,6 +42,16 @@ public sealed class ExtensionE2eRecorderStepTests(ITestOutputHelper testOutput)
 
     private const string RetryWarning = "::warning::Attempt 1 to install ffmpeg failed; retrying.";
     private const string GaveUpWarning = "::warning::ffmpeg could not be installed; E2E screen recordings are disabled for this shard.";
+
+    [Fact]
+    public void RecorderStepInvokesExtractedScript()
+    {
+        var step = ExtensionE2eWorkflow.Steps(ExtensionE2eWorkflow.Job())
+            .Single(candidate => ExtensionE2eWorkflow.Scalar(candidate, "name") == RecorderStepName);
+
+        Assert.Equal("pwsh", ExtensionE2eWorkflow.Scalar(step, "shell"));
+        Assert.Equal($"& \"${{{{ github.workspace }}}}/{RecorderScriptRelativePath}\"", ExtensionE2eWorkflow.Scalar(step, "run"));
+    }
 
     [Theory]
     // As authored: every apt-get outcome has to leave the shard alive.
@@ -64,10 +75,9 @@ public sealed class ExtensionE2eRecorderStepTests(ITestOutputHelper testOutput)
 
         using var workspace = TemporaryWorkspace.Create(testOutput);
 
-        var stepScript = ExtensionE2eWorkflow.StepScript(RecorderStepName);
         var stubDirectory = CreateCommandStubs(workspace, aptBehavior, out var invocationLog, out var pwshPath);
         var scriptPath = Path.Combine(workspace.Path, "step.ps1");
-        File.WriteAllText(scriptPath, BuildStepScript(stepScript, keepExplicitExit));
+        File.WriteAllText(scriptPath, BuildStepScript(File.ReadAllText(Path.Combine(RepoRoot.Path, RecorderScriptRelativePath)), keepExplicitExit));
 
         using var command = new PowerShellCommand(scriptPath, testOutput, label: aptBehavior)
             .WithEnvironmentVariable("PATH", stubDirectory)

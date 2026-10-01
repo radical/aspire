@@ -10,6 +10,7 @@ namespace Infrastructure.Tests;
 public sealed class VerifyTelemetryHookChangesWorkflowTests(ITestOutputHelper output)
 {
     private const string WorkflowRelativePath = ".github/workflows/verify-telemetry-hook-changes.yml";
+    private const string PolicyScriptRelativePath = ".github/workflows/verify-telemetry-hook-changes/verify-telemetry-hook-changes.ps1";
     private const string ProtectedHookPath = "src/Aspire.Cli/Agents/Hooks/track-telemetry.sh";
     private const string AspireSkillsInstallerPath = "src/Aspire.Cli/Agents/AspireSkills/AspireSkillsInstaller.cs";
     private const string AspireSkillsMetadataPath = "src/Aspire.Cli/Agents/AspireSkills/Embedded/aspire-skills.metadata.json";
@@ -33,16 +34,27 @@ public sealed class VerifyTelemetryHookChangesWorkflowTests(ITestOutputHelper ou
         var job = Mapping(Mapping(root, "jobs"), "verify");
         var steps = Sequence(job, "steps").Children.Cast<YamlMappingNode>().ToList();
 
-        var checkout = Assert.Single(steps, step => ScalarOrNull(step, "uses")?.StartsWith("actions/checkout@", StringComparison.Ordinal) == true);
-        var checkoutOptions = Mapping(checkout, "with");
-        Assert.Equal("${{ github.sha }}", Scalar(checkoutOptions, "ref"));
-        Assert.Equal("2", Scalar(checkoutOptions, "fetch-depth"));
-        Assert.Equal("false", Scalar(checkoutOptions, "persist-credentials"));
+        var mergeCheckout = Assert.Single(
+            steps,
+            step => ScalarOrNull(step, "uses")?.StartsWith("actions/checkout@", StringComparison.Ordinal) == true
+                && ScalarOrNull(Mapping(step, "with"), "ref") == "${{ github.sha }}");
+        var mergeCheckoutOptions = Mapping(mergeCheckout, "with");
+        Assert.Equal("2", Scalar(mergeCheckoutOptions, "fetch-depth"));
+        Assert.Equal("false", Scalar(mergeCheckoutOptions, "persist-credentials"));
+
+        var policyCheckout = Assert.Single(
+            steps,
+            step => ScalarOrNull(step, "name") == "Check out telemetry policy");
+        var policyCheckoutOptions = Mapping(policyCheckout, "with");
+        Assert.Equal("${{ github.workflow_sha }}", Scalar(policyCheckoutOptions, "ref"));
+        Assert.Equal(".telemetry-policy", Scalar(policyCheckoutOptions, "path"));
+        Assert.Equal("false", Scalar(policyCheckoutOptions, "persist-credentials"));
+        Assert.Equal($"{PolicyScriptRelativePath}\n", Scalar(policyCheckoutOptions, "sparse-checkout")?.ReplaceLineEndings("\n"));
 
         var verify = GetVerifyStep(steps);
         Assert.Equal("pwsh", Scalar(verify, "shell"));
         Assert.Equal("${{ github.head_ref }}", Scalar(Mapping(verify, "env"), "PR_HEAD_REF"));
-        Assert.False(string.IsNullOrWhiteSpace(Scalar(verify, "run")));
+        Assert.Equal($"& \"${{{{ github.workspace }}}}/.telemetry-policy/{PolicyScriptRelativePath}\"", Scalar(verify, "run"));
     }
 
     [Fact]
@@ -145,10 +157,7 @@ public sealed class VerifyTelemetryHookChangesWorkflowTests(ITestOutputHelper ou
 
     private async Task<CommandResult> RunPolicyAsync(TemporaryWorkspace workspace, string headRef)
     {
-        var scriptPath = Path.Combine(workspace.Path, "verify-telemetry-hook-changes.ps1");
-        await File.WriteAllTextAsync(scriptPath, GetPolicyScript());
-
-        using var command = new PowerShellCommand(scriptPath, output)
+        using var command = new PowerShellCommand(Path.Combine(RepoRoot.Path, PolicyScriptRelativePath), output)
             .WithWorkingDirectory(workspace.Path)
             .WithEnvironmentVariable("PR_HEAD_REF", headRef)
             .WithTimeout(TimeSpan.FromMinutes(1));
@@ -181,15 +190,6 @@ public sealed class VerifyTelemetryHookChangesWorkflowTests(ITestOutputHelper ou
     {
         GitCli.Run(workspace.Path, "add", "-A");
         GitCli.Run(workspace.Path, "commit", "-q", "-m", message);
-    }
-
-    private static string GetPolicyScript()
-    {
-        var steps = Sequence(Mapping(Mapping(LoadWorkflow(), "jobs"), "verify"), "steps")
-            .Children
-            .Cast<YamlMappingNode>()
-            .ToList();
-        return Scalar(GetVerifyStep(steps), "run");
     }
 
     private static YamlMappingNode GetVerifyStep(IReadOnlyList<YamlMappingNode> steps)
