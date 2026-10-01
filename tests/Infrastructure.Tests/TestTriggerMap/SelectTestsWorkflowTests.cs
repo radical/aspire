@@ -142,29 +142,81 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void SelectTestsActionInvokesMergeBaseResolverAndPropagatesOutputs()
+    {
+        var steps = ActionSteps(s_selectTestsAction);
+        var resolveMergeBase = StepById(steps, "resolve_merge_base");
+
+        Assert.Equal(
+            "${{ inputs.forceAll != 'true' && inputs.prBaseSha != '' }}",
+            Scalar(resolveMergeBase, "if"));
+        Assert.Equal(
+            "${{ inputs.prBaseSha }}",
+            Scalar(Mapping(resolveMergeBase, "env"), "PR_BASE_SHA"));
+        Assert.Equal(
+            "${{ inputs.headSha }}",
+            Scalar(Mapping(resolveMergeBase, "env"), "HEAD_SHA"));
+        Assert.Equal(
+            "./.github/actions/select-tests/resolve-merge-base.sh",
+            Scalar(resolveMergeBase, "run"));
+
+        var select = StepById(steps, "select");
+        var selectEnvironment = Mapping(select, "env");
+        Assert.Equal(
+            "${{ steps.resolve_merge_base.outputs.mode }}",
+            Scalar(selectEnvironment, "MERGE_BASE_MODE"));
+        Assert.Equal(
+            "${{ steps.resolve_merge_base.outputs.from_sha }}",
+            Scalar(selectEnvironment, "MERGE_BASE_FROM"));
+        Assert.Equal(
+            "${{ steps.resolve_merge_base.outputs.to_sha }}",
+            Scalar(selectEnvironment, "MERGE_BASE_TO"));
+        Assert.Equal(
+            "${{ steps.resolve_merge_base.outputs.force_all_reason }}",
+            Scalar(selectEnvironment, "MERGE_BASE_FORCE_ALL_REASON"));
+
+        var selectScript = Scalar(select, "run");
+        Assert.Contains(
+            "args+=(--from \"$MERGE_BASE_FROM\" --to \"$MERGE_BASE_TO\")",
+            selectScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "args+=(--force-all --force-all-reason \"$MERGE_BASE_FORCE_ALL_REASON\")",
+            selectScript,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     [RequiresTools(["bash"])]
     public async Task SelectTestsActionDeepensBothEndpointsUntilMergeBaseIsReachable()
     {
-        var result = await RunSelectActionAsync(mergeBaseSucceedsOnAttempt: 3);
+        var result = await RunMergeBaseResolverAsync(mergeBaseSucceedsOnAttempt: 3);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("fetch --no-tags --depth=4 origin base-sha head-sha", result.GitInvocations);
         Assert.Contains("fetch --no-tags --depth=16 origin base-sha head-sha", result.GitInvocations);
-        Assert.Contains("--from base-sha --to head-sha", result.DotNetArguments);
-        Assert.DoesNotContain("--force-all", result.DotNetArguments, StringComparison.Ordinal);
+        Assert.Equal("diff", result.Outputs["mode"]);
+        Assert.Equal("base-sha", result.Outputs["from_sha"]);
+        Assert.Equal("head-sha", result.Outputs["to_sha"]);
+        Assert.Equal(string.Empty, result.Outputs["force_all_reason"]);
     }
 
     [Fact]
     [RequiresTools(["bash"])]
     public async Task SelectTestsActionFallsBackToAllWhenMergeBaseRemainsUnreachable()
     {
-        var result = await RunSelectActionAsync(mergeBaseSucceedsOnAttempt: null);
+        var result = await RunMergeBaseResolverAsync(mergeBaseSucceedsOnAttempt: null);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("::warning::Could not find a merge-base", result.Output, StringComparison.Ordinal);
         Assert.Contains("fetch --no-tags --depth=4096 origin base-sha head-sha", result.GitInvocations);
-        Assert.Contains("--force-all --force-all-reason", result.DotNetArguments);
-        Assert.Contains("was unreachable within 4096 commits", result.DotNetArguments);
+        Assert.Equal("force-all", result.Outputs["mode"]);
+        Assert.Equal(string.Empty, result.Outputs["from_sha"]);
+        Assert.Equal(string.Empty, result.Outputs["to_sha"]);
+        Assert.Contains(
+            "was unreachable within 4096 commits",
+            result.Outputs["force_all_reason"],
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -224,13 +276,13 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
         Assert.Equal(["src/critical.txt"], ReadJsonOutput(outputs, "unmatched_files"));
     }
 
-    private async Task<SelectActionResult> RunSelectActionAsync(int? mergeBaseSucceedsOnAttempt)
+    private async Task<MergeBaseResolutionResult> RunMergeBaseResolverAsync(int? mergeBaseSucceedsOnAttempt)
     {
         using var workspace = TemporaryWorkspace.Create(output);
         var binDirectory = workspace.CreateDirectory("bin").FullName;
         var gitInvocationsPath = Path.Combine(workspace.Path, "git-invocations.log");
         var mergeBaseAttemptsPath = Path.Combine(workspace.Path, "merge-base-attempts");
-        var dotNetArgumentsPath = Path.Combine(workspace.Path, "dotnet-arguments.log");
+        var githubOutputPath = Path.Combine(workspace.Path, "github-output");
 
         WriteExecutable(
             Path.Combine(binDirectory, "git"),
@@ -253,15 +305,8 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
               *) exit 1 ;;
             esac
             """);
-        WriteExecutable(
-            Path.Combine(workspace.Path, "dotnet.sh"),
-            """
-            #!/bin/sh
-            printf '%s\n' "$*" > "$DOTNET_ARGUMENTS"
-            """);
 
-        var runnerPath = Path.Combine(workspace.Path, "run-select-action.sh");
-        var selectScript = Scalar(StepById(ActionSteps(s_selectTestsAction), "select"), "run");
+        var runnerPath = Path.Combine(workspace.Path, "run-merge-base-resolver.sh");
         File.WriteAllText(
             runnerPath,
             $"""
@@ -271,18 +316,10 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
             export GIT_INVOCATIONS={ShellQuote(gitInvocationsPath)}
             export MERGE_BASE_ATTEMPTS={ShellQuote(mergeBaseAttemptsPath)}
             export MERGE_BASE_SUCCEEDS_ON_ATTEMPT={ShellQuote(mergeBaseSucceedsOnAttempt?.ToString() ?? string.Empty)}
-            export DOTNET_ARGUMENTS={ShellQuote(dotNetArgumentsPath)}
-            export GITHUB_WORKSPACE={ShellQuote(workspace.Path)}
-            export FORCE_ALL=false
             export PR_BASE_SHA=base-sha
             export HEAD_SHA=head-sha
-            export BEFORE_BUILD_PROPS=
-            export SELECT_TESTS_COMMENT_FILE=
-            export SELECT_TESTS_JSON_FILE=
-            export ENFORCE_SELECTION=true
-            export SLNX=
-            export TRIGGER_MAP=
-            {selectScript}
+            export GITHUB_OUTPUT={ShellQuote(githubOutputPath)}
+            bash {ShellQuote(ResolveMergeBaseScriptPath)}
             """);
         SetExecutable(runnerPath);
 
@@ -290,8 +327,12 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
         return new(
             process.ExitCode,
             process.Output,
-            File.ReadAllText(gitInvocationsPath),
-            File.ReadAllText(dotNetArgumentsPath));
+            File.Exists(gitInvocationsPath) ? File.ReadAllText(gitInvocationsPath) : string.Empty,
+            File.Exists(githubOutputPath)
+                ? File.ReadAllLines(githubOutputPath)
+                    .Select(line => line.Split('=', 2))
+                    .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal)
+                : new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
     private static void AssertWindowsArm64Target(string? json)
@@ -331,6 +372,9 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
 
     private static string RepoPath(params string[] path)
         => Path.Combine([RepoRoot.Path, .. path]);
+
+    private static string ResolveMergeBaseScriptPath
+        => RepoPath(".github", "actions", "select-tests", "resolve-merge-base.sh");
 
     private static YamlMappingNode LoadYaml(params string[] path)
     {
@@ -380,9 +424,9 @@ public sealed class SelectTestsWorkflowTests(ITestOutputHelper output)
         return JsonSerializer.Deserialize<string[]>(outputs[start..end])!;
     }
 
-    private readonly record struct SelectActionResult(
+    private readonly record struct MergeBaseResolutionResult(
         int ExitCode,
         string Output,
         string GitInvocations,
-        string DotNetArguments);
+        IReadOnlyDictionary<string, string> Outputs);
 }
