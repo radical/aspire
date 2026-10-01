@@ -12,9 +12,13 @@ Each assertion should fail for the exact regression it protects. When a brittle 
 
 ## YAML contracts
 
-- Test declarative workflow behavior from parsed YAML: triggers, permissions, `needs`, reusable-workflow inputs and outputs, conditions, artifact flow, environments, gates, and ordering only when order affects execution.
+- A parsed-YAML assertion is useful when valid but wrong YAML could silently skip work, weaken a gate or security boundary, route the wrong artifact or RID, or leave independently maintained workflow and configuration sources inconsistent.
+- Prioritize relationships: producer-consumer wiring, selection-to-job mapping, final-result aggregation, reusable-workflow interfaces, permissions, conditions, artifact flow, and ordering only when order affects execution.
+- Prefer deriving expectations from another source of truth or checking relationships across nodes or files. Avoid restating one field's exact value or list unless it is a named, high-consequence policy contract.
 - Test immutable action pins and security-sensitive literals from their parsed YAML nodes when the literal is the contract. Name the invariant so the reason for exactness is clear.
+- Use exact lexical source checks only when parsing or execution erases the hazard, such as forbidden shell-version constructs or dangerous Azure template-expression literals. State why the lexical form itself is the contract.
 - Do not assert formatting, comments, display names, full step inventories, incidental command strings or quoting, implementation prose, or negative strings for renamed symbols.
+- Syntax and schema belong to actionlint. Parsed YAML cannot prove platform-owned runtime behavior.
 
 ## Imperative logic
 
@@ -24,9 +28,17 @@ Each assertion should fail for the exact regression it protects. When a brittle 
   - Execute the script with controlled fixtures and assert exit codes, outputs, side effects, generated files, and external-tool invocations. Reuse `NodeCommand`, `PowerShellCommand`, temporary workspaces or Git repositories, fake executables through `PATH`, and generated fixtures.
   - Retain a focused parsed-YAML test proving that the workflow invokes the correct file with its required inputs, environment, permissions, dependencies, and condition.
 
+## Fixtures and generated output
+
+- Use a temporary workspace for ordinary file, script, or MSBuild fixtures. Initialize a minimal Git repository only when behavior depends on commits, branches, merge bases, rename records, staging, or `git diff`; assert the resulting behavior rather than Git command text.
+- Use Verify for a stable, reviewable, complete generated artifact when fragment assertions would duplicate one output contract. Keep focused assertions for calculations, filtering, security or escaping, and edge behavior. Do not snapshot workflow or configuration source as a substitute for semantic tests, and avoid large approval blobs.
+- Test selector and trigger-map mechanisms with small synthetic maps and project graphs. Keep production-map tests to a thin set of derived cross-file invariants; do not duplicate the production map or job inventory as expected data.
+
 ## Verification hierarchy
 
 1. Use actionlint for workflow syntax, expression, and schema validation.
 2. Use parsed YAML tests for orchestration and security contracts.
 3. Use executable behavior tests for imperative logic.
 4. Use live or dry-run validation only for integration behavior owned by the platform.
+
+Azure Pipelines changes that depend on platform behavior still require validation in the official pipeline.
