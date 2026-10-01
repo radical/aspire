@@ -46,7 +46,6 @@ internal static class FluentUISetupHelpers
         context.JSInterop.SetupVoid("Microsoft.FluentUI.Blazor.Components.Menu.OpenMenu", _ => true).SetVoidResult();
         context.JSInterop.SetupVoid("Microsoft.FluentUI.Blazor.Components.Menu.CloseMenu", _ => true).SetVoidResult();
         context.JSInterop.SetupVoid("Microsoft.FluentUI.Blazor.Components.Menu.Dispose", _ => true).SetVoidResult();
-        context.JSInterop.SetupVoid("focusElement", _ => true).SetVoidResult();
     }
 
     public static void SetupFluentOverflow(BunitContext context)

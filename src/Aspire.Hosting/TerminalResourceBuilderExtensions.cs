@@ -178,15 +178,25 @@ public static class TerminalResourceBuilderExtensions
         }
 
         var trmnlDirectory = configuration[TerminalHostPaths.DirectoryOverrideConfigName];
-        var useDefaultDirectory = string.IsNullOrEmpty(trmnlDirectory);
         if (string.IsNullOrEmpty(trmnlDirectory))
         {
             var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             trmnlDirectory = TerminalHostPaths.GetTrmnlDirectory(homeDirectory);
         }
 
-        // Secure the directory before writing terminal metadata or starting any socket listeners.
-        SocketPermissionHelper.CreateDirectory(trmnlDirectory, repairExisting: useDefaultDirectory);
+        // 0700 on Unix so other local users cannot enumerate which terminals exist on
+        // this machine. On Windows the user-profile ACLs (per-user by default) make this
+        // a no-op; CreateDirectory is idempotent.
+        try
+        {
+            DirectoryHelper.CreateWithOwnerOnlyPermissions(trmnlDirectory);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            // Best-effort: directory may already have stricter perms or be on a filesystem
+            // that does not support chmod (e.g. some FAT-formatted home dirs). Per-socket
+            // 0600 in TerminalHostControlListener still protects each endpoint.
+        }
 
         var terminalHosts = new TerminalHostResource[replicaCount];
         var replicaIds = new string[replicaCount];

@@ -415,7 +415,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
             "aspire.cli.linux-x64",
             "9.4.0",
             "tools",
-            "any",
+            "net10.0",
             "linux-x64",
             GetAspireExecutableName());
 

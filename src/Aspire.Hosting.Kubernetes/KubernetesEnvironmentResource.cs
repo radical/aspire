@@ -9,7 +9,6 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Dcp.Process;
-using Aspire.Hosting.Kubernetes.Annotations;
 using Aspire.Hosting.Kubernetes.Extensions;
 using Aspire.Hosting.Kubernetes.Resources;
 using Aspire.Hosting.Pipelines;
@@ -1041,57 +1040,20 @@ public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmen
             : DefaultStorageSize;
         claim.Spec.Resources.Requests.Add("storage", capacity);
 
-        if (volumeResource.PersistentVolumeName is { } volumeNameExpression)
+        if (volumeResource.StorageClassName is { } storageClassExpression)
         {
-            claim.Spec.VolumeName = await ResolveExpressionAsync(volumeNameExpression, volumeResource.Name, cancellationToken).ConfigureAwait(false);
+            var storageClass = await ResolveExpressionAsync(storageClassExpression, volumeResource.Name, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(storageClass))
+            {
+                claim.Spec.StorageClassName = storageClass;
+            }
         }
-
-        claim.Spec.StorageClassName = await ResolveStorageClass(volumeResource, cancellationToken).ConfigureAwait(false);
-
-        foreach (var annotation in volumeResource.Annotations.OfType<KubernetesPersistentVolumeCustomizationAnnotation>())
+        else if (!string.IsNullOrEmpty(DefaultStorageClassName))
         {
-            annotation.Configure(claim);
+            claim.Spec.StorageClassName = DefaultStorageClassName;
         }
 
         return claim;
-    }
-
-    private async Task<string?> ResolveStorageClass(KubernetesPersistentVolumeResource volumeResource, CancellationToken cancellationToken)
-    {
-        if (!volumeResource.ShouldRequestStorageClassName)
-        {
-            return null;
-        }
-
-        string? storageClassName;
-        if (volumeResource.StorageClassName is { } storageClassExpression)
-        {  
-            if (storageClassExpression.Format.Length == 0)
-            {
-                storageClassName = string.Empty;
-            }
-            else
-            {
-                storageClassName = await ResolveExpressionAsync(storageClassExpression, volumeResource.Name, cancellationToken).ConfigureAwait(false);
-                if (storageClassName is { Length: > 0 } && string.IsNullOrWhiteSpace(storageClassName))
-                {
-                    storageClassName = null;
-                }
-            }
-        }
-        else if (DefaultStorageClassName == "")
-        {
-            // Preserve behavior of legacy PVCs. When DefaultStorageClassName
-            // was set to an empty string and volumeResource.StorageClassName
-            // was empty or null, legacy PVCs would omit the storageClassName entirely.
-            storageClassName = null;
-        }
-        else
-        {
-            storageClassName = DefaultStorageClassName;
-        }
-
-        return storageClassName;
     }
 
     private async Task BuildGatewayObjects(

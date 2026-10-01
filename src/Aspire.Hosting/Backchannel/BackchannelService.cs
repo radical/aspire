@@ -5,7 +5,6 @@ using System.Net.Sockets;
 using Aspire.Hosting.Backchannel;
 using Aspire.Hosting.Diagnostics;
 using Aspire.Hosting.Eventing;
-using Aspire.Shared;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -44,7 +43,6 @@ internal sealed class BackchannelService(
                 return;
             }
 
-            SocketPermissionHelper.CreateDirectory(Path.GetDirectoryName(unixSocketPath)!, repairExisting: false);
             _socketPath = unixSocketPath;
 
             using var activity = profilingTelemetry.StartBackchannelStartup(unixSocketPath);
@@ -60,7 +58,8 @@ internal sealed class BackchannelService(
             logger.LogDebug("Listening for backchannel connection on socket path: {SocketPath}", unixSocketPath);
             var serverSocket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             _serverSocket = serverSocket;
-            SocketPermissionHelper.Bind(serverSocket, unixSocketPath);
+            var endpoint = new UnixDomainSocketEndPoint(unixSocketPath);
+            serverSocket.Bind(endpoint);
             serverSocket.Listen();
             activity.AddBackchannelListening();
 

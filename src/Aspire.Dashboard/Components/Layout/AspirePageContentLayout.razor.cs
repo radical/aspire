@@ -8,10 +8,8 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Aspire.Dashboard.Components.Layout;
 
-public partial class AspirePageContentLayout : ComponentBase, IDisposable
+public partial class AspirePageContentLayout : ComponentBase
 {
-    private bool _disposed;
-
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; init; }
 
@@ -56,9 +54,6 @@ public partial class AspirePageContentLayout : ComponentBase, IDisposable
     [Inject]
     public required DashboardDialogService DialogService { get; init; }
 
-    [Inject]
-    public required NavigationManager NavigationManager { get; init; }
-
     private DashboardDialogReference? _toolbarPanel;
 
     public bool IsToolbarPanelOpen => _toolbarPanel is not null;
@@ -86,7 +81,6 @@ public partial class AspirePageContentLayout : ComponentBase, IDisposable
 
     public async Task OpenMobileToolbarAsync()
     {
-        var openedAtUri = NavigationManager.Uri;
         _toolbarPanel = await DialogService.ShowDialogAsync<ToolbarPanel>(
             new MobileToolbar(
                 ToolbarSection!,
@@ -103,16 +97,7 @@ public partial class AspirePageContentLayout : ComponentBase, IDisposable
                 OnDialogClosing = EventCallback.Factory.Create<IDialogInstance>(this, async () =>
                 {
                     _toolbarPanel = null;
-                    if (NavigationManager.Uri == openedAtUri)
-                    {
-                        await InvokeListenersAsync();
-                    }
-                    else
-                    {
-                        // Navigation also dismisses dialogs. Don't apply a filter from the old
-                        // page after the browser has already navigated elsewhere.
-                        DialogCloseListeners.Clear();
-                    }
+                    await InvokeListenersAsync();
                 })
             });
     }
@@ -129,11 +114,6 @@ public partial class AspirePageContentLayout : ComponentBase, IDisposable
 
     private async Task InvokeListenersAsync()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
         foreach (var dialogCloseListener in DialogCloseListeners.Values)
         {
             await dialogCloseListener.Invoke();
@@ -142,11 +122,6 @@ public partial class AspirePageContentLayout : ComponentBase, IDisposable
         DialogCloseListeners.Clear();
     }
 
-    public void Dispose()
-    {
-        _disposed = true;
-        DialogCloseListeners.Clear();
-    }
-
     public record MobileToolbar(RenderFragment ToolbarSection, string MobileToolbarButtonText);
 }
+

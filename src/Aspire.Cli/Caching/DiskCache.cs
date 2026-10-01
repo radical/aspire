@@ -22,8 +22,17 @@ internal sealed class DiskCache : IDiskCache
     {
         _logger = logger;
         _cacheDirectory = new DirectoryInfo(Path.Combine(executionContext.CacheDirectory.FullName, "nuget-search"));
-        // Create the directory on the first write, not while constructing the command model
-        // for read-only operations such as shell completion.
+        if (!_cacheDirectory.Exists)
+        {
+            try
+            {
+                _cacheDirectory.Create();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to create cache directory {CacheDirectory}", _cacheDirectory.FullName);
+            }
+        }
         _expiryWindow = ReadWindow(configuration, "PackageSearchCacheExpirySeconds", s_defaultCacheExpiryWindow);
         _maxAge = ReadWindow(configuration, "PackageSearchMaxCacheAgeSeconds", s_defaultMaxCacheAge);
     }

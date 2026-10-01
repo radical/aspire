@@ -41,9 +41,7 @@ public class TelemetryConfigurationTests
         var (loggerFactory, fileLoggerProvider) = Program.CreateLoggerFactory([], loggingOptions, errorWriter, logBufferContext);
         var identityChannelReader = new IdentityChannelReader(typeof(Program).Assembly);
         var startupContext = new Program.CliStartupContext(loggingOptions, errorWriter, loggerFactory, fileLoggerProvider, logBufferContext, loggerFactory.CreateLogger(Program.RootLoggerName), new ConsoleCancellationManager(finalDrainBudget: Timeout.InfiniteTimeSpan), identityChannelReader);
-        var host = await Program.BuildApplicationAsync([], startupContext, config);
-        host.Services.GetRequiredService<TelemetryManager>().Initialize();
-        return host;
+        return await Program.BuildApplicationAsync([], startupContext, config);
     }
 
     [Fact]
@@ -86,7 +84,6 @@ public class TelemetryConfigurationTests
         var telemetryConfiguration = TelemetryConfiguration.Create(configuration, [versionFlag]);
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
         using var telemetryManager = new TelemetryManager(telemetryConfiguration, tagsSource);
-        telemetryManager.Initialize();
         var internalMicrosoftDetector = new TelemetryFixture.TestInternalMicrosoftDetector
         {
             IsInternalMicrosoft = true
@@ -190,7 +187,6 @@ public class TelemetryConfigurationTests
         var telemetryConfiguration = TelemetryConfiguration.Create(configuration);
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
         using var telemetryManager = new TelemetryManager(telemetryConfiguration, tagsSource);
-        telemetryManager.Initialize();
         var internalMicrosoftDetector = new TelemetryFixture.TestInternalMicrosoftDetector
         {
             IsInternalMicrosoft = true
@@ -256,7 +252,6 @@ public class TelemetryConfigurationTests
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
 
         using var manager = new TelemetryManager(configuration, tagsSource);
-        manager.Initialize();
 
         Assert.False(manager.HasProfilingProvider, "Expected detached child profiling export to require an actual profiling session");
     }
@@ -332,8 +327,7 @@ public class TelemetryConfigurationTests
         var configuration = new ConfigurationBuilder().Build();
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
 
-        using var manager = new TelemetryManager(configuration, tagsSource, ["--version"]);
-        manager.Initialize();
+        var manager = new TelemetryManager(configuration, tagsSource, ["--version"]);
 
         Assert.False(manager.HasAzureMonitor);
     }
@@ -347,8 +341,7 @@ public class TelemetryConfigurationTests
         var configuration = new ConfigurationBuilder().Build();
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
 
-        using var manager = new TelemetryManager(configuration, tagsSource, [flag]);
-        manager.Initialize();
+        var manager = new TelemetryManager(configuration, tagsSource, [flag]);
 
         Assert.False(manager.HasAzureMonitor);
     }
@@ -367,7 +360,6 @@ public class TelemetryConfigurationTests
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
 
         using var manager = new TelemetryManager(configuration, tagsSource, ["agent", "telemetry", "--event-type", "skill_invocation"]);
-        manager.Initialize();
 
         Assert.False(manager.HasAzureMonitor);
     }
@@ -379,7 +371,6 @@ public class TelemetryConfigurationTests
         var tagsSource = new TelemetryTagsSource(NullLogger<TelemetryTagsSource>.Instance);
 
         using var manager = new TelemetryManager(configuration, tagsSource, ["agent", "telemetry", "--event-type", "skill_invocation"]);
-        manager.Initialize();
 
         Assert.True(manager.HasAzureMonitor);
     }

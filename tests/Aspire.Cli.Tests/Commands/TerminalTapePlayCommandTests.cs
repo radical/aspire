@@ -23,7 +23,8 @@ public class TerminalTapePlayCommandTests(ITestOutputHelper outputHelper)
     public async Task CommandHierarchy(string arguments, int expectedExitCode)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper,
+            options => options.EnabledFeatures = [KnownFeatures.TerminalCommandsEnabled]);
         using var provider = services.BuildServiceProvider();
 
         var result = provider.GetRequiredService<RootCommand>().Parse(arguments);
@@ -32,7 +33,7 @@ public class TerminalTapePlayCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void AvailableWithoutFeatureFlag()
+    public void RequiresTerminalFeature()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
@@ -40,7 +41,7 @@ public class TerminalTapePlayCommandTests(ITestOutputHelper outputHelper)
 
         var result = provider.GetRequiredService<RootCommand>().Parse("terminal tape play shell --tape-file probe.tape");
 
-        Assert.Empty(result.Errors);
+        Assert.NotEmpty(result.Errors);
     }
 
     [Theory]
@@ -95,7 +96,8 @@ public class TerminalTapePlayCommandTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         await File.WriteAllTextAsync(Path.Combine(workspace.WorkspaceRoot.FullName, "probe.tape"), "");
-        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper,
+            options => options.EnabledFeatures = [KnownFeatures.TerminalCommandsEnabled]);
         using var provider = services.BuildServiceProvider();
 
         var result = provider.GetRequiredService<RootCommand>().Parse("terminal tape play shell --tape-file probe.tape");

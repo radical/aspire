@@ -4,6 +4,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Json;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Diagnostics;
 using Aspire.Cli.Interaction;

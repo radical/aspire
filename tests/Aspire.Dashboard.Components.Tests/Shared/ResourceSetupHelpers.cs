@@ -43,12 +43,7 @@ internal static class ResourceSetupHelpers
         FluentUISetupHelpers.SetupFluentUIComponents(context);
     }
 
-    public static void SetupResourcesPage(
-        BunitContext context,
-        ViewportInformation viewport,
-        IDashboardClient? dashboardClient = null,
-        ILocalStorage? localStorage = null,
-        ISessionStorage? sessionStorage = null)
+    public static void SetupResourcesPage(BunitContext context, ViewportInformation viewport, IDashboardClient? dashboardClient = null, ILocalStorage? localStorage = null)
     {
         FluentUISetupHelpers.SetupFluentDivider(context);
         FluentUISetupHelpers.SetupFluentInputLabel(context);
@@ -62,7 +57,7 @@ internal static class ResourceSetupHelpers
         FluentUISetupHelpers.SetupFluentOverflow(context);
         FluentUISetupHelpers.SetupFluentMenu(context);
 
-        FluentUISetupHelpers.AddCommonDashboardServices(context, localStorage: localStorage, sessionStorage: sessionStorage);
+        FluentUISetupHelpers.AddCommonDashboardServices(context, localStorage: localStorage);
         context.JSInterop.SetupVoid("focusElement", _ => true);
         context.Services.AddSingleton<IconResolver>();
         context.Services.AddSingleton<ILogger<StructuredLogs>>(NullLogger<StructuredLogs>.Instance);

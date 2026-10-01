@@ -1552,10 +1552,7 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
             // package add, layout, and other short-lived invocations leave these unset so
             // they continue to use the shared ladder's force-kill mode.
             IsolateConsole = true,
-            // dotnet run nests its own non-breakaway job inside the CLI job, preventing DCP
-            // from escaping the CLI job to finish resource cleanup. Direct launches have no
-            // intervening job and opt back into the CLI job below.
-            KillOnParentExit = false,
+            KillOnParentExit = true,
             GracefulShutdownSignaler = _gracefulShutdownSignaler,
             ShutdownService = _shutdownService,
             // The bundled AppHost run hook delegates dotnet run to aspire run. The SDK passes
@@ -1619,7 +1616,6 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
                 // caller may reuse runOptions for other invocations.
                 var directRunOptions = runOptions.Clone();
                 directRunOptions.AppHostArgumentStartIndex = directRun.AppHostArgumentStartIndex;
-                directRunOptions.KillOnParentExit = true;
 
                 return await _runner.RunAppHostCommandAsync(
                     effectiveAppHostFile,
