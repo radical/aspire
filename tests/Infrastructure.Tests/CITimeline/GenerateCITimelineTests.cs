@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using VerifyXunit;
 using Xunit;
 
 namespace Infrastructure.Tests.CITimeline;
@@ -15,87 +16,108 @@ public class GenerateCITimelineTests
         GitHubApi.LoadJsonData(GetTestDataPath(filename));
 
     [Fact]
-    public void GenerateSummary_BasicRun_ContainsHeader()
+    public async Task GenerateSummary_BasicRun_MatchesCompleteHtml()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var html = TimelineRenderer.WrapHtml(TimelineRenderer.GenerateSummary(runInfo, jobs));
 
-        Assert.Contains("CI Timeline", summary);
-        Assert.Contains("success", summary);
+        await Verifier.Verify(html, "html").UseDirectory("Snapshots");
     }
 
     [Fact]
-    public void GenerateSummary_BasicRun_ContainsSummaryStats()
+    public void GenerateSummary_BasicRun_UsesRunWindowForWallTime()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
         var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
 
-        Assert.Contains("Jobs", summary);
-        Assert.Contains("Status", summary);
-        Assert.Contains("✅", summary);
-        Assert.Contains("❌", summary);
+        Assert.Contains("<tr><td>Total wall time</td><td><b>45m00s</b></td></tr>", summary);
     }
 
     [Fact]
-    public void GenerateSummary_BasicRun_ContainsCriticalPath()
+    public void GenerateSummary_BasicRun_RanksOnlyNonResultJobsOnCriticalPath()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
         var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var section = GetDetailsSection(summary, "<summary><b>🐢 Critical path</b>");
 
-        Assert.Contains("Critical path", summary);
+        Assert.Equal(
+        [
+            "<tr><td>1</td><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
+            "<tr><td>2</td><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
+            "<tr><td>3</td><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
+            "<tr><td>4</td><td>✅ 🐧 <code>Build</code></td><td><b>15m00s</b></td><td>2m00s</td><td>1m00s</td><td>12m00s</td></tr>",
+        ],
+            GetJobRows(section));
     }
 
     [Fact]
-    public void GenerateSummary_BasicRun_ContainsPhases()
+    public void GenerateSummary_MinTotalMinutes_UsesStrictCriticalPathAndInclusiveTimelineBoundary()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs, minTotalMinutes: 15);
+        var criticalPath = GetDetailsSection(summary, "<summary><b>🐢 Critical path</b>");
+        var fullTimeline = GetDetailsSection(summary, "<summary><b>📊 Full timeline</b>");
 
-        Assert.Contains("Full timeline", summary);
+        Assert.Equal(
+        [
+            "<tr><td>1</td><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
+            "<tr><td>2</td><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
+            "<tr><td>3</td><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
+        ],
+            GetJobRows(criticalPath));
+        Assert.Equal(
+        [
+            "<tr><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
+            "<tr><td>✅ 🐧 <code>Build</code></td><td><b>15m00s</b></td><td>2m00s</td><td>1m00s</td><td>12m00s</td></tr>",
+            "<tr><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
+            "<tr><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
+        ],
+            GetJobRows(fullTimeline));
     }
 
     [Fact]
-    public void GenerateSummary_BasicRun_ShowsRunnerEmoji()
+    public void GenerateSummary_MinTotalMinutes_ExcludesAllJobsAtHighThreshold()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs, minTotalMinutes: 999);
 
-        Assert.Contains("🐧", summary);
-        Assert.Contains("🪟", summary);
+        Assert.Empty(GetJobRows(GetDetailsSection(summary, "<summary><b>🐢 Critical path</b>")));
+        Assert.Empty(GetJobRows(GetDetailsSection(summary, "<summary><b>📊 Full timeline</b>")));
     }
 
     [Fact]
-    public void GenerateSummary_BasicRun_LargeRunnerGetsLightningBolt()
+    public void GenerateSummary_EncodesUntrustedRunConclusionJobNameAndRunnerLabel()
     {
-        var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        using var runDocument = JsonDocument.Parse("""
+            {
+              "run_started_at": "2026-01-15T10:00:00Z",
+              "updated_at": "2026-01-15T10:10:00Z",
+              "conclusion": "success <run>&\"",
+              "status": "completed",
+              "run_attempt": 2
+            }
+            """);
+        using var jobsDocument = JsonDocument.Parse("""
+            [
+              {
+                "name": "Build <job> & value (ubuntu-latest)",
+                "status": "completed",
+                "conclusion": "success",
+                "created_at": "2026-01-15T10:00:00Z",
+                "started_at": "2026-01-15T10:01:00Z",
+                "completed_at": "2026-01-15T10:10:00Z",
+                "runner_name": "runner <runner>&\"",
+                "html_url": "https://github.com/test/run/1",
+                "labels": ["ubuntu <runner>&\""]
+              }
+            ]
+            """);
+        var jobs = jobsDocument.RootElement.EnumerateArray().Select(job => job.Clone()).ToList();
+        var summary = TimelineRenderer.GenerateSummary(runDocument.RootElement, jobs);
 
-        Assert.Contains("🐧⚡", summary);
-    }
-
-    [Fact]
-    public void GenerateSummary_BasicRun_ContainsHtmlCodeTags()
-    {
-        var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
-
-        Assert.Contains("<code>", summary);
-        Assert.DoesNotContain("<script>", summary);
-    }
-
-    [Fact]
-    public void GenerateSummary_BasicRun_ExcludesResultsFromCriticalPath()
-    {
-        var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
-
-        var criticalPathStart = summary.IndexOf("Critical path", StringComparison.Ordinal);
-        var criticalPathEnd = summary.IndexOf("</details>", criticalPathStart, StringComparison.Ordinal);
-        if (criticalPathStart >= 0 && criticalPathEnd >= 0)
-        {
-            var criticalPathSection = summary[criticalPathStart..criticalPathEnd];
-            Assert.DoesNotContain(">results<", criticalPathSection);
-        }
+        Assert.Contains("<b>success &lt;run&gt;&amp;&quot;</b>", summary);
+        Assert.Contains("<code>Build &lt;job&gt; &amp; value</code>", summary);
+        Assert.Contains("<code>ubuntu &lt;runner&gt;&amp;&quot;</code>: 1", summary);
     }
 
     [Fact]
@@ -117,33 +139,20 @@ public class GenerateCITimelineTests
     }
 
     [Fact]
-    public void GenerateSummary_RerunAttempt_SkipsOldAttemptJobs()
+    public void GenerateSummary_RerunAttempt_ExcludesPriorAttemptJobsAndUsesAttemptWindow()
     {
         var (runInfo, jobs) = LoadTestData("rerun-attempt.json");
         var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var fullTimeline = GetDetailsSection(summary, "<summary><b>📊 Full timeline</b>");
 
         Assert.Contains("re-run attempt #2", summary);
-    }
-
-    [Fact]
-    public void GenerateSummary_WithMinTotalFilter_FiltersShortJobs()
-    {
-        var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs, minTotalMinutes: 999);
-
-        Assert.Contains("CI Timeline", summary);
-    }
-
-    [Fact]
-    public void WrapHtml_ProducesValidHtmlDocument()
-    {
-        var html = TimelineRenderer.WrapHtml("<p>Test content</p>");
-
-        Assert.StartsWith("<!DOCTYPE html>", html.TrimStart());
-        Assert.Contains("<html>", html);
-        Assert.Contains("</html>", html);
-        Assert.Contains("<style>", html);
-        Assert.Contains("Test content", html);
+        Assert.Contains("<tr><td>Jobs</td><td>1 (1 unique)</td></tr>", summary);
+        Assert.Contains("<tr><td>Total wall time</td><td><b>15m00s</b></td></tr>", summary);
+        Assert.Equal(
+        [
+            "<tr><td>✅ 🐧 <code>Build</code></td><td><b>15m00s</b></td><td>0s</td><td>1m00s</td><td>14m00s</td></tr>",
+        ],
+            GetJobRows(fullTimeline));
     }
 
     [Fact]
@@ -163,12 +172,20 @@ public class GenerateCITimelineTests
         Assert.Equal(6, jobs.Count);
     }
 
-    [Fact]
-    public void GenerateSummary_BasicRun_FormatsWallTime()
+    private static string GetDetailsSection(string summary, string summaryMarker)
     {
-        var (runInfo, jobs) = LoadTestData("basic-run.json");
-        var summary = TimelineRenderer.GenerateSummary(runInfo, jobs);
+        var summaryStart = summary.IndexOf(summaryMarker, StringComparison.Ordinal);
+        Assert.True(summaryStart >= 0, $"Could not find details section summary '{summaryMarker}'.");
 
-        Assert.Contains("45m", summary);
+        var detailsStart = summary.LastIndexOf("<details", summaryStart, StringComparison.Ordinal);
+        Assert.True(detailsStart >= 0, $"Could not find opening details boundary for '{summaryMarker}'.");
+
+        var detailsEnd = summary.IndexOf("</details>", summaryStart, StringComparison.Ordinal);
+        Assert.True(detailsEnd >= 0, $"Could not find closing details boundary for '{summaryMarker}'.");
+
+        return summary[detailsStart..(detailsEnd + "</details>".Length)];
     }
+
+    private static string[] GetJobRows(string section) =>
+        [.. section.Split('\n').Where(line => line.StartsWith("<tr><td>", StringComparison.Ordinal))];
 }
