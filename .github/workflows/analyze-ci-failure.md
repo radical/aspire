@@ -50,6 +50,7 @@ jobs:
       - name: Checkout data collection helpers
         uses: actions/checkout@v7.0.1
         with:
+          persist-credentials: false
           sparse-checkout: |
             eng/test-retry-patterns.json
             .github/workflows/analyze-ci-failure-history.sh
@@ -210,6 +211,7 @@ safe-outputs:
         - name: Checkout rerun helper
           uses: actions/checkout@v7.0.1
           with:
+            persist-credentials: false
             sparse-checkout: |
               .github/workflows/analyze-ci-failure-rerun.js
             sparse-checkout-cone-mode: false
