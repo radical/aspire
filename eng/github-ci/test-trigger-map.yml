@@ -327,6 +327,7 @@ path_rules:
       - .github/workflows/tests.yml
       - .github/workflows/extension-unit-tests.yml
       - .github/workflows/extension-e2e-tests.yml
+      - .github/workflows/extension-e2e/**
       - .github/workflows/build-packages.yml
       - .github/workflows/build-cli-native-archives.yml
     targets: [job:extension-e2e]
