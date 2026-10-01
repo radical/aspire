@@ -1,44 +1,56 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Semver;
+using Aspire.Hosting.Dcp.Process;
 
 namespace Aspire.Hosting.Utils;
 
 internal static class DotnetSdkUtils
 {
-    private static readonly SemVersion s_minimumMultiThreadedBuildVersion = SemVersion.Parse("11.0.100-rc.1");
-    // File-based apps require both the SDK argument-forwarding fix and the compiler-client mutex mitigation.
-    // 11.0.100-rtm.26473.104 is verified to contain both; earlier prereleases remain disabled:
-    // https://github.com/dotnet/sdk/pull/56207
-    // https://github.com/dotnet/roslyn/pull/85675
-    // https://github.com/dotnet/dotnet/pull/9565
-    // RC builds remain below this SemVer floor so they must be explicitly verified before being enabled.
-    private static readonly SemVersion s_minimumFileBasedMultiThreadedBuildVersion =
-        SemVersion.Parse("11.0.100-rtm.26473.104");
-
-    public static bool SupportsMultiThreadedBuild(SemVersion? version) =>
-        version is not null &&
-        SemVersion.ComparePrecedence(version, s_minimumMultiThreadedBuildVersion) >= 0;
-
-    public static bool SupportsFileBasedMultiThreadedBuild(SemVersion? version) =>
-        version is not null &&
-        SemVersion.ComparePrecedence(version, s_minimumFileBasedMultiThreadedBuildVersion) >= 0;
-
-    public static string? FindNearestGlobalJson(string workingDirectory)
+    private static readonly Dictionary<string, string> s_dotnetCliEnvVars = new()
     {
-        ArgumentException.ThrowIfNullOrEmpty(workingDirectory);
+        ["DOTNET_NOLOGO"] = "true",
+        ["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false",
+        ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "true",
+        ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "true",
+        ["SuppressNETCoreSdkPreviewMessage"] = "true"
+    };
 
-        var physicalWorkingDirectory = PathNormalizer.ResolveSymlinks(Path.GetFullPath(workingDirectory));
-        for (var directory = new DirectoryInfo(physicalWorkingDirectory); directory is not null; directory = directory.Parent)
+    public static async Task<Version?> TryGetVersionAsync(string? workingDirectory)
+    {
+        // Get version by parsing the SDK version string
+        Version? parsedVersion = null;
+
+        try
         {
-            var globalJsonPath = Path.Combine(directory.FullName, "global.json");
-            if (File.Exists(globalJsonPath))
+            var (task, _) = ProcessUtil.Run(new("dotnet")
             {
-                return PathNormalizer.ResolveToFilesystemPath(globalJsonPath);
+                WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory,
+                Arguments = "--version",
+                EnvironmentVariables = s_dotnetCliEnvVars,
+                OnOutputData = data =>
+                {
+                    if (!string.IsNullOrWhiteSpace(data))
+                    {
+                        // The SDK version is in the first line of output
+                        var line = data.AsSpan().Trim();
+                        // Trim any pre-release suffix
+                        var hyphenIndex = line.IndexOf('-');
+                        var versionSpan = hyphenIndex >= 0 ? line[..hyphenIndex] : line;
+                        if (Version.TryParse(versionSpan, out var v))
+                        {
+                            parsedVersion = v;
+                        }
+                    }
+                }
+            });
+            var result = await task.ConfigureAwait(false);
+            if (result.ExitCode == 0)
+            {
+                return parsedVersion;
             }
         }
-
+        catch (Exception) { }
         return null;
     }
 }

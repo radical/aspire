@@ -347,9 +347,7 @@ internal static class CliPathHelper
         var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var socketPath = BackchannelConstants.ComputeCliSocketPath(homeDirectory, socketPrefix);
         var socketDirectory = Path.GetDirectoryName(socketPath)!;
-        // CliPathHelper chooses CLI socket paths; SocketPermissionHelper shares permission
-        // enforcement and path validation with hosting consumers that also accept configured paths.
-        SocketPermissionHelper.CreateDirectory(socketDirectory, repairExisting: true);
+        Directory.CreateDirectory(socketDirectory);
 
         if (Interlocked.CompareExchange(ref s_socketDirectorySwept, 1, 0) == 0)
         {

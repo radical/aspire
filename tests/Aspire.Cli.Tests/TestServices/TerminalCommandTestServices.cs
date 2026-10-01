@@ -31,6 +31,7 @@ internal static class TerminalCommandTestServices
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
+            options.EnabledFeatures = [KnownFeatures.TerminalCommandsEnabled];
             options.AuxiliaryBackchannelMonitorFactory = _ => monitor;
             configureOptions?.Invoke(options);
         });

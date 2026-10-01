@@ -2,8 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIRECOMPUTE002
+#pragma warning disable ASPIREAZURE001
 #pragma warning disable ASPIREPIPELINES001
 
+using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Azure.Sandboxes.Provisioning;
@@ -21,6 +23,7 @@ namespace Aspire.Hosting;
 /// <summary>
 /// Extension methods for adding Azure Container Apps sandbox resources to the application model.
 /// </summary>
+[Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
 public static class AzureSandboxesExtensions
 {
     // https://learn.microsoft.com/azure/role-based-access-control/built-in-roles#container-apps-sandboxgroup-data-owner
@@ -35,6 +38,7 @@ public static class AzureSandboxesExtensions
     /// <returns>A resource builder for the sandbox group.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureSandboxGroupResource> AddAzureSandboxGroup(this IDistributedApplicationBuilder builder, [ResourceName] string name)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -152,6 +156,7 @@ public static class AzureSandboxesExtensions
     /// </remarks>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport("publishComputeResourceAsAzureSandbox", MethodName = "publishAsAzureSandbox")]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<T> PublishAsAzureSandbox<T>(
         this IResourceBuilder<T> builder,
         AzureSandboxOptions? options = null)
@@ -185,6 +190,7 @@ public static class AzureSandboxesExtensions
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> or <paramref name="configure"/> is null.</exception>
     /// <exception cref="ArgumentException">Thrown when a configured option is invalid.</exception>
     [AspireExportIgnore(Reason = "Use the AzureSandboxOptions overload from ATS.")]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<T> PublishAsAzureSandbox<T>(
         this IResourceBuilder<T> builder,
         Action<AzureSandboxOptions> configure)
@@ -216,6 +222,7 @@ public static class AzureSandboxesExtensions
     /// </remarks>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureSandboxGroupResource> WithNoManagedIdentity(this IResourceBuilder<AzureSandboxGroupResource> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -237,6 +244,7 @@ public static class AzureSandboxesExtensions
     /// </remarks>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureSandboxGroupResource> WithSystemAssignedIdentity(this IResourceBuilder<AzureSandboxGroupResource> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -258,6 +266,7 @@ public static class AzureSandboxesExtensions
     /// </remarks>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureSandboxGroupResource> WithUserAssignedIdentity(
         this IResourceBuilder<AzureSandboxGroupResource> builder,
         IResourceBuilder<AzureUserAssignedIdentityResource> identity)
@@ -283,6 +292,7 @@ public static class AzureSandboxesExtensions
     /// </remarks>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
+    [Experimental("ASPIREAZURE001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureSandboxGroupResource> WithAcrPullIdentity(
         this IResourceBuilder<AzureSandboxGroupResource> builder,
         IResourceBuilder<AzureUserAssignedIdentityResource> identity)

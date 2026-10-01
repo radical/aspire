@@ -44,7 +44,6 @@ export const DEFAULT_REPOS = [
 // the account's host.
 export const DEFAULT_PROXIMA_REPOS = [
   "coreai/aspire-1p",
-  "coreai/sisyphus",
 ];
 
 const GRAPHQL = "https://api.github.com/graphql";

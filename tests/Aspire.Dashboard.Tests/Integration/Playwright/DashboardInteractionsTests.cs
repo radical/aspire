@@ -242,14 +242,15 @@ public class DashboardInteractionsTests : PlaywrightTestsBase<DashboardInteracti
             var bottomButton = page.Locator(".scroll-to-bottom");
             await Assertions.Expect(bottomButton).ToBeVisibleAsync();
 
-            // Headless browsers can skip every intermediate compositor frame under load. Capture the native
-            // smooth-scroll request, then dispatch scrollend explicitly so the content-growth behavior is deterministic.
             await page.EvaluateAsync("""
                 () => {
                     const region = document.getElementById('scroll-region');
-                    region.scrollTo = options => {
-                        window.__scrollToBottomRequest = options;
-                    };
+                    const initialBottom = region.scrollHeight - region.clientHeight;
+                    window.__grewDuringScroll = false;
+                    region.addEventListener('scroll', () => {
+                        window.__grewDuringScroll = region.scrollTop > 0 && region.scrollTop < initialBottom;
+                        region.querySelector('.scroll-content').style.height = '4000px';
+                    }, { once: true });
                     document.querySelector('.scroll-to-bottom').addEventListener('click', event => {
                         window.__hiddenOnClick = event.currentTarget.hidden;
                     }, { once: true });
@@ -258,24 +259,10 @@ public class DashboardInteractionsTests : PlaywrightTestsBase<DashboardInteracti
 
             await bottomButton.ClickAsync();
             Assert.True(await page.EvaluateAsync<bool>("() => window.__hiddenOnClick"));
-            Assert.True(await page.EvaluateAsync<bool>("""
-                () => {
-                    const region = document.getElementById('scroll-region');
-                    return window.__scrollToBottomRequest.behavior === 'smooth' &&
-                        window.__scrollToBottomRequest.top === region.scrollHeight;
-                }
-                """));
-            await page.EvaluateAsync("""
-                () => {
-                    const region = document.getElementById('scroll-region');
-                    region.querySelector('.scroll-content').style.height = '4000px';
-                    region.dispatchEvent(new Event('scrollend'));
-                }
-                """);
             await page.WaitForFunctionAsync("""
                 () => {
                     const region = document.getElementById('scroll-region');
-                    return region.scrollHeight >= 4000 &&
+                    return window.__grewDuringScroll && region.scrollHeight >= 4000 &&
                         Math.abs(region.scrollHeight - region.clientHeight - region.scrollTop) < 1;
                 }
                 """).DefaultTimeout();

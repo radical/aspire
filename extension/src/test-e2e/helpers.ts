@@ -4,11 +4,10 @@ import * as path from 'path';
 import { blazorWasmDebugProofTimeoutMs, getBlazorWasmDebugProofControlTimeoutMs } from '../testing/blazorWasmDebugProofTimeouts';
 
 export { blazorWasmDebugProofTimeoutMs, blazorWasmDebugProofResponseAllowanceMs, getBlazorWasmDebugProofControlTimeoutMs } from '../testing/blazorWasmDebugProofTimeouts';
-export { ensureBlazorWasmDebuggerReady } from '../testing/blazorWasmDebuggerSetup';
 
 import { isSamePath } from './helpers/assertions';
 import { executeE2eControlCommand } from './helpers/fixtures';
-import { ensureDiagnosticsDir, getRunRoot } from './helpers/paths';
+import { ensureDiagnosticsDir } from './helpers/paths';
 
 interface BlazorWasmDebugSessionSnapshot {
     id: string;
@@ -21,7 +20,6 @@ interface BlazorWasmDebugSessionSnapshot {
         projectPath?: unknown;
         resourceType?: unknown;
         noDebug?: unknown;
-        userDataDir?: unknown;
     };
 }
 
@@ -97,11 +95,6 @@ export async function proveBlazorScenario(options: ProveBlazorScenarioOptions): 
     assert.notStrictEqual(proof.rootSession.configuration.noDebug, true);
     assert.strictEqual(proof.rootSession.configuration.browser, options.expectedBrowser);
     assert.strictEqual(proof.rootSession.configuration.resourceType, 'browser');
-    const profile = proof.rootSession.configuration.userDataDir;
-    const runRoot = getRunRoot();
-    assert.ok(typeof profile === 'string' && runRoot && isSamePath(path.dirname(profile), runRoot),
-        'Expected a browser profile owned by this E2E run.');
-    assert.ok(path.basename(profile).startsWith('blazor-browser-profile-'));
     assert.ok(
         typeof proof.rootSession.configuration.projectPath === 'string'
         && isSamePath(proof.rootSession.configuration.projectPath, options.clientProjectPath),

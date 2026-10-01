@@ -44,6 +44,7 @@ internal static class TelemetryServiceCollectionExtensions
         services.AddSingleton<TelemetryTagsSource>();
         services.AddSingleton<AspireCliTelemetry>();
         services.AddSingleton<ProfilingTelemetry>();
+        services.AddHostedService(sp => sp.GetRequiredService<AspireCliTelemetry>());
 
         return services;
     }

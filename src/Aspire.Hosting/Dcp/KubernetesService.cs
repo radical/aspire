@@ -299,8 +299,7 @@ internal sealed class KubernetesService(ILogger<KubernetesService> logger, IOpti
 #pragma warning restore CS0618 // Type or member is obsolete
                 },
                 RetryOnConnectivityAndConflictErrors,
-                restartCancellationToken,
-                timeoutEachAttempt: true);
+                restartCancellationToken);
         };
 
         await foreach (var item in PeriodicRestartAsyncEnumerable.CreateAsync(innerWatchFactory, restartInterval: TimeSpan.FromMinutes(5), cancellationToken: cancellationToken).ConfigureAwait(false))
@@ -460,8 +459,7 @@ internal sealed class KubernetesService(ILogger<KubernetesService> logger, IOpti
         string resourceType,
         Func<DcpKubernetesClient, CancellationToken, Task<TResult>> operation,
         Func<Exception, bool> isRetryable,
-        CancellationToken cancellationToken,
-        bool timeoutEachAttempt = false)
+        CancellationToken cancellationToken)
     {
         using var activity = ProfilingTelemetry.StartDcpKubernetesApi(configuration, operationType, resourceType);
         var retryCount = 0;
@@ -495,12 +493,7 @@ internal sealed class KubernetesService(ILogger<KubernetesService> logger, IOpti
                 ? MaxRetryDuration
                 : KubernetesInitializationTimeout;
 
-            var resiliencePipeline = CreateKubernetesCallResiliencePipeline(
-                retryDuration,
-                isRetryable,
-                activity,
-                () => retryCount++,
-                timeoutEachAttempt);
+            var resiliencePipeline = CreateKubernetesCallResiliencePipeline(retryDuration, isRetryable, activity, () => retryCount++);
             return await resiliencePipeline.ExecuteAsync(async (cancellationToken) =>
             {
                 // Keep connection establishment inside the retry loop so kubeconfig read failures remain retryable.
@@ -527,40 +520,34 @@ internal sealed class KubernetesService(ILogger<KubernetesService> logger, IOpti
         TimeSpan retryDuration,
         Func<Exception, bool> isRetryable,
         ProfilingTelemetry.ActivityScope activity,
-        Action recordRetry,
-        bool timeoutEachAttempt = false)
+        Action recordRetry)
     {
-        var timeoutOptions = new TimeoutStrategyOptions
-        {
-            Timeout = retryDuration,
-            OnTimeout = (_) =>
+        var resiliencePipeline = new ResiliencePipelineBuilder()
+            .AddTimeout(new TimeoutStrategyOptions
             {
-                activity.AddKubernetesApiTimeout();
-                return ValueTask.CompletedTask;
-            }
-        };
-        var retryOptions = new RetryStrategyOptions
-        {
-            ShouldHandle = timeoutEachAttempt
-                ? new PredicateBuilder().Handle(isRetryable).Handle<TimeoutRejectedException>()
-                : new PredicateBuilder().Handle(isRetryable),
-            BackoffType = DelayBackoffType.Exponential,
-            MaxRetryAttempts = int.MaxValue,
-            Delay = s_initialRetryDelay,
-            MaxDelay = TimeSpan.FromSeconds(5),
-            OnRetry = (retry) =>
+                Timeout = retryDuration,
+                OnTimeout = (_) =>
+                {
+                    activity.AddKubernetesApiTimeout();
+                    return ValueTask.CompletedTask;
+                }
+            })
+            .AddRetry(new RetryStrategyOptions()
             {
-                recordRetry();
-                activity.AddKubernetesApiRetry(retry.AttemptNumber, retry.RetryDelay, retry.Outcome.Exception);
-                return ValueTask.CompletedTask;
-            }
-        };
-
-        // Regular API calls have one total retry budget. Watches instead retry a stalled connection
-        // after each timeout until their outer periodic-restart token is canceled.
-        return timeoutEachAttempt
-            ? new ResiliencePipelineBuilder().AddRetry(retryOptions).AddTimeout(timeoutOptions).Build()
-            : new ResiliencePipelineBuilder().AddTimeout(timeoutOptions).AddRetry(retryOptions).Build();
+                ShouldHandle = new PredicateBuilder().Handle(isRetryable),
+                BackoffType = DelayBackoffType.Exponential,
+                MaxRetryAttempts = int.MaxValue,
+                Delay = s_initialRetryDelay,
+                MaxDelay = TimeSpan.FromSeconds(5),
+                OnRetry = (retry) =>
+                {
+                    recordRetry();
+                    activity.AddKubernetesApiRetry(retry.AttemptNumber, retry.RetryDelay, retry.Outcome.Exception);
+                    return ValueTask.CompletedTask;
+                }
+            })
+            .Build();
+        return resiliencePipeline;
     }
 
     private ResiliencePipeline CreateReadKubeconfigResiliencePipeline()

@@ -1,16 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const dispatcher = require('../../../.github/workflows/auto-rerun-transient-ci-failures.js');
-const pullRequest = require('../../../.github/workflows/auto-rerun/rerun-pull-request.js');
-const mainPolicy = require('../../../.github/workflows/auto-rerun/rerun-main.js');
-const common = require('../../../.github/workflows/auto-rerun/common.js');
-const rerunWorkflow = {
-    ...common, ...pullRequest, ...mainPolicy, ...dispatcher,
-    // Existing fixtures cover each policy's execution independently.
-    rerunMatchedJobs: options => options.sourceRunScope === 'main'
-        ? mainPolicy.rerunMainFailures(options)
-        : pullRequest.rerunPullRequestFailures(options),
-};
+const rerunWorkflow = require('../../../.github/workflows/auto-rerun-transient-ci-failures.js');
 
 class SummaryRecorder {
     constructor() {
@@ -61,72 +51,6 @@ async function main() {
 
 async function dispatch(operation, payload) {
     switch (operation) {
-        case 'selectPolicy':
-            return rerunWorkflow.selectPolicy(payload);
-
-        case 'dispatchWorkflow': {
-            const requests = [];
-            const outputs = {};
-            const messages = [];
-            const summary = new SummaryRecorder();
-            const github = createGitHubRecorder(payload, requests);
-            github.rest = {
-                actions: {
-                    getWorkflowRun: async options => {
-                        requests.push({ route: 'getWorkflowRun', payload: options });
-                        return { data: payload.workflowRun };
-                    },
-                },
-            };
-            const core = {
-                summary,
-                setOutput: (name, value) => { outputs[name] = value; },
-                info: message => messages.push(message),
-                warning: message => messages.push(message),
-                setFailed: message => messages.push(message),
-            };
-            const context = {
-                repo: { owner: payload.owner ?? 'microsoft', repo: payload.repo ?? 'aspire' },
-                eventName: payload.eventName ?? 'workflow_run',
-                payload: { workflow_run: payload.workflowRun },
-            };
-            const originalFetch = global.fetch;
-            global.fetch = async url => {
-                const match = String(url).match(/\/actions\/jobs\/(\d+)\/logs$/);
-                if (!match) {
-                    throw new Error(`Unexpected fetch request: ${url}`);
-                }
-
-                return {
-                    ok: true,
-                    status: 200,
-                    text: async () => payload.jobLogTextByJobId?.[match[1]] ?? '',
-                };
-            };
-
-            try {
-                const analysis = await dispatcher.run({
-                    phase: 'analyze',
-                    github, core, context,
-                    runId: payload.runId,
-                    dryRun: payload.dryRun ?? false,
-                    forceRerunAll: payload.forceRerunAll ?? false,
-                    workspace: path.resolve(__dirname, '../../..'),
-                });
-                const analysisRequests = [...requests];
-                if (analysis?.executionEligible && payload.execute) {
-                    await dispatcher.run({
-                        phase: 'execute', github, core, context,
-                        analysis: JSON.parse(outputs.analysis),
-                    });
-                }
-                return { analysis, analysisRequests, requests, outputs, messages, events: summary.events };
-            }
-            finally {
-                global.fetch = originalFetch;
-            }
-        }
-
         case 'analyzeFailedJobs':
             {
                 const logRequestJobIds = [];
@@ -142,27 +66,6 @@ async function dispatch(operation, payload) {
                 });
 
                 return { ...result, logRequestJobIds };
-            }
-
-        case 'analyzeMainFailedJobs':
-            {
-                const annotationRequestJobIds = [];
-                const logRequestJobIds = [];
-                const result = await rerunWorkflow.analyzeMainFailedJobs({
-                    jobs: payload.jobs ?? [],
-                    getAnnotationsForJob: async job => {
-                        annotationRequestJobIds.push(job.id);
-                        return payload.annotationTextByJobId?.[String(job.id)] ?? '';
-                    },
-                    getJobLogTextForJob: async job => {
-                        logRequestJobIds.push(job.id);
-                        return payload.jobLogTextByJobId?.[String(job.id)] ?? '';
-                    },
-                    maxRetryableJobs: payload.maxRetryableJobs,
-                    runAttempt: payload.runAttempt,
-                });
-
-                return { ...result, annotationRequestJobIds, logRequestJobIds };
             }
 
         case 'formatMatchedPatternForMarkdown':
@@ -201,9 +104,6 @@ async function dispatch(operation, payload) {
 
         case 'getDefaultMaxRunAttempt':
             return rerunWorkflow.defaultMaxRunAttempt;
-
-        case 'getMainMaxRunAttempt':
-            return rerunWorkflow.mainMaxRunAttempt;
 
         case 'validateRetryPatternsConfig':
             return rerunWorkflow.validateRetryPatternsConfig(payload.config);
@@ -265,10 +165,20 @@ async function dispatch(operation, payload) {
                 ...payload,
                 github,
                 summary,
-                delay: async () => {},
             });
 
             return { requests, events: summary.events, returnValue };
+        }
+
+        case 'requestMainFailureAnalysis': {
+            const requests = [];
+            const github = createGitHubRecorder(payload, requests);
+            const returnValue = await rerunWorkflow.requestMainFailureAnalysis({
+                ...payload,
+                github,
+            });
+
+            return { requests, returnValue };
         }
 
         default:
@@ -277,20 +187,9 @@ async function dispatch(operation, payload) {
 }
 
 function createGitHubRecorder(payload, requests) {
-    let currentRunRequestCount = 0;
-    let mainRefRequestCount = 0;
-    let mainWorkflowRunsRequestCount = 0;
-
     return {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
-
-            if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs') {
-                return { data: { jobs: payload.jobs ?? [] }, headers: {} };
-            }
-            if (route === 'GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations') {
-                return { data: payload.annotations ?? [], headers: {} };
-            }
 
             if (payload.failedRequestRoutes?.includes(route)) {
                 throw new Error(`Simulated request failure for ${route}`);
@@ -310,42 +209,27 @@ function createGitHubRecorder(payload, requests) {
             }
 
             if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}') {
-                const currentRun = Array.isArray(payload.currentRunResponses)
-                    ? payload.currentRunResponses[
-                        Math.min(currentRunRequestCount++, payload.currentRunResponses.length - 1)]
-                    : payload.currentRun;
                 return {
-                    data: currentRun ? {
-                        status: 'completed',
-                        conclusion: 'failure',
-                        ...currentRun,
-                    } : {
+                    data: payload.currentRun ?? {
                         run_attempt: payload.latestRunAttempt ?? null,
                     },
                 };
             }
 
             if (route === 'GET /repos/{owner}/{repo}/git/ref/{ref}') {
-                const currentMainSha = Array.isArray(payload.currentMainShas)
-                    ? payload.currentMainShas[Math.min(mainRefRequestCount++, payload.currentMainShas.length - 1)]
-                    : payload.currentMainSha;
                 return {
                     data: {
                         object: {
-                            sha: currentMainSha ?? null,
+                            sha: payload.currentMainSha ?? null,
                         },
                     },
                 };
             }
 
             if (route === 'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs') {
-                const workflowRuns = Array.isArray(payload.mainWorkflowRunResponses)
-                    ? payload.mainWorkflowRunResponses[
-                        Math.min(mainWorkflowRunsRequestCount++, payload.mainWorkflowRunResponses.length - 1)]
-                    : payload.mainWorkflowRuns;
                 return {
                     data: {
-                        workflow_runs: workflowRuns ?? [],
+                        workflow_runs: payload.mainWorkflowRuns ?? [],
                     },
                 };
             }
@@ -367,6 +251,11 @@ function createGitHubRecorder(payload, requests) {
                     headers: {
                         link: hasNextPage ? '<https://api.github.com/next>; rel="next"' : '',
                     },
+                };
+            }
+            if (route === 'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches') {
+                return {
+                    data: payload.workflowDispatchResponse ?? {},
                 };
             }
             if (route === 'POST /repos/{owner}/{repo}/issues/{issue_number}/comments') {

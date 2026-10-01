@@ -510,21 +510,18 @@ internal sealed class DcpHost
         return false;
     }
 
-    internal static Socket CreateLoggingSocket(string socketPath)
+    private static Socket CreateLoggingSocket(string socketPath)
     {
-        // This directory was allocated for the DCP session, not supplied as a socket override.
-        SocketPermissionHelper.CreateDirectory(Path.GetDirectoryName(socketPath)!, repairExisting: true);
+        var directoryName = Path.GetDirectoryName(socketPath);
+        if (!string.IsNullOrEmpty(directoryName))
+        {
+            DirectoryHelper.CreateWithOwnerOnlyPermissions(directoryName);
+        }
+
         var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        try
-        {
-            SocketPermissionHelper.Bind(socket, socketPath);
-            return socket;
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
+        socket.Bind(new UnixDomainSocketEndPoint(socketPath));
+
+        return socket;
     }
 
     private async Task StartLoggingSocketAsync(Socket socket)

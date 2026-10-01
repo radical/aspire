@@ -141,10 +141,6 @@ internal static class CliE2EAutomatorHelpers
                     counter,
                     TimeSpan.FromSeconds(120));
                 await auto.SourceAspireBundleEnvironmentAsync(counter);
-                if (strategy.LocalArchiveHiveLabel == "local")
-                {
-                    await auto.ConfigureLocalHiveAsync(counter);
-                }
                 break;
 
             case CliInstallMode.InstallScript:
@@ -435,10 +431,6 @@ internal static class CliE2EAutomatorHelpers
                     counter,
                     TimeSpan.FromSeconds(120));
                 await auto.SourceAspireCliEnvironmentAsync(counter);
-                if (strategy.LocalArchiveHiveLabel == "local")
-                {
-                    await auto.ConfigureLocalHiveAsync(counter);
-                }
                 break;
 
             case CliInstallMode.InstallScript:
@@ -714,7 +706,7 @@ internal static class CliE2EAutomatorHelpers
         this Hex1bTerminalAutomator auto,
         SequenceCounter counter)
     {
-        await auto.TypeAsync("aspire config set features:experimentalPolyglotJava true --global --non-interactive");
+        await auto.TypeAsync("aspire config set features:experimentalPolyglot:java true --global --non-interactive");
         await auto.EnterAsync();
         await auto.WaitForSuccessPromptAsync(counter);
     }

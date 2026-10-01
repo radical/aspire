@@ -1,4 +1,5 @@
 ::deep.resource-details-layout > .details-toolbar {
+    height: 36px;
     min-height: 36px;
 }
 
