@@ -9,7 +9,7 @@
 //     the repository.
 //
 //   node update-actionlint.js apply <version> <sha256>
-//     Rewrites the pin file with the verified version, SHA-256, and checksum-manifest URL.
+//     Rewrites the pin file with the verified version and SHA-256.
 //
 // The release API digest comes from the same upstream as the archive, so it is
 // not an independent trust anchor. Its purpose is to make the reviewed,
@@ -54,14 +54,8 @@ function parseReleaseTag(tag) {
     return tag.slice(1);
 }
 
-function checksumsUrl(version) {
-    return `https://github.com/${REPOSITORY}/releases/download/v${version}/actionlint_${version}_checksums.txt`;
-}
-
 // Pin file shape (.github/actionlint-version.json):
-//   { "version": "1.7.12",
-//     "linuxAmd64Sha256": "8aca8db9...",
-//     "checksums": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt" }
+//   { "version": "1.7.12", "linuxAmd64Sha256": "8aca8db9..." }
 function readPin(content) {
     let pin;
     try {
@@ -71,17 +65,13 @@ function readPin(content) {
     }
 
     const keys = Object.keys(pin ?? {}).sort().join(',');
-    if (keys !== 'checksums,linuxAmd64Sha256,version') {
-        throw new Error(`Pin file must contain exactly 'version', 'linuxAmd64Sha256', and 'checksums' but has '${keys}'.`);
+    if (keys !== 'linuxAmd64Sha256,version') {
+        throw new Error(`Pin file must contain exactly 'version' and 'linuxAmd64Sha256' but has '${keys}'.`);
     }
 
     parseVersion(pin.version, 'Pinned version');
     if (!SHA256.test(pin.linuxAmd64Sha256)) {
         throw new Error(`Pinned linuxAmd64Sha256 '${pin.linuxAmd64Sha256}' is not a lowercase SHA-256 hex digest.`);
-    }
-
-    if (pin.checksums !== checksumsUrl(pin.version)) {
-        throw new Error(`Pinned checksums URL '${pin.checksums}' does not match version ${pin.version}.`);
     }
 
     return { version: pin.version, sha256: pin.linuxAmd64Sha256 };
@@ -97,7 +87,7 @@ function applyPin(content, version, sha256) {
         throw new Error(`SHA-256 '${sha256}' is not a lowercase SHA-256 hex digest.`);
     }
 
-    return `${JSON.stringify({ version, linuxAmd64Sha256: sha256, checksums: checksumsUrl(version) }, null, 2)}\n`;
+    return `${JSON.stringify({ version, linuxAmd64Sha256: sha256 }, null, 2)}\n`;
 }
 
 // Release API asset shape (https://docs.github.com/rest/releases/releases#get-the-latest-release):

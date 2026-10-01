@@ -88,7 +88,7 @@ jobs:
           commit-message: "[Automated] Update actionlint to v${{ needs.check.outputs.version }}"
           labels: |
             area-engineering-systems
-          title: "[Automated] Update actionlint to v${{ needs.check.outputs.version }}"
+          title: "[automated] Update actionlint to v${{ needs.check.outputs.version }}"
           body: |
             Updates the actionlint pin in `.github/actionlint-version.json` from v${{ needs.check.outputs.previous-version }} to v${{ needs.check.outputs.version }}.
 

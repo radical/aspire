@@ -50,10 +50,10 @@ public sealed class UpdateActionlintTests : IDisposable
 
     [Theory]
     [RequiresTools(["node"])]
-    [InlineData("""{"version":"1.7","linuxAmd64Sha256":"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8","checksums":"https://github.com/rhysd/actionlint/releases/download/v1.7/actionlint_1.7_checksums.txt"}""", "Pinned version '1.7' is not a MAJOR.MINOR.PATCH version.")]
-    [InlineData("""{"version":"1.7.12","linuxAmd64Sha256":"ABC","checksums":"https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt"}""", "Pinned linuxAmd64Sha256 'ABC' is not a lowercase SHA-256 hex digest.")]
-    [InlineData("""{"version":"1.7.12","linuxAmd64Sha256":"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8","checksums":"https://github.com/rhysd/actionlint/releases/download/v1.7.11/actionlint_1.7.11_checksums.txt"}""", "Pinned checksums URL 'https://github.com/rhysd/actionlint/releases/download/v1.7.11/actionlint_1.7.11_checksums.txt' does not match version 1.7.12.")]
-    [InlineData("""{"version":"1.7.12","linuxAmd64Sha256":"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"}""", "Pin file must contain exactly 'version', 'linuxAmd64Sha256', and 'checksums' but has 'linuxAmd64Sha256,version'.")]
+    [InlineData("""{"version":"1.7","linuxAmd64Sha256":"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"}""", "Pinned version '1.7' is not a MAJOR.MINOR.PATCH version.")]
+    [InlineData("""{"version":"1.7.12","linuxAmd64Sha256":"ABC"}""", "Pinned linuxAmd64Sha256 'ABC' is not a lowercase SHA-256 hex digest.")]
+    [InlineData("""{"version":"1.7.12"}""", "Pin file must contain exactly 'version' and 'linuxAmd64Sha256' but has 'version'.")]
+    [InlineData("""{"version":"1.7.12","linuxAmd64Sha256":"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8","checksums":"https://example.com"}""", "Pin file must contain exactly 'version' and 'linuxAmd64Sha256' but has 'checksums,linuxAmd64Sha256,version'.")]
     public async Task ReadPinRejectsMalformedPins(string content, string expectedError)
     {
         var error = await InvokeExpectingErrorAsync("readPin", new { content });
@@ -98,8 +98,7 @@ public sealed class UpdateActionlintTests : IDisposable
             $$"""
             {
               "version": "1.7.13",
-              "linuxAmd64Sha256": "{{s_newArchiveSha256}}",
-              "checksums": "https://github.com/rhysd/actionlint/releases/download/v1.7.13/actionlint_1.7.13_checksums.txt"
+              "linuxAmd64Sha256": "{{s_newArchiveSha256}}"
             }
 
             """,
@@ -263,7 +262,6 @@ public sealed class UpdateActionlintTests : IDisposable
         {
             ["version"] = version,
             ["linuxAmd64Sha256"] = PinnedSha256,
-            ["checksums"] = $"https://github.com/rhysd/actionlint/releases/download/v{version}/actionlint_{version}_checksums.txt",
         });
 
     private static object Release(string version, string? digest) => new
