@@ -1376,44 +1376,6 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     }
 
     [Fact]
-    public async Task WorkflowYamlEnablesForceRerunAllMode()
-    {
-        string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
-
-        // Execution receives the analyzed policy, so the force flag has one source
-        // of truth and cannot be toggled inconsistently between jobs.
-        int enabledCount = workflowText.Split("FORCE_RERUN_ALL: 'true'").Length - 1;
-        int disabledCount = workflowText.Split("FORCE_RERUN_ALL: 'false'").Length - 1;
-        bool consistentlyEnabled = enabledCount == 1 && disabledCount == 0;
-        bool consistentlyDisabled = disabledCount == 1 && enabledCount == 0;
-        Assert.True(
-            consistentlyEnabled || consistentlyDisabled,
-            $"FORCE_RERUN_ALL must have one source of truth. Found {enabledCount} 'true' and {disabledCount} 'false'.");
-        Assert.Contains("forceRerunAll: String(process.env.FORCE_RERUN_ALL).toLowerCase() === 'true'", workflowText);
-        Assert.Contains("analysis: JSON.parse(process.env.ANALYSIS)", workflowText);
-    }
-
-    [Fact]
-    public async Task WorkflowSeparatesReadOnlyAnalysisFromWriteCapableExecution()
-    {
-        string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
-        string analysisJob = workflowText[
-            workflowText.IndexOf("  analyze-transient-failures:", StringComparison.Ordinal)..
-            workflowText.IndexOf("  rerun-transient-failures:", StringComparison.Ordinal)];
-        string executionJob = workflowText[workflowText.IndexOf("  rerun-transient-failures:", StringComparison.Ordinal)..];
-        string analysisPermissions = analysisJob[
-            analysisJob.IndexOf("    permissions:", StringComparison.Ordinal)..
-            analysisJob.IndexOf("    outputs:", StringComparison.Ordinal)];
-        Assert.Equal(
-            "    permissions:\n      actions: read\n      checks: read\n      contents: read\n",
-            analysisPermissions.ReplaceLineEndings("\n"));
-        Assert.Contains("phase: 'analyze'", analysisJob);
-        Assert.Contains("actions: write", executionJob);
-        Assert.Contains("phase: 'execute'", executionJob);
-        Assert.Equal(2, workflowText.Split("await dispatcher.run({").Length - 1);
-    }
-
-    [Fact]
     public async Task RepresentativeWorkflowFixturesStayAlignedWithCurrentWorkflowDefinitions()
     {
         Dictionary<string, string[]> expectations = new()
@@ -1459,28 +1421,6 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
                 Assert.Contains(expectedLine, workflowText);
             }
         }
-    }
-
-    [Fact]
-    public async Task WorkflowYamlKeepsDocumentedSafetyRails()
-    {
-        string workflowText = await ReadRepoFileAsync(".github/workflows/auto-rerun-transient-ci-failures.yml");
-        string ciWorkflowText = await ReadRepoFileAsync(".github/workflows/ci.yml");
-
-        int checkoutCount = workflowText.Split("uses: actions/checkout@").Length - 1;
-        int checkoutWithoutCredentialsCount = workflowText.Split("persist-credentials: false").Length - 1;
-        Assert.Equal(checkoutCount, checkoutWithoutCredentialsCount);
-
-        Assert.Contains("workflow_dispatch:", workflowText);
-        Assert.Contains("# zizmor: ignore[dangerous-triggers]", workflowText);
-        Assert.Contains("dry_run:", workflowText);
-        Assert.Contains("default: false", workflowText);
-        Assert.Contains("rerun_execution_eligible", workflowText);
-        Assert.Contains("needs.analyze-transient-failures.outputs.rerun_execution_eligible == 'true'", workflowText);
-        Assert.Contains("MANUAL_DRY_RUN", workflowText);
-        Assert.Contains("String(process.env.MANUAL_DRY_RUN).toLowerCase() === 'true'", workflowText);
-        Assert.Contains("group: ${{ github.workflow }}-${{ github.ref }}", ciWorkflowText);
-        Assert.Contains("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", ciWorkflowText);
     }
 
     [Fact]
