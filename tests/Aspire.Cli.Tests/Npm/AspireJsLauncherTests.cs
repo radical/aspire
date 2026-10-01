@@ -14,6 +14,202 @@ namespace Aspire.Cli.Tests.Npm;
 public class AspireJsLauncherTests(ITestOutputHelper outputHelper)
 {
     [Fact]
+    public void DetectRidRejectsMuslArm64WithFriendlyError()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var launcherScriptPath = Path.Combine(GetRepoRoot(), "eng", "clipack", "npm", "aspire.js");
+        var probeScript = Path.Combine(workspace.Path, "detect-musl-arm64.js");
+        File.WriteAllText(probeScript, $$"""
+            const launcher = require({{JsonSerializer.Serialize(launcherScriptPath)}});
+            launcher.__testing.detectRid('linux', 'arm64', true);
+            """);
+
+        var result = RunNodeScript(probeScript);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Unsupported platform: linux musl arm64", result.StdErr);
+    }
+
+    [Fact]
+    public void IsMuslFallsBackToDynamicLinkerWhenLddIsUnavailable()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var launcherScriptPath = Path.Combine(GetRepoRoot(), "eng", "clipack", "npm", "aspire.js");
+        var probeScript = Path.Combine(workspace.Path, "detect-musl-fallback.js");
+        File.WriteAllText(probeScript, $$"""
+            const childProcess = require('child_process');
+            const fs = require('fs');
+
+            childProcess.spawnSync = () => ({ error: { code: 'ENOENT' } });
+            Object.defineProperty(process, 'report', { value: null });
+            fs.readdirSync = directory => directory === '/lib' ? ['ld-musl-aarch64.so.1'] : [];
+
+            const launcher = require({{JsonSerializer.Serialize(launcherScriptPath)}});
+            console.log(launcher.__testing.isMusl());
+            """);
+
+        var result = RunNodeScript(probeScript);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("true", result.StdOut.Trim());
+    }
+
+    [Fact]
+    public void NeedsCopyRejectsSymlinkAndOtherNonRegularCacheEntries()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var launcherScriptPath = Path.Combine(GetRepoRoot(), "eng", "clipack", "npm", "aspire.js");
+        var probeScript = Path.Combine(workspace.Path, "reject-non-regular-cache.js");
+        File.WriteAllText(probeScript, $$"""
+            const fs = require('fs');
+            const launcher = require({{JsonSerializer.Serialize(launcherScriptPath)}});
+
+            const originalLstatSync = fs.lstatSync;
+            try {
+              for (const cacheEntryType of ['symlink', 'directory']) {
+                fs.lstatSync = () => ({
+                  isFile: () => false,
+                  isSymbolicLink: () => cacheEntryType === 'symlink',
+                  isDirectory: () => cacheEntryType === 'directory'
+                });
+
+                if (!launcher.__testing.needsCopy('source', 'target')) {
+                  throw new Error(`${cacheEntryType} cache entry was trusted`);
+                }
+              }
+            } finally {
+              fs.lstatSync = originalLstatSync;
+            }
+            """);
+
+        var result = RunNodeScript(probeScript);
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public void LauncherCreatesOwnerOnlyCacheDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var pointerVersion = "2.0.0";
+        var rid = GetCurrentRid();
+        var ridPackageName = $"@microsoft/aspire-cli-{rid}";
+        var layout = CreateFakeNpmLayout(workspace.Path, pointerVersion, rid, ridPackageName, pointerVersion);
+
+        var result = RunLauncher(layout.LauncherScript, layout.CacheDir, [layout.ProbeScript]);
+
+        Assert.Equal(0, result.ExitCode);
+
+        var cacheDirectory = Path.Combine(layout.CacheDir, pointerVersion, rid, "bin");
+        var mode = File.GetUnixFileMode(cacheDirectory);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            mode & (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute));
+    }
+
+    [Fact]
+    public void LauncherRegistersAndForwardsTerminatingSignalsBeforeSpawning()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var pointerVersion = "2.0.0";
+        var rid = GetCurrentRid();
+        var ridPackageName = $"@microsoft/aspire-cli-{rid}";
+        var layout = CreateFakeNpmLayout(workspace.Path, pointerVersion, rid, ridPackageName, pointerVersion);
+        var eventsPath = Path.Combine(workspace.Path, "signal-events.json");
+        var monkeyPatchScript = Path.Combine(workspace.Path, "patch-signals.js");
+        File.WriteAllText(monkeyPatchScript, $$"""
+            const childProcess = require('child_process');
+            const fs = require('fs');
+            const { EventEmitter } = require('events');
+
+            const eventsPath = {{JsonSerializer.Serialize(eventsPath)}};
+            const registeredSignals = [];
+            const handlers = new Map();
+            const originalOnce = process.once.bind(process);
+
+            process.once = (signal, handler) => {
+              if (typeof signal === 'string' && signal.startsWith('SIG')) {
+                registeredSignals.push(signal);
+                handlers.set(signal, handler);
+                return process;
+              }
+
+              return originalOnce(signal, handler);
+            };
+
+            childProcess.spawn = () => {
+              const expectedSignals = process.platform === 'win32'
+                ? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']
+                : ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
+              const registeredSignalsAtSpawn = [...registeredSignals];
+              const child = new EventEmitter();
+              child.killed = false;
+              child.kill = signal => {
+                child.killed = true;
+                fs.writeFileSync(eventsPath, JSON.stringify({
+                  expectedSignals,
+                  registeredSignalsAtSpawn,
+                  forwardedSignal: signal
+                }));
+                return true;
+              };
+
+              setImmediate(() => {
+                handlers.get('SIGTERM')();
+                child.emit('exit', 0, null);
+              });
+
+              return child;
+            };
+            """);
+
+        var result = RunLauncher(layout.LauncherScript, layout.CacheDir, [], requiredScript: monkeyPatchScript);
+
+        Assert.Equal(0, result.ExitCode);
+        using var events = JsonDocument.Parse(File.ReadAllText(eventsPath));
+        Assert.Equal(
+            events.RootElement.GetProperty("expectedSignals").EnumerateArray().Select(value => value.GetString()),
+            events.RootElement.GetProperty("registeredSignalsAtSpawn").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal("SIGTERM", events.RootElement.GetProperty("forwardedSignal").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LauncherReportsFriendlyPackageMapErrors(bool corruptMap)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var pointerVersion = "2.0.0";
+        var rid = GetCurrentRid();
+        var ridPackageName = $"@microsoft/aspire-cli-{rid}";
+        var layout = CreateFakeNpmLayout(workspace.Path, pointerVersion, rid, ridPackageName, pointerVersion);
+
+        if (corruptMap)
+        {
+            File.WriteAllText(layout.PackageMapPath, "{ not valid json");
+        }
+        else
+        {
+            File.Delete(layout.PackageMapPath);
+        }
+
+        var result = RunLauncher(layout.LauncherScript, layout.CacheDir, [layout.ProbeScript]);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Aspire CLI installation is corrupted", result.StdErr);
+        Assert.Contains("aspire-package-map.json", result.StdErr);
+        Assert.Contains("Reinstall @microsoft/aspire-cli", result.StdErr);
+        Assert.DoesNotContain("\n    at ", result.StdErr);
+    }
+
+    [Fact]
     public void LauncherFailsWhenRidPackageVersionMismatchesPointerPackageVersion()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -282,7 +478,12 @@ public class AspireJsLauncherTests(ITestOutputHelper outputHelper)
             console.log(JSON.stringify(output));
             """);
 
-        return new FakeNpmLayout(launcherScript, cacheDir, probeScript, Path.Combine(ridPackageDir, "package.json"));
+        return new FakeNpmLayout(
+            launcherScript,
+            cacheDir,
+            probeScript,
+            Path.Combine(ridPackageDir, "package.json"),
+            Path.Combine(pointerBinDir, "aspire-package-map.json"));
     }
 
     private static void CreateFakeNativeBinary(string binaryPath)
@@ -412,7 +613,12 @@ public class AspireJsLauncherTests(ITestOutputHelper outputHelper)
         return current ?? throw new InvalidOperationException("Could not find repository root");
     }
 
-    private sealed record FakeNpmLayout(string LauncherScript, string CacheDir, string ProbeScript, string RidPackageJsonPath);
+    private sealed record FakeNpmLayout(
+        string LauncherScript,
+        string CacheDir,
+        string ProbeScript,
+        string RidPackageJsonPath,
+        string PackageMapPath);
     private sealed record RidProbeCase(string Platform, string Arch, bool Musl);
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 }

@@ -407,6 +407,8 @@ if (require.main === module) {
 module.exports = {
   __testing: {
     detectRid,
+    isMusl,
+    needsCopy,
     runNpmPostinstallCheck
   }
 };
