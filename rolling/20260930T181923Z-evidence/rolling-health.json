@@ -1,0 +1,4270 @@
+{
+  "now": "2026-09-30T18:19:23+00:00",
+  "windows": {
+    "current": {
+      "start": "2026-09-23",
+      "end": "2026-09-29"
+    },
+    "prior": {
+      "start": "2026-09-16",
+      "end": "2026-09-22"
+    },
+    "last_five_weekdays": [
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29"
+    ]
+  },
+  "config": {
+    "rolling_window_days": 7,
+    "graph_history_days": 30,
+    "history_retention_days": 180,
+    "health_thresholds": {
+      "green": 90,
+      "yellow": 75
+    },
+    "primary_lane": "github-ci-main",
+    "diagnostics_lane": "github-ci-main",
+    "lanes": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "label": "GitHub CI \u2014 main",
+        "primary": true,
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "label": "GitHub outerloop \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "label": "AzDO internal \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      }
+    ]
+  },
+  "history": {
+    "lane_identity": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "branch": "main",
+        "definition_id": null
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "branch": "main",
+        "definition_id": null
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "branch": "refs/heads/main",
+        "definition_id": 1602
+      }
+    ],
+    "coverage": {
+      "start": "2026-09-16",
+      "end": "2026-09-29",
+      "days": 14,
+      "reduced": true,
+      "refresh_days": 14
+    },
+    "lanes": {
+      "github-ci-main": [
+        {
+          "date": "2026-09-16",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 6,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 8,
+          "other_failed": 0,
+          "insufficient_failed": 2
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 5,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 13,
+          "rolling_pass_rate": 6.1,
+          "rolling_passed": 3,
+          "rolling_failed": 46,
+          "confirmed_test_failed": 5,
+          "other_failed": 0,
+          "insufficient_failed": 8
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 2,
+          "failed": 11,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 4,
+          "rolling_failed": 51,
+          "confirmed_test_failed": 4,
+          "other_failed": 0,
+          "insufficient_failed": 7
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 3,
+          "failed": 7,
+          "rolling_pass_rate": 11.9,
+          "rolling_passed": 7,
+          "rolling_failed": 52,
+          "confirmed_test_failed": 2,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 1,
+          "failed": 13,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 7,
+          "rolling_failed": 55,
+          "confirmed_test_failed": 9,
+          "other_failed": 0,
+          "insufficient_failed": 4
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 10.9,
+          "rolling_passed": 7,
+          "rolling_failed": 57,
+          "confirmed_test_failed": 3,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "confirmed_test_failed": 6,
+          "other_failed": 0,
+          "insufficient_failed": 4
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 12.5,
+          "rolling_passed": 7,
+          "rolling_failed": 49,
+          "confirmed_test_failed": 4,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        }
+      ],
+      "github-outerloop-main": [
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        }
+      ],
+      "azdo-internal-main": [
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 9,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 40
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 2,
+          "failed": 1,
+          "rolling_pass_rate": 5.0,
+          "rolling_passed": 2,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 3,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 6,
+          "failed": 1,
+          "rolling_pass_rate": 22.0,
+          "rolling_passed": 9,
+          "rolling_failed": 32
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 3,
+          "failed": 1,
+          "rolling_pass_rate": 31.6,
+          "rolling_passed": 12,
+          "rolling_failed": 26
+        }
+      ]
+    }
+  },
+  "lanes": {
+    "github-ci-main": {
+      "id": "github-ci-main",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "branch": "main",
+      "label": "GitHub CI \u2014 main",
+      "primary": true,
+      "diagnostics": true,
+      "recent": [
+        7,
+        52
+      ],
+      "current": [
+        7,
+        56
+      ],
+      "prior": [
+        3,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 6.4,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 36636729143,
+        "identity": "github:36636729143",
+        "source": "github",
+        "created_at": "2026-09-29T21:58:37Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "github-outerloop-main": {
+      "id": "github-outerloop-main",
+      "provider": "github-actions",
+      "workflow": "tests-outerloop.yml",
+      "event": "schedule",
+      "branch": "main",
+      "label": "GitHub outerloop \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        0,
+        5
+      ],
+      "current": [
+        0,
+        7
+      ],
+      "prior": [
+        0,
+        7
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 36511652601,
+        "identity": "github:36511652601",
+        "source": "github",
+        "created_at": "2026-09-29T02:14:21Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "azdo-internal-main": {
+      "id": "azdo-internal-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1602,
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "batchedCI",
+        "individualCI"
+      ],
+      "label": "AzDO internal \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        9,
+        34
+      ],
+      "current": [
+        12,
+        38
+      ],
+      "prior": [
+        0,
+        28
+      ],
+      "change": {
+        "label": "\u2191 32 pts",
+        "delta": 31.6,
+        "meaningful": true
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 3090968,
+        "identity": "azure-devops:3090968",
+        "source": "azure-devops",
+        "created_at": "2026-09-29T19:26:50.7338444Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    }
+  },
+  "reruns": {
+    "runs": 1,
+    "recovered": 0,
+    "human": 1,
+    "bot": 0,
+    "unrecovered": 1
+  },
+  "failure_evidence_trends": {
+    "confirmed_test": {
+      "label": "Confirmed test failure",
+      "current": [
+        29,
+        49
+      ],
+      "prior": [
+        25,
+        46
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 4.8,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      }
+    },
+    "other": {
+      "label": "Other confirmed failure",
+      "current": [
+        0,
+        49
+      ],
+      "prior": [
+        0,
+        46
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "insufficient": {
+      "label": "Insufficient evidence",
+      "current": [
+        20,
+        49
+      ],
+      "prior": [
+        21,
+        46
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -4.8,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    }
+  },
+  "confirmed_tests": [
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureFunctionsTests.AddAzureFunctionsProject_WorksWithMultipleProjects",
+      "prior_runs": 2,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNodeAppWorks",
+      "prior_runs": 1,
+      "current_runs": 3,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNpmAppWorks",
+      "prior_runs": 1,
+      "current_runs": 3,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Cli.Tests.NuGet.NuGetPackagePrefetcherTests.PrefetchingCancellationDueToShutdownLogsCleanMessage",
+      "prior_runs": 0,
+      "current_runs": 3,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Tests.ResourceCommandServiceTests.ExecuteCommandAsync_RebuildCommand_ReturnsBuildOutput",
+      "prior_runs": 0,
+      "current_runs": 3,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.MongoDB.Tests.MongoDbReplicaSetFunctionalTests.VerifyMongoDBMultiNodeReplicaWithDataShouldWorkAcrossUsages(topologyChange: MemberPrepended)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Tests.ExecutableResourceFailureLoggingTests.ExecutableWorkingDirectoryDoesNotExist",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.BothDataSourceAndConnectionCanBeResolved(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.BothDataSourceAndConnectionCanBeResolved(key: null)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingEnablesTheRightActivitySource_Keyed",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents(rid: \"win-arm64\", singleFile: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichCanConfigureDbContextOptions",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichDoesntOverridesCustomRetry",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichEnablesRetryByDefault",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichPreservesDefaultWhenMaxRetryCountNotSet",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichSupportCustomOptionsLifetime",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichSupportServiceType",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichWithConflictingCommandTimeoutThrows",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichWithNamedAndNonNamedUsesBoth",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichWithRetryAndCustomExecutionStrategyThrows",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichWithRetryAndCustomRetryExecutionStrategy",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.EnrichWithoutRetryPreservesCustomExecutionStrategy",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ShouldNotThrowIfDbContextIsRegistered",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.ShouldThrowIfDbContextIsNotRegistered",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.EnrichNpgsqlTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.BothDataSourceAndConnectionCanBeResolved(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.BothDataSourceAndConnectionCanBeResolved(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.TracingEnablesTheRightActivitySource_Keyed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Npgsql.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Search.Documents.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Confluent.Kafka.Tests.OtelMetricsTests.EnsureMetricsAreProducedAsync(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Confluent.Kafka.Tests.OtelMetricsTests.EnsureMetricsAreProducedAsync(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Confluent.Kafka.Tests.OtelTracesTests.EnsureTracesAreProducedAsync(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Confluent.Kafka.Tests.OtelTracesTests.EnsureTracesAreProducedAsync(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Dashboard.Components.Tests.Dialogs.ManageDataDialogTests.Render_ClearedSignals_PrunesSelectionsAndSupportsRemovingEmptyResource(dashboardClientIsReadOnly: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Kusto.Tests.KustoFunctionalTests.KustoEmulator_WithDatabaseThatAlreadyExists_ErrorIsIgnored",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DcpStartupPublishesDevTunnelUrls",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.MongoDB.Tests.MongoDbReplicaSetFunctionalTests.VerifyMongoDBMultiNodeReplicaWithDataShouldWorkAcrossUsages(topologyChange: MemberAdded)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.MongoDB.Tests.MongoDbReplicaSetFunctionalTests.VerifyMongoDBMultiNodeReplicaWithDataShouldWorkAcrossUsages(topologyChange: None)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.MySql.Tests.MySqlFunctionalTests.WithDataShouldPersistStateBetweenUsages(useVolume: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Tests.Publishing.ResourceContainerImageBuilderTests.CanBuildImageFromProjectResource_WithDifferentImageFormats(imageFormat: Oci)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.TracingEnablesTheRightActivitySource_Keyed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.Data.SqlClient.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.AddMilvusClient_HealthCheckShouldBeRegisteredByDefault(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.AddMilvusClient_HealthCheckShouldBeRegisteredByDefault(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.AddMilvusClient_HealthCheckShouldNotBeRegisteredWhenDisabled(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.AddMilvusClient_HealthCheckShouldNotBeRegisteredWhenDisabled(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.ConnectionNameWinsOverConfigSection(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.ConnectionNameWinsOverConfigSection(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.ConnectionStringCanBeSetInCode(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.ConnectionStringCanBeSetInCode(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.ReadsFromConnectionStringsCorrectly(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.AspireMilvusExtensionTests.ReadsFromConnectionStringsCorrectly(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.CanAddMultipleKeyedServices",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Milvus.Client.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ClientAndDatabaseInstancesShouldBeResolved(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ClientAndDatabaseInstancesShouldBeResolved(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.Driver.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.MongoDB.EntityFrameworkCore.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckReportsConnectionFailureDescription(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckReportsConnectionFailureDescription(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckShouldBeRegisteredByDefault(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckShouldBeRegisteredByDefault(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckShouldNotBeRegisteredWhenDisabled(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.AddNatsClient_HealthCheckShouldNotBeRegisteredWhenDisabled(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.CanAddMultipleKeyedServices",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionNameWinsOverConfigSection(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionNameWinsOverConfigSection(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionStringCanBeSetInCode(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionStringCanBeSetInCode(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionStringCanContainUserAndPassword(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ConnectionStringCanContainUserAndPassword(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.NatsInstrumentationEndToEnd",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ReadsFromConnectionStringsCorrectly(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.ReadsFromConnectionStringsCorrectly(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.RegistersINatsClient(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.AspireNatsClientExtensionsTests.RegistersINatsClient(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.NATS.Net.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.ConformanceTests_TypeSpecificConfig.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.ConformanceTests_TypeSpecificConfig.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.AspireQdrantClientExtensionsTest.AddQdrantClient_HealthCheckShouldBeRegisteredWhenEnabled(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.AspireQdrantClientExtensionsTest.AddQdrantClient_HealthCheckShouldBeRegisteredWhenEnabled(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.AspireQdrantClientExtensionsTest.AddQdrant_HealthCheckShouldNotBeRegisteredWhenDisabled(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.AspireQdrantClientExtensionsTest.AddQdrant_HealthCheckShouldNotBeRegisteredWhenDisabled(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Qdrant.Client.Tests.AspireQdrantClientExtensionsTest.CanAddMultipleKeyedServices",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.AutoActivationCanSet(useKeyed: False, autoActivate: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.AutoActivationCanSet(useKeyed: False, autoActivate: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.AutoActivationCanSet(useKeyed: True, autoActivate: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.AutoActivationCanSet(useKeyed: True, autoActivate: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.AutoActivationDisabledByDefault",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.CanAddMultipleKeyedServices",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ConnectionFactoryOptionsFromConfig",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ConnectionNameWinsOverConfigSection(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ConnectionNameWinsOverConfigSection(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ConnectionStringCanBeSetInCode(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ConnectionStringCanBeSetInCode(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ReadsFromConnectionStringsCorrectly(useKeyed: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.RabbitMQ.Client.Tests.AspireRabbitMQExtensionsTests.ReadsFromConnectionStringsCorrectly(useKeyed: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.StackExchange.Redis.OutputCaching.Tests.OutputCacheConformanceTests.WorksWithOpenTelemetryTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents(rid: \"\", singleFile: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureServiceBusExtensionsTests.AzureServiceBusEmulatorResourceGeneratesConfigJsonOnlyChangedProperties",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated",
+      "prior_runs": 6,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichCanConfigureDbContextOptions",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichDoesntOverridesCustomRetry",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichEnablesRetryByDefault",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichPreservesDefaultWhenMaxRetryCountNotSet",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichSupportCustomOptionsLifetime",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichSupportServiceType",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithConflictingCommandTimeoutThrows",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithRetryAndCustomExecutionStrategyThrows",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithRetryAndCustomRetryExecutionStrategy",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithoutRetryPreservesCustomExecutionStrategy",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.OptionsTypeIsSealed",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ShouldNotThrowIfDbContextIsRegistered",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ShouldThrowIfDbContextIsNotRegistered",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Acquisition.Tests.Scripts.PRScriptShellTests.BooleanFlags_AreAccepted(flag: \"--verbose\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.AI.OpenAI.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Storage.Queues.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Azure.Storage.Queues.Tests.ConformanceTests.TracingEnablesTheRightActivitySource_Keyed",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillInvocation_CopilotAppMarker_DoesNotProvideDistinctAttribution",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillInvocation_CopilotStringArgs_ForwardsSkillName",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillMdRead_CopilotStringArgs_ForwardsSkillName",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillTool_Claude_StripsAspirePrefix",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Docker.Tests.DockerComposeTests.DeployWithDashboard_PrintsDashboardAndServiceEndpoints",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Maui.Tests.MauiBuildQueueTests.CancelQueuedResource_CompletesGracefullyAndDoesNotAcquireSemaphore",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.MongoDB.Tests.SingleMemberReplicaSetFunctionalTests.TransactionsAndChangeStreamsWorkWithTls",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Redis.Tests.RedisFunctionalTests.WithDataBindMountShouldPersistStateBetweenUsages",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Tests.DistributedApplicationTests.StartAsync_DashboardAuthConfig_PassedToDashboardProcess(tokenEnvVarName: \"ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Tests.Pipelines.DistributedApplicationPipelineTests.PipelineConfigurationContext_GetStepsByResourceAndTag_ReturnsCorrectSteps",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Hosting.Tests.Pipelines.DistributedApplicationPipelineTests.WithPipelineStepFactory_MultipleStepsSyncOverload_ExecutesAllSteps",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Templates.Tests.NUnit_NewUpAndBuildSupportProjectTemplatesTests.CanNewAndBuild(templateName: \"aspire-nunit\", extraTestCreationArgs: \"\", sdk: Net9, tfm: Net9, error: null)",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Aspire.Templates.Tests.XUnit_V3_NewUpAndBuildSupportProjectTemplatesTests.CanNewAndBuild(templateName: \"aspire-xunit\", extraTestCreationArgs: \"--xunit-version v3\", sdk: Net8, tfm: Net8, error: null)",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents(rid: \"win-arm64\", singleFile: True)",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents(rid: \"win-x64\", singleFile: True)",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    }
+  ],
+  "category_trends": {
+    "test": {
+      "label": "Test",
+      "current": [
+        49,
+        56
+      ],
+      "prior": [
+        46,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -6.4,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "build": {
+      "label": "Build / tooling",
+      "current": [
+        0,
+        56
+      ],
+      "prior": [
+        0,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "workflow": {
+      "label": "Workflow / other",
+      "current": [
+        0,
+        56
+      ],
+      "prior": [
+        0,
+        49
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    }
+  },
+  "multi_category_runs": {
+    "current": 0,
+    "prior": 0
+  },
+  "chart": [
+    {
+      "date": "2026-09-16",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 1,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    },
+    {
+      "date": "2026-09-17",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 6,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-09-18",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 8,
+      "other_failed": 0,
+      "insufficient_failed": 2
+    },
+    {
+      "date": "2026-09-19",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 1
+    },
+    {
+      "date": "2026-09-20",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-09-21",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 5,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    },
+    {
+      "date": "2026-09-22",
+      "passed": 0,
+      "failed": 13,
+      "rolling_pass_rate": 6.1,
+      "rolling_passed": 3,
+      "rolling_failed": 46,
+      "confirmed_test_failed": 5,
+      "other_failed": 0,
+      "insufficient_failed": 8
+    },
+    {
+      "date": "2026-09-23",
+      "passed": 2,
+      "failed": 11,
+      "rolling_pass_rate": 7.3,
+      "rolling_passed": 4,
+      "rolling_failed": 51,
+      "confirmed_test_failed": 4,
+      "other_failed": 0,
+      "insufficient_failed": 7
+    },
+    {
+      "date": "2026-09-24",
+      "passed": 3,
+      "failed": 7,
+      "rolling_pass_rate": 11.9,
+      "rolling_passed": 7,
+      "rolling_failed": 52,
+      "confirmed_test_failed": 2,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    },
+    {
+      "date": "2026-09-25",
+      "passed": 1,
+      "failed": 13,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 7,
+      "rolling_failed": 55,
+      "confirmed_test_failed": 9,
+      "other_failed": 0,
+      "insufficient_failed": 4
+    },
+    {
+      "date": "2026-09-26",
+      "passed": 0,
+      "failed": 3,
+      "rolling_pass_rate": 10.9,
+      "rolling_passed": 7,
+      "rolling_failed": 57,
+      "confirmed_test_failed": 3,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-09-27",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "confirmed_test_failed": 1,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-09-28",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "confirmed_test_failed": 6,
+      "other_failed": 0,
+      "insufficient_failed": 4
+    },
+    {
+      "date": "2026-09-29",
+      "passed": 0,
+      "failed": 4,
+      "rolling_pass_rate": 12.5,
+      "rolling_passed": 7,
+      "rolling_failed": 49,
+      "confirmed_test_failed": 4,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    }
+  ],
+  "verdict": "holding"
+}
