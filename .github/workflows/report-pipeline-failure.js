@@ -1,5 +1,5 @@
-// Nightly-pipeline failure reporter, used by deployment-tests.yml and
-// tests-daily-smoke.yml. Invoked from an actions/github-script step via report().
+// Nightly-pipeline failure reporter, used by deployment-tests.yml,
+// tests-daily-smoke.yml, and the weekly update-actionlint.yml. Invoked from an actions/github-script step via report().
 //
 // These scheduled pipelines otherwise fail silently — GitHub only emails whoever
 // last edited the workflow file. This reporter files a single deduplicated issue

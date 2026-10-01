@@ -92,3 +92,34 @@ jobs:
             - `actionlint_${{ needs.check.outputs.version }}_linux_amd64.tar.gz` SHA-256: `${{ needs.check.outputs.sha256 }}`
 
             The archive was downloaded and verified against the release API asset digest, and the candidate passed the handwritten-workflow lint before this PR was opened. The digest is published by the same upstream release, so review the release notes before merging.
+
+  # File/append a single deduplicated issue when a scheduled run fails (release
+  # lookup, digest verification, candidate lint, token minting, or PR creation).
+  # The scheduled-workflow watchdog backstops startup_failure/timed_out runs. See
+  # docs/ci/pipeline-failure-issues.md.
+  create-issue-on-failure:
+    name: Create Issue on Failure
+    needs: [check, update]
+    runs-on: ubuntu-latest
+    if: ${{ failure() && github.event_name == 'schedule' && github.repository_owner == 'microsoft' }}
+    permissions:
+      contents: read   # checkout to require the local .js modules
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: File or update failure issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          WORKFLOW_FILE: update-actionlint.yml
+          DISPLAY_NAME: Update actionlint
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await require('./.github/workflows/report-pipeline-failure.js').report({
+              github, context, core,
+              labels: ['automation-broken', 'area-engineering-systems'],
+            });

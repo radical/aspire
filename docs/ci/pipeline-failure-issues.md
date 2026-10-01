@@ -1,7 +1,8 @@
 # Nightly-pipeline failure issues (deployment E2E & daily smoke)
 
-The scheduled `Deployment E2E Tests` (`deployment-tests.yml`) and
-`Daily CLI Smoke Tests` (`tests-daily-smoke.yml`) workflows run unattended and
+The scheduled `Deployment E2E Tests` (`deployment-tests.yml`),
+`Daily CLI Smoke Tests` (`tests-daily-smoke.yml`), and weekly `Update actionlint`
+(`update-actionlint.yml`) workflows run unattended and
 otherwise fail silently — GitHub only emails whoever last edited the workflow
 file. Each workflow files a GitHub issue when a **scheduled** run fails.
 
@@ -24,6 +25,7 @@ When a scheduled run fails:
 - **Labels:** the workflow's existing labels **plus** `automation-broken`:
   - deployment: `automation-broken`, `area-testing`, `deployment-e2e`
   - smoke: `automation-broken`, `area-cli`, `failing-test`
+  - actionlint updater: `automation-broken`, `area-engineering-systems`
 - **Body marker:** a hidden HTML comment `<!-- ci-failure:<workflow-file>:scheduled -->`
   on the first line, used for dedup.
 
