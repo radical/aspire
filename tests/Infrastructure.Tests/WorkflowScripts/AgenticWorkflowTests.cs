@@ -70,18 +70,20 @@ public sealed class AgenticWorkflowTests
 
         var publish = Step(root, "Publish analysis data and comment on PR");
         Assert.Equal("${{ steps.download-analysis.outputs.download-path }}", Scalar(Mapping(publish, "env"), "ANALYSIS_DIR"));
-        var script = Scalar(publish, "run");
-        Assert.Contains("ANALYSIS_FILE=\"$ANALYSIS_DIR/analysis-result.json\"", script, StringComparison.Ordinal);
-        Assert.Contains("CAUSES_DIR=\"$ANALYSIS_DIR/causes\"", script, StringComparison.Ordinal);
+        AssertAnalysisArtifactConsumer(
+            publish,
+            ".github/workflows/analyze-ci-failure-publish.sh",
+            "ANALYSIS_FILE=\"$ANALYSIS_DIR/analysis-result.json\"",
+            "CAUSES_DIR=\"$ANALYSIS_DIR/causes\"");
 
         // The comment step runs in the same job but needs its own env wiring; without it the
         // analysis file is unreadable and the step fails before any comment is posted.
         var comment = Step(root, "Comment on PR");
         Assert.Equal("${{ steps.download-analysis.outputs.download-path }}", Scalar(Mapping(comment, "env"), "ANALYSIS_DIR"));
-        Assert.Contains(
-            "ANALYSIS_FILE=\"$ANALYSIS_DIR/analysis-result.json\"",
-            Scalar(comment, "run"),
-            StringComparison.Ordinal);
+        AssertAnalysisArtifactConsumer(
+            comment,
+            ".github/workflows/analyze-ci-failure-publish-comment.sh",
+            "ANALYSIS_FILE=\"$ANALYSIS_DIR/analysis-result.json\"");
 
         // The rerun job is a separate job, so it must download the artifact itself.
         var rerunDownload = Step(root, "Download CI analysis files for rerun");
@@ -148,6 +150,14 @@ public sealed class AgenticWorkflowTests
     {
         Assert.StartsWith(action + "@", Scalar(step, "uses"));
         Assert.Equal(artifactName, Scalar(Mapping(step, "with"), "name"));
+    }
+
+    private static void AssertAnalysisArtifactConsumer(YamlMappingNode step, string scriptPath, params string[] expectedBindings)
+    {
+        Assert.Equal($"bash {scriptPath}", Scalar(step, "run"));
+
+        var script = File.ReadAllText(Path.Combine(RepoRoot.Path, scriptPath));
+        Assert.All(expectedBindings, binding => Assert.Contains(binding, script, StringComparison.Ordinal));
     }
 
     private static void AssertUploadOrdering(YamlMappingNode root, string extension, YamlMappingNode upload, YamlMappingNode download, YamlMappingNode publish)
