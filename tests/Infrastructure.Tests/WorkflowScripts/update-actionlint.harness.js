@@ -1,3 +1,14 @@
+// Test harness for .github/workflows/update-actionlint.js, driven by UpdateActionlintTests.cs.
+//
+// Usage: node update-actionlint.harness.js <request.json>
+//   request.json: { "operation": "<name>", "payload": { ... } }
+//
+// Dispatches the operation to the updater's exported functions and prints a
+// single JSON object to stdout: { "result": ... } on success or
+// { "error": "<message>" } when the updater throws. The 'check' operation
+// replaces the network and filesystem with in-memory fakes so tests can supply
+// release metadata and archive bytes and assert on every fetch and write.
+
 const fs = require('node:fs/promises');
 const updater = require('../../../.github/workflows/update-actionlint.js');
 
@@ -31,6 +42,9 @@ async function dispatch(operation, payload) {
 
         case 'parseReleaseTag':
             return updater.parseReleaseTag(payload.tag);
+
+        case 'formatStepOutputs':
+            return updater.formatStepOutputs(payload.result);
 
         case 'selectLinuxAmd64Asset':
             return updater.selectLinuxAmd64Asset(payload.release, payload.version);

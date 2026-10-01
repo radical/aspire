@@ -153,6 +153,22 @@ async function check({ pinContent, outputDir, fetchJson, fetchBytes, writeFile, 
     return { updated: true, previousVersion: current.version, version: latest, sha256: asset.sha256, archivePath };
 }
 
+// Formats check() results as GITHUB_OUTPUT lines, e.g.:
+//   updated=true
+//   previous-version=1.7.12
+//   version=1.7.13
+//   sha256=<64 hex chars>
+//   archive-path=/home/runner/work/_temp/actionlint_1.7.13_linux_amd64.tar.gz
+// update-actionlint.yml consumes these names, so keep them in sync.
+function formatStepOutputs(result) {
+    const lines = [`updated=${result.updated}`, `previous-version=${result.previousVersion}`];
+    if (result.updated) {
+        lines.push(`version=${result.version}`, `sha256=${result.sha256}`, `archive-path=${result.archivePath}`);
+    }
+
+    return `${lines.join('\n')}\n`;
+}
+
 async function main(argv, env) {
     const pinPath = path.resolve('.github/actionlint-version.json');
     const pinContent = await fs.readFile(pinPath, 'utf8');
@@ -200,16 +216,11 @@ async function main(argv, env) {
     });
 
     if (env.GITHUB_OUTPUT) {
-        const lines = [`updated=${result.updated}`, `previous-version=${result.previousVersion}`];
-        if (result.updated) {
-            lines.push(`version=${result.version}`, `sha256=${result.sha256}`, `archive-path=${result.archivePath}`);
-        }
-
-        await fs.appendFile(env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
+        await fs.appendFile(env.GITHUB_OUTPUT, formatStepOutputs(result));
     }
 }
 
-module.exports = { applyPin, check, compareVersions, parseReleaseTag, readPin, selectLinuxAmd64Asset, verifySha256 };
+module.exports = { applyPin, check, compareVersions, formatStepOutputs, parseReleaseTag, readPin, selectLinuxAmd64Asset, verifySha256 };
 
 if (require.main === module) {
     main(process.argv.slice(2), process.env).catch(error => {

@@ -6,13 +6,12 @@ using System.Text;
 using System.Text.Json;
 using Aspire.TestUtilities;
 using Xunit;
-using YamlDotNet.RepresentationModel;
 
 namespace Infrastructure.Tests;
 
 /// <summary>
-/// Tests for .github/workflows/update-actionlint.js and the update-actionlint.yml
-/// workflow that proposes bumps to the .github/actionlint-version.json pin.
+/// Tests for .github/workflows/update-actionlint.js, which proposes bumps to the
+/// .github/actionlint-version.json pin.
 /// </summary>
 public sealed class UpdateActionlintTests : IDisposable
 {
@@ -236,29 +235,75 @@ public sealed class UpdateActionlintTests : IDisposable
     }
 
     [Fact]
-    public void UpdaterLintsTheSameFilesAsCi()
+    [RequiresTools(["node"])]
+    public async Task FormatStepOutputsEmitsOnlyStatusForNoOp()
     {
-        var ciLint = Step(Mapping(Mapping(LoadWorkflow("ci.yml"), "jobs"), "actionlint"), "Lint handwritten workflow files");
-        var updaterLint = Step(Mapping(Mapping(LoadWorkflow("update-actionlint.yml"), "jobs"), "check"), "Lint handwritten workflow files");
+        var outputs = await InvokeAsync<string>("formatStepOutputs", new { result = new { updated = false, previousVersion = "1.7.12" } });
 
-        Assert.Equal(Scalar(ciLint, "run"), Scalar(updaterLint, "run"));
+        Assert.Equal("updated=false\nprevious-version=1.7.12\n", outputs);
     }
 
     [Fact]
-    public void UpdaterIsScheduleOnlyAndKeepsSecretsOutOfTheCandidateJob()
+    [RequiresTools(["node"])]
+    public async Task FormatStepOutputsEmitsVerifiedCandidateForUpdate()
     {
-        var workflow = LoadWorkflow("update-actionlint.yml");
+        var outputs = await InvokeAsync<string>("formatStepOutputs", new
+        {
+            result = new { updated = true, previousVersion = "1.7.12", version = "1.7.13", sha256 = s_newArchiveSha256, archivePath = "/tmp/out/actionlint_1.7.13_linux_amd64.tar.gz" },
+        });
 
-        Assert.Equal(["schedule"], Mapping(workflow, "on").Children.Keys.Select(key => key.ToString()));
+        Assert.Equal(
+            $"updated=true\nprevious-version=1.7.12\nversion=1.7.13\nsha256={s_newArchiveSha256}\narchive-path=/tmp/out/actionlint_1.7.13_linux_amd64.tar.gz\n",
+            outputs);
+    }
 
-        var jobs = Mapping(workflow, "jobs");
-        Assert.DoesNotContain(Scalars(Mapping(jobs, "check")), value => value.Contains("secrets.", StringComparison.Ordinal));
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task ApplyCommandRewritesPinFileInWorkingDirectory()
+    {
+        var pinDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, ".github"));
+        var pinPath = Path.Combine(pinDirectory.FullName, "actionlint-version.json");
+        await File.WriteAllTextAsync(pinPath, PinContent("1.7.12"));
 
-        var tokenStep = Step(Mapping(jobs, "update"), "Generate GitHub App Token for pull request");
-        var tokenInputs = Mapping(tokenStep, "with");
-        Assert.Equal("write", Scalar(tokenInputs, "permission-contents"));
-        Assert.Equal("write", Scalar(tokenInputs, "permission-pull-requests"));
-        Assert.False(tokenInputs.Children.ContainsKey(new YamlScalarNode("permission-workflows")));
+        using var command = new NodeCommand(_output, "update-actionlint-apply");
+        command.WithWorkingDirectory(_workspace.Path);
+        var result = await command.ExecuteScriptAsync(
+            Path.Combine(_repoRoot, ".github", "workflows", "update-actionlint.js"),
+            "apply",
+            "1.7.13",
+            s_newArchiveSha256);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(
+            $$"""
+            {
+              "version": "1.7.13",
+              "linuxAmd64Sha256": "{{s_newArchiveSha256}}"
+            }
+
+            """,
+            await File.ReadAllTextAsync(pinPath));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task ApplyCommandLeavesPinUntouchedOnDowngrade()
+    {
+        var pinDirectory = Directory.CreateDirectory(Path.Combine(_workspace.Path, ".github"));
+        var pinPath = Path.Combine(pinDirectory.FullName, "actionlint-version.json");
+        var original = PinContent("1.7.12");
+        await File.WriteAllTextAsync(pinPath, original);
+
+        using var command = new NodeCommand(_output, "update-actionlint-apply");
+        command.WithWorkingDirectory(_workspace.Path);
+        var result = await command.ExecuteScriptAsync(
+            Path.Combine(_repoRoot, ".github", "workflows", "update-actionlint.js"),
+            "apply",
+            "1.7.11",
+            s_newArchiveSha256);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(pinPath));
     }
 
     private static string PinContent(string version) =>
@@ -308,34 +353,6 @@ public sealed class UpdateActionlintTests : IDisposable
         var response = JsonSerializer.Deserialize<HarnessResponse<T>>(result.Output, s_jsonOptions);
         Assert.NotNull(response);
         return response!;
-    }
-
-    private static YamlMappingNode Step(YamlMappingNode job, string name) =>
-        Assert.Single(
-            Assert.IsType<YamlSequenceNode>(job.Children[new YamlScalarNode("steps")]).Children.Cast<YamlMappingNode>(),
-            step => Scalar(step, "name") == name);
-
-    private static YamlMappingNode Mapping(YamlMappingNode node, string key) =>
-        Assert.IsType<YamlMappingNode>(node.Children[new YamlScalarNode(key)]);
-
-    private static string Scalar(YamlMappingNode node, string key) =>
-        node.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value.ToString() : "";
-
-    private static IEnumerable<string> Scalars(YamlNode node) => node switch
-    {
-        YamlScalarNode scalar => [scalar.Value ?? ""],
-        YamlMappingNode mapping => mapping.Children.SelectMany(child => Scalars(child.Key).Concat(Scalars(child.Value))),
-        YamlSequenceNode sequence => sequence.Children.SelectMany(Scalars),
-        _ => [],
-    };
-
-    private static string RepoPath(params string[] path) => Path.Combine([RepoRoot.Path, .. path]);
-
-    private static YamlMappingNode LoadWorkflow(string workflowName)
-    {
-        var yaml = new YamlStream();
-        yaml.Load(new StringReader(File.ReadAllText(RepoPath(".github", "workflows", workflowName))));
-        return Assert.IsType<YamlMappingNode>(Assert.Single(yaml.Documents).RootNode);
     }
 
     private sealed record HarnessResponse<T>(T? Result, string? Error);

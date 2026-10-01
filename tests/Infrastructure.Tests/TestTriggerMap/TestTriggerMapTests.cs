@@ -479,10 +479,6 @@ public sealed class TestTriggerMapTests
             ["test:Infrastructure.Tests"]
         },
         {
-            ".github/actionlint-version.json",
-            ["test:Infrastructure.Tests"]
-        },
-        {
             ".github/scripts/assert-extension-e2e-bridge-vsix.ps1",
             ["job:extension-unit"]
         },
