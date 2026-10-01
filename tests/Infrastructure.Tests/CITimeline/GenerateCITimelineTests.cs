@@ -51,7 +51,7 @@ public class GenerateCITimelineTests
     }
 
     [Fact]
-    public void GenerateSummary_MinTotalMinutes_UsesStrictCriticalPathAndInclusiveTimelineBoundary()
+    public void GenerateSummary_MinTotalMinutes_UsesStrictBoundary()
     {
         var (runInfo, jobs) = LoadTestData("basic-run.json");
         var summary = TimelineRenderer.GenerateSummary(runInfo, jobs, minTotalMinutes: 15);
@@ -68,7 +68,6 @@ public class GenerateCITimelineTests
         Assert.Equal(
         [
             "<tr><td>✅ 🪟 <code>Build</code></td><td><b>18m00s</b></td><td>2m00s</td><td>2m00s</td><td>14m00s</td></tr>",
-            "<tr><td>✅ 🐧 <code>Build</code></td><td><b>15m00s</b></td><td>2m00s</td><td>1m00s</td><td>12m00s</td></tr>",
             "<tr><td>❌ 🪟 <code>Aspire.Hosting.Tests</code></td><td><b>42m00s</b></td><td>18m00s</td><td>2m00s</td><td>22m00s</td></tr>",
             "<tr><td>✅ 🐧⚡ <code>Aspire.Hosting.Tests</code></td><td><b>40m00s</b></td><td>15m00s</td><td>1m00s</td><td>24m00s</td></tr>",
         ],

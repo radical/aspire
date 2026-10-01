@@ -193,6 +193,106 @@ public sealed class ExtensionReleaseWorkflowTests(ITestOutputHelper testOutput)
     }
 
     [Fact]
+    [RequiresTools(["bash", "git"])]
+    public async Task ChangelogRangePreloadDeepensShallowCheckout()
+    {
+        using var workspace = TemporaryWorkspace.Create(testOutput);
+        var sourcePath = workspace.CreateDirectory("source").FullName;
+        GitCli.Run(sourcePath, "init", "-q", "-b", "main");
+        GitCli.Run(sourcePath, "config", "user.email", "test@example.com");
+        GitCli.Run(sourcePath, "config", "user.name", "Test");
+        GitCli.Run(sourcePath, "config", "commit.gpgsign", "false");
+        Directory.CreateDirectory(Path.Combine(sourcePath, "extension"));
+        await File.WriteAllTextAsync(Path.Combine(sourcePath, "extension", "feature.txt"), "baseline\n");
+        GitCli.Run(sourcePath, "add", "extension/feature.txt");
+        GitCli.Run(sourcePath, "commit", "-q", "-m", "Baseline");
+        var fromSha = GitCli.Run(sourcePath, "rev-parse", "HEAD").Trim();
+        await File.AppendAllTextAsync(Path.Combine(sourcePath, "extension", "feature.txt"), "changed\n");
+        GitCli.Run(sourcePath, "add", "extension/feature.txt");
+        GitCli.Run(sourcePath, "commit", "-q", "-m", "feat: Add extension behavior");
+        var toSha = GitCli.Run(sourcePath, "rev-parse", "HEAD").Trim();
+        await File.WriteAllTextAsync(
+            Path.Combine(sourcePath, "extension", "CHANGELOG.md"),
+            $"<!-- aspire-ext-changelog from={fromSha} to={toSha} base=1.0.0 -->\n");
+        GitCli.Run(sourcePath, "add", "extension/CHANGELOG.md");
+        GitCli.Run(sourcePath, "commit", "-q", "-m", "Add pending changelog marker");
+
+        var originPath = Path.Combine(workspace.Path, "origin.git");
+        GitCli.Run(workspace.Path, "clone", "-q", "--bare", sourcePath, originPath);
+        var checkoutPath = Path.Combine(workspace.Path, "checkout");
+        GitCli.Run(
+            workspace.Path,
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--branch",
+            "main",
+            new Uri(originPath).AbsoluteUri,
+            checkoutPath);
+        Assert.Equal("true", GitCli.Run(checkoutPath, "rev-parse", "--is-shallow-repository").Trim());
+
+        var runnerTemp = workspace.CreateDirectory("runner").FullName;
+        var result = await RunBashScriptAsync(
+            s_preloadChangelogRangeScriptPath,
+            [],
+            new Dictionary<string, string?> { ["RUNNER_TEMP"] = runnerTemp },
+            checkoutPath);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Deepening main by 128 commits", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Preloaded authoritative marker range", result.Output, StringComparison.Ordinal);
+        var candidatesPath = Path.Combine(runnerTemp, "gh-aw", "extension-changelog-candidates.tsv");
+        Assert.Equal(
+            $"{toSha}\tfeat: Add extension behavior\n",
+            (await File.ReadAllTextAsync(candidatesPath)).ReplaceLineEndings("\n"));
+    }
+
+    [Fact]
+    [RequiresTools(["bash", "git"])]
+    public async Task ChangelogRangePreloadFailsWhenRangeIsAbsentFromOrigin()
+    {
+        using var workspace = TemporaryWorkspace.Create(testOutput);
+        var sourcePath = workspace.CreateDirectory("source").FullName;
+        GitCli.Run(sourcePath, "init", "-q", "-b", "main");
+        GitCli.Run(sourcePath, "config", "user.email", "test@example.com");
+        GitCli.Run(sourcePath, "config", "user.name", "Test");
+        GitCli.Run(sourcePath, "config", "commit.gpgsign", "false");
+        Directory.CreateDirectory(Path.Combine(sourcePath, "extension"));
+        await File.WriteAllTextAsync(Path.Combine(sourcePath, "extension", "feature.txt"), "baseline\n");
+        await File.WriteAllTextAsync(
+            Path.Combine(sourcePath, "extension", "CHANGELOG.md"),
+            $"<!-- aspire-ext-changelog from={new string('1', 40)} to={new string('2', 40)} base=1.0.0 -->\n");
+        GitCli.Run(sourcePath, "add", "extension");
+        GitCli.Run(sourcePath, "commit", "-q", "-m", "Add pending changelog marker");
+
+        var originPath = Path.Combine(workspace.Path, "origin.git");
+        GitCli.Run(workspace.Path, "clone", "-q", "--bare", sourcePath, originPath);
+        var checkoutPath = Path.Combine(workspace.Path, "checkout");
+        GitCli.Run(
+            workspace.Path,
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--branch",
+            "main",
+            new Uri(originPath).AbsoluteUri,
+            checkoutPath);
+
+        var runnerTemp = workspace.CreateDirectory("runner").FullName;
+        var result = await RunBashScriptAsync(
+            s_preloadChangelogRangeScriptPath,
+            [],
+            new Dictionary<string, string?> { ["RUNNER_TEMP"] = runnerTemp },
+            checkoutPath);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Failed to preload authoritative marker range", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(runnerTemp, "gh-aw", "extension-changelog-candidates.tsv")));
+    }
+
+    [Fact]
     [RequiresTools(["bash"])]
     public async Task ApplyingTriggerLabelFailsWhenExistingLabelCannotBeRemoved()
     {
