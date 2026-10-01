@@ -220,6 +220,11 @@ jobs:
         with:
           client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
           private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+          # actions dispatches release notes; contents pushes the tag and creates the draft release;
+          # workflows permits releases whose target commit changes workflow files relative to main.
+          permission-actions: write
+          permission-contents: write
+          permission-workflows: write
 
       # Single checkout with full history. The tag-creation step needs all
       # branches/tags reachable (fetch-depth: 0). The baseline-pr step
@@ -420,6 +425,10 @@ jobs:
         with:
           client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
           private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+          # contents reads the release branch; pull-requests queries and creates
+          # the merge-back pull request and applies its label.
+          permission-contents: read
+          permission-pull-requests: write
 
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -506,6 +515,10 @@ jobs:
         with:
           client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
           private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+          # contents pushes the baseline branch; pull-requests queries and creates
+          # the baseline pull request and applies its label.
+          permission-contents: write
+          permission-pull-requests: write
 
       # Checkout main directly — the baseline-update branch is meant to be
       # branched off main, not off the release branch the workflow was

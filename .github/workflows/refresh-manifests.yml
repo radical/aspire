@@ -32,6 +32,10 @@ jobs:
         with:
           client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
           private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+          # contents pushes the manifest-update branch; pull-requests creates or updates
+          # the manifest pull request and applies its labels.
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Create or update pull request
         uses: ./.github/actions/create-pull-request
