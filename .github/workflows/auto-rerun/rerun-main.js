@@ -215,10 +215,6 @@ async function rerunMainFailures(options) {
         sourceRunId, sourceRunUrl, sourceRunAttempt, sourceHeadSha,
         maxRunAttempt, delay = defaultDelay,
     } = options;
-    if (retryableJobs.length === 0 && !options.forceRerunAll) {
-        return;
-    }
-    let mainRerunState;
     const state = {
         policy: 'current-main-failed-jobs-v1',
         source_run_id: sourceRunId,
@@ -243,6 +239,12 @@ async function rerunMainFailures(options) {
             reason,
         };
     };
+    if (retryableJobs.length === 0) {
+        return skipMainRerun(
+            'no-retryable-jobs',
+            'No retry-safe failed jobs were found. No jobs were rerun.');
+    }
+
     const isTrustedMainRun = (run, expectedRunNumber, expectedWorkflowId) =>
         run &&
         run.id === sourceRunId &&
@@ -387,14 +389,40 @@ async function rerunMainFailures(options) {
             'The live workflow run no longer matches the trusted main CI run. No jobs were rerun.');
     }
 
-    mainRerunState = {
+    const mainRerunState = {
         ...state,
         decision: 'rerun',
         outcome: 'requested',
         reason: 'eligible',
     };
 
-    return common.requestFailedJobsRerun({ ...options, mainRerunState });
+    try {
+        await common.requestFailedJobsRerun({ github, owner, repo, sourceRunId });
+    }
+    catch {
+        await writeRerunOutcomeSummary({
+            summary,
+            sourceRunUrl,
+            sourceRunAttempt,
+            heading: 'Rerun request failed',
+            message: 'The failed-job rerun request did not complete successfully. GitHub may still have started a rerun.',
+        });
+        return {
+            ...mainRerunState,
+            outcome: 'failed',
+            reason: 'request-failed',
+        };
+    }
+
+    await common.writeRerunRequestedSummary({
+        summary,
+        sourceRunUrl,
+        sourceRunAttempt,
+        rerunAttemptNumber: sourceRunAttempt + 1,
+        retryableJobs,
+        postedComments: [],
+    });
+    return mainRerunState;
 }
 
 module.exports = {

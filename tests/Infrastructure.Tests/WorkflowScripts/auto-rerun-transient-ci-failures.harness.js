@@ -117,7 +117,7 @@ async function dispatch(operation, payload) {
                 if (analysis?.executionEligible && payload.execute) {
                     await dispatcher.run({
                         phase: 'execute', github, core, context,
-                        analysis: JSON.parse(outputs.analysis),
+                        analysis,
                     });
                 }
                 return { analysis, analysisRequests, requests, outputs, messages, events: summary.events };
@@ -281,15 +281,42 @@ function createGitHubRecorder(payload, requests) {
     let mainRefRequestCount = 0;
     let mainWorkflowRunsRequestCount = 0;
 
-    return {
+    const github = {
         request: async (route, requestPayload) => {
             requests.push({ route, payload: requestPayload });
 
             if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs') {
-                return { data: { jobs: payload.jobs ?? [] }, headers: {} };
+                const pages = payload.jobsByPage;
+                const page = Number(requestPayload.page ?? 1);
+                const jobs = Array.isArray(pages) ? pages[page - 1] ?? [] : payload.jobs ?? [];
+                const hasNextPage = Array.isArray(pages) && page < pages.length;
+                return {
+                    data: {
+                        total_count: Array.isArray(pages) ? pages.flat().length : jobs.length,
+                        jobs,
+                    },
+                    headers: {
+                        link: hasNextPage ? '<https://api.github.com/next>; rel="next"' : '',
+                    },
+                };
             }
             if (route === 'GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations') {
                 return { data: payload.annotations ?? [], headers: {} };
+            }
+            if (route === 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts') {
+                const pages = payload.artifactsByPage;
+                const page = Number(requestPayload.page ?? 1);
+                const artifacts = Array.isArray(pages) ? pages[page - 1] ?? [] : payload.artifacts ?? [];
+                const hasNextPage = Array.isArray(pages) && page < pages.length;
+                return {
+                    data: {
+                        total_count: Array.isArray(pages) ? pages.flat().length : artifacts.length,
+                        artifacts,
+                    },
+                    headers: {
+                        link: hasNextPage ? '<https://api.github.com/next>; rel="next"' : '',
+                    },
+                };
             }
 
             if (payload.failedRequestRoutes?.includes(route)) {
@@ -382,7 +409,32 @@ function createGitHubRecorder(payload, requests) {
 
             return { data: {} };
         },
+        paginate: async function (route, requestPayload, mapFunction) {
+            const results = [];
+
+            for (let page = 1; ; page++) {
+                const response = await this.request(route, { ...requestPayload, page });
+                const data = response.data;
+                const nestedItems = data && typeof data === 'object' && !Array.isArray(data)
+                    ? Object.values(data).find(Array.isArray)
+                    : undefined;
+                const normalizedResponse = Array.isArray(data) || !nestedItems
+                    ? response
+                    : { ...response, data: nestedItems };
+
+                const items = mapFunction
+                    ? mapFunction(normalizedResponse)
+                    : normalizedResponse.data;
+                results.push(...items);
+
+                if (!response.headers?.link?.includes('rel="next"')) {
+                    return results;
+                }
+            }
+        },
     };
+
+    return github;
 }
 
 main().catch(error => {

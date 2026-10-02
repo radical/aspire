@@ -4,23 +4,10 @@ const common = require('./common.js');
 function createJobReader({ github, owner, repo, core, token }) {
     const rerunWorkflow = common;
     const maxJobLogInspectionBytes = 256 * 1024;
-    async function paginate(route, parameters, selectItems) {
-        const items = [];
-
-        for (let page = 1; ; page++) {
-            const response = await github.request(route, {
-                ...parameters,
-                per_page: 100,
-                page,
-            });
-
-            items.push(...selectItems(response.data));
-
-            if (!response.headers.link || !response.headers.link.includes('rel="next"')) {
-                return items;
-            }
-        }
-    }
+    const paginate = (route, parameters, selectItems) => github.paginate(
+        route,
+        { ...parameters, per_page: 100 },
+        response => Array.isArray(response.data) ? response.data : selectItems(response.data));
 
     async function listJobsForAttempt(runId, attemptNumber) {
         return paginate(

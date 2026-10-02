@@ -269,8 +269,11 @@ The workflow identifies the associated PR from the `workflow_run` event payload.
 | [`tests/.../AutoRerunTransientCiFailuresTests.cs`](../../tests/Infrastructure.Tests/WorkflowScripts/AutoRerunTransientCiFailuresTests.cs) | C# test class: behavior-focused tests covering all matcher logic |
 
 The YAML passes GitHub context, the manual run ID, dry-run and force-mode flags,
-and the phase to the same JavaScript dispatcher. The scripts own policy routing,
-GitHub API access, artifact analysis, and rerun execution.
+and the phase to the same JavaScript dispatcher. The dispatcher serializes the
+PR or main policy's analysis object into workflow outputs. Each policy module
+owns its eligibility gates, live-run lookups, validation, and request error
+handling; `common.js` contains shared rerun-request and reporting operations,
+while `github.js` provides shared attempt-scoped job, annotation, and log access.
 
 The two jobs are separate to keep the analysis job's `GITHUB_TOKEN` read-only.
 GitHub Actions permissions are fixed per job: permission levels cannot use

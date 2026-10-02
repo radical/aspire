@@ -47,97 +47,6 @@ function parseCheckRunId(checkRunUrl) {
     return Number.isInteger(checkRunId) && checkRunId > 0 ? checkRunId : null;
 }
 
-function getPullRequestNumbers(workflowRun) {
-    return [...new Set((workflowRun?.pull_requests || [])
-        .map(pullRequest => pullRequest.number)
-        .filter(Number.isInteger))];
-}
-
-function getHeadRepositoryOwnerLogin(workflowRun) {
-    return workflowRun?.head_repository?.owner?.login ?? workflowRun?.head_repository?.owner?.name ?? null;
-}
-
-function matchesWorkflowRunHead(pullRequest, workflowRun, headOwner, headBranch) {
-    const pullRequestHead = pullRequest?.head;
-    const pullRequestHeadOwner = pullRequestHead?.repo?.owner?.login ?? pullRequestHead?.user?.login ?? null;
-
-    if (typeof pullRequestHeadOwner !== 'string' || pullRequestHeadOwner.toLowerCase() !== headOwner.toLowerCase()) {
-        return false;
-    }
-
-    if (pullRequestHead?.ref !== headBranch) {
-        return false;
-    }
-
-    const workflowHeadSha = workflowRun?.head_sha;
-    const pullRequestHeadSha = pullRequestHead?.sha;
-
-    return typeof workflowHeadSha !== 'string'
-        || workflowHeadSha.length === 0
-        || typeof pullRequestHeadSha !== 'string'
-        || pullRequestHeadSha.length === 0
-        || pullRequestHeadSha === workflowHeadSha;
-}
-
-async function listPullRequestsByHead({ github, owner, repo, head, warn }) {
-    const pullRequests = [];
-
-    try {
-        for (let page = 1; ; page++) {
-            const response = await github.request('GET /repos/{owner}/{repo}/pulls', {
-                owner,
-                repo,
-                state: 'all',
-                head,
-                per_page: 100,
-                page,
-            });
-
-            pullRequests.push(...(response.data || []));
-
-            if (!response.headers?.link || !response.headers.link.includes('rel="next"')) {
-                return pullRequests;
-            }
-        }
-    }
-    catch (error) {
-        if (typeof warn === 'function') {
-            warn(`Failed to resolve pull requests for head '${head}': ${error.message}`);
-        }
-        return [];
-    }
-}
-
-async function getAssociatedPullRequestNumbers({ github, owner, repo, workflowRun, warn }) {
-    const pullRequestNumbers = getPullRequestNumbers(workflowRun);
-    if (pullRequestNumbers.length > 0) {
-        return pullRequestNumbers;
-    }
-
-    const headOwner = getHeadRepositoryOwnerLogin(workflowRun);
-    const headBranch = workflowRun?.head_branch;
-
-    if (typeof headOwner !== 'string' || headOwner.length === 0 || typeof headBranch !== 'string' || headBranch.length === 0) {
-        return [];
-    }
-
-    const responseData = await listPullRequestsByHead({
-        github,
-        owner,
-        repo,
-        head: `${headOwner}:${headBranch}`,
-        warn,
-    });
-
-    const matchingPullRequests = responseData
-        .filter(pullRequest => matchesWorkflowRunHead(pullRequest, workflowRun, headOwner, headBranch));
-    const fallbackPullRequestNumbers = [...new Set(matchingPullRequests
-        .map(pullRequest => pullRequest.number)
-        .filter(Number.isInteger))];
-
-    return fallbackPullRequestNumbers.length === 1 ? fallbackPullRequestNumbers : [];
-}
-
 async function getCheckRunIdForJob({ job, getJobForWorkflowRun }) {
     const checkRunIdFromJob = parseCheckRunId(job?.check_run_url);
     if (checkRunIdFromJob) {
@@ -206,17 +115,6 @@ function computeRerunEligibility({
     return runAttempt <= 1
         ? retryableCount <= maxRetryableJobs
         : retryableCount < maxRetryableJobs;
-}
-
-function computeRerunExecutionEligibility({
-    dryRun,
-    retryableCount,
-    maxRetryableJobs = defaultMaxRetryableJobs,
-    runAttempt = 1,
-    maxRunAttempt = defaultMaxRunAttempt,
-    forceRerunAll = false
-}) {
-    return !dryRun && computeRerunEligibility({ retryableCount, maxRetryableJobs, runAttempt, maxRunAttempt, forceRerunAll });
 }
 
 function buildSummaryReference(url, text) {
@@ -340,84 +238,6 @@ async function writeAnalysisSummary({
     await summary.write();
 }
 
-// FORCE_RERUN_ALL summary. Force mode does not enumerate or classify jobs, so the
-// analyze-step summary is intentionally minimal: it records the eligibility decision
-// (the attempt cap is the only force-mode eligibility rule) and the analyzed run, with
-// no job/skip tables.
-async function writeForceRerunSummary({
-    summary,
-    rerunEligible,
-    dryRun,
-    sourceRunUrl,
-    sourceRunAttempt,
-    runAttempt,
-    maxRunAttempt = defaultMaxRunAttempt,
-    openPullRequestNumbers = [],
-}) {
-    const analyzedRunReference = buildSummaryReference(
-        buildWorkflowRunAttemptUrl(sourceRunUrl, sourceRunAttempt),
-        Number.isInteger(sourceRunAttempt) && sourceRunAttempt > 0
-            ? `workflow run attempt ${sourceRunAttempt}`
-            : 'workflow run'
-    );
-    const outcome = rerunEligible ? 'Rerun eligible' : 'Rerun skipped';
-    // In force mode the only way to be ineligible is the attempt cap: this summary runs
-    // after the open-PR gate (the zero-PR case returns earlier), and force-mode
-    // computeRerunEligibility returns false solely when runAttempt > maxRunAttempt. The
-    // The skipped case is reachable whenever an automatic or manual run is past the cap.
-    const outcomeDetails = rerunEligible
-        ? dryRun
-            ? 'Force-rerun mode: the failed jobs would be rerun if dry run were disabled (transient-failure analysis bypassed).'
-            : 'Force-rerun mode: re-running the failed jobs (transient-failure analysis bypassed).'
-        : `Force-rerun mode: the attempt cap was reached (attempt ${runAttempt} > ${maxRunAttempt}); no rerun was requested.`;
-
-    const summaryRows = [
-        [{ data: 'Category', header: true }, { data: 'Value', header: true }],
-        ['Mode', 'Force rerun (transient-failure analysis bypassed)'],
-        ['Outcome', outcome],
-        ['Source run attempt', String(Number.isInteger(runAttempt) ? runAttempt : sourceRunAttempt ?? 'unknown')],
-        ['Max run attempt', String(maxRunAttempt)],
-        ['Associated pull requests', String(openPullRequestNumbers.length)],
-        ['Dry run', String(dryRun)],
-        ['Eligible to rerun', String(rerunEligible)],
-    ];
-
-    await summary
-        .addHeading(outcome)
-        .addTable(summaryRows);
-
-    addSummaryReference(summary, 'Analyzed run', analyzedRunReference)
-        .addRaw(outcomeDetails)
-        .addBreak()
-        .addBreak();
-
-    await summary.write();
-}
-
-async function getOpenPullRequestNumbers({ github, owner, repo, pullRequestNumbers }) {
-    const openPullRequestNumbers = [];
-
-    for (const rawPullRequestNumber of new Set(pullRequestNumbers || [])) {
-        const pullRequestNumber = Number(rawPullRequestNumber);
-
-        if (!Number.isInteger(pullRequestNumber) || pullRequestNumber <= 0) {
-            continue;
-        }
-
-        const response = await github.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-            owner,
-            repo,
-            issue_number: pullRequestNumber,
-        });
-
-        if (response.data.state === 'open' && response.data.pull_request) {
-            openPullRequestNumbers.push(pullRequestNumber);
-        }
-    }
-
-    return openPullRequestNumbers;
-}
-
 function buildWorkflowRunAttemptUrl(sourceRunUrl, runAttempt) {
     if (!sourceRunUrl || !Number.isInteger(runAttempt) || runAttempt <= 0) {
         return sourceRunUrl;
@@ -433,102 +253,6 @@ function buildWorkflowRunReference(sourceRunUrl, runAttempt) {
             ? `workflow run attempt ${runAttempt}`
             : 'workflow run'
     );
-}
-
-function formatMarkdownLink(text, url) {
-    return url ? `[${text}](${url})` : text;
-}
-
-async function getLatestRunAttempt({ github, owner, repo, runId }) {
-    if (!Number.isInteger(runId) || runId <= 0) {
-        return null;
-    }
-
-    try {
-        const response = await github.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
-            owner,
-            repo,
-            run_id: runId,
-        });
-
-        const runAttempt = Number(response.data.run_attempt);
-        return Number.isInteger(runAttempt) && runAttempt > 0 ? runAttempt : null;
-    }
-    catch {
-        return null;
-    }
-}
-
-function sanitizeMarkdown(text) {
-    // Escape backticks and pipe characters to prevent markdown injection
-    return String(text).replace(/[`|]/g, ch => `\\${ch}`);
-}
-
-function buildPullRequestCommentBody({
-    failedAttemptUrl,
-    rerunAttemptUrl,
-    retryableJobs,
-    testPatternMatchedTests = [],
-    forceRerunAll = false,
-}) {
-    // FORCE_RERUN_ALL: force mode is a plain short-circuit — no jobs are fetched or
-    // classified, so there is no job list to show. Keep the comment to a single short
-    // line: the failed jobs are being retried. See the file-level comment.
-    if (forceRerunAll) {
-        return `Retrying the failed CI jobs for this pull request from ${formatMarkdownLink('the CI run attempt', failedAttemptUrl)}. The rerun is being tracked in ${formatMarkdownLink('the rerun attempt', rerunAttemptUrl)}.`;
-    }
-
-    const lines = [
-        `Re-running the failed jobs in the CI workflow for this pull request because ${retryableJobs.length} job${retryableJobs.length === 1 ? ' was' : 's were'} identified as retry-safe transient failures in ${formatMarkdownLink('the CI run attempt', failedAttemptUrl)}.`,
-        `GitHub was asked to rerun all failed jobs for that attempt, and the rerun is being tracked in ${formatMarkdownLink('the rerun attempt', rerunAttemptUrl)}.`,
-        'The job links below point to the failed attempt jobs that matched the retry-safe transient failure rules.',
-        '',
-        ...retryableJobs.map(job => {
-            const jobReference = job.htmlUrl
-                ? `[${job.name}](${job.htmlUrl})`
-                : `\`${job.name}\``;
-
-            return `- ${jobReference} - ${job.reason}`;
-        }),
-    ];
-
-    if (testPatternMatchedTests.length > 0) {
-        const displayedTests = testPatternMatchedTests.slice(0, 10);
-        lines.push(
-            '',
-            `<details><summary>Matched test failure patterns (${testPatternMatchedTests.length} test${testPatternMatchedTests.length === 1 ? '' : 's'})</summary>`,
-            '',
-            ...displayedTests.map(test => `- \`${sanitizeMarkdown(test.testName)}\` — ${test.reason}`),
-        );
-
-        if (testPatternMatchedTests.length > 10) {
-            lines.push(`- ...and ${testPatternMatchedTests.length - 10} more`);
-        }
-
-        lines.push('', '</details>');
-    }
-
-    return lines.join('\n');
-}
-
-async function addPullRequestComments({ github, owner, repo, pullRequestNumbers, body }) {
-    const postedComments = [];
-
-    for (const pullRequestNumber of pullRequestNumbers) {
-        const response = await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-            owner,
-            repo,
-            issue_number: pullRequestNumber,
-            body,
-        });
-
-        postedComments.push({
-            pullRequestNumber,
-            htmlUrl: response.data?.html_url || null,
-        });
-    }
-
-    return postedComments;
 }
 
 async function writeRerunOutcomeSummary({
@@ -547,149 +271,20 @@ async function writeRerunOutcomeSummary({
     await summary.write();
 }
 
-async function requestFailedJobsRerun({
-    github,
-    owner,
-    repo,
-    retryableJobs,
-    pullRequestNumbers = [],
+async function writeRerunRequestedSummary({
     summary,
-    sourceRunId,
     sourceRunUrl,
     sourceRunAttempt,
-    mainRerunState,
-    testPatternMatchedTests = [],
+    rerunAttemptNumber,
+    retryableJobs = [],
+    postedComments = [],
     forceRerunAll = false,
-    revalidateSourceAttempt = false,
-    log = () => {},
 }) {
-    // Normal mode lists retry-safe jobs first; an empty list means nothing to rerun.
-    // Force mode is a short-circuit that does not enumerate jobs (retryableJobs is
-    // empty by design), so it must proceed to the rerun regardless.
-    if (!forceRerunAll && retryableJobs.length === 0) {
-        return;
-    }
-
-    const openPullRequestNumbers = await getOpenPullRequestNumbers({
-        github,
-        owner,
-        repo,
-        pullRequestNumbers,
-    });
-
-    // The open-PR gate applies in all modes (including force mode): a rerun is
-    // skipped when every associated PR is closed. There is no value in spending CI on
-    // a closed/merged PR, so force mode does NOT bypass this.
-    if (pullRequestNumbers.length > 0 && openPullRequestNumbers.length === 0) {
-        log('All associated pull requests are closed. No jobs were rerun.');
-        const failedAttemptReference = buildWorkflowRunReference(sourceRunUrl, sourceRunAttempt);
-        await summary
-            .addHeading('Rerun skipped');
-
-        addSummaryReference(summary, 'Analyzed run', failedAttemptReference)
-            .addRaw('All associated pull requests are closed. No jobs were rerun.')
-            .addBreak()
-            .addBreak();
-
-        await summary
-            .addHeading('Retryable jobs', 2)
-            .addTable([
-                [{ data: 'Job', header: true }, { data: 'Reason', header: true }],
-                ...retryableJobs.map(job => [job.name, job.reason]),
-            ])
-            .write();
-        return;
-    }
-
-    if (revalidateSourceAttempt) {
-        const response = await github.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
-            owner,
-            repo,
-            run_id: sourceRunId,
-        });
-        const liveRun = response.data;
-        const liveAttempt = Number(liveRun.run_attempt);
-        const sourceAttempt = Number(sourceRunAttempt);
-        if (liveRun.status !== 'completed' ||
-            liveRun.conclusion !== 'failure' ||
-            liveAttempt !== sourceAttempt) {
-            const liveState = liveAttempt !== sourceAttempt
-                ? `The workflow run advanced from attempt ${sourceAttempt} to attempt ${liveAttempt}.`
-                : `The workflow run is ${liveRun.status || 'in an unknown state'} with conclusion ${liveRun.conclusion || 'none'}.`;
-            log(`${liveState} No jobs were rerun.`);
-            await writeRerunOutcomeSummary({
-                summary,
-                sourceRunUrl,
-                sourceRunAttempt,
-                message: `${liveState} No jobs were rerun.`,
-            });
-            return;
-        }
-    }
-
-
-    try {
-        await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs', {
-            owner,
-            repo,
-            run_id: sourceRunId,
-        });
-    }
-    catch (error) {
-        if (!mainRerunState) {
-            throw error;
-        }
-
-        await writeRerunOutcomeSummary({
-            summary,
-            sourceRunUrl,
-            sourceRunAttempt,
-            heading: 'Rerun request failed',
-            message: 'The failed-job rerun request did not complete successfully. GitHub may still have started a rerun.',
-        });
-        return {
-            ...mainRerunState,
-            outcome: 'failed',
-            reason: 'request-failed',
-        };
-    }
-
     const normalizedSourceRunAttempt = Number.isInteger(sourceRunAttempt) && sourceRunAttempt > 0
         ? sourceRunAttempt
         : null;
-    const failedAttemptUrl = buildWorkflowRunAttemptUrl(sourceRunUrl, normalizedSourceRunAttempt);
-    const latestRunAttempt = mainRerunState
-        ? null
-        : await getLatestRunAttempt({
-            github,
-            owner,
-            repo,
-            runId: sourceRunId,
-        });
-    const rerunAttemptNumber = latestRunAttempt && normalizedSourceRunAttempt && latestRunAttempt > normalizedSourceRunAttempt
-        ? latestRunAttempt
-        : normalizedSourceRunAttempt ? normalizedSourceRunAttempt + 1 : null;
-    const rerunAttemptUrl = buildWorkflowRunAttemptUrl(sourceRunUrl, rerunAttemptNumber);
     const failedAttemptReference = buildWorkflowRunReference(sourceRunUrl, normalizedSourceRunAttempt);
     const rerunAttemptReference = buildWorkflowRunReference(sourceRunUrl, rerunAttemptNumber);
-    let postedComments = [];
-
-    if (openPullRequestNumbers.length > 0) {
-        postedComments = await addPullRequestComments({
-            github,
-            owner,
-            repo,
-            pullRequestNumbers: openPullRequestNumbers,
-            body: buildPullRequestCommentBody({
-                failedAttemptUrl: failedAttemptReference.url,
-                rerunAttemptUrl: rerunAttemptReference.url,
-                retryableJobs,
-                testPatternMatchedTests,
-                forceRerunAll,
-            }),
-        });
-    }
-
     const summaryBuilder = summary
         .addHeading('Rerun requested');
 
@@ -705,7 +300,7 @@ async function requestFailedJobsRerun({
             .addBreak();
 
         await summaryBuilder.write();
-        return mainRerunState;
+        return;
     }
 
     summaryBuilder
@@ -722,7 +317,14 @@ async function requestFailedJobsRerun({
         ]);
 
     await summaryBuilder.write();
-    return mainRerunState;
+}
+
+async function requestFailedJobsRerun({ github, owner, repo, sourceRunId }) {
+    return github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs', {
+        owner,
+        repo,
+        run_id: sourceRunId,
+    });
 }
 
 function formatMatchedPatternForMarkdown(matchedPattern) {
@@ -758,31 +360,19 @@ module.exports = {
     findMatchingPattern,
     createBoundedDiagnosticPairPatterns,
     parseCheckRunId,
-    getPullRequestNumbers,
-    getHeadRepositoryOwnerLogin,
-    matchesWorkflowRunHead,
-    listPullRequestsByHead,
-    getAssociatedPullRequestNumbers,
     getCheckRunIdForJob,
     getFailedSteps,
     annotationText,
     toAnnotationText,
     computeRerunEligibility,
-    computeRerunExecutionEligibility,
     buildSummaryReference,
     addSummaryReference,
     addSummaryCommentReferences,
     writeAnalysisSummary,
-    writeForceRerunSummary,
-    getOpenPullRequestNumbers,
     buildWorkflowRunAttemptUrl,
     buildWorkflowRunReference,
-    formatMarkdownLink,
-    getLatestRunAttempt,
-    sanitizeMarkdown,
-    buildPullRequestCommentBody,
-    addPullRequestComments,
     writeRerunOutcomeSummary,
+    writeRerunRequestedSummary,
     requestFailedJobsRerun,
     formatMatchedPatternForMarkdown,
 };
