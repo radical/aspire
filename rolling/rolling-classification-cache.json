@@ -1,253 +1,5 @@
 {
   "attempts": {
-    "35166494293:1": [
-      {
-        "id": 105029151352,
-        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-5, Hosting-5, tests/Aspire.Hosting.Te... / Hosting-5 (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": []
-      },
-      {
-        "id": 105029163799,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105031183097,
-        "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, dynamic-debug-configuration)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run extension E2E tests"
-        ]
-      }
-    ],
-    "35173463386:1": [
-      {
-        "id": 105054066458,
-        "name": "outerloop_tests / Acquisition / Acquisition (macos-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105054066514,
-        "name": "outerloop_tests / Templates / Templates (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run nuget dependent tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105054066520,
-        "name": "outerloop_tests / Acquisition / Acquisition (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105054066537,
-        "name": "outerloop_tests / Hosting.Testing / Hosting.Testing (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105054066591,
-        "name": "outerloop_tests / Hosting.Java / Hosting.Java (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105054066612,
-        "name": "outerloop_tests / Hosting / Hosting (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105054066661,
-        "name": "outerloop_tests / Cli.EndToEnd / Cli.EndToEnd (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run nuget dependent tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105054066706,
-        "name": "outerloop_tests / Cli / Cli (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105054066711,
-        "name": "outerloop_tests / Cli / Cli (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105054066804,
-        "name": "outerloop_tests / Acquisition / Acquisition (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105054066835,
-        "name": "outerloop_tests / Dashboard / Dashboard (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105054066837,
-        "name": "outerloop_tests / Dashboard / Dashboard (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105054066888,
-        "name": "outerloop_tests / Hosting.JavaScript / Hosting.JavaScript (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Windows)"
-        ]
-      },
-      {
-        "id": 105058719019,
-        "name": "outerloop_tests / Final Results",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Fail if any dependency failed"
-        ]
-      }
-    ],
-    "35246832023:1": [
-      {
-        "id": 105290109435,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      }
-    ],
-    "35251762755:1": [
-      {
-        "id": 105306274566,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      }
-    ],
-    "35262261892:1": [
-      {
-        "id": 105341455585,
-        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-5, Hosting-5, tests/Aspire.Hosting.Te... / Hosting-5 (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": []
-      },
-      {
-        "id": 105341487412,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.JavaScript.Tests, Hosting.JavaScript, Hosting.JavaScrip... / Hosting.JavaScript (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": []
-      },
-      {
-        "id": 105341488099,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105344665704,
-        "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, dynamic-debug-configuration)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run extension E2E tests"
-        ]
-      }
-    ],
-    "35274272340:1": [
-      {
-        "id": 105381679335,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.RemoteHost.Tests, Hosting.RemoteHost, Hosting.RemoteHos... / Hosting.RemoteHost (windows-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Build test project"
-        ]
-      },
-      {
-        "id": 105381701264,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105384835984,
-        "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, winui-debug)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run extension E2E tests"
-        ]
-      },
-      {
-        "id": 105384836207,
-        "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, browser-debugger)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run extension E2E tests"
-        ]
-      }
-    ],
-    "35275989131:1": [
-      {
-        "id": 105391768026,
-        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run tests (Linux/macOS)"
-        ]
-      },
-      {
-        "id": 105395453605,
-        "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, browser-debugger)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run extension E2E tests"
-        ]
-      },
-      {
-        "id": 105395453629,
-        "name": "Tests / Run VS Code extension E2E tests / VS Code extension E2E (Windows, edge-cases)",
-        "conclusion": "failure",
-        "failed_steps": [
-          "Run extension E2E tests"
-        ]
-      }
-    ],
     "35298318356:1": [
       {
         "id": 105459220915,
@@ -3826,336 +3578,202 @@
           "Post Checkout code"
         ]
       }
+    ],
+    "36805510574:1": [
+      {
+        "id": 110195347282,
+        "name": "outerloop_tests / Cli.EndToEnd / Cli.EndToEnd (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run nuget dependent tests (Linux/macOS)"
+        ]
+      },
+      {
+        "id": 110195347363,
+        "name": "outerloop_tests / Dashboard / Dashboard (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      },
+      {
+        "id": 110195347503,
+        "name": "outerloop_tests / Dashboard / Dashboard (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Windows)"
+        ]
+      },
+      {
+        "id": 110198502626,
+        "name": "outerloop_tests / Final Results",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Fail if any dependency failed"
+        ]
+      }
+    ],
+    "36816020779:1": [
+      {
+        "id": 110221700969,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
+    ],
+    "36822838257:1": [
+      {
+        "id": 110242447520,
+        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-5, Hosting-5, tests/Aspire.Hosting.Te... / Hosting-5 (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": []
+      }
+    ],
+    "36883975285:1": [
+      {
+        "id": 110460313825,
+        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-1, Hosting-1, tests/Aspire.Hosting.Te... / Hosting-1 (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": []
+      },
+      {
+        "id": 110460331472,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (macos-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      },
+      {
+        "id": 110460375677,
+        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
+    ],
+    "36897940260:1": [
+      {
+        "id": 110490804038,
+        "name": "Tests / No-package tests (regular, Aspire.Hosting.Docker.Tests, Hosting.Docker, Hosting.Docker, tests/Asp... / Hosting.Docker (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Check for hang dump files",
+          "Upload logs, and test results",
+          "Copy CLI E2E recordings for upload",
+          "Upload CLI E2E recordings",
+          "Generate test results summary",
+          "Post Checkout code"
+        ]
+      },
+      {
+        "id": 110490806732,
+        "name": "Tests / No-package tests (regular, Aspire.Azure.Data.Tables.Tests, Azure.Data.Tables, Azure.Data.Tables, ... / Azure.Data.Tables (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Windows)"
+        ]
+      }
+    ],
+    "36907052709:1": [
+      {
+        "id": 110521184261,
+        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-5, Hosting-5, tests/Aspire.Hosting.Te... / Hosting-5 (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": []
+      },
+      {
+        "id": 110521195930,
+        "name": "Tests / No-package tests (regular, Aspire.RabbitMQ.Client.Tests, RabbitMQ.Client, RabbitMQ.Client, tests/... / RabbitMQ.Client (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Upload logs, and test results"
+        ]
+      },
+      {
+        "id": 110521204681,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      },
+      {
+        "id": 110521215591,
+        "name": "Tests / No-package tests (regular, Aspire.Hosting.MongoDB.Tests, Hosting.MongoDB, Hosting.MongoDB, tests/... / Hosting.MongoDB (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
+    ],
+    "36913448589:1": [
+      {
+        "id": 110543478634,
+        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-2, Hosting-2, tests/Aspire.Hosting.Te... / Hosting-2 (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Windows)"
+        ]
+      },
+      {
+        "id": 110543497523,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
+    ],
+    "36928109877:1": [
+      {
+        "id": 110591941041,
+        "name": "Tests / No-package tests (collection, Aspire.Hosting.Tests, Hosting-2, Hosting-2, tests/Aspire.Hosting.Te... / Hosting-2 (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Windows)"
+        ]
+      },
+      {
+        "id": 110591948198,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
+    ],
+    "36932541965:1": [
+      {
+        "id": 110607084913,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
+    ],
+    "36937689303:1": [
+      {
+        "id": 110622788752,
+        "name": "Tests / No-package tests (regular, Aspire.Hosting.Azure.Tests, Hosting.Azure, Hosting.Azure, tests/Aspire... / Hosting.Azure (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": []
+      },
+      {
+        "id": 110622794158,
+        "name": "Tests / No-package tests (regular, Aspire.Cli.Tests, Cli, Cli, tests/Aspire.Cli.Tests/Aspire.Cli.Tests.cs... / Cli (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Run tests (Linux/macOS)"
+        ]
+      }
     ]
   },
   "evidence_jobs": {
-    "35166494293:1:105029151352": {
-      "available": false,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": "gh: HTTP 404"
-    },
-    "35166494293:1:105029163799": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated"
-      ],
-      "error": null
-    },
-    "35166494293:1:105031183097": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066458": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066514": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests.ApiServiceWorks(urlPrefix: \"http://\")",
-        "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests.ApiServiceWorks(urlPrefix: \"https://\")",
-        "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests.ResourcesShowUpOnDashboard"
-      ],
-      "error": null
-    },
-    "35173463386:1:105054066520": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066537": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066591": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066612": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066661": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Cli.EndToEnd.Tests.RadiusDeployTests.DeployRadiusRedisRabbitMqAndMongoBackingResourcesToKind"
-      ],
-      "error": null
-    },
-    "35173463386:1:105054066706": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Cli.Tests.Projects.JavaAppHostToolchainResolverTests.ApplyToRuntimeSpec_ForMavenReactor_StagesAnUninstalledSiblingFromAnEmptyLocalRepository"
-      ],
-      "error": null
-    },
-    "35173463386:1:105054066711": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Cli.Tests.Projects.JavaAppHostToolchainResolverTests.ApplyToRuntimeSpec_ForMavenReactor_StagesAnUninstalledSiblingFromAnEmptyLocalRepository"
-      ],
-      "error": null
-    },
-    "35173463386:1:105054066804": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105054066835": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.CodeblockSyntaxColors_MeetWcagAaContrast(theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.CodeblockSyntaxColors_MeetWcagAaContrast(theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DarkAccentButtonInteractionStates_MeetWcagAaContrast",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Filter\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Filter\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Settings\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Settings\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Desktop\", width: 1280, height: 900)",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Mobile\", width: 375, height: 812)",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Tablet\", width: 768, height: 1024)",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/consolelogs\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/consolelogs\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/metrics\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/metrics\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/structuredlogs\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/structuredlogs\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/traces\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/traces\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-number-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-text-area\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-text-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-number-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-text-area\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-text-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AppBarTests.AppBar_Change_Theme",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AppBarTests.AppBar_ContentIsArrangedInOneRow",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AspireMenuLayoutTests.StructuredLogActions_TriggerRemainsVisibleAndMenuItemsSharePopup",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_Failure_DisplayFailureMessage",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_SuccessWithWhitespaceToken_RedirectToResources",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_Success_RedirectToResources",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_QueryStringToken_Failure_DisplayLoginPage",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_QueryStringToken_Success_RestrictToResources",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_AncestorScrollRepositionsControl",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_NestedClippingAncestorConstrainsControl(overflow: \"clip\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_NestedClippingAncestorConstrainsControl(overflow: \"hidden\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_SmoothScrollHidesImmediately_AndReachesNewBottom",
-        "Aspire.Dashboard.Tests.Integration.Playwright.MobileNavMenuTests.MobileNavFocusRemainsVisibleAtHighZoomViewport",
-        "Aspire.Dashboard.Tests.Integration.Playwright.MobileNavMenuTests.MobileNavMenuClosesWhenFocusLeavesMenu",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.GraphNode_RightClickOpensMenuAtCursorWithoutOverlay",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ResourceGraphCog_IsKeyboardAccessibleAndDoesNotDragNode",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ResourceViewTabs_RemainVisibleAtNarrowHorizontalViewport",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ViewOptionsMenu_ReportsExpandedState"
-      ],
-      "error": null
-    },
-    "35173463386:1:105054066837": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.CodeblockSyntaxColors_MeetWcagAaContrast(theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.CodeblockSyntaxColors_MeetWcagAaContrast(theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DarkAccentButtonInteractionStates_MeetWcagAaContrast",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Filter\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Filter\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Settings\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Settings\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Desktop\", width: 1280, height: 900)",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Mobile\", width: 375, height: 812)",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Tablet\", width: 768, height: 1024)",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/consolelogs\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/consolelogs\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/metrics\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/metrics\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/structuredlogs\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/structuredlogs\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/traces\", theme: \"Dark\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/traces\", theme: \"Light\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-number-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-text-area\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-text-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-number-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-text-area\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-text-input\", partName: \"control\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AppBarTests.AppBar_Change_Theme",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AppBarTests.AppBar_ContentIsArrangedInOneRow",
-        "Aspire.Dashboard.Tests.Integration.Playwright.AspireMenuLayoutTests.StructuredLogActions_TriggerRemainsVisibleAndMenuItemsSharePopup",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_Failure_DisplayFailureMessage",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_SuccessWithWhitespaceToken_RedirectToResources",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_Success_RedirectToResources",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_QueryStringToken_Failure_DisplayLoginPage",
-        "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_QueryStringToken_Success_RestrictToResources",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_AncestorScrollRepositionsControl",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_NestedClippingAncestorConstrainsControl(overflow: \"clip\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_NestedClippingAncestorConstrainsControl(overflow: \"hidden\")",
-        "Aspire.Dashboard.Tests.Integration.Playwright.MobileNavMenuTests.MobileNavFocusRemainsVisibleAtHighZoomViewport",
-        "Aspire.Dashboard.Tests.Integration.Playwright.MobileNavMenuTests.MobileNavMenuClosesWhenFocusLeavesMenu",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.GraphNode_RightClickOpensMenuAtCursorWithoutOverlay",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ResourceGraphCog_IsKeyboardAccessibleAndDoesNotDragNode",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ResourceViewTabs_RemainVisibleAtNarrowHorizontalViewport",
-        "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ViewOptionsMenu_ReportsExpandedState"
-      ],
-      "error": null
-    },
-    "35173463386:1:105054066888": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35173463386:1:105058719019": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35246832023:1:105290109435": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated"
-      ],
-      "error": null
-    },
-    "35251762755:1:105306274566": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated"
-      ],
-      "error": null
-    },
-    "35262261892:1:105341455585": {
-      "available": false,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": "gh: HTTP 404"
-    },
-    "35262261892:1:105341487412": {
-      "available": false,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": "gh: HTTP 404"
-    },
-    "35262261892:1:105341488099": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated"
-      ],
-      "error": null
-    },
-    "35262261892:1:105344665704": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35274272340:1:105381679335": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35274272340:1:105381701264": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated"
-      ],
-      "error": null
-    },
-    "35274272340:1:105384835984": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35274272340:1:105384836207": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35275989131:1:105391768026": {
-      "available": true,
-      "confirmed_test": true,
-      "test_names": [
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
-        "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated"
-      ],
-      "error": null
-    },
-    "35275989131:1:105395453605": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
-    "35275989131:1:105395453629": {
-      "available": true,
-      "confirmed_test": false,
-      "test_names": [],
-      "error": null
-    },
     "35298318356:1:105459220915": {
       "available": true,
       "confirmed_test": false,
@@ -8497,6 +8115,167 @@
       "available": true,
       "confirmed_test": false,
       "test_names": [],
+      "error": null
+    },
+    "36805510574:1:110195347282": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.EndToEnd.Tests.RadiusDeployTests.DeployRadiusRedisRabbitMqAndMongoBackingResourcesToKind"
+      ],
+      "error": null
+    },
+    "36805510574:1:110195347363": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Dashboard.Tests.Integration.Playwright.AspireMenuLayoutTests.StructuredLogActions_TriggerRemainsVisibleAndMenuItemsSharePopup",
+        "Aspire.Dashboard.Tests.Integration.Playwright.ResourceSelectInteractionTests.PointerSelection_ClosesDropdownAndSupportsConsecutiveChanges"
+      ],
+      "error": null
+    },
+    "36805510574:1:110195347503": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Dashboard.Tests.Integration.Playwright.AspireMenuLayoutTests.StructuredLogActions_TriggerRemainsVisibleAndMenuItemsSharePopup"
+      ],
+      "error": null
+    },
+    "36805510574:1:110198502626": {
+      "available": true,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": null
+    },
+    "36816020779:1:110221700969": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.Tests.NuGet.NuGetPackagePrefetcherTests.PrefetchingCancellationDueToShutdownLogsCleanMessage"
+      ],
+      "error": null
+    },
+    "36822838257:1:110242447520": {
+      "available": false,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": "gh: HTTP 404"
+    },
+    "36883975285:1:110460313825": {
+      "available": false,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": "gh: HTTP 404"
+    },
+    "36883975285:1:110460331472": {
+      "available": true,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": null
+    },
+    "36883975285:1:110460375677": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Hosting.Azure.Tests.AzureFunctionsTests.AddAzureFunctionsProject_WorksWithMultipleProjects"
+      ],
+      "error": null
+    },
+    "36897940260:1:110490804038": {
+      "available": true,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": null
+    },
+    "36897940260:1:110490806732": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Azure.Data.Tables.Tests.ConformanceTests.TracingEnablesTheRightActivitySource"
+      ],
+      "error": null
+    },
+    "36907052709:1:110521184261": {
+      "available": false,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": "gh: HTTP 404"
+    },
+    "36907052709:1:110521195930": {
+      "available": true,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": null
+    },
+    "36907052709:1:110521204681": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.Tests.Backchannel.BackchannelJsonSerializerContextTests.RpcCancellationReachesServer"
+      ],
+      "error": null
+    },
+    "36907052709:1:110521215591": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Hosting.MongoDB.Tests.SingleMemberReplicaSetFunctionalTests.TransactionsAndChangeStreamsWorkWithTls"
+      ],
+      "error": null
+    },
+    "36913448589:1:110543478634": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Hosting.Tests.ResourceCommandServiceTests.ExecuteCommandAsync_RebuildCommand_ReturnsBuildOutput"
+      ],
+      "error": null
+    },
+    "36913448589:1:110543497523": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.Tests.NuGet.NuGetPackagePrefetcherTests.PrefetchingCancellationDueToShutdownLogsCleanMessage"
+      ],
+      "error": null
+    },
+    "36928109877:1:110591941041": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Hosting.Tests.ResourceCommandServiceTests.ExecuteCommandAsync_RebuildCommand_ReturnsBuildOutput"
+      ],
+      "error": null
+    },
+    "36928109877:1:110591948198": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.Tests.Backchannel.BackchannelJsonSerializerContextTests.RpcCancellationReachesServer"
+      ],
+      "error": null
+    },
+    "36932541965:1:110607084913": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.Tests.Backchannel.BackchannelJsonSerializerContextTests.RpcCancellationReachesServer"
+      ],
+      "error": null
+    },
+    "36937689303:1:110622788752": {
+      "available": false,
+      "confirmed_test": false,
+      "test_names": [],
+      "error": "gh: HTTP 404"
+    },
+    "36937689303:1:110622794158": {
+      "available": true,
+      "confirmed_test": true,
+      "test_names": [
+        "Aspire.Cli.Tests.Backchannel.BackchannelJsonSerializerContextTests.RpcCancellationReachesServer"
+      ],
       "error": null
     }
   }
