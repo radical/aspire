@@ -69,7 +69,7 @@ Current-main reruns are intentionally narrower than pull request reruns. After i
 1. A check-run annotation contains GitHub's hosted-runner-loss message: `The hosted runner lost communication with the server.` This does not apply to Hosting-1 or Hosting-5.
 2. The job diagnostics contain `netaspireci.azurecr.io` within 500 characters of either `connect: connection refused` or `Connection reset by peer`, in either order.
 3. The job diagnostics contain `mcr.microsoft.com` within 500 characters of HTTP 503 or `ServiceUnavailable`, in either order. `CONTAINER1014` without both the registry endpoint and a nearby service-unavailable status is not enough.
-4. The job diagnostics contain Windows process initialization exit `-1073741502` or `0xC0000142`, and every failed step is a post-test reporting or cleanup step. A failed `Run tests*` step prevents this override.
+4. The job diagnostics contain Windows process initialization exit `-1073741502` or `0xC0000142`, at least one `Run tests*` or `Run nuget dependent tests*` step succeeded, and every failed step is a post-test reporting or cleanup step. A failed, skipped, or absent test execution step prevents this override.
 
 Hosting-1 and Hosting-5 are always excluded from automatic current-main reruns because runner-loss signals in those shards can mask DCP or process-lifecycle failures. Generic messages such as `Operation timed out`, generic container failures, and the broader pull request/TRX patterns do not make a current-main run eligible.
 
@@ -206,7 +206,7 @@ The policies deliberately apply different rails:
 | Rail | Scope | Detail |
 |------|-------|--------|
 | **Attempt limit** | All paths | Pull request source attempts use `defaultMaxRunAttempt` (3), defined in [`auto-rerun/common.js`](../../.github/workflows/auto-rerun/common.js). Current-`main` source attempts use `mainMaxRunAttempt` (1), defined in [`auto-rerun/rerun-main.js`](../../.github/workflows/auto-rerun/rerun-main.js), allowing exactly one retry. |
-| **Open PR** | Pull request and manual paths | At least one associated pull request must still be open, including in force mode. |
+| **Open PR** | Pull request and manual paths | At least one associated pull request must still be open during analysis, including manual dry runs and force mode. Execution rechecks that an associated PR remains open immediately before requesting a rerun. |
 | **Live source attempt** | Pull request and manual execution | Immediately before the write, the selected run must still be a completed failure at the source attempt analyzed earlier. |
 | **Retryable job cap** | Normal PR analysis and current-main | At least 1 but no more than 5 retryable jobs (default). Pull request attempts after the first use the existing stricter count rule. Current-main only considers source attempt 1 and requires every real failed job to match. Force mode bypasses this cap because it does not enumerate jobs. |
 | **Non-aggregator** | Normal PR analysis and current-main | Aggregator jobs (`Final Results`, `Tests / Final Test Results`) are excluded from analysis. Force mode bypasses analysis and lets GitHub rerun the failed set. |

@@ -40,6 +40,10 @@ const mainPostTestReportingFailureStepPatterns = [
     /^Check for hang dump files$/i,
     ...postTestCleanupFailureStepPatterns,
 ];
+const mainTestExecutionStepPatterns = [
+    /^Run tests\b/i,
+    /^Run nuget dependent tests\b/i,
+];
 
 function classifyMainFailedJob(job, annotationsOrText, jobLogText = '') {
     const failedSteps = getFailedSteps(job);
@@ -83,10 +87,15 @@ function classifyMainFailedJob(job, annotationsOrText, jobLogText = '') {
 
     const hasOnlyPostTestReportingFailures = failedSteps.length > 0 &&
         failedSteps.every(step => matchesAny(step, mainPostTestReportingFailureStepPatterns));
+    const hasSuccessfulTestExecutionStep = (job?.steps || []).some(step =>
+        step.conclusion === 'success' &&
+        matchesAny(step.name || '', mainTestExecutionStepPatterns));
     const matchesWindowsProcessInitializationFailure =
         windowsProcessInitializationFailurePatterns.some(pattern => pattern.test(diagnosticsText));
 
-    if (hasOnlyPostTestReportingFailures && matchesWindowsProcessInitializationFailure) {
+    if (hasSuccessfulTestExecutionStep &&
+        hasOnlyPostTestReportingFailures &&
+        matchesWindowsProcessInitializationFailure) {
         return {
             retryable: true,
             failedSteps,

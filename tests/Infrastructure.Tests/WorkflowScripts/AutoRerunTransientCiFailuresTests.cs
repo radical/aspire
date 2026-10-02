@@ -76,6 +76,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
                         }
                     }
                 },
+                issueStatesByNumber = new Dictionary<string, string> { ["15110"] = "open" },
                 annotations = new[] { new { message = "fatal: expected 'packfile'" } }
             });
 
@@ -89,6 +90,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             job => Assert.Equal("Build packages 2", job.GetProperty("name").GetString()));
         Assert.Collection(
             result.GetProperty("requests").EnumerateArray(),
+            r => Assert.Equal("GET /repos/{owner}/{repo}/issues/{issue_number}", r.GetProperty("route").GetString()),
             r => Assert.Equal("GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", r.GetProperty("route").GetString()),
             r => Assert.Equal("GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", r.GetProperty("route").GetString()),
             r => Assert.Equal("GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", r.GetProperty("route").GetString()),
@@ -167,12 +169,59 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
         Assert.Equal("pull-request", result.GetProperty("analysis").GetProperty("policy").GetString());
         Assert.Equal(expectedExecution, result.GetProperty("analysis").GetProperty("executionEligible").GetBoolean());
-        JsonElement analysisRequest = Assert.Single(result.GetProperty("analysisRequests").EnumerateArray());
-        Assert.Equal("getWorkflowRun", analysisRequest.GetProperty("route").GetString());
+        Assert.Collection(
+            result.GetProperty("analysisRequests").EnumerateArray(),
+            request => Assert.Equal("getWorkflowRun", request.GetProperty("route").GetString()),
+            request => Assert.Equal("GET /repos/{owner}/{repo}/issues/{issue_number}", request.GetProperty("route").GetString()));
         Assert.Equal(
             expectedExecution ? 1 : 0,
             result.GetProperty("requests").EnumerateArray().Count(r =>
                 r.GetProperty("route").GetString() == "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs"));
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task DispatcherManualDryRunRejectsClosedAssociatedPullRequestDuringAnalysis()
+    {
+        JsonElement result = await InvokeHarnessAsync<JsonElement>(
+            "dispatchWorkflow",
+            new
+            {
+                eventName = "workflow_dispatch",
+                runId = 123,
+                dryRun = true,
+                forceRerunAll = true,
+                execute = true,
+                workflowRun = new
+                {
+                    id = 123,
+                    name = "CI",
+                    @event = "pull_request",
+                    status = "completed",
+                    conclusion = "failure",
+                    run_attempt = 1,
+                    head_branch = "feature",
+                    html_url = "https://github.com/microsoft/aspire/actions/runs/123",
+                    pull_requests = new[] { new { number = 15110 } }
+                },
+                issueStatesByNumber = new Dictionary<string, string> { ["15110"] = "closed" }
+            });
+
+        Assert.False(result.GetProperty("analysis").GetProperty("executionEligible").GetBoolean());
+        Assert.DoesNotContain(
+            result.GetProperty("requests").EnumerateArray(),
+            request => request.GetProperty("route").GetString() ==
+                "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs");
+        Assert.Contains(
+            result.GetProperty("events").EnumerateArray(),
+            e => e.GetProperty("type").GetString() == "heading" &&
+                e.GetProperty("text").GetString() == "Rerun skipped");
+        Assert.Contains(
+            result.GetProperty("events").EnumerateArray(),
+            e => e.GetProperty("type").GetString() == "raw" &&
+                e.GetProperty("text").GetString()?.Contains(
+                    "All associated pull requests are closed. No jobs were rerun.",
+                    StringComparison.Ordinal) is true);
     }
 
     [Fact]
@@ -904,7 +953,7 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
             "Upload CLI E2E recordings",
             "Generate test results summary",
             "Post Checkout code"
-        ]);
+        ], successfulSteps: ["Run tests (Windows)"]);
 
         AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
             [job],
@@ -1017,6 +1066,37 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.False(result.RerunEligible);
         Assert.Empty(result.RetryableJobs);
         Assert.Single(result.SkippedJobs);
+    }
+
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("skipped")]
+    [RequiresTools(["node"])]
+    public async Task CurrentMainRejectsWindowsProcessInitializationFailureWithoutSuccessfulTests(string testStepState)
+    {
+        string[] reportingFailures =
+        [
+            "Upload logs, and test results",
+            "Generate test results summary"
+        ];
+        WorkflowJob job = testStepState switch
+        {
+            "skipped" => CreateJob(
+                failedSteps: reportingFailures,
+                skippedSteps: ["Run tests (Windows)"]),
+            _ => CreateJob(failedSteps: reportingFailures),
+        };
+
+        AnalyzeFailedJobsResult result = await AnalyzeMainJobsAsync(
+            [job],
+            new Dictionary<string, string> { ["1"] = "Process completed with exit code -1073741502." });
+
+        Assert.False(result.RerunEligible);
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+        Assert.Equal(
+            "The job did not match the narrow current-main transient infrastructure allowlist.",
+            result.SkippedJobs[0].Reason);
     }
 
     [Fact]
@@ -3251,17 +3331,25 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         return response.Result!;
     }
 
-    private static WorkflowJob CreateJob(int id = 1, string name = "Tests / Sample / Sample (ubuntu-latest)", string conclusion = "failure", string[]? failedSteps = null)
+    private static WorkflowJob CreateJob(
+        int id = 1,
+        string name = "Tests / Sample / Sample (ubuntu-latest)",
+        string conclusion = "failure",
+        string[]? failedSteps = null,
+        string[]? successfulSteps = null,
+        string[]? skippedSteps = null)
         => new()
         {
             Id = id,
             Name = name,
             Conclusion = conclusion,
-            Steps = (failedSteps ?? []).Select(stepName => new WorkflowStep
-            {
-                Name = stepName,
-                Conclusion = "failure"
-            }).ToArray()
+            Steps = (failedSteps ?? [])
+                .Select(stepName => new WorkflowStep { Name = stepName, Conclusion = "failure" })
+                .Concat((successfulSteps ?? [])
+                    .Select(stepName => new WorkflowStep { Name = stepName, Conclusion = "success" }))
+                .Concat((skippedSteps ?? [])
+                    .Select(stepName => new WorkflowStep { Name = stepName, Conclusion = "skipped" }))
+                .ToArray()
         };
 
     private static RetryableJobInput[] CreateMainRetryableJobs() =>

@@ -42,6 +42,7 @@ jobs:
       actions: read
       checks: read
       contents: read
+      issues: read
     outputs:
       analysis: ${{ steps.analyze.outputs.analysis }}
       rerun_execution_eligible: ${{ steps.analyze.outputs.rerun_execution_eligible }}

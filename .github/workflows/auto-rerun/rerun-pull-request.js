@@ -1101,6 +1101,24 @@ async function analyzePullRequestFailures({
         return analysis;
     }
 
+    const openPullRequestNumbers = await getOpenPullRequestNumbers({
+        github,
+        owner,
+        repo,
+        pullRequestNumbers,
+    });
+    if (openPullRequestNumbers.length === 0) {
+        const message = 'All associated pull requests are closed. No jobs were rerun.';
+        core.info(message);
+        await writeRerunOutcomeSummary({
+            summary: core.summary,
+            sourceRunUrl,
+            sourceRunAttempt: workflowRun.run_attempt,
+            message,
+        });
+        return analysis;
+    }
+
     // TEMPORARY — FORCE_RERUN_ALL short-circuit (revert when no longer needed):
     // The run failed (job-level `if`) and has an associated PR (checked above),
     // so request a rerun without fetching or classifying any jobs. Only the
@@ -1127,7 +1145,7 @@ async function analyzePullRequestFailures({
             sourceRunUrl,
             sourceRunAttempt: forceRunAttempt,
             runAttempt: forceRunAttempt,
-            openPullRequestNumbers: pullRequestNumbers,
+            openPullRequestNumbers,
         });
 
         if (!forceRerunEligible) {
