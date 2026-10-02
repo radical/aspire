@@ -150,7 +150,7 @@ The reusable issue mechanics (marker dedup, the comment-recording loop with
 per-run dedup, octokit primitives) live in the generic, repo-agnostic engine
 [`tracking-issue.js`](../../.github/workflows/tracking-issue.js), shared with the
 [specialized-test failure reporter](specialized-test-failure-issues.md), the
-[nightly-pipeline failure reporter](pipeline-failure-issues.md), the
+[scheduled-pipeline failure reporter](pipeline-failure-issues.md), the
 [red-main CI reporter](ci-failure-issues.md), and
 unit-tested by
 [`TrackingIssueTests`](../../tests/Infrastructure.Tests/WorkflowScripts/TrackingIssueTests.cs).
