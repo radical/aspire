@@ -1550,7 +1550,6 @@ public sealed class TestTriggerMapTests
 
         var skippedActions = new HashSet<string>(StringComparer.Ordinal)
         {
-            "create-pull-request",
             "preload-azure-cli-requests",
         };
 

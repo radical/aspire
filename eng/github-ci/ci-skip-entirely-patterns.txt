@@ -57,7 +57,6 @@ Aspire-Core.slnf
 # Dev/AzDO/scheduled-only infrastructure with no regular GitHub PR CI consumer.
 .config/dotnet-tools.json
 eng/Version.Details.xml
-.github/actions/create-pull-request/**
 .github/actions/preload-azure-cli-requests/**
 
 # GitHub workflow files that do not affect the CI build or test process
