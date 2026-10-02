@@ -7,6 +7,14 @@ name: Update actionlint
 on:
   schedule:
     - cron: '0 16 * * 1' # Mondays 16:00 UTC
+  push:
+    branches: ['validate/update-actionlint-20610']
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [success, failure]
+        default: success
 
 permissions:
   contents: read
@@ -16,7 +24,7 @@ jobs:
   check:
     name: Check for a newer actionlint
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'microsoft' }}
+    if: ${{ github.repository_owner == 'radical' }}
     outputs:
       updated: ${{ steps.check.outputs.updated }}
       previous-version: ${{ steps.check.outputs.previous-version }}
@@ -52,6 +60,9 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     if: ${{ needs.check.outputs.updated == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,6 +77,7 @@ jobs:
 
       - name: Generate GitHub App Token for pull request
         id: pr-token
+        if: ${{ inputs.mode == 'failure' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
@@ -77,9 +89,9 @@ jobs:
         # actionlint (pinned in .github/actionlint-version.json) rejects zizmor's preferred '$/' syntax.
         uses: ./.github/actions/create-pull-request # zizmor: ignore[self-repository]
         with:
-          token: ${{ steps.pr-token.outputs.token }}
+          token: ${{ steps.pr-token.outputs.token || github.token }}
           branch: update-actionlint
-          base: main
+          base: validate/update-actionlint-20610
           draft: true
           commit-message: "[Automated] Update actionlint to v${{ needs.check.outputs.version }}"
           labels: |
@@ -101,14 +113,14 @@ jobs:
     name: Create Issue on Failure
     needs: [check, update]
     runs-on: ubuntu-latest
-    if: ${{ failure() && github.event_name == 'schedule' && github.repository_owner == 'microsoft' }}
+    if: ${{ failure() && github.event_name != 'pull_request' && github.repository_owner == 'radical' }}
     permissions:
       contents: read   # checkout to require the local .js modules
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: validate/update-actionlint-20610
           persist-credentials: false
 
       - name: File or update failure issue
