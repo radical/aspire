@@ -1,0 +1,2684 @@
+{
+  "now": "2026-09-25T00:00:00+00:00",
+  "windows": {
+    "current": {
+      "start": "2026-09-18",
+      "end": "2026-09-24"
+    },
+    "prior": {
+      "start": "2026-09-11",
+      "end": "2026-09-17"
+    },
+    "last_five_weekdays": [
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24"
+    ]
+  },
+  "config": {
+    "rolling_window_days": 7,
+    "graph_history_days": 30,
+    "history_retention_days": 180,
+    "health_thresholds": {
+      "green": 90,
+      "yellow": 75
+    },
+    "primary_lane": "github-ci-main",
+    "diagnostics_lane": "github-ci-main",
+    "lanes": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "label": "GitHub CI \u2014 main",
+        "primary": true,
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "label": "GitHub outerloop \u2014 main",
+        "primary": false,
+        "diagnostics": true
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "label": "AzDO internal \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      }
+    ]
+  },
+  "history": {
+    "lane_identity": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "eligible_reasons": []
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "eligible_reasons": []
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "event": null,
+        "branch": "refs/heads/main",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ]
+      }
+    ],
+    "coverage": {
+      "start": "2026-09-11",
+      "end": "2026-09-24",
+      "days": 14,
+      "reduced": true,
+      "refresh_days": 14
+    },
+    "lanes": {
+      "github-ci-main": [
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 5,
+          "other_failed": 0,
+          "insufficient_failed": 2
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 1,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 4,
+          "other_failed": 0,
+          "insufficient_failed": 2
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 1,
+          "failed": 12,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 4,
+          "other_failed": 0,
+          "insufficient_failed": 8
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 2,
+          "other_failed": 0,
+          "insufficient_failed": 7
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 9.6,
+          "rolling_passed": 5,
+          "rolling_failed": 47,
+          "confirmed_test_failed": 6,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.7,
+          "rolling_passed": 6,
+          "rolling_failed": 50,
+          "confirmed_test_failed": 8,
+          "other_failed": 0,
+          "insufficient_failed": 2
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 9.1,
+          "rolling_passed": 5,
+          "rolling_failed": 50,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 10.2,
+          "rolling_passed": 5,
+          "rolling_failed": 44,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.6,
+          "rolling_passed": 5,
+          "rolling_failed": 42,
+          "confirmed_test_failed": 5,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 13,
+          "rolling_pass_rate": 6.1,
+          "rolling_passed": 3,
+          "rolling_failed": 46,
+          "confirmed_test_failed": 5,
+          "other_failed": 0,
+          "insufficient_failed": 8
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 2,
+          "failed": 11,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 4,
+          "rolling_failed": 51,
+          "confirmed_test_failed": 4,
+          "other_failed": 0,
+          "insufficient_failed": 7
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 3,
+          "failed": 7,
+          "rolling_pass_rate": 11.9,
+          "rolling_passed": 7,
+          "rolling_failed": 52,
+          "confirmed_test_failed": 2,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        }
+      ],
+      "github-outerloop-main": [
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 1,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        }
+      ],
+      "azdo-internal-main": [
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 20
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 9,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 17
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 40
+        }
+      ]
+    }
+  },
+  "lanes": {
+    "github-ci-main": {
+      "id": "github-ci-main",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "branch": "main",
+      "label": "GitHub CI \u2014 main",
+      "primary": true,
+      "diagnostics": true,
+      "recent": [
+        7,
+        58
+      ],
+      "current": [
+        7,
+        59
+      ],
+      "prior": [
+        5,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 2.2,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 36074131736,
+        "identity": "github:36074131736",
+        "source": "github",
+        "created_at": "2026-09-24T23:43:17Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "github-outerloop-main": {
+      "id": "github-outerloop-main",
+      "provider": "github-actions",
+      "workflow": "tests-outerloop.yml",
+      "event": "schedule",
+      "branch": "main",
+      "label": "GitHub outerloop \u2014 main",
+      "primary": false,
+      "diagnostics": true,
+      "recent": [
+        0,
+        5
+      ],
+      "current": [
+        0,
+        7
+      ],
+      "prior": [
+        0,
+        7
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 35946233512,
+        "identity": "github:35946233512",
+        "source": "github",
+        "created_at": "2026-09-24T02:12:03Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "azdo-internal-main": {
+      "id": "azdo-internal-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1602,
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "batchedCI",
+        "individualCI"
+      ],
+      "label": "AzDO internal \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        0,
+        38
+      ],
+      "current": [
+        0,
+        40
+      ],
+      "prior": [
+        0,
+        20
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 3087039,
+        "identity": "azure-devops:3087039",
+        "source": "azure-devops",
+        "created_at": "2026-09-24T23:45:47.3149606Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    }
+  },
+  "reruns": {
+    "runs": 3,
+    "recovered": 0,
+    "human": 3,
+    "bot": 0,
+    "unrecovered": 3
+  },
+  "failure_evidence_trends": {
+    "confirmed_test": {
+      "label": "Confirmed test failure",
+      "current": [
+        24,
+        52
+      ],
+      "prior": [
+        22,
+        47
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -0.7,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "other": {
+      "label": "Other confirmed failure",
+      "current": [
+        0,
+        52
+      ],
+      "prior": [
+        0,
+        47
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "insufficient": {
+      "label": "Insufficient evidence",
+      "current": [
+        28,
+        52
+      ],
+      "prior": [
+        25,
+        47
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.7,
+        "meaningful": false,
+        "direction": "\ud83d\udd34 Worsening"
+      }
+    }
+  },
+  "failure_evidence_lanes": {
+    "github-outerloop-main": {
+      "label": "GitHub outerloop \u2014 main",
+      "confirmed_test": {
+        "current": [
+          7,
+          7
+        ],
+        "prior": [
+          7,
+          7
+        ],
+        "change": {
+          "label": "\u2248 flat",
+          "delta": 0.0,
+          "meaningful": false,
+          "direction": "\u26aa Flat"
+        }
+      },
+      "no_confirmed_test": {
+        "current": [
+          0,
+          7
+        ],
+        "prior": [
+          0,
+          7
+        ]
+      }
+    },
+    "github-ci-main": {
+      "label": "GitHub CI \u2014 main",
+      "confirmed_test": {
+        "current": [
+          24,
+          52
+        ],
+        "prior": [
+          22,
+          47
+        ],
+        "change": {
+          "label": "\u2248 flat",
+          "delta": -0.7,
+          "meaningful": false,
+          "direction": "\ud83d\udfe2 Improving"
+        }
+      },
+      "no_confirmed_test": {
+        "current": [
+          28,
+          52
+        ],
+        "prior": [
+          25,
+          47
+        ]
+      }
+    }
+  },
+  "confirmed_tests": [
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Cli.Tests.Projects.JavaAppHostToolchainResolverTests.ApplyToRuntimeSpec_ForMavenReactor_StagesAnUninstalledSiblingFromAnEmptyLocalRepository",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Filter\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Filter\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Settings\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardDialog_HasNoSeriousOrCriticalWcagViolations(surface: \"Settings\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Desktop\", width: 1280, height: 900)",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/consolelogs\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/consolelogs\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/metrics\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/metrics\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/structuredlogs\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/structuredlogs\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/traces\", theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardPage_HasNoSeriousOrCriticalWcagViolations(relativeUrl: \"/traces\", theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Cli.EndToEnd.Tests.RadiusDeployTests.DeployRadiusRedisRabbitMqAndMongoBackingResourcesToKind",
+      "prior_runs": 3,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_SmoothScrollHidesImmediately_AndReachesNewBottom",
+      "prior_runs": 2,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests.ResourcesShowUpOnDashboard",
+      "prior_runs": 2,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests.ApiServiceWorks(urlPrefix: \"http://\")",
+      "prior_runs": 1,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests.ApiServiceWorks(urlPrefix: \"https://\")",
+      "prior_runs": 1,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureServiceBusExtensionsTests.AzureServiceBusEmulatorResourceGeneratesConfigJsonOnlyChangedProperties",
+      "prior_runs": 0,
+      "current_runs": 7,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.CodeblockSyntaxColors_MeetWcagAaContrast(theme: \"Dark\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.CodeblockSyntaxColors_MeetWcagAaContrast(theme: \"Light\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DarkAccentButtonInteractionStates_MeetWcagAaContrast",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Mobile\", width: 375, height: 812)",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.DashboardHomePage_IsAccessibleAcrossViewports(viewportName: \"Tablet\", width: 768, height: 1024)",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-number-input\", partName: \"control\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-text-area\", partName: \"control\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Dark\", controlName: \"fluent-text-input\", partName: \"control\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-number-input\", partName: \"control\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-text-area\", partName: \"control\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AccessibilityTests.FluentDelegatedInput_ShowsVisibleFocusIndicator(theme: \"Light\", controlName: \"fluent-text-input\", partName: \"control\")",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AppBarTests.AppBar_ContentIsArrangedInOneRow",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AspireMenuLayoutTests.StructuredLogActions_TriggerRemainsVisibleAndMenuItemsSharePopup",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_Failure_DisplayFailureMessage",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_SuccessWithWhitespaceToken_RedirectToResources",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_LoginPage_Success_RedirectToResources",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_QueryStringToken_Failure_DisplayLoginPage",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.GraphNode_RightClickOpensMenuAtCursorWithoutOverlay",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ResourceGraphCog_IsKeyboardAccessibleAndDoesNotDragNode",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ResourceViewTabs_RemainVisibleAtNarrowHorizontalViewport",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.ResourcesTests.ViewOptionsMenu_ReportsExpandedState",
+      "prior_runs": 7,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_AncestorScrollRepositionsControl",
+      "prior_runs": 2,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_NestedClippingAncestorConstrainsControl(overflow: \"clip\")",
+      "prior_runs": 2,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.DashboardInteractionsTests.ScrollButtons_NestedClippingAncestorConstrainsControl(overflow: \"hidden\")",
+      "prior_runs": 2,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ExplicitSizing_TakesPrimaryAndAppliesRequestedGrid",
+      "prior_runs": 0,
+      "current_runs": 6,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureFunctionsTests.AddAzureFunctionsProject_WorksWithMultipleProjects",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalDockTests.AppHostWorkloadEnded_CompletionCloseKeepsTabUntilExplicitClose(beforeHandshake: False)",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalDockTests.AppHostWorkloadEnded_CompletionCloseKeepsTabUntilExplicitClose(beforeHandshake: True)",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalDockTests.CloseTab_RestoresFocusOnlyAfterRemovalIncludingLastTab",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalDockTests.KeyboardNavigation_SelectsTabsWithoutInterceptingTerminalInput",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalDockTests.ResizeHandle_ViewportChangesKeepTheHandleReachable",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.FontSizeControls_TakePrimaryAndRespectPackageBounds(name: \"Decrease font size\", bound: 8, delta: -1)",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.FontSizeControls_TakePrimaryAndRespectPackageBounds(name: \"Increase font size\", bound: 32, delta: 1)",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.InitialConnection_UsesProducerDimensions",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ModifiedF6_DoesNotMoveFocusFromTerminal",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ProducerOutput_RendersInCanvasAndPublicClientSnapshot",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ReadOnly_BlocksKeyboardAndPasteWithoutInterruptingOutput(initialReadOnly: True, chromeless: False)",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.SecondaryTypingAndPaste_PreservePrimaryAndProducerDimensions",
+      "prior_runs": 0,
+      "current_runs": 5,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ReadOnly_BlocksKeyboardAndPasteWithoutInterruptingOutput(initialReadOnly: False, chromeless: False)",
+      "prior_runs": 0,
+      "current_runs": 4,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ReadOnly_BlocksKeyboardAndPasteWithoutInterruptingOutput(initialReadOnly: False, chromeless: True)",
+      "prior_runs": 0,
+      "current_runs": 4,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.ResourceSelectInteractionTests.PointerSelection_ClosesDropdownAndSupportsConsecutiveChanges",
+      "prior_runs": 2,
+      "current_runs": 3,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.ReadOnly_BlocksKeyboardAndPasteWithoutInterruptingOutput(initialReadOnly: True, chromeless: True)",
+      "prior_runs": 0,
+      "current_runs": 3,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichCanConfigureDbContextOptions",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichDoesntOverridesCustomRetry",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichEnablesRetryByDefault",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichPreservesDefaultWhenMaxRetryCountNotSet",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichSupportCustomOptionsLifetime",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichSupportServiceType",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithConflictingCommandTimeoutThrows",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithRetryAndCustomExecutionStrategyThrows",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithRetryAndCustomRetryExecutionStrategy",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.EnrichWithoutRetryPreservesCustomExecutionStrategy",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ShouldNotThrowIfDbContextIsRegistered",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.ShouldThrowIfDbContextIsNotRegistered",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.EnrichSqlServerTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 2,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.AppBarTests.AppBar_Change_Theme",
+      "prior_runs": 7,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.BrowserTokenAuthenticationTests.BrowserToken_QueryStringToken_Success_RestrictToResources",
+      "prior_runs": 7,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.MobileNavMenuTests.MobileNavFocusRemainsVisibleAtHighZoomViewport",
+      "prior_runs": 7,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.MobileNavMenuTests.MobileNavMenuClosesWhenFocusLeavesMenu",
+      "prior_runs": 7,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Docker.Tests.DockerComposeTests.DeployWithDashboard_PrintsDashboardAndServiceEndpoints",
+      "prior_runs": 1,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Acquisition.Tests.Scripts.PRScriptShellTests.BooleanFlags_AreAccepted(flag: \"--verbose\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Azure.AI.OpenAI.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Azure.Storage.Queues.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Azure.Storage.Queues.Tests.ConformanceTests.TracingEnablesTheRightActivitySource_Keyed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillInvocation_CopilotAppMarker_DoesNotProvideDistinctAttribution",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillInvocation_CopilotStringArgs_ForwardsSkillName",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillMdRead_CopilotStringArgs_ForwardsSkillName",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_SkillTool_Claude_StripsAspirePrefix",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DcpStartupPublishesDevTunnelUrls",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Maui.Tests.MauiBuildQueueTests.CancelQueuedResource_CompletesGracefullyAndDoesNotAcquireSemaphore",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.MongoDB.Tests.SingleMemberReplicaSetFunctionalTests.TransactionsAndChangeStreamsWorkWithTls",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Redis.Tests.RedisFunctionalTests.WithDataBindMountShouldPersistStateBetweenUsages",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Tests.DistributedApplicationTests.StartAsync_DashboardAuthConfig_PassedToDashboardProcess(tokenEnvVarName: \"ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Tests.Pipelines.DistributedApplicationPipelineTests.PipelineConfigurationContext_GetStepsByResourceAndTag_ReturnsCorrectSteps",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Tests.Pipelines.DistributedApplicationPipelineTests.WithPipelineStepFactory_MultipleStepsSyncOverload_ExecutesAllSteps",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.CanRegisterMultipleInstancesUsingDifferentKeys",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConfigurationSchemaInvalidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConfigurationSchemaValidJsonConfigTest",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ConnectionInformationIsDelayValidated(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.DbContextCanBeAlwaysResolved",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.DbContextPoolingRegistersIDbContextPool",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.EachKeyedComponentRegistersItsOwnHealthCheck",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableHealthChecks",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.FavorsNamedConfigurationOverTopLevelConfigurationWhenBothProvided_DisableTracing",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: \"key\")",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthCheckReportsExpectedStatus(key: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.HealthChecksRegistersHealthCheckService(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: False, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.LoggerFactoryIsUsedByRegisteredClient(registerAfterLoggerFactory: True, useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.MetricsRegistersMeterProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.OptionsTypeIsSealed",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.ServiceLifetimeIsAsExpected(useKey: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingEnablesTheRightActivitySource",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: False)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.TracingRegistersTraceProvider(enabled: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.ConformanceTests.WhenKeyedRegistrationIsUsedThenItsImpossibleToResolveWithoutKey",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Templates.Tests.NUnit_NewUpAndBuildSupportProjectTemplatesTests.CanNewAndBuild(templateName: \"aspire-nunit\", extraTestCreationArgs: \"\", sdk: Net9, tfm: Net9, error: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Templates.Tests.XUnit_V3_NewUpAndBuildSupportProjectTemplatesTests.CanNewAndBuild(templateName: \"aspire-xunit\", extraTestCreationArgs: \"--xunit-version v3\", sdk: Net8, tfm: Net8, error: null)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents(rid: \"win-arm64\", singleFile: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.Hex1bNativePublishingTests.NativeAssetsKeepTheirLayoutAndContents(rid: \"win-x64\", singleFile: True)",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Dashboard.Tests.Integration.Playwright.TerminalTests.TerminalFocusNavigation_MovesToExpectedControlsWithoutForwardingInput",
+      "prior_runs": 0,
+      "current_runs": 1,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Commands.SdkDumpCommandTests.SdkDumpCi_ForHostingProject_DoesNotEmitWarnings",
+      "prior_runs": 9,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationCreatesThePrincipalWithTheIdentityObjectIdAsItsSid",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationFailsWithoutDamageWhenThePrincipalOwnsASchema",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationHandlesPrincipalNamesRequiringEscaping",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationIsANoOpWhenTheScriptRunsAgain",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationLeavesPrincipalsItDidNotCreateIntact",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationReplacesThePrincipalWhenTheIdentityObjectIdChanges",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Azure.Tests.AzureSqlPrincipalReconciliationTests.ReconciliationRollsBackWhenTheUserCannotBeRecreated",
+      "prior_runs": 7,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Cli.EndToEnd.Tests.NewWithAgentInitTests.AspireNew_WithAgentInit_InstallsPlaywrightWithoutErrors",
+      "prior_runs": 4,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Cli.EndToEnd.Tests.PlaywrightCliInstallTests.AgentInit_CwdDiffersFromRoot_PlacesSkillsInWorkspaceRoot",
+      "prior_runs": 4,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Cli.EndToEnd.Tests.PlaywrightCliInstallTests.AgentInit_InstallsPlaywrightCli_AndGeneratesSkillFiles",
+      "prior_runs": 4,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.BuildAndRunTemplateTests.StarterTemplateNewAndRunWithoutExplicitBuild(config: \"Debug\")",
+      "prior_runs": 4,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests_PreviousTFM.WebFrontendWorks(urlPrefix: \"http://\")",
+      "prior_runs": 3,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.Xunit_StarterTemplateProjectNamesTests.StarterTemplateWithTest_ProjectNames(prefix: \"aspire\")",
+      "prior_runs": 3,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Utils.EnvironmentCheckerTests.CheckAllAsync_TimedOutCheckReportsWarningAndContinues",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Cli.EndToEnd.Tests.McpDocsE2ETests.GetDoc_WithSection_ReturnsSpecificSection",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.MSTest_StarterTemplateProjectNamesTests.StarterTemplateWithTest_ProjectNames(prefix: \"aspire\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.None_StarterTemplateProjectNamesTests.StarterTemplateWithTest_ProjectNames(prefix: \"aspire\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.Nunit_StarterTemplateProjectNamesTests.StarterTemplateWithTest_ProjectNames(prefix: \"aspire\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests.ApiServiceWorks(urlPrefix: \"http://\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests.ApiServiceWorks(urlPrefix: \"https://\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests.ResourcesShowUpOnDashboard",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests.WebFrontendWorks(urlPrefix: \"http://\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests.WebFrontendWorks(urlPrefix: \"https://\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateWithRedisCacheTests_PreviousTFM.WebFrontendWorks(urlPrefix: \"https://\")",
+      "prior_runs": 2,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Acquisition.PeerInstallProbeTests.ProbeAsync_PeerEmitsArrayWithNonObjectFirstElement_FallsBackToVersion(doctorStdout: \"[\\\"string\\\"]\", kind: \"string\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Agents.TelemetryHookScriptTests.Pwsh_ReferenceFileRead_CopilotStringArgs_ForwardsRelativePath",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Cli.Tests.Projects.AppHostServerSessionTests.Start_StopRequested_GracefulSignalerThrows_StillEscalatesToKill",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNodeAppWorks",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.JavaScript.Tests.NodeFunctionalTests.VerifyNpmAppWorks",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Maui.Tests.MauiBuildQueueTests.ReleaseSemaphoreAfterLaunchAsync_AndroidReleasesWhenApplicationCancelsDuringTimeoutStop",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Aspire.Hosting.Tests.Pipelines.DistributedApplicationPipelineTests.WithPipelineStepFactory_MultipleStepsAsyncOverload_ExecutesAllSteps",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonDoesNotSetExtractionFailedWhenFailuresFoundDespiteUnreadableTrx",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonHandlesRealTrxTimestamps",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonIsEmptyWhenAllPass",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonListsOnlyFailedTestNames",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonSetsExtractionFailedWhenAllTrxUnreadable",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonSetsExtractionFailedWhenSomeTrxUnreadableAndNoFailuresFound",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.FailedTestsJsonTreatsAbortedAsFailure",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-ci-main",
+      "lane": "GitHub CI \u2014 main",
+      "name": "Infrastructure.Tests.GenerateTestSummaryToolTests.IncludesStructuredErrorMessageAndStackTraceInReport",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_Net11.ApiServiceWorks(urlPrefix: \"http://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_Net11.ApiServiceWorks(urlPrefix: \"https://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_Net11.ResourcesShowUpOnDashboard",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_Net11.WebFrontendWorks(urlPrefix: \"http://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_Net11.WebFrontendWorks(urlPrefix: \"https://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_PreviousTFM.ApiServiceWorks(urlPrefix: \"https://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_PreviousTFM.ResourcesShowUpOnDashboard",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_PreviousTFM.WebFrontendWorks(urlPrefix: \"http://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    },
+    {
+      "lane_id": "github-outerloop-main",
+      "lane": "GitHub outerloop \u2014 main",
+      "name": "Aspire.Templates.Tests.StarterTemplateRunTests_PreviousTFM.WebFrontendWorks(urlPrefix: \"https://\")",
+      "prior_runs": 1,
+      "current_runs": 0,
+      "current_recovered": 0
+    }
+  ],
+  "category_trends": {
+    "test": {
+      "label": "Test",
+      "current": [
+        52,
+        59
+      ],
+      "prior": [
+        47,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": -2.2,
+        "meaningful": false,
+        "direction": "\ud83d\udfe2 Improving"
+      }
+    },
+    "build": {
+      "label": "Build / tooling",
+      "current": [
+        0,
+        59
+      ],
+      "prior": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "workflow": {
+      "label": "Workflow / other",
+      "current": [
+        0,
+        59
+      ],
+      "prior": [
+        0,
+        52
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    }
+  },
+  "multi_category_runs": {
+    "current": 0,
+    "prior": 0
+  },
+  "chart": [
+    {
+      "date": "2026-09-11",
+      "passed": 0,
+      "failed": 7,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 5,
+      "other_failed": 0,
+      "insufficient_failed": 2
+    },
+    {
+      "date": "2026-09-12",
+      "passed": 1,
+      "failed": 1,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 1
+    },
+    {
+      "date": "2026-09-13",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 4,
+      "other_failed": 0,
+      "insufficient_failed": 2
+    },
+    {
+      "date": "2026-09-14",
+      "passed": 1,
+      "failed": 12,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 4,
+      "other_failed": 0,
+      "insufficient_failed": 8
+    },
+    {
+      "date": "2026-09-15",
+      "passed": 2,
+      "failed": 9,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 2,
+      "other_failed": 0,
+      "insufficient_failed": 7
+    },
+    {
+      "date": "2026-09-16",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": null,
+      "rolling_passed": null,
+      "rolling_failed": null,
+      "confirmed_test_failed": 1,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    },
+    {
+      "date": "2026-09-17",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": 9.6,
+      "rolling_passed": 5,
+      "rolling_failed": 47,
+      "confirmed_test_failed": 6,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-09-18",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.7,
+      "rolling_passed": 6,
+      "rolling_failed": 50,
+      "confirmed_test_failed": 8,
+      "other_failed": 0,
+      "insufficient_failed": 2
+    },
+    {
+      "date": "2026-09-19",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 9.1,
+      "rolling_passed": 5,
+      "rolling_failed": 50,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 1
+    },
+    {
+      "date": "2026-09-20",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 10.2,
+      "rolling_passed": 5,
+      "rolling_failed": 44,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-09-21",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.6,
+      "rolling_passed": 5,
+      "rolling_failed": 42,
+      "confirmed_test_failed": 5,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    },
+    {
+      "date": "2026-09-22",
+      "passed": 0,
+      "failed": 13,
+      "rolling_pass_rate": 6.1,
+      "rolling_passed": 3,
+      "rolling_failed": 46,
+      "confirmed_test_failed": 5,
+      "other_failed": 0,
+      "insufficient_failed": 8
+    },
+    {
+      "date": "2026-09-23",
+      "passed": 2,
+      "failed": 11,
+      "rolling_pass_rate": 7.3,
+      "rolling_passed": 4,
+      "rolling_failed": 51,
+      "confirmed_test_failed": 4,
+      "other_failed": 0,
+      "insufficient_failed": 7
+    },
+    {
+      "date": "2026-09-24",
+      "passed": 3,
+      "failed": 7,
+      "rolling_pass_rate": 11.9,
+      "rolling_passed": 7,
+      "rolling_failed": 52,
+      "confirmed_test_failed": 2,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    }
+  ],
+  "verdict": "holding",
+  "collection": {
+    "mode": "bootstrap",
+    "refresh_dates": [
+      "2026-09-11",
+      "2026-09-12",
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-19",
+      "2026-09-20",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24"
+    ],
+    "fetched_records": 204,
+    "active_records": 204,
+    "reused_records": 0,
+    "replaced_records": 0,
+    "lane_seconds": {
+      "github-ci-main": 40.816,
+      "github-outerloop-main": 7.001,
+      "azdo-internal-main": 1.948
+    },
+    "provider_commands": 316,
+    "provider_retries": 0,
+    "evidence": {
+      "attempt_cache_hits": 113,
+      "attempt_fetches": 0,
+      "evidence_positive_hits": 252,
+      "evidence_negative_hits": 0,
+      "evidence_expired_negatives": 0,
+      "evidence_log_fetches": 236
+    },
+    "collection_seconds": 50.269,
+    "total_seconds": 82.38
+  },
+  "execution_source": {
+    "commit": "1f0933abc030a0afb9a612aea410d20fbb196569",
+    "dirty": false,
+    "paths": [
+      "aspire-rolling-ci-health.prompt.txt",
+      "scripts/ci_health.py",
+      "scripts/test_ci_health.py"
+    ]
+  }
+}

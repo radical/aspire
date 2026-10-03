@@ -1,0 +1,60 @@
+{
+  "artifact_kind": "historical-rolling-ci-health-reconstruction",
+  "description": "Historical reconstruction collected on October 2-3, 2026 from live provider records. This report did not run on September 25, 2026.",
+  "generation_started_at": "2026-10-02T23:55:47Z",
+  "successful_collection_started_at": "2026-10-03T00:07:18Z",
+  "generation_completed_by": "2026-10-03T00:08:48Z",
+  "report_cutoff": "2026-09-25T00:00:00Z",
+  "prior_window": {
+    "start": "2026-09-11",
+    "end": "2026-09-17"
+  },
+  "current_window": {
+    "start": "2026-09-18",
+    "end": "2026-09-24"
+  },
+  "source_revision": "1f0933abc030a0afb9a612aea410d20fbb196569",
+  "source_paths": [
+    "aspire-rolling-ci-health.prompt.txt",
+    "scripts/ci_health.py",
+    "scripts/test_ci_health.py"
+  ],
+  "headline": "Unhealthy: GitHub CI main, 7/59 initial successes, 12% initial green, flat",
+  "collection_mode": "bootstrap",
+  "previous_data_used": false,
+  "provider_commands": 316,
+  "provider_retries": 0,
+  "collection_seconds": 50.269,
+  "collector_total_seconds_before_render": 82.38,
+  "lane_seconds": {
+    "github-ci-main": 40.816,
+    "github-outerloop-main": 7.001,
+    "azdo-internal-main": 1.948
+  },
+  "cache_policy": "Isolated canonical-cache copy merged with completed local checkpoints. Only compact attempts and positive log evidence were retained; all unavailable/negative evidence was removed before retry. Neither cache nor source state is published.",
+  "cache_metrics": {
+    "attempt_cache_hits": 113,
+    "attempt_fetches": 0,
+    "evidence_positive_hits": 252,
+    "evidence_negative_hits": 0,
+    "evidence_log_fetches": 236,
+    "unavailable_evidence_entries_after_collection": 29
+  },
+  "limitations": [
+    "Report cutoff controls completed UTC date buckets, not a historical provider snapshot. Provider records and rerun outcomes reflect information available during reconstruction.",
+    "The report JSON now field is the historical cutoff, not the actual generation timestamp; use this manifest for generation provenance.",
+    "The collector records total_seconds before rendering and does not separately time diagnostics, compute, rendering, or validation.",
+    "The initial cold-cache collection was stopped after more than ten minutes, preserving completed cache checkpoints; timings and command counts describe the successful retry only."
+  ],
+  "validation": {
+    "collector_report_validation": "passed",
+    "unit_tests": {
+      "passed": 61,
+      "failed": 0
+    }
+  },
+  "publication_scope": "Only this manifest and the immutable historical PNG and JSON. No issue edits, comments, canonical cache updates, or canonical source-state updates.",
+  "png_url": "https://raw.githubusercontent.com/radical/aspire/ci-health-assets/rolling/history/as-of-20260925/generated-20261002T235547Z/rolling-health.png",
+  "json_url": "https://raw.githubusercontent.com/radical/aspire/ci-health-assets/rolling/history/as-of-20260925/generated-20261002T235547Z/rolling-health.json",
+  "manifest_url": "https://raw.githubusercontent.com/radical/aspire/ci-health-assets/rolling/history/as-of-20260925/generated-20261002T235547Z/manifest.json"
+}
