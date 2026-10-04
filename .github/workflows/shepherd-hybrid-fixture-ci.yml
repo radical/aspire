@@ -2,10 +2,6 @@ name: Shepherd hybrid fixture CI
 
 on:
   pull_request:
-    paths:
-      - '.ci-shepherd-pilot/**'
-      - '.ci-shepherd-worker-pilot/**'
-      - '.ci-shepherd-issue-pilot/**'
 
 permissions:
   contents: read
@@ -13,6 +9,7 @@ permissions:
 jobs:
   fixture:
     name: Check changed Shepherd fixtures
+    if: github.repository == 'radical/aspire' && (github.head_ref == 'shepherd-hybrid-inline-fixture' || github.head_ref == 'shepherd-hybrid-cloud-fixture' || github.head_ref == 'copilot/repair-radical-aspire-issue-125')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,6 +21,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           python3 --version
           python3 - <<'PY'
@@ -45,7 +43,13 @@ jobs:
           }
           directories = sorted({path.split("/", 1)[0] for path in paths} & allowed)
           if not directories:
-              raise SystemExit("No changed supported fixture directory")
+              # A successful repair can restore the base bytes and empty the PR
+              # diff. Still exercise that exact head instead of skipping its CI.
+              directories = [{
+                  "shepherd-hybrid-inline-fixture": ".ci-shepherd-pilot",
+                  "shepherd-hybrid-cloud-fixture": ".ci-shepherd-worker-pilot",
+                  "copilot/repair-radical-aspire-issue-125": ".ci-shepherd-issue-pilot",
+              }[os.environ["HEAD_REF"]]]
           for directory in directories:
               command = [
                   "python3", "-B", "-m", "unittest", "discover",
