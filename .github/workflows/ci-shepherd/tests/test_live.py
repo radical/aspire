@@ -708,6 +708,43 @@ class LiveTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(contracts.read_json(artifacts / "audit.json")["phase"], "complete")
         self.assertFalse((self.work / "should-not-exist").exists())
 
+    def test_compiled_prepare_reports_bounded_quota_wait_without_effects(self):
+        original = self.service.transport
+        def exhausted(method, endpoint, body):
+            response = original(method, endpoint, body)
+            if method == "GET" and endpoint.startswith("agents/"):
+                return Response(response.payload, {"X-RateLimit-Resource": "mission_control",
+                                                  "X-RateLimit-Limit": "60", "X-RateLimit-Remaining": "0",
+                                                  "X-RateLimit-Reset": str(int(live.clock().timestamp()) + 3600)})
+            return response
+        self.service.transport = exhausted
+        fixture = HTTPFixture(self.service)
+        self.addCleanup(fixture.close)
+        source = Path(__file__).resolve().parents[1]
+        scripts = self.work / ".github" / "workflows"
+        scripts.mkdir(parents=True)
+        (scripts / "ci-shepherd").symlink_to(source, target_is_directory=True)
+        binaries = self.work / "bin"
+        binaries.mkdir()
+        shim = binaries / "python3"
+        shim.write_text(f"#!{sys.executable}\n" + (Path(__file__).parent / "fixture_host.py").read_text())
+        shim.chmod(0o700)
+        environment = {"PATH": str(binaries.resolve()) + ":" + os.defpath,
+                       "GITHUB_REPOSITORY": RUN["repository"], "GITHUB_RUN_ID": RUN["runId"],
+                       "GITHUB_RUN_ATTEMPT": RUN["runAttempt"], "GITHUB_WORKFLOW_SHA": RUN["workflowSha"],
+                       "GITHUB_OUTPUT": str((self.work / "output").resolve()), "SHEPHERD_MODE": "observe",
+                       "CI_SHEPHERD_USER_TOKEN": "test-only-host-credential",
+                       "TEST_HTTP_PORT": str(fixture.server.server_port), "TEST_SOURCE": str(source)}
+        step = compiled_step("Prepare host-owned envelope")
+        result = subprocess.run(["bash", "-c", step["run"]], cwd=self.work, env=environment,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1)
+        audit = contracts.read_json(self.work / "artifacts/ci-shepherd/prepared/audit.json")
+        self.assertEqual(audit["phase"], "failed")
+        self.assertEqual(audit["attempts"], [])
+        self.assertIn("quota wait exceeds 180s", result.stderr)
+        self.assertEqual({method for method, _, _ in self.service.calls}, {"GET"})
+
     def test_task_http_rejections_and_uncertain_errors_are_distinct_without_retries(self):
         class Reject:
             def __init__(self, code):

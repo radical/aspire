@@ -1,6 +1,7 @@
 """Test-only subprocess shim; no production endpoint or capability override."""
 
 import os
+from datetime import datetime
 from pathlib import Path
 import sys
 from urllib.parse import urlparse
@@ -36,6 +37,9 @@ class FixtureTransport(original):
 
 
 live.HTTPTransport = FixtureTransport
+if os.environ.get("TEST_CLOCK"):
+    observed = datetime.fromisoformat(os.environ["TEST_CLOCK"])
+    live.clock = lambda: observed
 hosted.prepare.__kwdefaults__["host_check"] = lambda run: None
 hosted.apply.__kwdefaults__["host_check"] = lambda run: None
 if Path(sys.argv[1]).name == "hosted.py":

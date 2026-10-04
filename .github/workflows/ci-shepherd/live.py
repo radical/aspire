@@ -2,10 +2,12 @@
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from email.utils import format_datetime, parsedate_to_datetime
 from http.client import HTTPException
 import io
 import json
 import re
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -35,6 +37,7 @@ TASK_STATES = {"queued", "in_progress", "idle", "waiting_for_user", "completed",
                "failed", "timed_out", "cancelled"}
 CORRELATION = "ci-shepherd-correlation: "
 MAX_BYTES = 256 * 1024
+MAX_GET_WAIT_SECONDS = 180
 
 
 def clock():
@@ -49,16 +52,102 @@ class NoRedirect(HTTPRedirectHandler):
 class HTTPTransport:
     """No ambient gh configuration, token fallback, write retry or token redirect."""
 
-    def __init__(self, token, *, write=False, opener=None):
+    def __init__(self, token, *, write=False, opener=None, clock_fn=None, sleep_fn=None):
         if not isinstance(token, str) or not token:
             raise ValueError("selected user credential is required")
         self.token, self.write = token, write
         self.opener = opener or build_opener(NoRedirect())
+        self.clock_fn, self.sleep_fn = clock_fn or clock, sleep_fn or time.sleep
+        self.mission_quota = None
+        self.quota_waits = 0
+        self.waited_seconds = 0
+
+    def _safe_headers(self, headers):
+        patterns = {
+            "x-ratelimit-resource": r"[A-Za-z0-9_-]{1,64}",
+            "x-ratelimit-limit": r"[0-9]{1,20}",
+            "x-ratelimit-remaining": r"[0-9]{1,20}",
+            "x-ratelimit-used": r"[0-9]{1,20}",
+            "x-ratelimit-reset": r"[0-9]{1,20}",
+            "retry-after": r"[0-9]{1,20}",
+            "x-github-request-id": r"[A-Za-z0-9:._-]{1,128}",
+        }
+        safe, seen = {}, set()
+        for name, value in headers.items():
+            key = name.casefold()
+            if key not in patterns and key != "date":
+                continue
+            if key in seen:
+                safe.pop(key, None)
+                continue
+            seen.add(key)
+            if not isinstance(value, str) or self.token in value:
+                continue
+            if key == "date":
+                try:
+                    date = parsedate_to_datetime(value)
+                    if date.tzinfo is not None:
+                        safe[key] = format_datetime(date.astimezone(timezone.utc), usegmt=True)
+                except (ValueError, TypeError, OverflowError):
+                    continue
+            elif re.fullmatch(patterns[key], value):
+                safe[key] = value
+        return safe
+
+    def _safe_path(self, path):
+        return path.replace(self.token, "[redacted]")
+
+    def _diagnostic(self, method, path, status, headers):
+        return f"{method} {self._safe_path(path)} HTTP {status}; headers=" + json.dumps(self._safe_headers(headers), sort_keys=True)
+
+    def _observe_quota(self, headers):
+        safe = self._safe_headers(headers)
+        if safe.get("x-ratelimit-resource") != "mission_control":
+            return
+        required = {"x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"}
+        if not required <= safe.keys():
+            raise ValueError("incomplete mission_control quota headers")
+        limit, remaining, reset = (int(safe[key]) for key in
+                                   ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"))
+        if limit <= 0 or remaining > limit or reset <= 0:
+            raise ValueError("invalid mission_control quota headers")
+        self.mission_quota = {"remaining": remaining, "reset": reset}
+
+    def _admit_task_request(self, method, path):
+        if not path.startswith(f"agents/repos/{REPOSITORY}/tasks") or self.mission_quota is None:
+            return
+        remaining, reset = self.mission_quota["remaining"], self.mission_quota["reset"]
+        if method != "GET":
+            # Never wait after the final effect guard. A fresh GET must establish
+            # write admission; even an elapsed reset is not proof of availability.
+            if remaining == 0:
+                raise RejectedEffect(f"{method} {self._safe_path(path)} not sent; mission_control exhausted; reset={reset}")
+            return
+        if remaining > 1:
+            return
+        before = self.clock_fn()
+        delay = reset - before.timestamp() + 1
+        if delay <= 0:
+            return
+        if self.waited_seconds + delay > MAX_GET_WAIT_SECONDS:
+            raise IncompleteInventory(f"GET {self._safe_path(path)} quota wait exceeds {MAX_GET_WAIT_SECONDS}s; reset={reset}")
+        # Observed task headers use a separate bucket, e.g.
+        # resource=mission_control, limit=60, remaining=1, reset=1791087531.
+        # Keep its last slot for POST; core=5000 says nothing about this bucket.
+        # https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+        self.sleep_fn(delay)
+        after = self.clock_fn()
+        if after < before:
+            raise IncompleteInventory("host clock rollback after quota wait")
+        if after.timestamp() <= reset:
+            raise IncompleteInventory("quota wait did not reach reset")
+        self.waited_seconds += delay
+        self.quota_waits += 1
 
     def __call__(self, method, endpoint, body):
         # API paths come from this fixed adapter, never decision text.
         path = urlparse(endpoint)
-        if path.scheme or path.netloc or path.fragment or ".." in path.path:
+        if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid API path")
         prefix = f"repos/{REPOSITORY}"
         reads = (
@@ -77,6 +166,7 @@ class HTTPTransport:
             or method == "PATCH" and re.fullmatch(re.escape(prefix) + r"/issues/comments/[1-9][0-9]*", path.path)
         ):
             raise ValueError("hosted write endpoint is not allowed")
+        self._admit_task_request(method, path.path)
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2026-03-10", "User-Agent": "ci-shepherd-fixture"}
         data = None if body is None else json.dumps(body, allow_nan=False).encode()
@@ -90,34 +180,41 @@ class HTTPTransport:
             if method == "GET" and error.code == 302:
                 return self._download(error.headers.get("Location"))
             # Only documented rejections establish that no task was created.
+            diagnostic = self._diagnostic(method, path.path, error.code, error.headers)
             if method == "POST" and path.path.endswith("/tasks") and error.code in {400, 401, 403, 422}:
-                raise RejectedEffect(f"task rejected with HTTP {error.code}; human/external block") from error
+                raise RejectedEffect("task rejected; " + diagnostic) from None
             if method != "GET":
-                raise LostResponse(f"write result uncertain: HTTP {error.code}; no retry") from error
-            raise IncompleteInventory(f"GET unavailable: HTTP {error.code}") from error
+                raise LostResponse("write result uncertain; no retry; " + diagnostic) from None
+            raise IncompleteInventory("GET unavailable; " + diagnostic) from None
         except (OSError, URLError) as error:
             exception = IncompleteInventory if method == "GET" else LostResponse
-            raise exception("API response unavailable; no retry") from error
+            raise exception(f"{method} {self._safe_path(path.path)} response unavailable; no retry") from None
         try:
             with response:
                 raw = response.read(MAX_BYTES + 1)
                 if len(raw) > MAX_BYTES:
                     raise (IncompleteInventory if method == "GET" else LostResponse)("API result exceeds limit")
                 payload = contracts.loads(raw.decode("utf-8"))
+                self._observe_quota(response.headers)
                 return Response(payload, dict(response.headers), response.status)
         except (ValueError, UnicodeError, OSError, HTTPException) as error:
             exception = IncompleteInventory if method == "GET" else LostResponse
-            raise exception("API result unavailable or invalid; no retry") from error
+            raise exception("API result unavailable or invalid; no retry; " +
+                            self._diagnostic(method, path.path, response.status, response.headers)) from None
 
     def _download(self, location):
-        parsed = urlparse(location or "")
         # GitHub's GET artifact/log redirect is a short-lived signed URL. Do
         # not forward the user credential to storage or follow another redirect.
         # https://docs.github.com/en/rest/actions/artifacts#download-an-artifact
-        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port not in {None, 443} or not (
-            (parsed.hostname or "").endswith(".blob.core.windows.net")
-            or (parsed.hostname or "").endswith(".actions.githubusercontent.com")
-        ):
+        try:
+            parsed = urlparse(location or "")
+            trusted = parsed.scheme == "https" and not parsed.username and not parsed.password and parsed.port in {None, 443} and (
+                (parsed.hostname or "").endswith(".blob.core.windows.net")
+                or (parsed.hostname or "").endswith(".actions.githubusercontent.com")
+            )
+        except ValueError:
+            raise IncompleteInventory("untrusted storage redirect") from None
+        if not trusted:
             raise IncompleteInventory("untrusted storage redirect")
         try:
             with self.opener.open(Request(location), timeout=30) as response:
@@ -126,7 +223,7 @@ class HTTPTransport:
                     raise IncompleteInventory("download unavailable or exceeds limit")
                 return Response(raw, {}, 200)
         except (OSError, URLError, HTTPException) as error:
-            raise IncompleteInventory("download unavailable") from error
+            raise IncompleteInventory("download unavailable") from None
 
 
 class API:
@@ -198,11 +295,20 @@ def archive_json(raw, filename):
 class RemoteHistory:
     """Independent Actions/task witness; local files and comment absence aren't authority."""
 
-    def __init__(self, api, run):
+    def __init__(self, api, run, recovery=None):
         self.api, self.run = api, run
         self.trial = None
+        self.recovery = recovery
+        self.recovery_record = None
+        self.resume_allowed = True
+        self.durable_records = []
 
     def collect(self, workers):
+        self.trial = None
+        self.recovery_record = None
+        self.resume_allowed = True
+        self.durable_records = []
+        migrated_runs = set()
         prefix = f"repos/{REPOSITORY}/actions"
         workflow = self.api.get(prefix + "/workflows/ci-shepherd.lock.yml")
         if workflow.get("path") != WORKFLOW or workflow.get("id") != WORKFLOW_ID:
@@ -238,6 +344,24 @@ class RemoteHistory:
             # The two older transport-only runs can prove no effects through
             # their independently downloaded receipt; no fake "history=true".
             own = str(run["id"]) == self.run["runId"]
+            if self.recovery is not None:
+                import recovery
+                if (run["actor"]["id"] != recovery.ACTOR["id"] or run["head_repository"]["id"] != REPOSITORY_ID
+                        or run["workflow_id"] != WORKFLOW_ID):
+                    raise IncompleteInventory("pinned recovery actor/repository identity mismatch")
+                if str(run["id"]) in recovery.JOBS and not own:
+                    artifacts = self.api.pages(prefix + f"/runs/{run['id']}/artifacts", key="artifacts")
+                    record = self.recovery.witness(self.api, run, artifacts)
+                    migrated_runs.add(str(run["id"]))
+                    if record is not None:
+                        self.recovery_record = record
+                        if self.trial is not None and self.trial != receipts.trial_tuple(record):
+                            raise IncompleteInventory("remote history contains multiple trials")
+                        self.trial = receipts.trial_tuple(record)
+                        history["recordIds"].append(recovery.COMMENT_ID)
+                        history["publicationAttempts"].append(record["trialId"])
+                        history["associatedOperationIds"].append(recovery.OPERATION_ID)
+                    continue
             if not own and (run["status"] != "completed" or run["conclusion"] != "success"):
                 raise IncompleteInventory("failed/cancelled/incomplete privileged run; human recovery required")
             if not own and (run["head_sha"] != self.run["workflowSha"] or run["actor"]["login"] != "radical"):
@@ -273,8 +397,12 @@ class RemoteHistory:
                         or audit["mode"] not in {"observe", "live"} or audit["phase"] != "complete"):
                     raise IncompleteInventory("incomplete privileged attempt audit")
                 record = audit["record"]
+                if self.recovery is not None and (audit["attempts"] or record is not None and record != recovery.prepared_record()):
+                    self.resume_allowed = False
                 if record is not None:
                     receipts.validate_record(record, ROOT)
+                    if self.recovery is not None:
+                        self.durable_records.append(record)
                     trial = receipts.trial_tuple(record)
                     if self.trial is not None and self.trial != trial:
                         raise IncompleteInventory("remote history contains multiple trials")
@@ -291,11 +419,18 @@ class RemoteHistory:
         for worker in workers:
             if worker["operationId"] is not None:
                 history["associatedOperationIds"].append(worker["operationId"])
+        if self.recovery is not None and migrated_runs != set(recovery.JOBS):
+            raise IncompleteInventory("pinned recovery history is missing a named prior attempt")
         return {key: sorted(set(values)) for key, values in history.items()}
 
 
 class FixtureGitHub(GitHub):
-    def __init__(self, transport, run, *, write=False, audit=None):
+    def __init__(self, transport, run, *, write=False, audit=None, recovery=None):
+        if recovery is not None:
+            from recovery import PinnedRecovery
+            if type(recovery) is not PinnedRecovery or recovery.run != run:
+                raise ValueError("explicit typed pinned recovery/run required")
+        self.recovery = recovery
         self.api = API(transport)
         self.run = run
         actor = self.api.get("user")
@@ -309,7 +444,7 @@ class FixtureGitHub(GitHub):
             raise ValueError("fixed fixture repository identity changed")
         self.audit = audit
         self.context = {}
-        self.history = RemoteHistory(self.api, run)
+        self.history = RemoteHistory(self.api, run, recovery)
 
     def mapping(self):
         pr = self.api.get(f"repos/{REPOSITORY}/pulls/121")
@@ -389,6 +524,16 @@ class FixtureGitHub(GitHub):
         return task, correlation, normalized
 
     def refresh(self, root):
+        for _ in range(2):
+            waits = getattr(self.transport, "quota_waits", 0)
+            snapshot = self._refresh(root)
+            if getattr(self.transport, "quota_waits", 0) == waits:
+                return snapshot
+            # Any PR/comment reads preceding a wait are no longer fresh. Repeat
+            # the entire collection, not just task reads or cached authority.
+        raise IncompleteInventory("quota waits prevent a complete fresh observation")
+
+    def _refresh(self, root):
         if root != ROOT:
             raise ValueError("root outside fixed fixture")
         pr = self.mapping()
@@ -459,6 +604,9 @@ class FixtureGitHub(GitHub):
                         "labels": [label["name"] for label in pr["labels"]], "state": pr["state"],
                         "feedback": descriptive, "tasks": task_context, "gate": gate, "untrustedEvidence": True}
         _, canonical_record = receipts.read_record(snapshot, self.actor)
+        if self.recovery is not None:
+            record = self.recovery.check_canonical(snapshot, self.actor)
+            self.recovery.check_durable(record, self.history.durable_records)
         for task in task_context:
             correlation = task["correlation"]
             operation = next(value for value in canonical_record["operations"] if value["id"] == correlation["operationId"])
