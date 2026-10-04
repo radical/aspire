@@ -100,7 +100,9 @@ an honest human handoff, not another initial assignment or guessed PR.
 The intentionally narrow `python-labels-v1` profile changes only
 `.ci-shepherd-pilot/labels.py`; exact-head
 `.ci-shepherd-pilot/test_labels.py` remains unchanged. Eligible PR diffs modify
-only that source file. The source has one single-parameter `normalize_label`
+only that existing source file (`status=modified`); added fixtures or test changes
+use the cloud lane. PR file inventories are identified by unique `filename`
+because the primary API does not supply item IDs. The source has one single-parameter `normalize_label`
 function with optional inert `str` annotations. Repairs preserve its signature,
 returning its parameter or a chain of zero-argument `strip`, `lower`, `casefold` and
 `upper` calls. Source/replacement bodies are limited to16,000 bytes and
@@ -136,7 +138,13 @@ missing, malformed or unsuccessful; such evidence cannot authorize code.
 Task creation uses only the verified primary REST fields `prompt`, `base_ref`,
 optional `head_ref` and `create_pull_request`, API version `2026-03-10`.
 Task details come from `agents/repos/{owner}/{repo}/tasks/{task_id}`; both
-`is_archived=false` and `is_archived=true` inventory lanes are required. See the
+`is_archived=false` and `is_archived=true` inventory lanes are required.
+Primary task responses require only `tasks`; lane counts are optional and
+validated when present. Without counts, bounded Link pagination establishes
+completeness. Live links can omit the archive filter: every next request keeps
+the original filter pinned, and contradictory filters/relations fail closed.
+A full final page requires an explicit self `last` link; a missing continuation
+or exhausted page bound is not an empty/complete inventory. See the
 [primary REST schema](https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json).
 No invented worker hard cap or cancellation endpoint is exposed.
 
