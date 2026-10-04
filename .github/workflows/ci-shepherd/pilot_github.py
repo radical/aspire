@@ -269,7 +269,7 @@ class PilotGitHub:
         tasks = {}
         for archived in ("false", "true"):
             for task in self.api.pages(f"agents/repos/{REPOSITORY}/tasks", key="tasks",
-                                       query={"is_archived": archived}, require_total_count=True,
+                                       query={"is_archived": archived}, optional_total_count=True,
                                        total_count_key="total_archived_count" if archived == "true" else "total_active_count"):
                 if task["id"] in tasks:
                     raise IncompleteInventory("task present in both archive lanes")
