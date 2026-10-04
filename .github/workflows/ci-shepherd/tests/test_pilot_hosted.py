@@ -59,6 +59,16 @@ def expression(value, context):
 
 
 class PilotHostedBudgetTests(WorkspaceTest, unittest.TestCase):
+    def test_emitted_prepare_and_settle_route_manual_only_target_without_schedule_drift(self):
+        for step_name in ("Prepare host-owned envelope", "Settle native billing before authorizing an action"):
+            step = compiled_step(step_name)
+            for event, requested, expected in (
+                    ("workflow_dispatch", "upstream-20722", "upstream-20722"),
+                    ("workflow_dispatch", "", "fork"), ("schedule", "upstream-20722", "fork")):
+                with self.subTest(step=step_name, event=event, requested=requested):
+                    self.assertEqual(expected, expression(step["env"]["SHEPHERD_TARGET"], {
+                        "github.event_name": event, "inputs.target": requested}))
+
     def test_emitted_config_admits_thirty_pilot_five_legacy_ignoring_repo_default(self):
         step = compiled_step("Execute GitHub Copilot CLI")
         lines = step["run"].splitlines()
