@@ -2,6 +2,10 @@
 
 ## Agentic workflow maintenance
 
+The manual-only [CI Shepherd transport proof](ci-shepherd/README.md) is a bounded
+no-effect experiment. Its Python behavioral tests and pinned-compiler commands
+are separate from the existing Infrastructure.Tests contracts.
+
 Agentic workflows are authored in `.github/workflows/*.md`. Upgrade the active
 compiler to the latest stable release and inspect its suggested migrations before
 recompiling:
