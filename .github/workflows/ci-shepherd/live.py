@@ -245,7 +245,7 @@ class API:
         return response.payload
 
     def pages(self, path, *, key=None, query=None, require_empty_count=False, require_total_count=False,
-              total_count_key="total_count"):
+              total_count_key="total_count", optional_total_count=False):
         query = dict(query or {})
         items, total = [], None
         for page in range(1, self.max_pages + 1):
@@ -259,7 +259,7 @@ class API:
             values = payload if key is None else payload.get(key) if isinstance(payload, dict) else None
             if not isinstance(values, list) or len(values) > 100:
                 raise IncompleteInventory("missing or malformed inventory")
-            if require_total_count:
+            if require_total_count or optional_total_count and isinstance(payload, dict) and total_count_key in payload:
                 count = payload.get(total_count_key) if isinstance(payload, dict) else None
                 if type(count) is not int or count < 0 or total is not None and count != total:
                     raise IncompleteInventory("inventory total_count missing/malformed/changed")
@@ -273,6 +273,8 @@ class API:
             if len(links) > 1:
                 raise IncompleteInventory("ambiguous Link")
             following = False
+            last_page = None
+            relations = set()
             if links:
                 if not isinstance(links[0], str):
                     raise IncompleteInventory("invalid Link")
@@ -280,6 +282,36 @@ class API:
                     match = re.fullmatch(r'\s*<([^>]+)>;\s*rel="(next|prev|first|last)"\s*', part)
                     if not match:
                         raise IncompleteInventory("malformed Link")
+                    if optional_total_count:
+                        # The task API may return {"tasks": [...]} without counts.
+                        # In that case Link is the completeness witness, not an
+                        # invented zero. Validate all relations before trusting it.
+                        # https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
+                        parsed = urlparse(match[1])
+                        parameters = parse_qs(parsed.query, strict_parsing=True)
+                        page_values = parameters.pop("page", [])
+                        expected = {k: [str(v)] for k, v in {**query, "per_page": 100}.items()}
+                        # Live task links omit is_archived. Requests are rebuilt
+                        # from the pinned query, never from the returned URL.
+                        if (match[2] in relations or parsed.scheme != "https" or parsed.netloc != "api.github.com"
+                                or parsed.path != "/" + path or parsed.fragment
+                                or parameters.get("per_page") != ["100"]
+                                or any(name not in expected or value != expected[name] for name, value in parameters.items())
+                                or len(page_values) != 1 or not re.fullmatch(r"[1-9][0-9]*", page_values[0])):
+                            raise IncompleteInventory("foreign or ambiguous pagination relation")
+                        relations.add(match[2])
+                        linked_page = int(page_values[0])
+                        if (match[2] == "first" and linked_page != 1
+                                or match[2] == "prev" and linked_page != page - 1
+                                or match[2] == "last" and linked_page < page):
+                            raise IncompleteInventory("contradictory pagination relation")
+                        if match[2] == "last":
+                            last_page = linked_page
+                        if match[2] == "next":
+                            if linked_page != page + 1:
+                                raise IncompleteInventory("nonsequential or changed pagination")
+                            following = True
+                        continue
                     if match[2] != "next":
                         continue
                     parsed = urlparse(match[1])
@@ -289,10 +321,15 @@ class API:
                     if parse_qs(parsed.query, strict_parsing=True) != expected:
                         raise IncompleteInventory("nonsequential or changed pagination")
                     following = True
-            if not following and len(values) < 100:
+            if optional_total_count and following and last_page is not None and last_page <= page:
+                raise IncompleteInventory("contradictory next/last pagination")
+            if optional_total_count and not following and (
+                    len(values) == 100 and last_page != page or last_page is not None and last_page > page):
+                raise IncompleteInventory("task pagination missing next link; inventory incomplete")
+            if not following and (len(values) < 100 or optional_total_count and last_page == page):
                 ids = [item["id"] for item in items]
                 issue_pr.unique(ids, "remote inventory identity")
-                if require_total_count and len(items) != total:
+                if (require_total_count or optional_total_count and total is not None) and len(items) != total:
                     raise IncompleteInventory("inventory total_count contradicts complete pages")
                 return items
         raise IncompleteInventory("pagination limit; inventory incomplete")
