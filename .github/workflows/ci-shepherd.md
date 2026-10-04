@@ -18,6 +18,13 @@ on:
         description: Authorize only the pinned unsent prepared intent and its two reviewed prior-source runs.
         type: boolean
         default: false
+      target:
+        description: Fixed manual-only upstream trial or default fork pilot.
+        type: choice
+        default: fork
+        options:
+          - fork
+          - upstream-20722
 
 concurrency:
   group: ci-shepherd-transport-proof
@@ -111,6 +118,10 @@ jobs:
           CI_SHEPHERD_TRACKER: ${{ vars.CI_SHEPHERD_TRACKER }}
           CI_SHEPHERD_TRACKER_NODE: ${{ vars.CI_SHEPHERD_TRACKER_NODE }}
           CI_SHEPHERD_AUTHORITY_COMMENT: ${{ vars.CI_SHEPHERD_AUTHORITY_COMMENT }}
+          SHEPHERD_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'fork' }}
+          CI_SHEPHERD_UPSTREAM_TRACKER: ${{ vars.CI_SHEPHERD_UPSTREAM_TRACKER }}
+          CI_SHEPHERD_UPSTREAM_TRACKER_NODE: ${{ vars.CI_SHEPHERD_UPSTREAM_TRACKER_NODE }}
+          CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT: ${{ vars.CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT }}
         run: python3 .github/workflows/ci-shepherd/hosted.py prepare --workdir artifacts/ci-shepherd/prepared
       - uses: actions/upload-artifact@v7.0.1
         with:
@@ -168,6 +179,10 @@ jobs:
           CI_SHEPHERD_TRACKER_NODE: ${{ vars.CI_SHEPHERD_TRACKER_NODE }}
           CI_SHEPHERD_AUTHORITY_COMMENT: ${{ vars.CI_SHEPHERD_AUTHORITY_COMMENT }}
           CI_SHEPHERD_USER_TOKEN: ${{ secrets.CI_SHEPHERD_USER_TOKEN }}
+          SHEPHERD_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'fork' }}
+          CI_SHEPHERD_UPSTREAM_TRACKER: ${{ vars.CI_SHEPHERD_UPSTREAM_TRACKER }}
+          CI_SHEPHERD_UPSTREAM_TRACKER_NODE: ${{ vars.CI_SHEPHERD_UPSTREAM_TRACKER_NODE }}
+          CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT: ${{ vars.CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT }}
         run: |
           python3 .github/workflows/ci-shepherd/pilot.py settle \
             --trusted artifacts/ci-shepherd/pilot/trusted \

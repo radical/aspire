@@ -13,6 +13,7 @@ import live
 import issue_pr
 import pilot_state as state
 import round as contracts
+import pilot_binding as bindings
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
@@ -24,10 +25,47 @@ class PresentationUncertain(ValueError):
 
 
 class PilotTransport(live.HTTPTransport):
+    def __init__(self, token, *, write=False, binding=bindings.FORK, tracker=None, authority=None):
+        super().__init__(token, write=write)
+        self.binding = binding
+        self.task_repository = binding.repository
+        self.tracker, self.authority = tracker, authority
+
     def validate_endpoint(self, method, endpoint, body):
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
+        if self.binding == bindings.UPSTREAM:
+            target = "repos/" + self.binding.repository
+            if method == "GET" and (path.path == target or re.fullmatch(
+                    re.escape(target) + r"/(?:issues/20722(?:/comments)?|issues/comments/[1-9][0-9]*"
+                    r"|pulls/20722(?:/(?:comments|reviews|files))?|commits/[0-9a-f]{40}/(?:check-runs|status))",
+                    path.path) or re.fullmatch(
+                        r"agents/repos/microsoft/aspire/tasks(?:/[A-Za-z0-9_-]+)?", path.path)):
+                if body is not None:
+                    raise ValueError("GET body forbidden")
+                return
+            if method == "POST" and path.path == "agents/repos/microsoft/aspire/tasks" and self.write:
+                if (not isinstance(body, dict) or set(body) != {"prompt", "base_ref", "head_ref", "create_pull_request"}
+                        or not isinstance(body["prompt"], str) or not body["prompt"] or len(body["prompt"].encode()) > 20000
+                        or body["base_ref"] != "main"
+                        or body["head_ref"] != "copilot/restrict-workflows-to-microsoft-aspire"
+                        or body["create_pull_request"] is not False):
+                    raise ValueError("upstream trial task body mismatch")
+                return
+            if method in {"POST", "PATCH"} and path.path.startswith(target + "/"):
+                raise ValueError("upstream host publication is not authorized")
+            controller_reads = {"user", "users/radical", PREFIX,
+                                f"{PREFIX}/issues/{self.tracker}", f"{PREFIX}/issues/{self.tracker}/comments"}
+            if method == "GET" and path.path in controller_reads and body is None:
+                return
+            if (method == "PATCH" and self.write and self.authority is not None
+                    and path.path == f"{PREFIX}/issues/comments/{self.authority}"
+                    and isinstance(body, dict) and set(body) == {"body"}
+                    and len(body["body"].encode()) <= state.MAX_BODY
+                    and state.parse(body["body"])["repository"] == self.binding.repository):
+                return
+            raise ValueError("upstream trial endpoint is not allowed")
         prefix = re.escape(PREFIX)
         reads = (
             r"user|users/radical|" + prefix +
@@ -82,8 +120,16 @@ def fingerprint(observation):
 
 
 class PilotGitHub:
-    def __init__(self, transport, tracker, authority_id, tracker_node, *, write=False):
-        self.transport, self.api = transport, live.API(transport)
+    def __init__(self, transport, tracker, authority_id, tracker_node, *, write=False, binding=bindings.FORK):
+        if binding not in {bindings.FORK, bindings.UPSTREAM}:
+            raise ValueError("closed pilot binding required")
+        self.binding = binding
+        self.repository, self.repository_id = binding.repository, binding.repository_id
+        self.prefix = "repos/" + self.repository
+        # The approved upstream target currently has 751 active/1357 archived
+        # tasks. Keep fork bounds unchanged; 20 pages/lane bounds this trial.
+        self.transport, self.api = transport, live.API(
+            transport, max_pages=20 if binding == bindings.UPSTREAM else 10)
         self.tracker, self.authority_id, self.write = tracker, authority_id, write
         if not isinstance(tracker_node, str) or not tracker_node:
             raise ValueError("pinned tracker node required")
@@ -97,10 +143,16 @@ class PilotGitHub:
         if any(value.get("id") != 1472 or value.get("login") != "radical" for value in (actor, identity)):
             raise ValueError("selected pilot operator identity mismatch")
         self.actor = {"id": 1472, "login": "radical"}
-        repository = self.api.get(PREFIX)
-        if (repository["id"] != live.REPOSITORY_ID or repository["full_name"] != REPOSITORY
+        repository = self.api.get(self.prefix)
+        if (repository["id"] != self.repository_id or repository["full_name"] != self.repository
                 or repository["default_branch"] != "main"):
-            raise ValueError("pilot fork identity/default branch mismatch")
+            raise ValueError("pilot target identity/default branch mismatch")
+        if binding == bindings.UPSTREAM:
+            controller = self.api.get(PREFIX)
+            if controller.get("id") != live.REPOSITORY_ID or controller.get("full_name") != REPOSITORY:
+                raise ValueError("controller repository mismatch")
+            if tracker == 122 or authority_id == 5982545145:
+                raise ValueError("upstream requires separate controller authority")
         self.ledger = None
         self.expected = None
         self.tasks = {}
@@ -122,6 +174,8 @@ class PilotGitHub:
         if len(candidates) != 1 or candidates[0]["id"] != self.authority_id:
             raise ValueError("pilot authority missing/ambiguous/replaced; no initialization")
         observed = state.parse(candidates[0]["body"])
+        if observed["repository"] != self.repository:
+            raise ValueError("authority target namespace mismatch")
         if self.expected is None:
             self.expected = deepcopy(observed)
             self.ledger = deepcopy(observed)
@@ -148,30 +202,34 @@ class PilotGitHub:
         self.expected = deepcopy(self.ledger)
 
     def mapping(self, number):
-        value = self.api.get(f"{PREFIX}/pulls/{number}")
-        if (value["number"] != number or value["base"]["repo"]["id"] != live.REPOSITORY_ID
-                or value["head"]["repo"]["id"] != live.REPOSITORY_ID
-                or value["base"]["repo"]["full_name"] != REPOSITORY or value["head"]["repo"]["full_name"] != REPOSITORY
+        if self.binding.subject is not None and number != self.binding.subject:
+            raise ValueError("upstream trial subject mismatch")
+        value = self.api.get(f"{self.prefix}/pulls/{number}")
+        if (value["number"] != number or value["base"]["repo"]["id"] != self.repository_id
+                or value["head"]["repo"]["id"] != self.repository_id
+                or value["base"]["repo"]["full_name"] != self.repository or value["head"]["repo"]["full_name"] != self.repository
                 or value["base"]["ref"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", value["head"]["sha"])
                 or not re.fullmatch(r"[A-Za-z0-9_./-]+", value["head"]["ref"])):
             raise ValueError("PR fork/head/base identity mismatch")
+        if self.binding == bindings.UPSTREAM and value["head"]["ref"] != "copilot/restrict-workflows-to-microsoft-aspire":
+            raise ValueError("upstream trial branch mismatch")
         return value
 
     def observe(self, chain):
         number = chain["child"] or chain["origin"]
         kind = "pr" if chain["child"] is not None else chain["kind"]
-        value = self.mapping(number) if kind == "pr" else self.api.get(f"{PREFIX}/issues/{number}")
+        value = self.mapping(number) if kind == "pr" else self.api.get(f"{self.prefix}/issues/{number}")
         node = chain["childNode"] or chain["node"]
         if value["number"] != number or value["node_id"] != node:
             raise ValueError("subject identity changed")
         active = managed(value)
         if chain["child"] is not None:
-            origin = self.api.get(f"{PREFIX}/issues/{chain['origin']}")
+            origin = self.api.get(f"{self.prefix}/issues/{chain['origin']}")
             active = active and origin["node_id"] == chain["node"] and managed(origin)
         feedback = []
-        endpoints = [(f"{PREFIX}/issues/{number}/comments", "comment")]
+        endpoints = [(f"{self.prefix}/issues/{number}/comments", "comment")]
         if kind == "pr":
-            endpoints.append((f"{PREFIX}/pulls/{number}/comments", "review-comment"))
+            endpoints.append((f"{self.prefix}/pulls/{number}/comments", "review-comment"))
         for endpoint, prefix in endpoints if active else []:
             for comment in self.api.pages(endpoint):
                 if comment["id"] == chain["statusId"] and self.owned(comment) and state.STATUS_MARKER in comment.get("body", ""):
@@ -179,6 +237,9 @@ class PilotGitHub:
                 identity = f"{prefix}:{comment['id']}:{comment['updated_at']}"
                 if identity not in chain["dispositions"]:
                     feedback.append({"id": identity, "body": comment["body"][:2000], "url": comment.get("html_url", "")})
+                    for key in ("path", "line", "start_line", "original_line", "side", "commit_id"):
+                        if key in comment:
+                            feedback[-1][key] = comment[key]
         # Issue comments (including our status) change updated_at. Bind the
         # complete title/body cryptographically instead, without copying those
         # untrusted bodies into the authority ledger.
@@ -187,9 +248,9 @@ class PilotGitHub:
         head = value["head"]["sha"] if kind == "pr" else description
         ready, pending_ci, checks, reviews = False, False, [], []
         if kind == "pr" and active:
-            checks = self.api.pages(f"{PREFIX}/commits/{head}/check-runs", key="check_runs",
+            checks = self.api.pages(f"{self.prefix}/commits/{head}/check-runs", key="check_runs",
                                     require_total_count=True)
-            statuses = self.api.get(f"{PREFIX}/commits/{head}/status")
+            statuses = self.api.get(f"{self.prefix}/commits/{head}/status")
             if not isinstance(statuses.get("statuses"), list) or len(statuses["statuses"]) >= 100:
                 raise IncompleteInventory("combined status inventory incomplete")
             latest_statuses = {}
@@ -213,7 +274,7 @@ class PilotGitHub:
                     if identity not in chain["dispositions"]:
                         feedback.append({"id": identity, "body": status["context"] + ": " + status["state"],
                                          "url": status.get("target_url", "")})
-            reviews = self.api.pages(f"{PREFIX}/pulls/{number}/reviews")
+            reviews = self.api.pages(f"{self.prefix}/pulls/{number}/reviews")
             latest = {}
             for review in reviews:
                 if review["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
@@ -246,6 +307,10 @@ class PilotGitHub:
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None}
 
     def guard(self, chain, observation, *, effect=True):
+        if effect:
+            repository = self.api.get(self.prefix)
+            if repository.get("id") != self.repository_id or repository.get("full_name") != self.repository:
+                raise ValueError("target repository changed")
         fresh = self.observe(chain)
         if not fresh["managed"]:
             raise ValueError("subject management removed or hands-off")
@@ -268,7 +333,7 @@ class PilotGitHub:
     def inventory(self):
         tasks = {}
         for archived in ("false", "true"):
-            for task in self.api.pages(f"agents/repos/{REPOSITORY}/tasks", key="tasks",
+            for task in self.api.pages(f"agents/repos/{self.repository}/tasks", key="tasks",
                                        query={"is_archived": archived}, optional_total_count=True,
                                        total_count_key="total_archived_count" if archived == "true" else "total_active_count"):
                 if task["id"] in tasks:
@@ -282,8 +347,8 @@ class PilotGitHub:
     def task_detail(self, task_id, chain, operation):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", task_id):
             raise ValueError("invalid task id")
-        task = self.api.get(f"agents/repos/{REPOSITORY}/tasks/{task_id}")
-        if (task["id"] != task_id or task["repository"]["id"] != live.REPOSITORY_ID
+        task = self.api.get(f"agents/repos/{self.repository}/tasks/{task_id}")
+        if (task["id"] != task_id or task["repository"]["id"] != self.repository_id
                 or task["creator"]["id"] != self.actor["id"] or not isinstance(task.get("sessions"), list)
                 or task.get("session_count") != len(task["sessions"]) or not task["sessions"]
                 or not isinstance(task.get("artifacts"), list)):
@@ -292,8 +357,13 @@ class PilotGitHub:
         nano, billed = 0, True
         expected = {"chain": chain["id"], "operation": operation["id"], "origin": chain["origin"]}
         for session in task["sessions"]:
-            if session["task_id"] != task_id or session["repository"]["id"] != live.REPOSITORY_ID:
+            if session["task_id"] != task_id or session["repository"]["id"] != self.repository_id:
                 raise ValueError("session source mismatch")
+            if self.binding == bindings.UPSTREAM and (
+                    session.get("user", {}).get("id") != self.actor["id"]
+                    or session.get("base_ref") != "main"
+                    or session.get("head_ref") != "copilot/restrict-workflows-to-microsoft-aspire"):
+                raise ValueError("upstream session actor/branch mismatch")
             lines = [line[len(CORRELATION):] for line in session["prompt"].splitlines() if line.startswith(CORRELATION)]
             if len(lines) != 1 or contracts.loads(lines[0]) != expected:
                 raise ValueError("session operation correlation mismatch")
@@ -306,6 +376,78 @@ class PilotGitHub:
         if len(correlations) != len(set(correlations)):
             raise ValueError("duplicate task sessions")
         return task, nano / 1e9 if billed else None
+
+    def admission_slots(self, head_ref):
+        if self.binding == bindings.FORK:
+            return self.external_slots + state.worker_slots(self.ledger)
+        known = {operation["taskId"] for chain in self.ledger["chains"] for operation in chain["operations"]}
+        target_id = self.mapping(self.binding.subject)["id"]
+        unbound = 0
+        queued_pending = 0
+        inspected = 0
+        for task in self.tasks.values():
+            if task["id"] in known or task["state"] in state.TERMINAL:
+                continue
+            inspected += 1
+            if inspected > 128:
+                raise ValueError("upstream foreign-task association inspection bound exceeded")
+            # Unrelated upstream work does not occupy this authority's cap, but
+            # every live foreign task must prove it is not on the target branch.
+            detail = self.api.get(f"agents/repos/{self.repository}/tasks/{task['id']}")
+            sessions = detail.get("sessions")
+            queued_stub = (task["state"] == detail.get("state") == "queued"
+                           and type(detail.get("session_count")) is int and detail["session_count"] == 1
+                           and sessions == [] and detail.get("artifacts") == [])
+            if (detail.get("id") != task["id"] or detail.get("repository", {}).get("id") != self.repository_id
+                    or not isinstance(sessions, list) or type(detail.get("session_count")) is not int
+                    or detail["session_count"] != len(sessions) and not queued_stub
+                    or not isinstance(detail.get("artifacts"), list)):
+                raise ValueError("foreign task branch association unavailable")
+            if not sessions:
+                if detail["artifacts"]:
+                    raise ValueError("session-free foreign task artifact association unavailable")
+                # A queued foreign task can explicitly have no session yet.
+                # This proves only current unbound state, never future inactivity.
+                # Live queued stub: session_count=1, sessions=[], artifacts=[].
+                # Accept that observed pending shape only when both states agree;
+                # managed tasks still require fully correlated sessions.
+                unbound += 1
+                queued_pending += queued_stub
+                continue
+            heads = []
+            for session in sessions:
+                if (session.get("task_id") != task["id"]
+                        or session.get("repository", {}).get("id") != self.repository_id
+                        or not isinstance(session.get("head_ref"), str)
+                        or not isinstance(session.get("base_ref"), str)
+                        or bool(session["head_ref"]) != bool(session["base_ref"])):
+                    raise ValueError("foreign session branch association unavailable")
+                heads.append(session["head_ref"])
+            for artifact in detail["artifacts"]:
+                if artifact.get("provider") != "github" or not isinstance(artifact.get("data"), dict):
+                    raise ValueError("foreign task artifact association unavailable")
+                if artifact.get("type") == "branch":
+                    branch = artifact["data"].get("head_ref")
+                    if not isinstance(branch, str) or not branch:
+                        raise ValueError("foreign task branch artifact unavailable")
+                    heads.append(branch)
+                elif artifact.get("type") == "pull":
+                    if type(artifact["data"].get("id")) is not int:
+                        raise ValueError("foreign task PR artifact unavailable")
+                    if artifact["data"]["id"] == target_id:
+                        raise ValueError("active task already owns target PR")
+                else:
+                    raise ValueError("foreign task artifact association unavailable")
+            if head_ref in heads:
+                raise ValueError("active task already owns target branch")
+            unbound += all(not head for head in heads) and not detail["artifacts"]
+        if unbound:
+            print(f"CI Shepherd upstream admission observed {unbound} explicitly unbound foreign tasks; "
+                  "no current branch/PR association, not proof of future inactivity.", file=sys.stderr)
+        if queued_pending:
+            print(f"CI Shepherd upstream admission observed {queued_pending} queued pending-association placeholders "
+                  "(session_count=1, sessions=[], artifacts=[]); not proof of eventual inactivity.", file=sys.stderr)
+        return state.worker_slots(self.ledger)
 
     def reconcile_workers(self):
         for chain in self.ledger["chains"]:
@@ -373,7 +515,7 @@ class PilotGitHub:
         if len(pulls) != 1 or len(branches) != 1:
             chain["state"] = "human"
             return
-        candidates = [pr for pr in self.api.pages(f"{PREFIX}/pulls", query={"state": "open"})
+        candidates = [pr for pr in self.api.pages(f"{self.prefix}/pulls", query={"state": "open"})
                       if pr["id"] == pulls[0]["id"]]
         if len(candidates) != 1:
             raise ValueError("task PR artifact mapping unavailable")
@@ -383,7 +525,7 @@ class PilotGitHub:
                 or not all(session["head_ref"] == pr["head"]["ref"] and session["base_ref"] == "main"
                            for session in task["sessions"])):
             raise ValueError("task/session/branch/PR artifact mismatch")
-        ref = self.api.get(f"{PREFIX}/git/ref/heads/{pr['head']['ref']}")
+        ref = self.api.get(f"{self.prefix}/git/ref/heads/{pr['head']['ref']}")
         if ref.get("ref") != "refs/heads/" + pr["head"]["ref"] or ref.get("object", {}).get("sha") != pr["head"]["sha"]:
             raise ValueError("independent child branch mapping mismatch")
         # Mapping preserves the parent's counters; a missing artifact never
@@ -397,7 +539,7 @@ class PilotGitHub:
         if chain["childAdoption"] == "confirmed":
             return
         pr = self.mapping(chain["child"])
-        origin = self.api.get(f"{PREFIX}/issues/{chain['origin']}")
+        origin = self.api.get(f"{self.prefix}/issues/{chain['origin']}")
         if origin["node_id"] != chain["node"] or pr["node_id"] != chain["childNode"]:
             raise ValueError("origin/child adoption authority changed")
         if not managed(origin) or pr["state"] != "open" or "shepherd-hands-off" in [label["name"] for label in pr["labels"]]:
@@ -413,14 +555,14 @@ class PilotGitHub:
         chain["childAdoption"] = "sent"
         self.persist()
         pr = self.mapping(chain["child"])
-        origin = self.api.get(f"{PREFIX}/issues/{chain['origin']}")
+        origin = self.api.get(f"{self.prefix}/issues/{chain['origin']}")
         if (not managed(origin) or origin["node_id"] != chain["node"] or pr["node_id"] != chain["childNode"]
                 or pr["state"] != "open" or "shepherd-hands-off" in [label["name"] for label in pr["labels"]]):
             raise ValueError("child adoption management changed before send")
         self.authority_guard()
         # Only independently mapped task artifacts can enter this fixed label
         # writer; a model cannot supply labels, subjects or an arbitrary body.
-        response = self.transport("POST", f"{PREFIX}/issues/{chain['child']}/labels", {"labels": ["shepherd-adopted"]})
+        response = self.transport("POST", f"{self.prefix}/issues/{chain['child']}/labels", {"labels": ["shepherd-adopted"]})
         if not isinstance(response, Response) or response.status != 200 or not isinstance(response.payload, list) or not any(
                 label.get("name") == "shepherd-adopted" for label in response.payload):
             chain["childAdoption"] = "uncertain"
@@ -437,11 +579,13 @@ class PilotGitHub:
         for chain in self.ledger["chains"]:
             if chain["child"] is not None and chain["childAdoption"] in {"reserved", "sent", "uncertain"}:
                 self.adopt_child(chain)
-        for candidate in self.api.pages(f"{PREFIX}/issues", query={"state": "open", "labels": "shepherd-adopted"}):
+        intake = ([self.mapping(self.binding.subject)] if self.binding.subject is not None else
+                  self.api.pages(f"{self.prefix}/issues", query={"state": "open", "labels": "shepherd-adopted"}))
+        for candidate in intake:
             number = candidate["number"]
             if number in {121, self.tracker} or not managed(candidate) or state.find_chain(self.ledger, number) is not None:
                 continue
-            state.adopt(self.ledger, number, "pr" if "pull_request" in candidate else "issue", candidate["node_id"])
+            state.adopt(self.ledger, number, "pr" if self.binding.subject is not None or "pull_request" in candidate else "issue", candidate["node_id"])
         observations = {}
         for chain in self.ledger["chains"]:
             observed = self.observe(chain)
@@ -481,7 +625,7 @@ class PilotGitHub:
         else:
             blocker = "Bounded repair batch due."
         task = "" if not operation or not operation["taskId"] else (
-            f"\nTask: https://github.com/{REPOSITORY}/agents/tasks/{operation['taskId']}")
+            f"\nTask: https://github.com/{self.repository}/agents/tasks/{operation['taskId']}")
         last = "" if operation is None else f" Last action: {operation['state']}."
         return (f"[automated] CI Shepherd - {lane}\n\nLocal attempts: {chain['localAttempts']}/2; "
                 f"action rounds: {chain['rounds']}/10.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}. "
@@ -491,12 +635,16 @@ class PilotGitHub:
                 f"{state.STATUS_MARKER}\nChain: {chain['id']}")
 
     def publish_status(self, chain, observation, now):
+        if self.binding == bindings.UPSTREAM:
+            # Upstream host writes are limited to the single task request.
+            # The canonical fork authority remains the trial's status surface.
+            return
         if not self.write or not observation["managed"] or chain["state"] not in {"open", "human"}:
             return
         body = self.status(chain, observation, now)
         number = observation["number"]
         if chain["statusPending"]:
-            candidates = [comment for comment in self.api.pages(f"{PREFIX}/issues/{number}/comments")
+            candidates = [comment for comment in self.api.pages(f"{self.prefix}/issues/{number}/comments")
                           if self.owned(comment) and state.STATUS_MARKER in comment.get("body", "")
                           and comment["body"].endswith("Chain: " + chain["id"])]
             if len(candidates) != 1:
@@ -504,7 +652,7 @@ class PilotGitHub:
             chain.update(statusId=candidates[0]["id"], statusPending=False)
             self.persist()
         if chain["statusId"] is not None:
-            comment = self.api.get(f"{PREFIX}/issues/comments/{chain['statusId']}")
+            comment = self.api.get(f"{self.prefix}/issues/comments/{chain['statusId']}")
             if not self.owned(comment) or state.STATUS_MARKER not in comment["body"]:
                 raise ValueError("owned presentation comment missing/replaced")
             if comment["body"] == body:
@@ -514,8 +662,8 @@ class PilotGitHub:
             chain["statusPending"] = True
             self.persist()
             self.guard(chain, observation, effect=False)
-        method, endpoint = ("POST", f"{PREFIX}/issues/{number}/comments") if chain["statusId"] is None else (
-            "PATCH", f"{PREFIX}/issues/comments/{chain['statusId']}")
+        method, endpoint = ("POST", f"{self.prefix}/issues/{number}/comments") if chain["statusId"] is None else (
+            "PATCH", f"{self.prefix}/issues/comments/{chain['statusId']}")
         response = self.transport(method, endpoint, {"body": body})
         if not isinstance(response, Response) or response.status != (201 if method == "POST" else 200):
             raise LostResponse("presentation outcome unknown; no retry")

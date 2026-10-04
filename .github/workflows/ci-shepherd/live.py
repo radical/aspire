@@ -114,7 +114,7 @@ class HTTPTransport:
         self.mission_quota = {"remaining": remaining, "reset": reset}
 
     def _admit_task_request(self, method, path):
-        if not path.startswith(f"agents/repos/{REPOSITORY}/tasks") or self.mission_quota is None:
+        if not path.startswith(f"agents/repos/{getattr(self, 'task_repository', REPOSITORY)}/tasks") or self.mission_quota is None:
             return
         remaining, reset = self.mission_quota["remaining"], self.mission_quota["reset"]
         if method != "GET":

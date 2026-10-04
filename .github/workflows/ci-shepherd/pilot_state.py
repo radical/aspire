@@ -24,13 +24,13 @@ def amount(value):
     return value
 
 
-def new_ledger():
-    return {"schemaVersion": 1, "repository": "radical/aspire", "cursor": 0, "chains": []}
+def new_ledger(repository="radical/aspire"):
+    return {"schemaVersion": 1, "repository": repository, "cursor": 0, "chains": []}
 
 
 def validate(ledger):
     contracts.exact(ledger, {"schemaVersion", "repository", "cursor", "chains"}, "pilot ledger")
-    if ledger["schemaVersion"] != 1 or ledger["repository"] != "radical/aspire":
+    if ledger["schemaVersion"] != 1 or ledger["repository"] not in {"radical/aspire", "microsoft/aspire"}:
         raise ValueError("unsupported pilot authority")
     if type(ledger["cursor"]) is not int or ledger["cursor"] < 0 or not isinstance(ledger["chains"], list):
         raise ValueError("invalid pilot cursor/chains")
@@ -45,6 +45,9 @@ def validate(ledger):
         chains.add(chain["id"])
         issue_pr.text(chain["node"], "origin node")
         issue_pr.positive(chain["origin"], "origin")
+        if ledger["repository"] == "microsoft/aspire" and (
+                chain["origin"] != 20722 or chain["kind"] != "pr" or chain["child"] is not None):
+            raise ValueError("upstream trial subject mismatch")
         if chain["origin"] == 121 or chain["child"] == 121:
             raise ValueError("legacy authority is observation-only")
         if chain["kind"] not in {"pr", "issue"} or chain["state"] not in {"open", "closed", "hands-off", "human"}:

@@ -110,6 +110,70 @@ returning its parameter or a chain of zero-argument `strip`, `lower`, `casefold`
 commands, arbitrary paths or executable API bodies can be proposed.
 Other PRs and all initial issues use the generic cloud lane.
 
+### Manual upstream trial
+
+The controller remains installed/executed in `radical/aspire`; its checkout,
+OIDC identity and existing daily fork schedule do not change. Manual dispatch
+with `mode=pilot`, `target=upstream-20722` selects only `microsoft/aspire`
+(repository ID `696529789`), PR `20722`, existing branch
+`copilot/restrict-workflows-to-microsoft-aspire`, base `main`. Scheduled runs
+always select `target=fork`. There is no upstream workflow installation,
+schedule, general repository selector or host Git Data/comment writer.
+
+Use a **separate fork-hosted authority**, not tracker122 or its comment:
+`CI_SHEPHERD_UPSTREAM_TRACKER=127`,
+`CI_SHEPHERD_UPSTREAM_TRACKER_NODE=I_kwDOLIR8788AAAABU-aGuQ`, and
+`CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT=<verified new radical-owned comment ID>`.
+Render the empty target namespace locally before publishing it:
+
+```shell
+PYTHONPATH=.github/workflows/ci-shepherd python3 -B -c \
+  'import pilot_state; print(pilot_state.render(pilot_state.new_ledger("microsoft/aspire")))'
+```
+
+The ledger's target namespace must match the fixed binding while its tracker
+and writer remain in the controller fork. Existing fork/legacy authority is
+never repointed. Native admission is still30 credits, chain allowance500 and
+rolling authority allowance1,000; these are independent authority namespaces,
+not a promise of a combined cross-authority billing cap.
+
+Fork capacity remains repository-wide, including unrelated workers. Only the
+manual upstream trial counts Shepherd-owned/in-flight/unknown operations in
+this authority toward max2. Ownership is persisted operation/task correlation,
+not the task creator's login. Before preparation and fresh cloud admission,
+complete both archive inventories and reconcile managed task/session facts.
+Inspect live foreign task details for a target-branch or target-PR collision;
+missing/malformed association evidence vetoes work. Explicit empty base/head
+with no artifacts describes currently unbound chat work, not a confirmed
+collision. This does not prove the task can never bind later; refresh before
+admission and retain head/authority guards. No task is aged out as terminal.
+Foreign tasks with verified IDs, explicit integer count0 and empty sessions/
+artifacts are currently unbound. The observed queued pending stub
+(`state=queued`, count1, empty sessions/artifacts) is also accepted only when
+both inventory and detail say queued. No other count mismatch is accepted;
+managed workers still require complete correlated sessions.
+The upstream-only inventory bound is20 pages per archive lane (at100/page),
+covering the observed751 active and1,357 archived tasks; fork bounds stay
+unchanged. At most128 live foreign task details may be inspected per admission.
+Exhausted bounds or failed reads block work explicitly, never truncate inventory
+or release unknown capacity.
+
+The trial has **one lifetime native action round**: at most one worker request,
+then observation/billing only, even after failure, restart, head change or
+stop/re-adoption. Unknown sends remain reserved; no automatic second repair.
+The worker must refresh the full fork authority URL before writes, and only
+repair bounded repository guards/always-true workflow conditionals plus their
+pinned-compiler generated updates. Labeler workflows, authentication changes,
+permission broadening, test weakening, merge and force-push remain forbidden.
+Inline review path/line metadata is preserved. A fixed diagnostic brief is
+included only on its exact observed head; changed heads do not inherit it.
+
+Global disable still forbids native admission, task dispatch and publication.
+An authenticated settlement job may record available usage for an already
+admitted packet while disabled, then safely finalize an unsent operation.
+Potentially sent effects retain their state/capacity; unknown usage retains
+its reservation. Missing authority configuration never authorizes settlement.
+
 The same fresh native engine emits only a typed proposal through
 `submit_decision`. It receives no GitHub write token or shell/write tools.
 The pinned compiler's `engine.env.GH_AW_MAX_AI_CREDITS` override binds the actual

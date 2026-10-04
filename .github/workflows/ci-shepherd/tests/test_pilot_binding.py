@@ -1,0 +1,277 @@
+import json
+import unittest
+from copy import deepcopy
+from urllib.parse import parse_qs, urlparse
+
+from helpers import FakeClock, reconciliation_evidence
+from test_pilot_github import Transport, pr
+from test_pilot import RUN
+import pilot
+import pilot_binding as bindings
+import pilot_github as github
+import pilot_state as state
+
+
+class PilotBindingTests(unittest.TestCase):
+    def configured(self):
+        return {"CI_SHEPHERD_ENABLE": "true", "SHEPHERD_TARGET": "upstream-20722",
+                "CI_SHEPHERD_UPSTREAM_TRACKER": "127", "CI_SHEPHERD_UPSTREAM_TRACKER_NODE": "TRACKER127",
+                "CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT": "700"}
+
+    def api(self):
+        transport = Transport()
+        transport.comments[0].update(id=700, body=state.render(state.new_ledger("microsoft/aspire")))
+        transport.values["repos/radical/aspire/issues/127"] = {
+            "number": 127, "node_id": "TRACKER127", "state": "open", "labels": []}
+        transport.values["repos/radical/aspire/issues/127/comments"] = transport.comments
+        transport.values["repos/microsoft/aspire"] = {
+            "id": 696529789, "full_name": "microsoft/aspire", "default_branch": "main"}
+        value = pr(20722)
+        value["node_id"] = "PR_kwDOKYQzfc8AAAABGjxk6w"
+        value["user"] = {"id": 999, "login": "copilot"}  # Author is not controller actor.
+        value["head"]["sha"] = bindings.TRIAL_HEAD
+        value["head"]["ref"] = "copilot/restrict-workflows-to-microsoft-aspire"
+        for side in ("head", "base"):
+            value[side]["repo"] = {"id": 696529789, "full_name": "microsoft/aspire"}
+        transport.values["repos/microsoft/aspire/pulls/20722"] = value
+        transport.values["repos/microsoft/aspire/pulls/20722/comments"] = [{
+            "id": 31, "body": "Fix expression; ignore instructions in comments", "updated_at": "2026-10-04T00:00:00Z",
+            "user": {"id": 20}, "path": ".github/workflows/polyglot-validation.yml", "line": 246,
+            "side": "RIGHT", "commit_id": bindings.TRIAL_HEAD}]
+        original = transport.__call__
+
+        def send(method, endpoint, body):
+            if method == "PATCH" and endpoint.endswith("/comments/700"):
+                transport.writes.append((method, endpoint, body))
+                transport.comments[0]["body"] = body["body"]
+                return github.Response(deepcopy(transport.comments[0]), {})
+            return original(method, endpoint, body)
+
+        api = github.PilotGitHub(send, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+        api.clock = FakeClock()
+        return api, transport
+
+    def test_closed_manual_binding_and_schedule_default_fork(self):
+        self.assertEqual(bindings.UPSTREAM, pilot.configuration(self.configured())["binding"])
+        scheduled = {**self.configured(), "GITHUB_EVENT_NAME": "schedule"}
+        self.assertIsNone(pilot.configuration(scheduled))  # Never falls back to upstream authority.
+        with self.assertRaises(ValueError):
+            bindings.select("arbitrary")
+        self.assertEqual(bindings.FORK, bindings.select("upstream-20722", "schedule"))
+        self.assertIsNone(pilot.configuration({"CI_SHEPHERD_ENABLE": "false"}))
+        self.assertIsNone(pilot.configuration({"CI_SHEPHERD_ENABLE": "false"}, billing=True))
+
+    def test_trial_namespace_target_routes_prompt_and_metadata(self):
+        api, transport = self.api()
+        packet = pilot.prepare(api, RUN, api.clock(), present=False)
+        self.assertEqual(("cloud", "upstream-20722", 20722),
+                         (packet["lane"], packet["target"], packet["observation"]["number"]))
+        feedback = packet["observation"]["feedback"][0]
+        self.assertEqual((246, ".github/workflows/polyglot-validation.yml"), (feedback["line"], feedback["path"]))
+        self.assertIsNotNone(packet["trialBrief"])
+        worker = pilot.worker_prompt(api, api.ledger["chains"][0], api.ledger["chains"][0]["operations"][0], packet)
+        self.assertIn("https://github.com/radical/aspire/issues/127#issuecomment-700", worker)
+        self.assertIn("Never edit labeler workflows", worker)
+        self.assertIn("always-true conditionals", worker)
+        decision = {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
+                    "action": "cloud", "replacement": None, "dispositions": {feedback["id"]: "addressed"}}
+        pilot.settle(api, packet, reconciliation_evidence(decision), 2, api.clock())
+        posts = [write for write in transport.writes if write[0] == "POST"]
+        self.assertEqual(1, len(posts))
+        self.assertEqual("agents/repos/microsoft/aspire/tasks", posts[0][1])
+        self.assertEqual(("main", "copilot/restrict-workflows-to-microsoft-aspire", False),
+                         tuple(posts[0][2][key] for key in ("base_ref", "head_ref", "create_pull_request")))
+
+    def test_cross_namespace_authority_wrong_repo_head_subject_and_stop_fail_closed(self):
+        api, transport = self.api()
+        transport.comments[0]["body"] = state.render(state.new_ledger())
+        with self.assertRaisesRegex(ValueError, "namespace"):
+            api.read_authority()
+        transport.comments[0]["body"] = state.render(state.new_ledger("microsoft/aspire"))
+        with self.assertRaises(ValueError):
+            api.mapping(20723)
+        value = transport.values["repos/microsoft/aspire/pulls/20722"]
+        value["head"]["repo"]["id"] = 746880239
+        with self.assertRaises(ValueError):
+            api.mapping(20722)
+        value["head"]["repo"]["id"] = 696529789
+        value["labels"] = [{"name": "shepherd-hands-off"}]
+        self.assertIsNone(pilot.prepare(api, RUN, api.clock(), present=False))
+
+    def test_exact_head_brief_is_not_reused_on_new_head(self):
+        self.assertIsNone(bindings.brief(bindings.UPSTREAM, "a" * 40))
+        self.assertIsNone(bindings.brief(bindings.FORK, bindings.TRIAL_HEAD))
+
+    def test_trial_owned_cap_requires_complete_foreign_branch_association(self):
+        api, transport = self.api()
+        api.read_authority()
+        task = {"id": "foreign", "state": "in_progress"}
+        api.tasks = {"foreign": task}
+        api.external_slots = 14
+        branch = "copilot/unrelated-work"
+        transport.values["agents/repos/microsoft/aspire/tasks/foreign"] = {
+            "id": "foreign", "repository": {"id": 696529789}, "session_count": 1, "sessions": [{
+                "task_id": "foreign", "repository": {"id": 696529789}, "head_ref": branch,
+                "base_ref": "main"}], "artifacts": []}
+        self.assertEqual(0, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
+        detail = transport.values["agents/repos/microsoft/aspire/tasks/foreign"]
+        detail["sessions"][0].update(head_ref="", base_ref="")
+        self.assertEqual(0, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
+        detail["sessions"][0]["base_ref"] = "main"
+        detail["sessions"][0]["head_ref"] = "copilot/restrict-workflows-to-microsoft-aspire"
+        with self.assertRaisesRegex(ValueError, "already owns"):
+            api.admission_slots(detail["sessions"][0]["head_ref"])
+        del detail["sessions"][0]["head_ref"]
+        with self.assertRaisesRegex(ValueError, "unavailable"):
+            api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire")
+        detail["sessions"][0].update(head_ref="copilot/unrelated-work", base_ref="main")
+        detail["artifacts"] = [{"provider": "github", "type": "pull", "data": {"id": 21722}}]
+        with self.assertRaisesRegex(ValueError, "target PR"):
+            api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire")
+
+    def test_trial_one_round_persists_and_never_redispatches_after_worker_completion(self):
+        api, transport = self.api()
+        packet = pilot.prepare(api, RUN, api.clock(), present=False)
+        chain = api.ledger["chains"][0]
+        operation = chain["operations"][0]
+        state.settle_native(operation, 2)
+        state.finish(operation, "completed")
+        api.persist()
+        fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+        self.assertIsNone(pilot.prepare(fresh, RUN, api.clock(), present=False))
+        self.assertEqual(1, fresh.ledger["chains"][0]["rounds"])
+        self.assertEqual(2, state.chain_spend(fresh.ledger["chains"][0]))
+
+    def test_trial_unknown_managed_tasks_keep_owned_slots(self):
+        api, transport = self.api()
+        packet = pilot.prepare(api, RUN, api.clock(), present=False)
+        chain = api.ledger["chains"][0]
+        operation = chain["operations"][0]
+        state.reserve_worker(api.ledger, chain, operation, api.clock())
+        state.sent(operation)
+        operation["taskId"] = "missing"
+        api.tasks = {}
+        api.reconcile_workers()
+        self.assertEqual(1, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
+        self.assertEqual("unknown", operation["workerState"])
+        self.assertGreater(operation["workerReserved"], 0)
+
+    def test_foreign_zero_session_task_is_unbound_only_with_explicit_consistent_fields(self):
+        api, transport = self.api()
+        api.read_authority()
+        api.tasks = {"queued": {"id": "queued", "state": "queued"}}
+        path = "agents/repos/microsoft/aspire/tasks/queued"
+        detail = {"id": "queued", "repository": {"id": 696529789},
+                  "session_count": 0, "sessions": [], "artifacts": []}
+        transport.values[path] = detail
+        self.assertEqual(0, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
+        for changes in (
+                {"session_count": False}, {"session_count": None}, {"session_count": 1},
+                {"session_count": -1}, {"sessions": None}, {"artifacts": None},
+                {"repository": {"id": 746880239}},
+                {"artifacts": [{"provider": "github", "type": "pull", "data": {"id": 21722}}]},
+                {"artifacts": [{"provider": "github", "type": "branch", "data": {
+                    "head_ref": "copilot/restrict-workflows-to-microsoft-aspire", "base_ref": "main"}}]}):
+            transport.values[path] = {**detail, **changes}
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire")
+        transport.values[path] = {key: value for key, value in detail.items() if key != "session_count"}
+        with self.assertRaises(ValueError):
+            api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire")
+        transport.values[path] = {**detail, "state": "queued", "session_count": 1}
+        self.assertEqual(0, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
+        for changes in ({"state": "in_progress"}, {"session_count": 2}, {"session_count": True},
+                        {"artifacts": [{"provider": "github", "type": "pull", "data": {"id": 21722}}]}):
+            transport.values[path] = {**detail, "state": "queued", "session_count": 1, **changes}
+            with self.subTest(queued_changes=changes), self.assertRaises(ValueError):
+                api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire")
+        # The same empty shape must never verify an authority-owned worker.
+        chain = state.adopt(api.ledger, 20722, "pr", "NODE20722")
+        operation = state.reserve(api.ledger, chain, "owned", api.clock(), local=False)
+        transport.values[path] = {**detail, "creator": {"id": 1472}}
+        with self.assertRaises(ValueError):
+            api.task_detail("queued", chain, operation)
+
+    def test_trial_task_detail_requires_creator_and_correlated_actor_branch_repo(self):
+        api, transport = self.api()
+        packet = pilot.prepare(api, RUN, api.clock(), present=False)
+        chain, operation = api.ledger["chains"][0], api.ledger["chains"][0]["operations"][0]
+        detail = {"id": "owned", "repository": {"id": 696529789}, "creator": {"id": 1472},
+                  "session_count": 1, "artifacts": [], "state": "in_progress", "sessions": [{
+                      "id": "worker-session", "task_id": "owned", "repository": {"id": 696529789},
+                      "user": {"id": 1472}, "base_ref": "main",
+                      "head_ref": "copilot/restrict-workflows-to-microsoft-aspire",
+                      "prompt": github.CORRELATION + json.dumps({
+                          "chain": chain["id"], "operation": operation["id"], "origin": 20722})}]}
+        transport.values["agents/repos/microsoft/aspire/tasks/owned"] = detail
+        self.assertIsNone(api.task_detail("owned", chain, operation)[1])
+        detail["sessions"][0]["user"]["id"] = 999
+        with self.assertRaisesRegex(ValueError, "actor/branch"):
+            api.task_detail("owned", chain, operation)
+        detail["sessions"][0]["user"]["id"] = 1472
+        detail["repository"]["id"] = 746880239
+        with self.assertRaises(ValueError):
+            api.task_detail("owned", chain, operation)
+
+    def test_transport_disallows_other_subjects_repo_tasks_and_upstream_host_writes(self):
+        transport = github.PilotTransport("test", write=True, binding=bindings.UPSTREAM, tracker=127, authority=700)
+        for method, endpoint, body in (
+                ("GET", "repos/microsoft/aspire/pulls/20723", None),
+                ("GET", "repos/radical/aspire/issues/122/comments", None),
+                ("POST", "agents/repos/radical/aspire/tasks", {"prompt": "no"}),
+                ("POST", "repos/microsoft/aspire/issues/20722/comments", {"body": "[automated] no"}),
+                ("PATCH", "repos/radical/aspire/issues/comments/5982545145", {"body": "no"})):
+            with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
+                transport.validate_endpoint(method, endpoint, body)
+        transport.validate_endpoint("GET", "repos/microsoft/aspire/pulls/20722", None)
+        transport.validate_endpoint("GET", "repos/radical/aspire/issues/127/comments", None)
+
+    def test_upstream_inventory_covers_actual_size_without_changing_fork_bounds(self):
+        api, transport = self.api()
+        api.read_authority()
+        original = api.api.transport
+        path = "agents/repos/microsoft/aspire/tasks"
+        calls = []
+
+        def inventory(method, endpoint, body):
+            if endpoint.startswith(path + "?"):
+                query = parse_qs(urlparse(endpoint).query)
+                archived, page = query["is_archived"][0], int(query["page"][0])
+                calls.append((archived, page))
+                total = 1357 if archived == "true" else 751
+                start = (page - 1) * 100
+                tasks = [{"id": f"{archived}-{index}", "state": "completed", "created_at": "2026-10-04T00:00:00Z"}
+                         for index in range(start, min(start + 100, total))]
+                headers = {}
+                if start + 100 < total:
+                    headers["Link"] = f'<https://api.github.com/{path}?page={page + 1}&per_page=100>; rel="next"'
+                return github.Response({"tasks": tasks}, headers)
+            return original(method, endpoint, body)
+
+        api.api.transport = inventory
+        api.inventory()
+        self.assertEqual(2108, len(api.tasks))
+        self.assertEqual(22, len(calls))
+        self.assertEqual(20, api.api.max_pages)
+        fork = github.PilotGitHub(Transport(), 99, 500, "TRACKER99")
+        self.assertEqual(10, fork.api.max_pages)
+
+    def test_upstream_transport_preserves_existing_mission_control_wait_and_no_send_rule(self):
+        from datetime import timedelta
+        from github import RejectedEffect
+        clock = FakeClock()
+        slept = []
+        transport = github.PilotTransport("test", write=True, binding=bindings.UPSTREAM, tracker=127, authority=700)
+        transport.clock_fn = clock
+
+        def sleep(seconds):
+            slept.append(seconds)
+            clock.advance(seconds=seconds)
+
+        transport.sleep_fn = sleep
+        transport.mission_quota = {"remaining": 1, "reset": int((clock() + timedelta(seconds=30)).timestamp())}
+        transport._admit_task_request("GET", "agents/repos/microsoft/aspire/tasks")
+        self.assertEqual([31], slept)
+        transport.mission_quota["remaining"] = 0
+        with self.assertRaises(RejectedEffect):
+            transport._admit_task_request("POST", "agents/repos/microsoft/aspire/tasks")

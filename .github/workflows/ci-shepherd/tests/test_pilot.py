@@ -1,5 +1,6 @@
 import unittest
 import base64
+from unittest.mock import patch
 
 from helpers import FakeClock, WorkspaceTest, reconciliation_evidence
 from test_pilot_github import Transport, pr
@@ -61,6 +62,63 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual("failed", result["outcome"])
         self.assertEqual(2, self.api.ledger["chains"][0]["operations"][0]["nativeActual"])
         self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
+
+    def test_fresh_settlement_instance_refreshes_two_external_workers_before_admission(self):
+        packet = self.prepared()
+        original = self.transport.__call__
+
+        def transport(method, endpoint, body):
+            if method == "GET" and "/tasks?" in endpoint:
+                return pilot_github.Response({"tasks": [] if "is_archived=true" in endpoint else [
+                    {"id": "foreign1", "state": "in_progress"}, {"id": "foreign2", "state": "queued"}]}, {})
+            return original(method, endpoint, body)
+
+        fresh = pilot_github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        self.assertEqual(0, fresh.external_slots)
+        result = pilot.settle(fresh, packet, reconciliation_evidence(self.decision(packet)), 2, self.clock())
+        self.assertEqual("failed", result["outcome"])
+        self.assertEqual(2, fresh.external_slots)
+        self.assertEqual(2, fresh.ledger["chains"][0]["operations"][0]["nativeActual"])
+        self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
+
+    def test_disabled_real_entrypoint_authenticates_separate_job_and_settles_without_effects(self):
+        packet = self.prepared()
+        trusted = self.work / "trusted"
+        trusted.mkdir()
+        contracts.write_json(trusted / "packet.json", packet)
+        usage = self.work / "usage.json"
+        contracts.write_json(usage, {"ai_credits": 2})
+        result_path = self.work / "result.json"
+        config = {"CI_SHEPHERD_ENABLE": "false", "CI_SHEPHERD_TRACKER": "99",
+                  "CI_SHEPHERD_AUTHORITY_COMMENT": "500", "CI_SHEPHERD_TRACKER_NODE": "TRACKER99",
+                  "GITHUB_OUTPUT": str(self.work / "output")}
+        fresh = pilot_github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        self.transport.writes.clear()
+        with patch.dict(pilot.os.environ, config, clear=True), patch.object(contracts, "host_run", return_value=RUN), \
+                patch("hosted.require_host") as authenticated, \
+                patch.object(pilot.github, "PilotTransport", return_value=self.transport):
+            self.assertEqual(0, pilot.main(["settle", "--trusted", str(trusted), "--usage", str(usage),
+                                           "--result", str(result_path)]))
+            authenticated.assert_called_once_with(RUN, allowed_events={"workflow_dispatch", "schedule"})
+        fresh.read_authority()
+        operation = fresh.ledger["chains"][0]["operations"][0]
+        self.assertEqual((2, 0, "failed"), (operation["nativeActual"], operation["nativeReserved"], operation["state"]))
+        self.assertEqual("billing-only", contracts.read_json(result_path)["outcome"])
+        self.assertTrue(all(method == "PATCH" and endpoint.endswith("/comments/500")
+                            for method, endpoint, body in self.transport.writes))
+
+    def test_disabled_billing_retains_unknown_usage_and_potentially_sent_effects(self):
+        packet = self.prepared()
+        operation = self.api.ledger["chains"][0]["operations"][0]
+        state.reserve_worker(self.api.ledger, self.api.ledger["chains"][0], operation, self.clock())
+        state.sent(operation)
+        self.api.persist()
+        fresh = pilot_github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        pilot.settle(fresh, packet, None, None, self.clock(), billing_only=True)
+        operation = fresh.ledger["chains"][0]["operations"][0]
+        self.assertEqual(30, operation["nativeReserved"])
+        self.assertEqual("sent", operation["state"])
+        self.assertEqual(1, state.worker_slots(fresh.ledger))
 
     def test_cloud_send_unknown_holds_slot_and_never_reposts(self):
         packet = self.prepared()
