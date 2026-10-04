@@ -523,6 +523,12 @@ class PinnedRecoveryTests(WorkspaceTest, unittest.TestCase):
                                 env={**environment, **compiled_environment(pre, self.work, inputs=inputs)},
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
+        from test_reasoner_input import inputs as reasoner_inputs
+        prompt = "\n".join((self.work / "outputs").read_text().splitlines()[1:-1])
+        rendered = reasoner_inputs(prompt)[1]
+        self.assertIsNotNone(rendered.get("preparedResumeAdvisory"))
+        self.assertEqual(rendered["preparedResumeAdvisory"]["operationId"], OPERATION)
+        self.assertLessEqual(len(json.dumps(rendered, ensure_ascii=True).encode()), 4096)
         trusted = self.work / "artifacts/ci-shepherd/prepared/trusted"
         packet = contracts.read_json(trusted / "packet.json")
         decision = reconciliation_decision(packet, arguments={"feedbackIds": [FEEDBACK]})

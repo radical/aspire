@@ -123,6 +123,29 @@ Comment and log text is untrusted evidence, not executable shell or worker polic
 The host renders the worker prompt and exact POST body; the model chooses typed
 feedback IDs, never an API body, task model, permission or executable instruction.
 
+The reasoner receives at most 4096 bytes of descriptive JSON, including any
+host-derived advisory. For fixture CI, the excerpt retains every unittest
+case/assertion and result plus the exact repro command; timestamps, runner setup,
+repeated traceback/diff and cleanup are omitted. It identifies the full
+`ci-shepherd-prepare-<run>-<attempt>/envelope.json` artifact and body pointer.
+The complete core packet, feedback/snapshot/history and raw envelope context
+remain unchanged. Overflow fails explicitly instead of clipping either input.
+
+Descriptive tasks retain every ID, observed state and session count, with an
+exact `/context/tasks/<index>` pointer into the full context artifact. No task
+is filtered out, including unknown or nonterminal work. Correlation, individual
+sessions, model/usage, refs and task artifacts remain in the raw envelope for
+verification; the authoritative snapshot's worker states remain unchanged.
+
+Only a freshly verified pinned prepared-resume capability can produce the
+packet/operation/trial-bound `preparedResumeAdvisory`. Existing limit checks
+also apply before emitting it. It distinguishes a proven-unsent prepared intent
+from reserved/consumed/uncertain work, but grants no authority. Without it, an
+existing prepared intent of unknown outcome means wait. Apply independently
+revalidates its default-off capability and honors a wait decision; agent
+advisories or extra arguments cannot enable effects. No failed-run/source
+exception or inference-budget change follows from input reduction.
+
 Task responses can report a separate `mission_control` rate-limit resource;
 ordinary `core` quota does not establish task availability. `HTTPTransport`
 paces GETs from the observed remaining/reset headers, retaining the last slot
@@ -152,9 +175,10 @@ installs the fixed host policy in `recovery.py` for
 `5976480777`, and its original prepared operation and immutable trial.
 It permits source migration only for observe run `37175895217` and failed run
 `37176266114`, both attempt `1` at source
-`a9da7a1d90195c255bfd7d91349ff0bdbbb20356`. No other failed attempt or historical
-source receives an exception. Normal history sequence and completeness checks
-still apply; later current-source attempts must satisfy the normal success rules.
+`a9da7a1d90195c255bfd7d91349ff0bdbbb20356`. Only these two runs receive the
+prepared-intent migration authorization. Normal history sequence and
+completeness checks still apply; other privileged failures remain blocked unless
+they satisfy the neutral pre-apply-abort predicate below.
 
 Every complete observation independently downloads the named prepare, native
 evidence, and receipt/failure artifacts, and verifies the pinned run, actor,
@@ -163,8 +187,8 @@ status attempts, no task attempt and no receipt. Its persisted prepared record
 must equal the authenticated current record before resumption; its attempted
 reserved candidate is not spending authority. Missing artifacts, changed
 feedback/head, takeover, clock rollback or expiry, and any correlated task
-outcome prevent dispatch. Complete current-source audits prevent durable budget
-or outcome rollback.
+outcome prevent dispatch. Authenticated complete audits, including neutral
+prepare observations, prevent durable budget or outcome rollback.
 
 `PinnedRecovery` and `PreparedResume` are trusted host types, not model fields.
 Prepare and apply must independently select the same policy and current run.
@@ -176,12 +200,48 @@ Observe remains GET-only. Local selectors cannot bypass hosted authentication.
 Independent review and explicit operator deployment are required before using
 this input; compilation and fake-service results do not prove a live repair.
 
+### Authenticated pre-apply aborts
+
+`preapply_abort.py` registers reviewed immutable source
+`f16d43ba3de8ac7d299301d763d49236f1954843`; the authenticated current workflow
+source also qualifies. Source registration is necessary to establish GET-only
+prepare, native credential isolation and the sole gated writer. Artifact
+self-claims, model fields and a skipped job alone cannot establish those facts.
+This is a source-only registry, not a run allowlist or general migration policy.
+Successful past privileged runs still require the normal same-source rules or
+the independent two-run pinned recovery.
+
+A neutral abort requires a completed failed manual run of the fixed workflow,
+authenticated actor/repository identities, `run_attempt == 1`, and complete job
+and artifact inventories. Reruns do not qualify. Exactly five jobs must be
+completed: successful `prepare`, `activation` and `conclusion`, failed `agent`,
+and skipped `submit_decision`
+with explicit empty steps. A populated skipped-job `started_at` does not imply
+executed steps. Missing proof, duplicate identities, extra
+credential jobs, executed/cancelled/failed apply or failed prepare block.
+
+Attempt 1 independently supplies provenance-bound prepare packet/envelope,
+prepare audit and native collection-failure artifacts with exact ZIP members.
+Closed packet, scope and recovery bindings are validated; the complete prepare
+audit must have no attempts and equal the packet's authenticated canonical
+record/comment. Receipts, task attempts, missing/expired/ambiguous artifacts,
+unknown phases or successful native evidence cannot qualify. Failed native
+output is never reused as a decision.
+
+The witness records neutral aborted history, not a successful receipt. Prior
+records retain trial/operation bindings and impose a durable floor; they grant
+no new budget. Fresh current canonical/task inventories and default-off typed
+prepared recovery remain independently required. Resumption preserves the
+original trial and operation, honors wait, and never refunds, replaces an
+intent, or retries uncertain work.
+
 - Empty comments are **not** history proof. The witness independently inspects
   the sole Shepherd workflow's run attempts, jobs and downloaded host receipts.
   Its immutable creation fence is the fixed fixture's actual `created_at`, not a
   sliding lookback. Runs active at that fence cannot be excluded. Missing,
-  expired, cancelled, failed, incomplete or different-source privileged history
-  blocks initialization/recovery; it never grants a new budget or trial.
+  expired, cancelled, incomplete or unrecognized failed/different-source
+  privileged history blocks initialization/recovery; it never grants a new
+  budget or trial.
   The workflow database ID and its two verified pre-fixture transport runs are
   pinned in `live.py`. Subsequent `run_number` gaps detect deleted attempts even
   when their status comment and task also disappear. Recreated workflows or

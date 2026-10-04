@@ -13,6 +13,24 @@ or uncertain operation, absent/pending/approval-blocked CI, human feedback,
 successful current-head CI, or any uncertainty. Task completion does not prove
 a push or passing CI. Hands-off vetoes all new writes; no cancellation is claimed.
 
+A `prepared` intent is distinct from `reserved` or `consumed`, but its state
+alone is not unsent proof. Normally choose `wait` for an existing prepared
+intent with unknown outcome. The sole exception is a
+host-derived `preparedResumeAdvisory` with `preparedResumeEligible: true` and
+`nonAuthorizing: true`, bound to this exact packet, operation, trial and feedback.
+It reports independent canonical/history/task verification of the proven-unsent
+prepared intent. For that exact intent and open current-head fixture failure,
+recommend the typed `repair-pr` decision rather than treating `prepared` as
+`reserved` or `uncertain`. The advisory never authorizes writes or overrides a
+reason to wait; apply independently revalidates the default-off host capability.
+Do not copy the advisory into the decision or arguments.
+
+Descriptive CI context is an explicitly bounded excerpt of every unittest
+case/assertion and result, with the exact repro command and a full raw artifact
+reference. The complete core packet is unchanged. Setup, repeated traceback/diff
+and cleanup text are omitted only from that descriptive excerpt, not from host
+evidence. Unrecognized or incomplete evidence is a reason to wait, not success.
+
 This installation supports only `wait` and `repair-pr`. No issue assignment,
 adoption, rerun, checkpoint mutation, merge or force-push capability is installed.
 
