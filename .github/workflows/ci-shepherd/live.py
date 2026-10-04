@@ -302,12 +302,14 @@ class RemoteHistory:
         self.recovery_record = None
         self.resume_allowed = True
         self.durable_records = []
+        self.aborted_attempts = []
 
     def collect(self, workers):
         self.trial = None
         self.recovery_record = None
         self.resume_allowed = True
         self.durable_records = []
+        self.aborted_attempts = []
         migrated_runs = set()
         prefix = f"repos/{REPOSITORY}/actions"
         workflow = self.api.get(prefix + "/workflows/ci-shepherd.lock.yml")
@@ -362,6 +364,24 @@ class RemoteHistory:
                         history["publicationAttempts"].append(record["trialId"])
                         history["associatedOperationIds"].append(recovery.OPERATION_ID)
                     continue
+            if not own and run["status"] == "completed" and run["conclusion"] == "failure":
+                import preapply_abort
+                for aborted in preapply_abort.collect(self.api, run, self.run):
+                    self.aborted_attempts.append({"run": aborted["run"], "disposition": aborted["disposition"]})
+                    record = aborted["record"]
+                    if record is not None:
+                        trial = receipts.trial_tuple(record)
+                        if self.trial is not None and self.trial != trial:
+                            raise IncompleteInventory("remote history contains multiple trials")
+                        self.trial = trial
+                        self.durable_records.append(record)
+                        history["publicationAttempts"].append(trial["trialId"])
+                        history["associatedOperationIds"].extend(op["id"] for op in record["operations"])
+                        if self.recovery is not None and record != recovery.prepared_record():
+                            self.resume_allowed = False
+                    if aborted["commentId"] is not None:
+                        history["recordIds"].append(aborted["commentId"])
+                continue
             if not own and (run["status"] != "completed" or run["conclusion"] != "success"):
                 raise IncompleteInventory("failed/cancelled/incomplete privileged run; human recovery required")
             if not own and (run["head_sha"] != self.run["workflowSha"] or run["actor"]["login"] != "radical"):
