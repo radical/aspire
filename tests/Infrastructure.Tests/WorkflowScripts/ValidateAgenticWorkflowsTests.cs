@@ -25,6 +25,10 @@ public sealed class ValidateAgenticWorkflowsTests(ITestOutputHelper output)
     [InlineData(true, WorkflowRelativePath)]
     [InlineData(true, ".github/workflows/new-agent.md")]
     [InlineData(true, ".github/workflows/nested/new-agent.md")]
+    [InlineData(true, ".github/workflows/ci-shepherd/round.py")]
+    [InlineData(true, ".github/workflows/ci-shepherd/tests/test_round.py")]
+    [InlineData(true, ".github/workflows/ci-shepherd/policies/pr.md")]
+    [InlineData(false, ".github/workflows/ci-shepherd/README.md")]
     [InlineData(false, ".github/workflows/README.md")]
     [InlineData(false, ".github/workflows/nested/README.md")]
     [InlineData(true, ".github/workflows/README.md", ".github/workflows/new-agent.md")]
@@ -49,6 +53,30 @@ public sealed class ValidateAgenticWorkflowsTests(ITestOutputHelper output)
         }
 
         Assert.Equal(expected, matcher.Match(changedPaths).HasMatches);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [RequiresTools(["bash", "python3"])]
+    public async Task ShepherdContractValidationPropagatesFailures(bool passing)
+    {
+        using var workspace = TemporaryWorkspace.Create(output);
+        WriteFile(workspace, ".github/workflows/ci-shepherd/tests/test_fixture.py", $$"""
+            import unittest
+
+            class FixtureTests(unittest.TestCase):
+                def test_validation(self):
+                    self.assertEqual(1, {{(passing ? 1 : 2)}})
+            """);
+
+        var result = await ProcessRunner.RunAsync(
+            output,
+            "bash",
+            ["-c", Scalar(Step(Steps(LoadWorkflow()), "Run CI Shepherd behavioral contracts"), "run")],
+            workspace.Path);
+
+        Assert.Equal(passing, result.ExitCode == 0);
     }
 
     [Theory]

@@ -34,6 +34,8 @@ changes.
 `validate-agentic-workflows.yml` recompiles with the pinned gh-aw version, checks
 for generated-file drift, runs `gh aw lint --shellcheck` as a blocking lint gate,
 and runs the `Category=AgenticWorkflow` contracts in `Infrastructure.Tests`.
+It also runs the CI Shepherd Python behavioral suite; changes to its helpers,
+tests, and policies trigger this validation, while README-only changes do not.
 Class-level traits group generated-workflow, validation trigger/drift, and shared
 process-runner tests without including unrelated negative-test diagnostics.
 Apply this trait to new agentic contract classes so dedicated validation includes them.

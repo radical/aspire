@@ -5,12 +5,13 @@ name: Validate Agentic Workflows
 # files never triggers the main build/test workflow. This dedicated job gives them their own
 # deterministic, path-triggered validation: recompile the Markdown sources with the repository-pinned
 # gh-aw CLI, prove the committed .lock.yml/agentics-maintenance files are not stale, and run the
-# trait-scoped agentic contracts in Infrastructure.Tests. See
+# CI Shepherd Python contracts and trait-scoped agentic contracts in Infrastructure.Tests. See
 # https://github.com/microsoft/aspire/issues/20446.
 on:
   pull_request:
     paths:
       - .github/workflows/**/*.md
+      - .github/workflows/ci-shepherd/**
       - '!.github/workflows/**/README.md'
       - .github/workflows/**/*.lock.yml
       - .github/workflows/agentics-maintenance*.yml
@@ -64,6 +65,9 @@ jobs:
 
       - name: Lint generated agentic workflows
         run: gh aw lint --shellcheck
+
+      - name: Run CI Shepherd behavioral contracts
+        run: python3 -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_*.py' -v
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
