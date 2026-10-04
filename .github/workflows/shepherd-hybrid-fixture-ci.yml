@@ -1,0 +1,56 @@
+name: Shepherd hybrid fixture CI
+
+on:
+  pull_request:
+    paths:
+      - '.ci-shepherd-pilot/**'
+      - '.ci-shepherd-worker-pilot/**'
+      - '.ci-shepherd-issue-pilot/**'
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: Check changed Shepherd fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run exact changed fixture tests
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 --version
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          base, head = os.environ["BASE_SHA"], os.environ["HEAD_SHA"]
+          if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (base, head)):
+              raise SystemExit("Expected exact PR commit SHAs")
+          paths = subprocess.check_output(
+              ["git", "--no-pager", "diff", "--name-only", f"{base}...{head}"],
+              text=True,
+          ).splitlines()
+          allowed = {
+              ".ci-shepherd-pilot",
+              ".ci-shepherd-worker-pilot",
+              ".ci-shepherd-issue-pilot",
+          }
+          directories = sorted({path.split("/", 1)[0] for path in paths} & allowed)
+          if not directories:
+              raise SystemExit("No changed supported fixture directory")
+          for directory in directories:
+              command = [
+                  "python3", "-B", "-m", "unittest", "discover",
+                  "-s", directory, "-p", "test_*.py", "-v",
+              ]
+              print("Running:", " ".join(command), flush=True)
+              subprocess.run(command, check=True)
+          PY

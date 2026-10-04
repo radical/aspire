@@ -145,6 +145,12 @@ class HTTPTransport:
         self.quota_waits += 1
 
     def __call__(self, method, endpoint, body):
+        self.validate_endpoint(method, endpoint, body)
+        path = urlparse(endpoint)
+        self._admit_task_request(method, path.path)
+        return self.request(method, endpoint, body)
+
+    def validate_endpoint(self, method, endpoint, body):
         # API paths come from this fixed adapter, never decision text.
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
@@ -166,7 +172,9 @@ class HTTPTransport:
             or method == "PATCH" and re.fullmatch(re.escape(prefix) + r"/issues/comments/[1-9][0-9]*", path.path)
         ):
             raise ValueError("hosted write endpoint is not allowed")
-        self._admit_task_request(method, path.path)
+
+    def request(self, method, endpoint, body):
+        path = urlparse(endpoint)
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2026-03-10", "User-Agent": "ci-shepherd-fixture"}
         data = None if body is None else json.dumps(body, allow_nan=False).encode()
@@ -236,7 +244,8 @@ class API:
             raise IncompleteInventory("GET unavailable; no success fallback")
         return response.payload
 
-    def pages(self, path, *, key=None, query=None, require_empty_count=False, require_total_count=False):
+    def pages(self, path, *, key=None, query=None, require_empty_count=False, require_total_count=False,
+              total_count_key="total_count"):
         query = dict(query or {})
         items, total = [], None
         for page in range(1, self.max_pages + 1):
@@ -251,7 +260,7 @@ class API:
             if not isinstance(values, list) or len(values) > 100:
                 raise IncompleteInventory("missing or malformed inventory")
             if require_total_count:
-                count = payload.get("total_count") if isinstance(payload, dict) else None
+                count = payload.get(total_count_key) if isinstance(payload, dict) else None
                 if type(count) is not int or count < 0 or total is not None and count != total:
                     raise IncompleteInventory("inventory total_count missing/malformed/changed")
                 total = count
