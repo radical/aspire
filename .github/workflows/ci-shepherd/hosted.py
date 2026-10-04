@@ -254,8 +254,22 @@ def apply(directory, evidence_path, decision_path, receipt_path, run, *, transpo
         if write and decision["action"] == "wait":
             result = live.recover_receipt(github, scope, run, evidence, packet, decision, checked_clock)
         if result is None:
-            resume = None if recovery is None or decision["action"] == "wait" else recovery.authorize(
-                github, packet, github.refresh(live.ROOT))
+            resume = None
+            # An unstarted scope cannot accept an existing trial in the kernel.
+            if decision["action"] != "wait" and (recovery is not None or write and scope.trial is not None):
+                current = github.refresh(live.ROOT)
+                _, record = receipts.read_record(current, github.actor)
+                scope.check_record(live.ROOT, record)
+                records = [packet["record"]["value"], record]
+                # Shared reconciliation can confirm a past task on non-WAIT.
+                # This installation permits that recovery only through fresh WAIT.
+                # Historical consumption remains a floor, not current pending state.
+                if write and any(value is not None and any(
+                    operation["state"] in {"consumed", "uncertain"} for operation in value["operations"]
+                ) for value in records):
+                    raise ValueError("consumed/uncertain recovery requires a fresh WAIT decision")
+                if recovery is not None:
+                    resume = recovery.authorize(github, packet, current)
             result = contracts.apply_reconciliation(packet, decision, run, github, checked_clock, scope,
                                                    executor=executor, dry_run=not write, evidence=evidence, resume=resume)
         snapshot = github.refresh(live.ROOT)
