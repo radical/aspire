@@ -69,7 +69,7 @@ def validate_feedback(values):
     for feedback in values:
         exact(feedback, {"id", "revision", "state"}, "feedback")
         text(feedback["id"], "feedback id")
-        text(feedback["revision"], "feedback revision")
+        text(feedback["revision"], "feedback revision", 128 * 1024)
         choice(feedback["state"], {"open", "addressed", "declined", "needs-human"}, "feedback state")
         ids.append(feedback["id"])
     unique(ids, "feedback id")
@@ -92,8 +92,9 @@ def validate_snapshot(snapshot, root):
     if snapshot["root"] != root:
         raise ValueError("observation root identity changed")
     exact(snapshot["complete"], INVENTORIES, "inventory completeness")
-    # GET /agents/repos/{owner}/{repo}/tasks defaults to is_archived=false.
-    # Its {"tasks": [...]} response has optional counts, not a proof that no
+    # Query both archive lanes explicitly; the public preview has returned all
+    # tasks when the documented default filter was omitted. Optional counts
+    # in {"tasks": [...]} are not a proof that no
     # potentially nonterminal archived tasks exist. Both lanes need complete
     # host evidence; archive visibility never discards durable ownership.
     # https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json

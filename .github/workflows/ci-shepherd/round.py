@@ -282,7 +282,7 @@ def validate_reconciliation_decision(packet, decision, run):
 
 
 def apply_reconciliation(packet, decision, run, github, clock, scope, *, executor=None, dry_run=True, evidence=None):
-    """Shared host-only mechanism; no production effect executor is installed."""
+    """Shared host-only mechanism with explicitly injected effect capabilities."""
     import issue_pr
     import receipts
     from github import LostResponse, RejectedEffect
@@ -371,6 +371,8 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
         raise ValueError("local mode has no hosted writer capability")
     import reasoning
     reasoning.validate_reconciliation_evidence(packet, decision, run, evidence)
+    if recovery_result is None and callable(getattr(executor, "validate", None)):
+        executor.validate(receipts.operation_identity(packet, decision))
     # expected is the last authenticated canonical remote value, never a local
     # cache. Sole hosted concurrency provides serialization, not a fake CAS.
     expected = deepcopy(record)
@@ -435,9 +437,11 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
     # indistinguishable from a lost POST response and must hold capacity.
     operation["state"] = "consumed"
     persist(record)
-    guard()
+    dispatch_snapshot = guard()
     rejected = False
     try:
+        if callable(getattr(executor, "bind", None)):
+            executor.bind(deepcopy(operation), receipts.trial_tuple(record), dispatch_snapshot, guard)
         result = executor.execute(deepcopy(operation))
     except RejectedEffect:
         rejected, result = True, None
@@ -524,7 +528,10 @@ def main(argv=None):
                 raise ValueError("prepare envelope belongs to another run")
             evidence = reasoning.collect(args.session_root, args.logs, args.outcome, args.out)
             observed, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
-            validate_decision({**envelope, "sessionId": evidence["sessionId"]}, observed, host_run())
+            if envelope["packet"]["kind"] == "reconciliation":
+                validate_reconciliation_decision(envelope["packet"], observed, host_run())
+            else:
+                validate_decision({**envelope, "sessionId": evidence["sessionId"]}, observed, host_run())
         else:
             import reasoning
             envelope = read_json(args.trusted / "envelope.json")
