@@ -13,6 +13,12 @@ class PilotStateTests(unittest.TestCase):
     def start(self, identity, local=True):
         return state.reserve(self.ledger, self.chain, identity, self.clock(), local=local)
 
+    def test_oversized_identity_rejected_before_counter_or_reservation_changes(self):
+        before = state.render(self.ledger)
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.start("x" * 16385)
+        self.assertEqual(before, state.render(self.ledger))
+
     def finish(self, operation, cost=1):
         state.settle_native(operation, cost)
         state.finish(operation, "failed")
