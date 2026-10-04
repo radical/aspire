@@ -46,7 +46,7 @@ class Transport:
                 value.setdefault("updated_at", "2026-10-04T00:00:00Z")
             return Response(value, {})
         if path.endswith("/tasks"):
-            return Response({"tasks": [], "total_active_count": 0, "total_archived_count": 0}, {})
+            return Response({"tasks": []}, {})
         if path.endswith("/check-runs"):
             return Response({"check_runs": [], "total_count": 0}, {})
         if path.endswith("/status"):
@@ -285,6 +285,112 @@ class PilotGitHubTests(unittest.TestCase):
         self.api.api.transport = inventory
         self.api.inventory()
         self.assertEqual(1, self.api.external_slots)
+
+    def test_primary_tasks_only_both_lanes_preserve_external_capacity(self):
+        self.api.read_authority()
+        original = self.transport.__call__
+
+        def inventory(method, endpoint, body):
+            if "/tasks?" in endpoint:
+                archived = "is_archived=true" in endpoint
+                tasks = [{"id": f"{archived}-{index}", "state": status, "created_at": "2026-10-04T00:00:00Z"}
+                         for index, status in enumerate(
+                             ["cancelled"] * 6 if archived else ["completed", "completed", "cancelled", "in_progress"])]
+                return Response({"tasks": tasks}, {})
+            return original(method, endpoint, body)
+
+        self.api.api.transport = inventory
+        self.api.inventory()
+        self.assertEqual(10, len(self.api.tasks))
+        self.assertEqual(1, self.api.external_slots)
+
+    def test_primary_optional_counts_validate_present_values_without_requiring_them(self):
+        from live import API
+        for count in (None, -1, True, "0", 1):
+            with self.subTest(count=count), self.assertRaises(IncompleteInventory):
+                API(lambda *_: Response({"tasks": [], "total_active_count": count}, {})).pages(
+                    "agents/repos/radical/aspire/tasks", key="tasks", optional_total_count=True,
+                    total_count_key="total_active_count")
+        with self.assertRaises(IncompleteInventory):
+            API(lambda *_: Response({"tasks": []}, {})).pages(
+                "agents/repos/radical/aspire/tasks", key="tasks", require_total_count=True)
+
+    def test_primary_countless_link_pagination_completeness_and_fail_closed_boundaries(self):
+        from live import API
+        path = "agents/repos/radical/aspire/tasks"
+        next_link = f'<https://api.github.com/{path}?is_archived=false&per_page=100&page=2>; rel="next"'
+        calls = []
+
+        def pages(_method, endpoint, _body):
+            calls.append(endpoint)
+            if endpoint.endswith("&page=1"):
+                return Response({"tasks": [{"id": "one"}]}, {"Link": next_link})
+            return Response({"tasks": [{"id": "two"}]}, {})
+
+        result = API(pages).pages(path, key="tasks", query={"is_archived": "false"}, optional_total_count=True)
+        self.assertEqual([{"id": "one"}, {"id": "two"}], result)
+        self.assertEqual(2, len(calls))
+        for headers, values in (
+                ({}, [{"id": str(index)} for index in range(100)]),
+                ({"Link": next_link + ", " + next_link}, []),
+                ({"Link": next_link.replace('rel="next"', 'rel="last"')}, []),
+                ({"Link": next_link.replace("is_archived=false", "is_archived=true")}, [])):
+            with self.subTest(headers=headers), self.assertRaises(IncompleteInventory):
+                API(lambda *_: Response({"tasks": values}, headers)).pages(
+                    path, key="tasks", query={"is_archived": "false"}, optional_total_count=True)
+        with self.assertRaises(IncompleteInventory):
+            API(pages, max_pages=1).pages(
+                path, key="tasks", query={"is_archived": "false"}, optional_total_count=True)
+
+    def test_primary_optional_count_change_and_duplicate_pages_fail_closed(self):
+        from live import API
+        path = "agents/repos/radical/aspire/tasks"
+        link = f'<https://api.github.com/{path}?per_page=100&page=2>; rel="next"'
+        for changed_count in (True, False):
+            def pages(_method, endpoint, _body):
+                first = endpoint.endswith("&page=1")
+                return Response({"tasks": [{"id": "one" if first or not changed_count else "two"}],
+                                 "total_active_count": 2 if first else 3 if changed_count else 2},
+                                {"Link": link} if first else {})
+            with self.subTest(changed_count=changed_count), self.assertRaises(ValueError):
+                API(pages).pages(path, key="tasks", optional_total_count=True, total_count_key="total_active_count")
+
+    def test_primary_links_omitting_archive_filter_keep_each_requested_lane_pinned(self):
+        from live import API
+        path = "agents/repos/radical/aspire/tasks"
+        for archived in ("false", "true"):
+            calls = []
+
+            def pages(_method, endpoint, _body):
+                calls.append(endpoint)
+                first = endpoint.endswith("&page=1")
+                number = 1 if first else 2
+                url = f"https://api.github.com/{path}?page={number}&per_page=100"
+                first_url = f"https://api.github.com/{path}?page=1&per_page=100"
+                link = f'<{first_url}>; rel="first", <{url}>; rel="last"'
+                if first:
+                    link = f'<https://api.github.com/{path}?page=2&per_page=100>; rel="next"'
+                return Response({"tasks": [{"id": f"{archived}-{number}"}]}, {"Link": link})
+
+            with self.subTest(archived=archived):
+                result = API(pages).pages(path, key="tasks", query={"is_archived": archived},
+                                         optional_total_count=True)
+                self.assertEqual(2, len(result))
+                self.assertEqual([
+                    f"{path}?is_archived={archived}&per_page=100&page=1",
+                    f"{path}?is_archived={archived}&per_page=100&page=2"], calls)
+
+    def test_primary_first_last_self_link_proves_complete_single_page(self):
+        from live import API
+        path = "agents/repos/radical/aspire/tasks"
+        url = f"https://api.github.com/{path}?page=1&per_page=100"
+        for size in (0, 4, 100):
+            tasks = [{"id": str(index)} for index in range(size)]
+            with self.subTest(size=size):
+                result = API(lambda *_: Response({"tasks": tasks}, {
+                    "Link": f'<{url}>; rel="first", <{url}>; rel="last"'})).pages(
+                        path, key="tasks", query={"is_archived": "false"}, optional_total_count=True)
+                self.assertEqual(tasks, result)
 
     def test_resumed_settled_worker_holds_capacity_and_additional_usage(self):
         chain, operation, task = self.issue_worker()

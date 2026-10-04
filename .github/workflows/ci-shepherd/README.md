@@ -136,7 +136,13 @@ missing, malformed or unsuccessful; such evidence cannot authorize code.
 Task creation uses only the verified primary REST fields `prompt`, `base_ref`,
 optional `head_ref` and `create_pull_request`, API version `2026-03-10`.
 Task details come from `agents/repos/{owner}/{repo}/tasks/{task_id}`; both
-`is_archived=false` and `is_archived=true` inventory lanes are required. See the
+`is_archived=false` and `is_archived=true` inventory lanes are required.
+Primary task responses require only `tasks`; lane counts are optional and
+validated when present. Without counts, bounded Link pagination establishes
+completeness. Live links can omit the archive filter: every next request keeps
+the original filter pinned, and contradictory filters/relations fail closed.
+A full final page requires an explicit self `last` link; a missing continuation
+or exhausted page bound is not an empty/complete inventory. See the
 [primary REST schema](https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json).
 No invented worker hard cap or cancellation endpoint is exposed.
 
