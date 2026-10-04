@@ -170,6 +170,16 @@ def validate_evidence(evidence, session_id, *, hosted=False):
     return validate(evidence["events"], session_id, debug=evidence["debug"], hosted=hosted)
 
 
+def validate_reconciliation_evidence(packet, decision, run, evidence):
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("sessionId"), str):
+        raise ValueError("live reconciliation requires fresh host evidence")
+    observed, report = validate_evidence(evidence, evidence["sessionId"], hosted=True)
+    if observed != decision:
+        raise ValueError("reconciliation decision differs from the actual host final decision")
+    contracts.validate_reconciliation_decision(packet, observed, run)
+    return report
+
+
 def collect(session_root, logs, outcome, output):
     if outcome != "success":
         raise ValueError("host engine step did not succeed")

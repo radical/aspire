@@ -154,7 +154,8 @@ class HostedTests(WorkspaceTest, unittest.TestCase):
     def test_compiled_awf_launch_clears_worker_credentials(self):
         step = compiled_step("Execute GitHub Copilot CLI")
         command = step["run"][step["run"].index("awf --config "):]
-        names = ["GH_TOKEN", "GITHUB_TOKEN", "GH_AW_GITHUB_TOKEN", "GH_AW_GITHUB_MCP_SERVER_TOKEN"]
+        names = ["GH_TOKEN", "GITHUB_TOKEN", "GH_AW_GITHUB_TOKEN", "GH_AW_GITHUB_MCP_SERVER_TOKEN",
+                 "CI_SHEPHERD_USER_TOKEN"]
         capture = "import json,os; print(json.dumps({key: os.environ.get(key) for key in " + repr(
             names + ["COPILOT_GITHUB_TOKEN"]
         ) + "}))"

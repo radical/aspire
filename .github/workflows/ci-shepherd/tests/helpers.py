@@ -4,6 +4,8 @@ import re
 import shutil
 import sys
 import uuid
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -118,3 +120,145 @@ class FakeProcess:
             (logs / "process-fixture.log").write_text(wire_report(self.tools))
         output = jsonl(self.transform(events)) if self.output is None else self.output
         return CompletedProcess(argv, self.returncode, output, "")
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = datetime(2026, 10, 4, tzinfo=timezone.utc)
+        self.readings = []
+
+    def __call__(self):
+        if self.readings:
+            self.now = self.readings.pop(0)
+        return self.now
+
+    def advance(self, **kwargs):
+        self.now += timedelta(**kwargs)
+
+
+def subject(kind="pr", number=7):
+    return {"repository": "owner/repo", "kind": kind, "number": number}
+
+
+def observation(kind="pr"):
+    root = subject(kind)
+    return {
+        "schemaVersion": 1, "root": root,
+        "complete": {key: True for key in (
+            "subjects", "feedback", "workers", "workersArchived", "workersUnarchived",
+            "pullRequests", "history", "comments", "jobs",
+        )},
+        "subjects": [{
+            "subject": root, "nodeId": "NODE7", "state": "open", "managed": True,
+            "labels": ["shepherd-adopted"], "revision": "a" * 40 if kind == "pr" else "issue-revision-1",
+            "feedback": [{"id": "review-1", "revision": "2026-10-04T00:00:00Z", "state": "open"}],
+        }],
+        "workers": [], "managedPullRequests": [7] if kind == "pr" else [],
+        "history": {"recordIds": [], "publicationAttempts": [], "associatedOperationIds": []},
+        "comments": [],
+        "jobs": [{
+            "subject": root, "headSha": "a" * 40, "runId": 10, "jobId": 20,
+            "logicalJob": "tests / linux", "transient": True, "state": "completed",
+        }] if kind == "pr" else [],
+    }
+
+
+RECONCILIATION_RUN = {
+    "repository": "owner/repo", "runId": "41", "runAttempt": "1", "workflowSha": "b" * 40,
+}
+
+
+def reconciliation_decision(packet, action="repair-pr", arguments=None):
+    value = {
+        "schemaVersion": 1, "subject": deepcopy(packet["subject"]), "basis": deepcopy(packet["basis"]),
+        "action": action, "reason": "Use the current host observations.",
+        "evidenceIds": [packet["evidence"][0]["id"]],
+    }
+    if action != "wait":
+        defaults = {
+            "repair-pr": {"feedbackIds": ["review-1"]}, "assign-issue": {},
+            "adopt-pr": {"pullRequestNumber": 8},
+            "rerun-transient": {"runId": 10, "jobId": 20, "logicalJob": "tests / linux"},
+            "checkpoint": {},
+        }
+        value["arguments"] = deepcopy(defaults[action] if arguments is None else arguments)
+    return value
+
+
+def reconciliation_evidence(decision):
+    session = str(uuid.uuid4())
+    call = {
+        "toolCallId": "decision-call", "toolName": "safeoutputs-submit_decision",
+        "arguments": {"decision": json.dumps(decision)},
+    }
+    return {"schemaVersion": 1, "sessionId": session, "events": host_events(session, decision, [call]),
+            "debug": wire_report(["safeoutputs-submit_decision"])}
+
+
+class FakeGitHub:
+    """Closed host snapshots; history is independent of comment visibility."""
+    write_enabled = True
+    actor = {"id": 100, "login": "shepherd[bot]"}
+
+    def __init__(self, snapshot=None):
+        import receipts
+        self.snapshot = deepcopy(snapshot or observation())
+        _, record = receipts.read_record(self.snapshot, self.actor)
+        self.scope = receipts.TrialScope(self.snapshot["root"], None if record is None else receipts.trial_tuple(record))
+        self.writes = []
+        self.effects = []
+        self.refreshes = 0
+        self.before_refresh = None
+        self.loss = None
+        self.effect_loss = False
+        self.effect_visible = False
+        self.reject_effect = False
+
+    def refresh(self, root):
+        self.refreshes += 1
+        if self.before_refresh:
+            self.before_refresh(self, self.refreshes)
+        return deepcopy(self.snapshot)
+
+    def publish_status(self, root, body, comment_id, guard):
+        from github import LostResponse
+        guard()
+        self.writes.append(("create" if comment_id is None else "edit", comment_id, body))
+        record = body.split("<!-- ci-shepherd:root:v1 -->\n", 1)[1]
+        trial_id = json.loads(record)["trialId"]
+        self.snapshot["history"]["publicationAttempts"] = [trial_id]
+        if self.loss == "create-before":
+            self.loss = None
+            raise LostResponse("status creation response unavailable")
+        if comment_id is None:
+            comment_id = 501
+            self.snapshot["comments"].append({"id": comment_id, "user": deepcopy(self.actor), "body": body})
+            self.snapshot["history"]["recordIds"].append(comment_id)
+        else:
+            next(comment for comment in self.snapshot["comments"] if comment["id"] == comment_id)["body"] = body
+        if self.loss in {"create-after", "edit-after"}:
+            self.loss = None
+            raise LostResponse("status publication response unavailable")
+        return {"id": comment_id}
+
+    def execute(self, operation):
+        from github import LostResponse, RejectedEffect
+        self.effects.append(deepcopy(operation))
+        if self.reject_effect:
+            raise RejectedEffect("remote service established no effect")
+        result = {"id": f"task-{len(self.snapshot['workers']) + 1}", "kind": "worker"} if operation["action"] in {"repair-pr", "assign-issue"} else {
+            "id": "effect-1", "kind": "effect",
+        }
+        if self.effect_loss:
+            if self.effect_visible:
+                self.snapshot["workers"].append({
+                    "id": result["id"], "state": "queued", "root": deepcopy(self.snapshot["root"]),
+                    "operationId": operation["id"],
+                })
+            raise LostResponse("effect result unavailable")
+        if result["kind"] == "worker":
+            self.snapshot["workers"].append({
+                "id": result["id"], "state": "queued", "root": deepcopy(self.snapshot["root"]),
+                "operationId": operation["id"],
+            })
+        return result

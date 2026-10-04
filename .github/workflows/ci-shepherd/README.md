@@ -1,8 +1,182 @@
-# CI Shepherd no-effect transport
+# CI Shepherd guarded fixture gate
 
-This slice proves a closed packet/decision/receipt boundary. It has no issue or PR
-repair lanes, remote workers, scheduling, cancellation, publication, or live mode.
-A receipt always records `outcome: wait` and an empty `effects` array.
+The manual workflow defaults to `transport-proof`: a fresh native decision and a
+receipt with `outcome: wait` and empty `effects`. `observe` performs deterministic
+GET-only collection and fresh reasoning without starting a trial. `live` installs
+one capability: repairing the original label-normalization defect in
+`radical/aspire#121` on the existing `shepherd-fork-fixture` branch targeting `main`.
+Only `.ci-shepherd-fixture/labels.py` may change; fixture assertions must not.
+
+`hosted.py` prepares host-owned artifacts and applies independently downloaded
+same-run inputs. `live.py` implements the fixed REST adapter, independent history
+witness and existing-PR executor. `policies/pr.md` is the packet-first reasoning
+and output policy. No issue lane, subsequent defect repair, rerun, checkpoint
+mutation, merge or force-push handler is installed. Local live selection is
+rejected before credential loading; the callable core remains dry-run by default.
+
+## Reconciliation safety contract
+
+`round.py` exposes `prepare_reconciliation`, `validate_reconciliation_decision`
+and `apply_reconciliation`. This is distinct from the transport-proof schema;
+the existing smoke and hosted workflow still use their original contracts.
+Apply defaults to dry-run. Effect-bearing execution requires an explicitly
+injected host executor, writer capability and validated fresh host session/tool
+evidence through `reasoning.py`. There is no executor registry or model-supplied
+API body, executable command or permission report.
+
+Both prepare and apply require a separate `receipts.TrialScope(root, trial)`
+argument. It is trusted host authorization, **not** a packet/decision field.
+The root comes from immutable approved host configuration, not adopted-candidate
+selection or an agent claim. Only that one authorized root is accepted, including
+when another root has complete inventories or the original trial has expired.
+
+Use `trial=None` only for a genuinely unstarted authorized root. Its immutable
+`trialId`, `trialStartedAt` and `expiresAt` are pinned at authorized live
+initialization and cross-checked against the authenticated remote record before
+every subsequent mutation. Reconstructed cycles supply that same pinned tuple
+from trusted authenticated authority; an existing record with an unbound or
+mismatched scope fails closed. Missing authority cannot restart a bound trial.
+Observe, wait, dry-run and transport proof do not start its clock.
+
+- Decisions bind schema, subject, root, policy, packet/run identity, revision,
+  feedback and evidence references to the host prepare packet. Duplicate JSON
+  keys, extra fields, invented evidence and unsupported arguments fail closed.
+- The vocabulary is `wait`, `repair-pr`, `assign-issue`, `adopt-pr`,
+  `rerun-transient` and `checkpoint`. Wait has no arguments. Other arguments are
+  typed references to host-observed feedback, linked PRs or verified transient
+  current-head jobs, not freeform mutation instructions.
+- Before **each** status write and effect, apply refreshes identity, open state,
+  adoption, hands-off, head/issue revision, full normalized feedback, linked
+  subjects, jobs, inventories, authority, budgets and expiry. A root issue or
+  linked PR hands-off veto pauses the entire chain; removed adoption stops
+  management. No progress publication follows that veto.
+- `issue_pr.py` requires explicit complete inventories for subjects, feedback,
+  workers, **both archive lanes**, managed PRs, history, comments and jobs.
+  Unknown task states hold capacity. Only `completed`, `cancelled` and `failed`
+  are terminal. A previously confirmed worker missing from the inventory remains
+  unknown, not free capacity; losing archive visibility does not discard its ID.
+
+`receipts.py` owns one bounded root record in a marked `[automated]` status
+comment, edited in place. Both the GitHub actor ID and login must match the
+trusted host actor; marker text from another actor is ignored. Malformed,
+unsupported, ambiguous or mismatched authoritative records require recovery,
+not a new success-shaped chain. Local files are never authority.
+
+The bounds are enforced by `round.py`, `issue_pr.py` and `receipts.py`:
+
+- A prepare packet is valid for ten minutes. Every apply clock read uses a local
+  high-water mark, including initialization and limit checks, so a rollback
+  below an earlier apply observation fails closed even while the packet remains
+  valid. A reconstructed trial cannot authorize observations before its pinned
+  start; both the checked clock and receipt limits enforce that lower bound.
+- The remote root trial has an immutable ID and absolute 24-hour expiry, started
+  only by its first live initialization. Dry-run and implementation approval
+  start no clock. Process loss, readiness, new heads and fresh packets never
+  renew it.
+- One active worker is allowed; unknown workers and nonterminal or uncertain
+  reservations retain capacity through takeover and expiry.
+- Each chain has three cumulative repair reservations. Transient reruns have
+  two reservations per PR, stable logical job and head, independent of run/job
+  IDs. Reservations never refund the cumulative budgets, even on known failure.
+- Initial issue assignment has one intent per chain, including after terminal
+  workers or issue revision changes. Further work must use the managed PR lane,
+  not repeated initial assignment to bypass repair limits.
+- The normalized repository inventory also limits open managed PR capacity to
+  three when allocating a slot through issue assignment or child PR adoption.
+  Repairing an existing managed PR allocates no slot, and adopting a PR already
+  counted by that complete inventory allocates no additional slot. Worker,
+  repair-budget and completeness guards still apply. No merge, force-push,
+  approval dismissal or test weakening is exposed.
+- The status body is at most 16 KiB. Exhaustion pauses instead of truncating
+  history or resetting counters; larger details belong in external artifacts.
+
+Operations retain stable typed basis identities and pass through `prepared`,
+`reserved`, `consumed`, then `confirmed`, `failed` or `uncertain`. Preparation,
+budget reservation and the send boundary are persisted **before** an effect.
+Only a verified returned ID or an exactly correlated remote outcome may confirm
+it. Replays never repeat an effect. An established past worker outcome can be
+confirmed before considering a new head/action, without dispatching a new worker.
+
+A lost POST response is reconciled only by exact remote root/operation identity.
+An unestablished result requires human recovery and zero retry POSTs. Lost
+status-create/edit responses are recovered by rereading authenticated authority
+and comparing the entire expected record; ambiguous or absent publication
+does not authorize another create or reset the trial.
+
+### Collector and history authority
+
+`github.py` remains an injectable primitive. The fixed `live.py` collector
+verifies the selected `/user` identity against `/users/radical`, and pins the
+repository, PR database/node identity, creation timestamp and branch mapping.
+It collects both explicit task archive lanes, task details/sessions/artifacts,
+all issue/review feedback, managed open PRs and current-head fixture runs/jobs.
+HTTP errors, missing bodies/statuses, oversized data, paging errors, foreign links,
+skipped/cyclic pages and pagination-limit exhaustion are explicit failures;
+a full page requires another probe. See the primary
+[comment API](https://docs.github.com/en/rest/issues/comments) and
+[pagination contract](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api).
+
+Real failed unittest logs are descriptive, host-bound context alongside the
+unchanged closed core packet. Current-head actionable fixture assertions become
+open typed feedback, so the first repair requires no synthetic operator comment.
+Comment and log text is untrusted evidence, not executable shell or worker policy.
+The host renders the worker prompt and exact POST body; the model chooses typed
+feedback IDs, never an API body, task model, permission or executable instruction.
+
+- Empty comments are **not** history proof. The witness independently inspects
+  the sole Shepherd workflow's run attempts, jobs and downloaded host receipts.
+  Its immutable creation fence is the fixed fixture's actual `created_at`, not a
+  sliding lookback. Runs active at that fence cannot be excluded. Missing,
+  expired, cancelled, failed, incomplete or different-source privileged history
+  blocks initialization/recovery; it never grants a new budget or trial.
+  The workflow database ID and its two verified pre-fixture transport runs are
+  pinned in `live.py`. Subsequent `run_number` gaps detect deleted attempts even
+  when their status comment and task also disappear. Recreated workflows or
+  incomplete sequence visibility require human recovery.
+- Host-owned `audit.json` records attempted publication/dispatch before each
+  write, including failure outcomes. Always-upload steps preserve failure
+  diagnostics. If upload itself fails, later runs block on missing evidence.
+  Canonical records and correlated tasks must agree with witnessed trial and
+  operation identities. Local audit files are not authority.
+- Task routes are `agents/repos/{owner}/{repo}/tasks` and `/{task_id}`, with API
+  version `2026-03-10`. Both `is_archived=false` and `is_archived=true` are queried
+  explicitly; the preview has returned all tasks when the filter was omitted.
+  Optional aggregate counts are never completeness or live authority.
+- POST uses `prompt`, `base_ref: main`, `head_ref: shepherd-fork-fixture`, and
+  `create_pull_request: false`. No task model is requested. Actual identity,
+  model, state, errors and usage come from server task sessions, with exact
+  root/trial/operation/source-head correlation. AI-credit task usage is displayed
+  in credits by dividing its nano-unit `amount` by `1e9`; AWF usage is separate.
+  See the primary [task API](https://docs.github.com/en/rest/agent-tasks/agent-tasks).
+- Known documented HTTP rejection is distinct from uncertainty. A lost response
+  never retries POST. A later fresh wait can confirm an exactly correlated task
+  receipt without spending another repair reservation. Missing/unverifiable
+  tasks, unknown states, `idle`, `waiting_for_user` and `timed_out` retain capacity.
+- Completion is not push/CI proof. Receipts show the actual current head and
+  fixture gate on **that** head. No current-head run, approval/permission blocks,
+  skipped CI or an old green remain not ready. `gate.ciPassed` describes CI
+  alone; `gate.ready` also requires a head different from the initial fixture,
+  a comparison changing only `labels.py`, and an authenticated completed task
+  whose newest session has the exact root/trial/operation/source-head and refs.
+  A newer unassociated session retains unknown worker capacity.
+- There is no proven cancellation API. Hands-off prevents new host writes and
+  the worker prompt requires the same chain checks before commit/push/replies;
+  observation reports any in-flight task truthfully.
+- Multi-root/multi-repository installation must bind the common trial window
+  and **all** reservations to common canonical remote authority before relaxing
+  the singleton restriction. The callable core enforces one trusted authorized
+  root; supplying another packet/root cannot hide the original reservation or
+  obtain a renewed trial. It is not a global collector or multi-root scheduler.
+- The hosted workflow remains the sole intended live writer, serialized by its
+  existing constant concurrency group with cancellation disabled. Local runs
+  cannot select live mode. No new lock service is introduced.
+
+Keep read/mutation credentials in reviewed deterministic host jobs, never in the
+reasoner. Prepare and apply must preserve the immutable trusted workflow revision
+and independently downloaded same-run prepare artifact. Model-authored reports and mutable agent uploads cannot replace that boundary.
+Prepare/apply obtain fresh identity directly from GitHub's TLS-authenticated OIDC
+service, verifying repository, actor, hosted runner, run/attempt and workflow SHA.
+Only those deterministic jobs have `id-token: write` and the selected user secret.
 
 ## Local commands
 
@@ -72,13 +246,14 @@ actionlint -shellcheck shellcheck \
 ```
 
 The hosted engine uses native Copilot routing (`copilot-requests: write` and
-`github.token`); it needs no user task token. The pinned compiler emits a
+`github.token`); it receives no user task token. The pinned compiler emits a
 ten-minute execution timeout and AWF proxy budgets of five credits and twelve
 turns. Harness retries are disabled. These are supported configuration bounds,
 not a claimed twenty-tool-call limit or evidence of hosted enforcement.
 
 The execution step explicitly empties `GH_TOKEN`, `GITHUB_TOKEN`,
-`GH_AW_GITHUB_TOKEN`, and `GH_AW_GITHUB_MCP_SERVER_TOKEN` through `engine.env`.
+`GH_AW_GITHUB_TOKEN`, `GH_AW_GITHUB_MCP_SERVER_TOKEN`, and
+`CI_SHEPHERD_USER_TOKEN` through `engine.env`.
 Empty-string GitHub expressions keep these bindings valid in v0.89.17; literal
 empty strings are emitted as YAML null by that compiler.
 The native inference token remains scoped to the AWF API proxy; it is not a
@@ -117,5 +292,54 @@ and [home mounts](https://github.com/github/gh-aw-firewall/blob/v0.28.20/src/ser
 Behavioral tests execute the generated collection command against fixture
 session files and capture the generated AWF launch environment with sentinel
 worker credentials. They do not prove a real container mount or inference.
-Hosted collection and native MCP transport remain unproven until a real run.
-Failure to find the expected host reports prevents a receipt.
+These fixture assertions alone do not prove a real hosted collection or native
+MCP transport. Failure to find the expected host reports prevents a receipt.
+
+## Parent-operated first live gate
+
+Review and deploy only this workflow, its generated lock and the
+`ci-shepherd/` directory to the fork's registered workflow branch. Keep the
+fixture branch separate and never check it out with the host credential.
+Recompile with the pinned tool before deployment. The new restricted secret
+requires compiler security review; the manual-dispatch concurrency warning is
+intentional because one constant workflow group serializes all modes.
+
+The parent provisions `CI_SHEPHERD_USER_TOKEN` securely in `radical/aspire` for
+the selected `radical` user. The primary task API requires a supported user
+credential with agent-task read/write access; installation tokens are unsupported.
+The host also needs issue-comment write, repository/PR read, and Actions read.
+The secret is referenced only in deterministic prepare/apply steps and is never
+part of a packet, prompt, artifact or reasoner environment.
+
+After reviewing the worker/status templates, the parent adds `shepherd-adopted`
+to **PR 121 only**. Without adoption the gate stops before reasoning/effects.
+These commands are the parent's operations, not actions performed by local tests:
+
+```shell
+gh workflow run ci-shepherd.lock.yml --repo radical/aspire \
+  --ref <reviewed-deployment-branch> -f mode=observe
+gh run watch <observe-run-id> --repo radical/aspire --exit-status
+gh workflow run ci-shepherd.lock.yml --repo radical/aspire \
+  --ref <same-reviewed-deployment-branch> -f mode=live
+gh run watch <live-run-id> --repo radical/aspire --exit-status
+```
+
+Inspect the independent prepare/evidence/receipt artifacts, not just green job
+conclusions. Observe must show the initial SHA and failed fixture assertion logs,
+fresh session/tool evidence, zero effects and no trial/status comment. The first
+live repair must show persisted prepared/reserved/consumed authority, one
+cumulative repair, and one actual task ID on the existing branch—never a new PR.
+The actual server-selected model is recorded, not assumed.
+
+Run another fresh live cycle to observe progress: an active task must produce a
+wait with no second task POST. On a changed head, the old failure/success cannot
+substitute for the new fixture CI. Check the worker changed only `labels.py`,
+preserved the ten fixture cases, and reported its commit/test/CI evidence.
+Any approval/licensing/permission block, uncertain receipt or incomplete history
+requires human recovery, not redispatch or renewed authority.
+
+Local stdlib tests exercise fake HTTP and generated prepare/collector/apply
+commands, including delayed receipt recovery and hostile log text remaining
+data. They do **not** establish a real cloud task launch, verified worker push,
+CI approval, cancellation, OIDC service compatibility or an end-to-end live
+trial. Those remain the parent's actual service gate.
