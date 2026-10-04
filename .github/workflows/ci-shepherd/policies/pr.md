@@ -13,6 +13,13 @@ or uncertain operation, absent/pending/approval-blocked CI, human feedback,
 successful current-head CI, or any uncertainty. Task completion does not prove
 a push or passing CI. Hands-off vetoes all new writes; no cancellation is claimed.
 
+Repair also requires the host's current-head `repairScope`: verified preservation
+of every intervening labels-only commit and positive `commitRoom`. Zero, one or
+two commits beyond the pinned initial head leave room for exactly one fix commit;
+three commits exhaust this fixture's scope. An unverified or stale scope is a
+reason to wait. This descriptive field grants no authority; apply independently
+recollects scope before every publication and dispatch.
+
 A `prepared` intent is distinct from `reserved` or `consumed`, but its state
 alone is not unsent proof. Normally choose `wait` for an existing prepared
 intent with unknown outcome. The sole exception is a

@@ -3,14 +3,14 @@
 The manual workflow defaults to `transport-proof`: a fresh native decision and a
 receipt with `outcome: wait` and empty `effects`. `observe` performs deterministic
 GET-only collection and fresh reasoning without starting a trial. `live` installs
-one capability: repairing the original label-normalization defect in
+one capability: repairing current-head label-normalization failures in
 `radical/aspire#121` on the existing `shepherd-fork-fixture` branch targeting `main`.
 Only `.ci-shepherd-fixture/labels.py` may change; fixture assertions must not.
 
 `hosted.py` prepares host-owned artifacts and applies independently downloaded
 same-run inputs. `live.py` implements the fixed REST adapter, independent history
 witness and existing-PR executor. `policies/pr.md` is the packet-first reasoning
-and output policy. No issue lane, subsequent defect repair, rerun, checkpoint
+and output policy. No issue lane, unrelated defect repair, rerun, checkpoint
 mutation, merge or force-push handler is installed. Local live selection is
 rejected before credential loading; the callable core remains dry-run by default.
 
@@ -122,6 +122,25 @@ open typed feedback, so the first repair requires no synthetic operator comment.
 Comment and log text is untrusted evidence, not executable shell or worker policy.
 The host renders the worker prompt and exact POST body; the model chooses typed
 feedback IDs, never an API body, task model, permission or executable instruction.
+
+`repairScope` binds the host observation to the current workflow source, fixed
+root, initial head and current PR head. The immutable initial head has zero
+intervening commits. For a later head, the host requires a complete comparison
+and verifies every commit's exact SHA, single-parent chain and complete file
+inventory. Each commit must modify only `.ci-shepherd-fixture/labels.py`; changes
+to tests or workflows followed by a revert still reject. A cumulative net diff
+alone cannot prove preservation. See the primary
+[comparison and commit APIs](https://docs.github.com/en/rest/commits/commits).
+
+Dispatch admits zero, one or two commits beyond the initial head, with room for
+exactly one labels-only fix commit. Three commits exhaust dispatch room without
+preventing observation. Scope is independently refreshed before every status
+mutation and the final send, before the last clock check; no GET follows that
+check before POST. An initially ineligible repair spends nothing. If eligibility
+is lost after a reservation or consumed publication, that capacity remains held;
+there is no refund, replacement operation or POST retry. A later eligible repair
+uses a new head/feedback-bound operation under the same immutable trial and
+cumulative three-repair limit.
 
 The reasoner receives at most 4096 bytes of descriptive JSON, including any
 host-derived advisory. For fixture CI, the excerpt retains every unittest
@@ -271,6 +290,32 @@ Historical consumption remains a provenance/budget floor, not permanently
 pending work after current confirmation of the uniquely authenticated task.
 Missing or ambiguous outcomes retain capacity without redispatch; a
 claimed confirmation without that task fails closed.
+
+### Reviewed successful-source compatibility
+
+`successful_history.py` registers immutable source
+`9ee8070c8d5e1f6bb8a8324ad386e0e17b7fa7d5` for its consumed-to-confirmed WAIT
+protocol, not a particular run. Source registration attests the reviewed code
+and credential-job boundary; matching artifact shapes or a shared branch cannot
+register another source. The independent two-run witness and default-off typed
+recovery configuration remain required.
+
+Only a successful manual attempt 1 from that source, exact workflow/repository
+and authenticated actor qualifies. Complete job and artifact inventories must
+agree with their explicit total counts. All five expected jobs and the sole
+`Guarded host apply` step must succeed. Independently downloaded, provenance-bound
+prepare, prepare-audit, native evidence and receipt ZIPs must contain the exact
+members and bind the same packet/run/session. The native decision must be WAIT;
+the audit must show exactly one confirmed publication, no task attempt and no
+additional spending, preserving the original consumed operation's trial,
+identity, provenance and counter.
+
+The confirmed record becomes a durable floor. Fresh canonical authority and a
+unique matching current task remain mandatory before another cycle. Another
+eligible head may append an operation without altering that confirmation or
+resetting the trial/budget. Unknown sources, reruns, failed writers, changed
+bindings, ambiguous tasks or missing/expired evidence do not inherit this
+compatibility. Historical native evidence never authorizes a new dispatch.
 
 - Empty comments are **not** history proof. The witness independently inspects
   the sole Shepherd workflow's run attempts, jobs and downloaded host receipts.

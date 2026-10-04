@@ -392,6 +392,8 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
         scope.check_record(root, record if initializing else current_record)
         if current_id != comment_id or current_record != expected:
             raise ValueError("remote authority changed before mutation; needs-human")
+        if recovery_result is None and callable(getattr(executor, "validate", None)):
+            executor.validate(identity)
         receipts.ensure_limits(current, record if initializing else current_record, identity, checked_clock(), own_id)
         if resume is not None:
             resume.check(github, packet, current, record)

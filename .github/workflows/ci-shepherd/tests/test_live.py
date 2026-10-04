@@ -59,6 +59,10 @@ class FakeService:
         self.incomplete = None
         self.before_request = None
         self.file_scope = True
+        self.commit_shas = []
+        self.commit_files = {}
+        self.commit_headers = {}
+        self.comparison_override = {}
 
     def current_run(self):
         return {"id": int(self.run["runId"]), "run_attempt": int(self.run["runAttempt"]), "path": live.WORKFLOW,
@@ -149,9 +153,21 @@ class FakeService:
         if path == actions + "/jobs/20/logs":
             return Response(self.logs, {})
         if "/compare/" in path:
-            return Response({"status": "ahead", "total_commits": 1, "ahead_by": 1,
+            shas = self.commit_shas or [self.pr["head"]["sha"]]
+            return Response({"status": "ahead", "total_commits": len(shas), "ahead_by": len(shas), "behind_by": 0,
+                             "base_commit": {"sha": live.INITIAL_HEAD}, "merge_base_commit": {"sha": live.INITIAL_HEAD},
+                             "commits": [{"sha": sha, "parents": [{"sha": shas[index - 1] if index else live.INITIAL_HEAD}]}
+                                         for index, sha in enumerate(shas)],
                              "files": [{"filename": ".ci-shepherd-fixture/labels.py" if self.file_scope else ".ci-shepherd-fixture/test_labels.py",
-                                        "status": "modified"}]}, {})
+                                        "status": "modified"}], **deepcopy(self.comparison_override)}, {})
+        if "/commits/" in path:
+            sha = path.rsplit("/", 1)[1]
+            shas = self.commit_shas or [self.pr["head"]["sha"]]
+            index = shas.index(sha)
+            return Response({"sha": sha, "parents": [{"sha": shas[index - 1] if index else live.INITIAL_HEAD}],
+                             "files": deepcopy(self.commit_files.get(sha, [
+                                 {"filename": ".ci-shepherd-fixture/labels.py", "status": "modified"}]))},
+                            self.commit_headers.get(sha, {}))
         for entry in self.history:
             run = entry["run"]
             if path == actions + f"/runs/{run['id']}/artifacts":

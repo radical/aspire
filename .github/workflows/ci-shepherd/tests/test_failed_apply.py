@@ -166,18 +166,13 @@ class FailedApplyTests(WorkspaceTest, unittest.TestCase):
             receipts.TrialScope(live.ROOT, TRIAL), dry_run=True)
         self.assertEqual(result, {"outcome": "dry-run", "effects": [],
                                   "operation": receipts.operation_identity(packet, decision)})
-        failure = None
-        try:
-            self.apply_decision(packet, decision)
-        except ValueError as error:
-            failure = str(error)
-        self.assertEqual(failure, "first gate permits only the original normalization defect; later repairs aren't installed",
-                         "Confirmed current authority must reach the unchanged executor cap, not historical WAIT rejection")
-        self.assertEqual([call for call in self.service.calls if call[0] != "GET"], [])
-        self.assertEqual(receipts.parse_body(self.service.comments[0]["body"]), confirmed)
-        self.assertEqual(confirmed["repairBatches"], 1)
-        self.assertEqual(receipts.trial_tuple(confirmed), TRIAL)
-        self.assertFalse((self.work / "receipt.json").exists())
+        result = self.apply_decision(packet, decision)
+        self.assertEqual(result["outcome"], "confirmed")
+        self.assertEqual(len(self.service.posts()), 1)
+        current = receipts.parse_body(self.service.comments[0]["body"])
+        self.assertEqual(current["operations"][0], confirmed["operations"][0])
+        self.assertEqual(current["repairBatches"], 2)
+        self.assertEqual(receipts.trial_tuple(current), TRIAL)
 
     def test_completed_worker_approval_blocked_pr_ci_allows_fresh_wait_receipt_recovery(self):
         task = self.service.tasks[TASK]
