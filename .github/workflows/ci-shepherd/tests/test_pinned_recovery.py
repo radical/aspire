@@ -162,9 +162,11 @@ class PinnedService(FakeService):
             value = {"workflow_runs": [{"id": 37170819379, "run_attempt": 1, "head_sha": self.ci_head,
                                        "path": live.FIXTURE_WORKFLOW, "event": "pull_request", "pull_requests": [{"number": 121}],
                                        "status": self.ci_state, "conclusion": self.ci_conclusion}]}
+            value["workflow_runs"].extend(deepcopy(self.ci_extra_runs))
         elif path == prefix + "/runs/37170819379/attempts/1/jobs":
-            value = {"jobs": [{"id": 111343238059, "run_id": 37170819379, "head_sha": self.ci_head, "name": live.JOB,
-                              "status": self.ci_state, "conclusion": self.ci_conclusion}]}
+            value = deepcopy(self.ci_jobs) if self.ci_jobs is not None else {
+                "jobs": [{"id": 111343238059, "run_id": 37170819379, "head_sha": self.ci_head, "name": live.JOB,
+                          "status": self.ci_state, "conclusion": self.ci_conclusion}]}
         elif path == prefix + "/jobs/111343238059/logs":
             value = self.logs
         else:

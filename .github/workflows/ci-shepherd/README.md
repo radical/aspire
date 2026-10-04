@@ -178,7 +178,7 @@ It permits source migration only for observe run `37175895217` and failed run
 `a9da7a1d90195c255bfd7d91349ff0bdbbb20356`. Only these two runs receive the
 prepared-intent migration authorization. Normal history sequence and
 completeness checks still apply; other privileged failures remain blocked unless
-they satisfy the neutral pre-apply-abort predicate below.
+they satisfy the neutral pre-apply-abort or consumed failed-apply predicates below.
 
 Every complete observation independently downloads the named prepare, native
 evidence, and receipt/failure artifacts, and verifies the pinned run, actor,
@@ -235,6 +235,43 @@ prepared recovery remain independently required. Resumption preserves the
 original trial and operation, honors wait, and never refunds, replaces an
 intent, or retries uncertain work.
 
+### Source-qualified consumed apply failure
+
+`failed_apply.py` registers reviewed immutable source
+`d1cb65eb4fd8b3efe456b6573c7eb04010439e36`, not a run ID or arbitrary historical
+source. Its reviewed publication-before-send ordering and isolated writer are
+necessary to interpret a failed audit. The independent two-run `PinnedRecovery`
+witness and explicit default-off selector remain required.
+
+Only attempt 1 of a completed failed manual run qualifies. Complete authenticated
+run/job/artifact inventories must show successful `prepare`, `activation`,
+`agent` and `conclusion`, and the sole failed `submit_decision` job with a failed
+`Guarded host apply` step. Exact provenance-bound ZIP members independently
+supply the closed original prepared packet/envelope, complete GET-only prepare
+audit, successful native repair evidence, and failed apply audit/observation.
+The failure must be `task PR artifact mismatch`; the audit must contain exactly
+the original reserved publication, consumed publication and task-send attempt.
+Missing/expired/ambiguous artifacts, successful receipts, extra attempts,
+unreviewed sources, reruns or changed authority block.
+
+This is **effect-possible** history, never a no-effect abort or successful receipt.
+The consumed repair counter, original operation identity/provenance and immutable
+trial impose a durable floor. Historical native success verifies prior intent
+only; it cannot authorize a new POST or replace the current decision. A fresh
+WAIT may use the existing guarded receipt recovery after independent current
+canonical/task inventories and all normal head, feedback, management, authority
+and clock checks. Confirmation requires one uniquely correlated authenticated
+task. Every publication guard recomputes that unique association and requires
+the same task ID; disappearance, duplication or replacement stops publication.
+Live non-WAIT decisions are explicitly rejected before any mutation while the
+trusted packet or fresh canonical record retains a
+consumed/uncertain operation. The host does not rewrite that decision to WAIT
+or route it through the shared kernel's non-WAIT receipt reconciliation.
+Historical consumption remains a provenance/budget floor, not permanently
+pending work after current confirmation of the uniquely authenticated task.
+Missing or ambiguous outcomes retain capacity without redispatch; a
+claimed confirmation without that task fails closed.
+
 - Empty comments are **not** history proof. The witness independently inspects
   the sole Shepherd workflow's run attempts, jobs and downloaded host receipts.
   Its immutable creation fence is the fixed fixture's actual `created_at`, not a
@@ -261,6 +298,17 @@ intent, or retries uncertain work.
   root/trial/operation/source-head correlation. AI-credit task usage is displayed
   in credits by dividing its nano-unit `amount` by `1e9`; AWF usage is separate.
   See the primary [task API](https://docs.github.com/en/rest/agent-tasks/agent-tasks).
+- Task PR artifacts require the exact integer database ID. An omitted or blank
+  `global_id` is accepted only with independent REST verification of the fixed
+  PR's node/repository/ref mapping; wrong nonempty IDs and ambiguous correlation
+  markers block. `task PR artifact mismatch` alone does not establish which
+  metadata field differed or prove that a blank ID caused the rejection.
+- A valid task POST response records diagnostic status `201` and the returned
+  task ID before verification GETs. Those values are not confirmation authority.
+  Delayed metadata can be reconciled only through bounded GETs of the existing
+  task, never another POST. Unverifiable post-send identity retains consumed
+  capacity and fails closed; sanitized verification diagnostics preserve no
+  credentials or arbitrary response bodies.
 - Known documented HTTP rejection is distinct from uncertainty. A lost response
   never retries POST. A later fresh wait can confirm an exactly correlated task
   receipt without spending another repair reservation. Missing/unverifiable
@@ -272,6 +320,16 @@ intent, or retries uncertain work.
   a comparison changing only `labels.py`, and an authenticated completed task
   whose newest session has the exact root/trial/operation/source-head and refs.
   A newer unassociated session retains unknown worker capacity.
+- A completed `action_required` PR run on the exact current head and fixture
+  workflow with a complete explicit `total_count: 0` / `jobs: []` inventory is
+  reported as `approval-blocked`, with `ciPassed: false` and `ready: false`.
+  It supplies no repair evidence and permits read-only observation or fresh
+  guarded WAIT receipt recovery, not approval, rerun or another task dispatch.
+  Other missing/ambiguous jobs or unproven inventories still fail closed.
+  Same-head successful `workflow_dispatch` runs do not satisfy or mask the PR
+  check. GitHub's default [cloud-agent workflow approval gate](https://docs.github.com/en/copilot/concepts/security-governance-and-network-settings/risks-and-mitigations#copilot-cloud-agent-can-push-code-changes-to-your-repository)
+  requires a user with write access to approve workflow execution; Shepherd
+  does not approve runs or change that configuration.
 - There is no proven cancellation API. Hands-off prevents new host writes and
   the worker prompt requires the same chain checks before commit/push/replies;
   observation reports any in-flight task truthfully.

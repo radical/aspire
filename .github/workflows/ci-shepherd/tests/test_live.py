@@ -51,6 +51,8 @@ class FakeService:
         self.ci_head = live.INITIAL_HEAD
         self.ci_state = "completed"
         self.ci_conclusion = "failure"
+        self.ci_extra_runs = []
+        self.ci_jobs = None
         self.task_status = "queued"
         self.hide_tasks = False
         self.task_model = "actual-server-model"
@@ -137,8 +139,11 @@ class FakeService:
             values = [{"id": 10, "run_attempt": 1, "head_sha": self.ci_head, "path": live.FIXTURE_WORKFLOW,
                        "event": "pull_request", "pull_requests": [{"number": 121}],
                        "status": self.ci_state, "conclusion": self.ci_conclusion}] if query["head_sha"] == [self.ci_head] else []
+            values.extend(deepcopy(run) for run in self.ci_extra_runs if query["head_sha"] == [run["head_sha"]])
             return Response({"workflow_runs": values}, {})
         if path == actions + "/runs/10/attempts/1/jobs":
+            if self.ci_jobs is not None:
+                return Response(deepcopy(self.ci_jobs), {})
             return Response({"jobs": [{"id": 20, "run_id": 10, "head_sha": self.ci_head, "name": live.JOB,
                                       "status": self.ci_state, "conclusion": self.ci_conclusion}]}, {})
         if path == actions + "/jobs/20/logs":
@@ -275,7 +280,128 @@ class LiveTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(record["repairBatches"], 1)
         self.assertEqual(record["operations"][0]["state"], "confirmed")
         audit = contracts.read_json(self.work / "audit.json")
-        self.assertEqual([attempt["kind"] for attempt in audit["attempts"]], ["status"] * 4 + ["task", "status"])
+        self.assertEqual([attempt["kind"] for attempt in audit["attempts"]], ["status"] * 4 + ["task", "task-response", "status"])
+
+    def task_with_pull_artifact(self, global_id):
+        trial = {"trialId": "8ac4f956-3cd7-42b9-bd69-546b220b128f",
+                 "trialStartedAt": "2026-10-04T04:13:32.988354Z", "expiresAt": "2026-10-05T04:13:32.988354Z"}
+        correlation = {"root": live.ROOT, "trial": trial,
+                       "operationId": "1d681347-69c8-4fe5-ba17-24aa6cd7f238", "sourceHead": live.INITIAL_HEAD}
+        task = self.service.task_value("task-1", live.CORRELATION + receipts.canonical(correlation))
+        data = {"id": live.PR_ID}
+        if global_id != "absent":
+            data["global_id"] = global_id
+        task["artifacts"].append({"provider": "github", "type": "pull", "data": data})
+        self.service.tasks[task["id"]] = task
+        return task, correlation
+
+    def test_optional_blank_pull_global_id_requires_independent_rest_identity(self):
+        for global_id in ("absent", "", live.PR_NODE):
+            with self.subTest(global_id=global_id):
+                self.service = FakeService()
+                task, expected = self.task_with_pull_artifact(global_id)
+                github = live.FixtureGitHub(self.service.transport, self.service.run)
+                failure, result = None, None
+                try:
+                    result = github.task(task["id"])
+                except ValueError as error:
+                    failure = str(error)
+                self.assertIsNone(failure, "Supported optional/blank task node identity rejected: " + str(failure))
+                self.assertEqual(result[1], expected)
+                self.assertIn(("GET", f"repos/{live.REPOSITORY}/pulls/121", None), self.service.calls)
+                self.assertEqual(self.service.posts(), [])
+
+    def test_pull_artifact_wrong_ids_mapping_or_ambiguous_correlation_block(self):
+        for change in ("global-id", "null-global-id", "database-id", "float-database-id", "rest-node",
+                       "rest-ref", "creator", "session-repository", "two-correlations", "duplicate-marker"):
+            with self.subTest(change=change):
+                self.service = FakeService()
+                task, correlation = self.task_with_pull_artifact("absent")
+                data = task["artifacts"][-1]["data"]
+                if change == "global-id":
+                    data["global_id"] = "PR_wrong"
+                elif change == "null-global-id":
+                    data["global_id"] = None
+                elif change == "database-id":
+                    data["id"] += 1
+                elif change == "float-database-id":
+                    data["id"] = float(live.PR_ID)
+                elif change == "rest-node":
+                    self.service.pr["node_id"] = "PR_wrong"
+                elif change == "rest-ref":
+                    self.service.pr["head"]["ref"] = "different-branch"
+                elif change == "creator":
+                    task["creator"] = {"id": 999, "login": "radical"}
+                elif change == "session-repository":
+                    task["sessions"][0]["repository"]["id"] += 1
+                else:
+                    second = deepcopy(correlation)
+                    if change == "two-correlations":
+                        second["operationId"] = "a8b5ce20-6eca-487c-831e-6ac596bf9ba6"
+                    task["sessions"][0]["prompt"] += "\n" + live.CORRELATION + receipts.canonical(second)
+                github = live.FixtureGitHub(self.service.transport, self.service.run)
+                with self.assertRaises((ValueError, KeyError)):
+                    github.task(task["id"])
+                self.assertEqual(self.service.posts(), [])
+
+    def test_post_send_invalid_artifact_retains_consumed_capacity_without_retry(self):
+        original = self.service.task_value
+
+        def invalid_task(task_id, prompt):
+            task = original(task_id, prompt)
+            task["artifacts"].append({"provider": "github", "type": "pull",
+                                       "data": {"id": live.PR_ID, "global_id": "PR_wrong"}})
+            return task
+
+        self.service.task_value = invalid_task
+        packet, _, _ = self.prepare()
+        with self.assertRaisesRegex(ValueError, "artifact mismatch"):
+            self.apply(packet)
+        canonical = receipts.parse_body(self.service.comments[0]["body"])
+        self.assertEqual(canonical["repairBatches"], 1)
+        self.assertEqual(canonical["operations"][0]["state"], "consumed")
+        self.assertIsNone(canonical["operations"][0]["result"])
+        self.assertEqual(len(self.service.posts()), 1)
+        audit = contracts.read_json(self.work / "audit.json")
+        self.assertEqual(audit["phase"], "failed")
+        self.assertIn({"kind": "task-response", "operationId": canonical["operations"][0]["id"],
+                       "status": 201, "taskId": "task-1"}, audit["attempts"])
+
+    def test_delayed_same_task_get_confirmation_never_reposts(self):
+        original_task = self.service.task_value
+
+        def task_value(task_id, prompt):
+            task = original_task(task_id, prompt)
+            task["artifacts"].append({"provider": "github", "type": "pull",
+                                       "data": {"id": live.PR_ID, "global_id": live.PR_NODE}})
+            return task
+
+        self.service.task_value = task_value
+        original_transport = self.service.transport
+        task_reads = []
+
+        def transport(method, endpoint, body):
+            response = original_transport(method, endpoint, body)
+            if method == "GET" and "/tasks/" in endpoint:
+                task_reads.append(endpoint)
+                if len(task_reads) == 1:
+                    attempts = contracts.read_json(self.work / "audit.json")["attempts"]
+                    self.assertEqual(attempts[-1]["kind"], "task-response")
+                    self.assertEqual(attempts[-1]["status"], 201)
+                    self.assertEqual(attempts[-1]["taskId"], "task-1")
+                    response.payload["artifacts"][-1]["data"]["global_id"] = "PR_unverified"
+            return response
+
+        self.service.transport = transport
+        packet, _, _ = self.prepare()
+        result, _ = self.apply(packet)
+        self.assertEqual(result["outcome"], "confirmed")
+        self.assertEqual(result["operation"]["result"], {"id": "task-1", "kind": "worker"})
+        self.assertEqual(len(self.service.posts()), 1)
+        self.assertEqual(set(task_reads), {f"agents/repos/{live.REPOSITORY}/tasks/task-1"})
+        self.assertGreater(len(task_reads), 1)
+        self.assertLessEqual(len(task_reads), 6)
+        self.assertEqual(receipts.parse_body(self.service.comments[0]["body"])["repairBatches"], 1)
 
     def test_both_archive_lanes_are_explicit_and_missing_visibility_blocks(self):
         for lane in ("true", "false"):
@@ -588,6 +714,83 @@ class LiveTests(WorkspaceTest, unittest.TestCase):
         self.service.file_scope = False
         adapter.refresh(live.ROOT)
         self.assertFalse(adapter.context["gate"]["ready"])
+
+    def test_zero_job_approval_blocked_pr_ci_allows_observe_wait_not_manual_green(self):
+        self.service.pr["head"]["sha"] = self.service.ci_head = "c" * 40
+        self.service.ci_conclusion = "action_required"
+        self.service.ci_jobs = {"total_count": 0, "jobs": []}
+        self.service.ci_extra_runs = [{"id": 11, "run_attempt": 1, "head_sha": self.service.ci_head,
+                                      "path": live.FIXTURE_WORKFLOW, "event": "workflow_dispatch",
+                                      "pull_requests": [], "status": "completed", "conclusion": "success"}]
+        prepared, failure = None, None
+        try:
+            prepared = self.prepare("observe")
+        except ValueError as error:
+            failure = str(error)
+        self.assertIsNone(failure, "Approval-blocked zero-job PR CI prevented observation: " + str(failure))
+        packet, envelope, _ = prepared
+        gate = {"headSha": self.service.ci_head, "runId": 10, "jobId": None, "state": "approval-blocked",
+                "conclusion": "action_required", "jobConclusion": None, "ciPassed": False, "ready": False}
+        self.assertEqual(envelope["context"]["gate"], gate)
+        self.assertEqual(packet["observation"]["jobs"], [])
+        self.assertEqual(packet["basis"]["feedback"], [])
+        self.assertEqual(envelope["context"]["feedback"], [])
+        result, _ = self.apply(packet, "wait")
+        self.assertEqual(result["outcome"], "wait")
+        self.assertEqual(result["gate"], gate)
+        self.assertEqual([call for call in self.service.calls if call[0] != "GET"], [])
+        self.assertEqual(self.service.comments, [])
+
+    def test_zero_job_approval_exception_rejects_other_conclusions_and_unproven_inventories(self):
+        for change in ("success", "failure", "cancelled", "unknown", "queued", "in_progress", "missing-count",
+                       "wrong-count", "float-count", "boolean-count", "missing-count-next-page", "wrong-count-next-page",
+                       "missing-jobs", "other-job", "ambiguous-job", "http"):
+            with self.subTest(change=change):
+                self.service = FakeService()
+                self.service.ci_conclusion = "action_required"
+                self.service.ci_jobs = {"total_count": 0, "jobs": []}
+                if change in {"success", "failure", "cancelled", "unknown"}:
+                    self.service.ci_conclusion = change
+                elif change in {"queued", "in_progress"}:
+                    self.service.ci_state = change
+                elif change == "missing-count":
+                    self.service.ci_jobs.pop("total_count")
+                elif change in {"wrong-count", "float-count", "boolean-count"}:
+                    self.service.ci_jobs["total_count"] = {"wrong-count": 1, "float-count": 0.0, "boolean-count": False}[change]
+                elif change in {"missing-count-next-page", "wrong-count-next-page"}:
+                    if change == "missing-count-next-page":
+                        self.service.ci_jobs.pop("total_count")
+                    else:
+                        self.service.ci_jobs["total_count"] = 1
+                    original = self.service.transport
+
+                    def transport(method, endpoint, body):
+                        response = original(method, endpoint, body)
+                        if "/runs/10/attempts/1/jobs?" in endpoint:
+                            if parse_qs(urlparse(endpoint).query)["page"] == ["1"]:
+                                response.headers["Link"] = (
+                                    f'<https://api.github.com/repos/{live.REPOSITORY}/actions/runs/10/attempts/1/jobs'
+                                    '?per_page=100&page=2>; rel="next"')
+                            else:
+                                return Response({"total_count": 0, "jobs": []}, {})
+                        return response
+
+                    self.service.transport = transport
+                elif change == "missing-jobs":
+                    self.service.ci_jobs.pop("jobs")
+                elif change in {"other-job", "ambiguous-job"}:
+                    self.service.ci_jobs["jobs"] = [
+                        {"id": 20 + index, "run_id": 10, "head_sha": self.service.ci_head,
+                         "name": "different job" if change == "other-job" else live.JOB,
+                         "status": "completed", "conclusion": "success"}
+                        for index in range(1 if change == "other-job" else 2)]
+                    self.service.ci_jobs["total_count"] = len(self.service.ci_jobs["jobs"])
+                else:
+                    self.service.incomplete = "/runs/10/attempts/1/jobs"
+                github = live.FixtureGitHub(self.service.transport, self.service.run)
+                with self.assertRaises(ValueError):
+                    github.refresh(live.ROOT)
+                self.assertEqual([call for call in self.service.calls if call[0] != "GET"], [])
 
     def test_observe_and_default_transport_do_not_write_or_start_trial(self):
         packet, _, _ = self.prepare("observe")

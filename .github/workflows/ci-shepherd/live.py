@@ -236,7 +236,7 @@ class API:
             raise IncompleteInventory("GET unavailable; no success fallback")
         return response.payload
 
-    def pages(self, path, *, key=None, query=None):
+    def pages(self, path, *, key=None, query=None, require_empty_count=False):
         query = dict(query or {})
         items = []
         for page in range(1, self.max_pages + 1):
@@ -251,6 +251,10 @@ class API:
             if not isinstance(values, list) or len(values) > 100:
                 raise IncompleteInventory("missing or malformed inventory")
             items.extend(values)
+            if require_empty_count and not items and (
+                not isinstance(payload, dict) or type(payload.get("total_count")) is not int or payload["total_count"] != 0
+            ):
+                raise IncompleteInventory("empty inventory lacks an explicit zero total_count")
             links = [v for k, v in response.headers.items() if k.casefold() == "link"]
             if len(links) > 1:
                 raise IncompleteInventory("ambiguous Link")
@@ -303,6 +307,7 @@ class RemoteHistory:
         self.resume_allowed = True
         self.durable_records = []
         self.aborted_attempts = []
+        self.failed_apply_attempts = []
 
     def collect(self, workers):
         self.trial = None
@@ -310,6 +315,7 @@ class RemoteHistory:
         self.resume_allowed = True
         self.durable_records = []
         self.aborted_attempts = []
+        self.failed_apply_attempts = []
         migrated_runs = set()
         prefix = f"repos/{REPOSITORY}/actions"
         workflow = self.api.get(prefix + "/workflows/ci-shepherd.lock.yml")
@@ -366,8 +372,15 @@ class RemoteHistory:
                     continue
             if not own and run["status"] == "completed" and run["conclusion"] == "failure":
                 import preapply_abort
-                for aborted in preapply_abort.collect(self.api, run, self.run):
-                    self.aborted_attempts.append({"run": aborted["run"], "disposition": aborted["disposition"]})
+                import failed_apply
+                if run["head_sha"] in failed_apply.SOURCES:
+                    observed = [failed_apply.collect(self.api, run, self.recovery)]
+                    self.failed_apply_attempts.extend(observed)
+                    self.resume_allowed = False
+                else:
+                    observed = preapply_abort.collect(self.api, run, self.run)
+                    self.aborted_attempts.extend({"run": item["run"], "disposition": item["disposition"]} for item in observed)
+                for aborted in observed:
                     record = aborted["record"]
                     if record is not None:
                         trial = receipts.trial_tuple(record)
@@ -498,6 +511,8 @@ class FixtureGitHub(GitHub):
             if not isinstance(prompt, str):
                 raise IncompleteInventory("session prompt unavailable for correlation")
             matching = [line[len(CORRELATION):] for line in prompt.splitlines() if line.startswith(CORRELATION)]
+            if len(matching) > 1:
+                raise IncompleteInventory("ambiguous task correlation markers")
             session_correlation = None
             for line in matching:
                 value = contracts.loads(line)
@@ -537,10 +552,15 @@ class FixtureGitHub(GitHub):
                 raise IncompleteInventory("unknown task artifact")
             if correlation is not None and artifact["type"] == "branch" and artifact["data"] != {"head_ref": HEAD, "base_ref": BASE}:
                 raise IncompleteInventory("task branch artifact mismatch")
-            if correlation is not None and artifact["type"] == "pull" and (
-                artifact["data"]["id"] != PR_ID or artifact["data"].get("global_id", PR_NODE) != PR_NODE
-            ):
-                raise IncompleteInventory("task PR artifact mismatch")
+            if correlation is not None and artifact["type"] == "pull":
+                data = artifact["data"]
+                if (type(data["id"]) is not int or data["id"] != PR_ID
+                        or "global_id" in data and data["global_id"] not in ("", PR_NODE)):
+                    raise IncompleteInventory("task PR artifact mismatch")
+                # Task metadata has returned e.g. {"id": 4565196299, "global_id": ""}.
+                # Missing/blank GraphQL IDs are descriptive absence, never node
+                # authority: verify this fixed PR's database/node identity via REST.
+                self.mapping()
         return task, correlation, normalized
 
     def refresh(self, root):
@@ -627,6 +647,9 @@ class FixtureGitHub(GitHub):
         if self.recovery is not None:
             record = self.recovery.check_canonical(snapshot, self.actor)
             self.recovery.check_durable(record, self.history.durable_records)
+            import failed_apply
+            for attempt in self.history.failed_apply_attempts:
+                failed_apply.check_floor(snapshot, record, attempt["record"])
         for task in task_context:
             correlation = task["correlation"]
             operation = next(value for value in canonical_record["operations"] if value["id"] == correlation["operationId"])
@@ -662,7 +685,16 @@ class FixtureGitHub(GitHub):
         if not candidates:
             return [], {"state": "missing-current-head-ci", "headSha": head, "ciPassed": False, "ready": False}
         run = max(candidates, key=lambda value: value["id"])
-        jobs = self.api.pages(prefix + f"/runs/{run['id']}/attempts/{run['run_attempt']}/jobs", key="jobs")
+        approval_blocked = run["status"] == "completed" and run["conclusion"] == "action_required"
+        jobs = self.api.pages(prefix + f"/runs/{run['id']}/attempts/{run['run_attempt']}/jobs", key="jobs",
+                              require_empty_count=approval_blocked)
+        # Cloud-agent PR workflows awaiting human approval can report completed /
+        # action_required with {"total_count": 0, "jobs": []}. This is not CI
+        # success or repair evidence; other missing-job outcomes remain errors.
+        # https://docs.github.com/en/copilot/concepts/security-governance-and-network-settings/risks-and-mitigations
+        if approval_blocked and not jobs:
+            return [], {"headSha": head, "runId": run["id"], "jobId": None, "state": "approval-blocked",
+                        "conclusion": run["conclusion"], "jobConclusion": None, "ciPassed": False, "ready": False}
         found = [job for job in jobs if job["name"] == JOB]
         if len(found) != 1:
             raise IncompleteInventory("fixture CI gate job missing/ambiguous")
@@ -776,12 +808,21 @@ class ExistingPRExecutor:
         if not isinstance(response, Response) or response.status != 201 or not isinstance(response.payload, dict):
             raise LostResponse("task POST outcome uncertain; no retry")
         task_id = response.payload.get("id")
+        if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", task_id):
+            raise LostResponse("task POST returned unverifiable identity; no retry")
+        if self.github.audit is not None:
+            self.github.audit.attempt("task-response", {"operationId": operation["id"],
+                                                       "status": 201, "taskId": task_id})
         try:
             task, correlation, _ = self.github.task(task_id)
             expected = {"root": ROOT, "trial": trial, "operationId": operation["id"], "sourceHead": pr["head"]["sha"]}
             if correlation != expected:
                 raise IncompleteInventory("returned task lacks exact source/prompt correlation")
         except (ValueError, KeyError) as error:
+            if self.github.audit is not None:
+                self.github.audit.attempt("task-verification-failed",
+                                          {"operationId": operation["id"], "taskId": task_id,
+                                           "errorType": type(error).__name__})
             raise LostResponse("task identity verification uncertain; no retry") from error
         return {"id": task["id"], "kind": "worker"}
 
@@ -825,6 +866,8 @@ def recover_receipt(github, scope, run, evidence, packet, decision, clock_fn):
         scope.check_record(ROOT, current_record)
         if current_id != comment_id or current_record != record:
             raise ValueError("recovery authority changed")
+        if receipts.reconcile_effect(current, previous) != result:
+            raise ValueError("recovery task association changed")
         receipts.ensure_limits(current, record, previous["identity"], now, previous["id"])
         return current
 
