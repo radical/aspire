@@ -100,11 +100,13 @@ def output_prompt(packet, context=None):
     )
 
 
-def prepare(directory, mode, run, *, transport=None, host_check=require_host):
+def prepare(directory, mode, run, *, transport=None, host_check=require_host, recovery=None):
     contracts.validate_run(run)
     if mode not in {"transport-proof", "observe", "live"}:
         raise ValueError("unknown mode")
     if mode == "transport-proof":
+        if recovery is not None:
+            raise ValueError("transport proof cannot authorize recovery")
         packet, envelope = contracts.prepare(directory, run, native_session=True)
         prompt = output_prompt(packet)
     else:
@@ -116,7 +118,7 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host):
         audit = Audit(directory / "audit.json", run, mode)
         try:
             transport = transport or live.HTTPTransport(os.environ.get("CI_SHEPHERD_USER_TOKEN"))
-            github = live.FixtureGitHub(transport, run)
+            github = live.FixtureGitHub(transport, run, recovery=recovery)
             # Collect independently authenticated history before selecting the
             # trial scope. The downloaded host artifact, not model fields,
             # carries that immutable tuple into the same-run apply job.
@@ -127,6 +129,8 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host):
             contracts.write_json(trusted / "packet.json", packet)
             envelope = {"schemaVersion": 1, "packet": packet, "sessionId": None,
                         "mode": mode, "scope": {"root": scope.root, "trial": scope.trial}, "context": context}
+            if recovery is not None:
+                envelope["recovery"] = recovery.descriptor()
             if len(json.dumps(envelope, allow_nan=False).encode()) > contracts.MAX_JSON_BYTES:
                 raise ValueError("host envelope/context exceeds bounded artifact")
             contracts.write_json(trusted / "envelope.json", envelope)
@@ -141,7 +145,7 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host):
     return packet, envelope, prompt
 
 
-def apply(directory, evidence_path, decision_path, receipt_path, run, *, transport=None, host_check=require_host):
+def apply(directory, evidence_path, decision_path, receipt_path, run, *, transport=None, host_check=require_host, recovery=None):
     trusted = Path(directory)
     envelope = contracts.read_json(trusted / "envelope.json")
     packet = contracts.read_json(trusted / "packet.json")
@@ -154,7 +158,12 @@ def apply(directory, evidence_path, decision_path, receipt_path, run, *, transpo
         raise ValueError("safe output differs from actual final decision")
     if packet["kind"] == "transport-proof":
         return contracts.apply({**envelope, "sessionId": evidence["sessionId"]}, decision, run, receipt_path)
-    contracts.exact(envelope, {"schemaVersion", "packet", "sessionId", "mode", "scope", "context"}, "host reconciliation envelope")
+    keys = {"schemaVersion", "packet", "sessionId", "mode", "scope", "context"}
+    if recovery is not None:
+        keys.add("recovery")
+        if envelope.get("recovery") != recovery.descriptor():
+            raise ValueError("independent host recovery authorization differs from prepare")
+    contracts.exact(envelope, keys, "host reconciliation envelope")
     contracts.exact(envelope["scope"], {"root", "trial"}, "host scope")
     if envelope["schemaVersion"] != 1 or envelope["mode"] not in {"observe", "live"} or envelope["scope"]["root"] != live.ROOT:
         raise ValueError("host mode/scope mismatch")
@@ -180,15 +189,17 @@ def apply(directory, evidence_path, decision_path, receipt_path, run, *, transpo
     try:
         write = envelope["mode"] == "live"
         transport = transport or live.HTTPTransport(os.environ.get("CI_SHEPHERD_USER_TOKEN"), write=write)
-        github = live.FixtureGitHub(transport, run, write=write, audit=audit)
+        github = live.FixtureGitHub(transport, run, write=write, audit=audit, recovery=recovery)
         scope = receipts.TrialScope(live.ROOT, envelope["scope"]["trial"])
         executor = live.ExistingPRExecutor(github, packet, envelope["context"])
         result = None
         if write and decision["action"] == "wait":
             result = live.recover_receipt(github, scope, run, evidence, packet, decision, checked_clock)
         if result is None:
+            resume = None if recovery is None or decision["action"] == "wait" else recovery.authorize(
+                github, packet, github.refresh(live.ROOT))
             result = contracts.apply_reconciliation(packet, decision, run, github, checked_clock, scope,
-                                                   executor=executor, dry_run=not write, evidence=evidence)
+                                                   executor=executor, dry_run=not write, evidence=evidence, resume=resume)
         snapshot = github.refresh(live.ROOT)
         comment_id, record = receipts.read_record(snapshot, github.actor)
         audit.record(record, comment_id)
@@ -218,8 +229,15 @@ def main(argv=None):
     failure = args.workdir / "failure.json" if args.command == "prepare" else args.receipt.parent / "failure.json"
     try:
         run = contracts.host_run()
+        selector = os.environ.get("SHEPHERD_RESUME_PREPARED", "false")
+        if selector not in {"false", "true"}:
+            raise ValueError("invalid trusted recovery selector")
+        recovery = None
+        if selector == "true":
+            from recovery import PinnedRecovery
+            recovery = PinnedRecovery(run)
         if args.command == "prepare":
-            _, _, prompt = prepare(args.workdir, os.environ.get("SHEPHERD_MODE", "transport-proof"), run)
+            _, _, prompt = prepare(args.workdir, os.environ.get("SHEPHERD_MODE", "transport-proof"), run, recovery=recovery)
             # A random multiline delimiter prevents feedback containing newlines
             # from becoming another Actions output. Neither prompt nor API body
             # is interpolated into an executable shell command.
@@ -228,7 +246,7 @@ def main(argv=None):
             with open(os.environ["GITHUB_OUTPUT"], "a") as output:
                 output.write(f"prompt<<{delimiter}\n{prompt}\n{delimiter}\n")
         else:
-            apply(args.trusted, args.evidence, args.decision, args.receipt, run)
+            apply(args.trusted, args.evidence, args.decision, args.receipt, run, recovery=recovery)
         return 0
     except (ValueError, OSError, KeyError, TypeError) as error:
         failure.parent.mkdir(parents=True, exist_ok=True)

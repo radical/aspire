@@ -75,13 +75,16 @@ def compiled_step(name):
     raise ValueError("compiled step not found")
 
 
-def compiled_environment(step, workspace):
+def compiled_environment(step, workspace, *, inputs=None):
+    inputs = {} if inputs is None else inputs
     context = {
         "github.workspace": str(Path(workspace).resolve()),
         "github.token": "fixture-inference-token",
         "runner.temp": str(Path(workspace).resolve() / "runner"),
         "steps.agentic_execution.outcome": "success",
         "''": "",
+        "inputs.mode || 'transport-proof'": inputs.get("mode", "transport-proof"),
+        "inputs.resume_prepared && 'true' || 'false'": "true" if inputs.get("resume_prepared", False) else "false",
     }
     return {
         key: re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda match: context.get(match[1], "fixture-context"), value)

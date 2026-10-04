@@ -11,6 +11,10 @@ on:
           - transport-proof
           - observe
           - live
+      resume_prepared:
+        description: Authorize only the pinned unsent prepared intent and its two reviewed prior-source runs.
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-shepherd-transport-proof
@@ -93,6 +97,7 @@ jobs:
         id: packet
         env:
           SHEPHERD_MODE: ${{ inputs.mode || 'transport-proof' }}
+          SHEPHERD_RESUME_PREPARED: ${{ inputs.resume_prepared && 'true' || 'false' }}
           CI_SHEPHERD_USER_TOKEN: ${{ inputs.mode != 'transport-proof' && secrets.CI_SHEPHERD_USER_TOKEN || '' }}
         run: python3 .github/workflows/ci-shepherd/hosted.py prepare --workdir artifacts/ci-shepherd/prepared
       - uses: actions/upload-artifact@v7.0.1
@@ -187,6 +192,7 @@ safe-outputs:
             path: artifacts/ci-shepherd/evidence
         - name: Guarded host apply
           env:
+            SHEPHERD_RESUME_PREPARED: ${{ inputs.resume_prepared && 'true' || 'false' }}
             CI_SHEPHERD_USER_TOKEN: ${{ inputs.mode != 'transport-proof' && secrets.CI_SHEPHERD_USER_TOKEN || '' }}
           run: |
             python3 .github/workflows/ci-shepherd/hosted.py apply \

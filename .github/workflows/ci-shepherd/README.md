@@ -123,6 +123,59 @@ Comment and log text is untrusted evidence, not executable shell or worker polic
 The host renders the worker prompt and exact POST body; the model chooses typed
 feedback IDs, never an API body, task model, permission or executable instruction.
 
+Task responses can report a separate `mission_control` rate-limit resource;
+ordinary `core` quota does not establish task availability. `HTTPTransport`
+paces GETs from the observed remaining/reset headers, retaining the last slot
+for a task POST. GET waits total at most 180 seconds per transport. A collection
+that waited is discarded and collected again, with at most two full collection
+attempts, so earlier head/feedback/authority reads cannot survive the wait.
+Existing final guards still reject expiry, rollback, or changed authority.
+POST never sleeps or retries; known exhausted admission is rejected before send.
+Unexpected HTTP errors include the allowed method/path, status and sanitized
+quota/reset/retry/date/request-ID headers, never credentials, response bodies,
+or signed download URLs. See GitHub's
+[rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+
+`diagnostics.py` inspects downloaded failed-run audits and comment records
+offline, using explicitly supplied expected trial, operation, packet and source
+identities. An audit's attempted reserved candidate is not proof of publication:
+the canonical prepared record and its zero repair counter remain distinct.
+The diagnostic refuses task attempts, inconsistent provenance, or an unexpected
+receipt. Its output grants no recovery authority and does not relax failed
+history or source-revision checks.
+
+### Pinned prepared-intent recovery
+
+The manual `resume_prepared` input defaults to `false`. Setting it explicitly
+installs the fixed host policy in `recovery.py` for
+[radical/aspire#121](https://github.com/radical/aspire/pull/121), comment
+`5976480777`, and its original prepared operation and immutable trial.
+It permits source migration only for observe run `37175895217` and failed run
+`37176266114`, both attempt `1` at source
+`a9da7a1d90195c255bfd7d91349ff0bdbbb20356`. No other failed attempt or historical
+source receives an exception. Normal history sequence and completeness checks
+still apply; later current-source attempts must satisfy the normal success rules.
+
+Every complete observation independently downloads the named prepare, native
+evidence, and receipt/failure artifacts, and verifies the pinned run, actor,
+job, packet and session identities. The failed archive must have exactly three
+status attempts, no task attempt and no receipt. Its persisted prepared record
+must equal the authenticated current record before resumption; its attempted
+reserved candidate is not spending authority. Missing artifacts, changed
+feedback/head, takeover, clock rollback or expiry, and any correlated task
+outcome prevent dispatch. Complete current-source audits prevent durable budget
+or outcome rollback.
+
+`PinnedRecovery` and `PreparedResume` are trusted host types, not model fields.
+Prepare and apply must independently select the same policy and current run.
+The closed decision contract is unchanged. Live resumption preserves the
+operation ID, identity, original run/packet provenance and trial, reserves once,
+and persists `consumed` before POST. It never appends a substitute operation,
+starts a trial, refunds capacity, or retries a reserved/consumed/uncertain intent.
+Observe remains GET-only. Local selectors cannot bypass hosted authentication.
+Independent review and explicit operator deployment are required before using
+this input; compilation and fake-service results do not prove a live repair.
+
 - Empty comments are **not** history proof. The witness independently inspects
   the sole Shepherd workflow's run attempts, jobs and downloaded host receipts.
   Its immutable creation fence is the fixed fixture's actual `created_at`, not a
@@ -177,6 +230,17 @@ and independently downloaded same-run prepare artifact. Model-authored reports a
 Prepare/apply obtain fresh identity directly from GitHub's TLS-authenticated OIDC
 service, verifying repository, actor, hosted runner, run/attempt and workflow SHA.
 Only those deterministic jobs have `id-token: write` and the selected user secret.
+
+The generated AWF `maxAiCredits: 5` setting limits admission of further model
+requests, not the total cost of an already-admitted response. AWF accounts usage
+after responses; a request admitted below the threshold can finish above it.
+Actual hosted observation used 9.07425 credits across two successful requests:
+the first cost 4.61655, allowing the second. Record actual usage separately from
+the configured threshold; do not report a hard five-credit spend cap. See the
+pinned [rate-limit contract](https://github.com/github/gh-aw-firewall/blob/v0.28.20/src/types/rate-limit-options.ts)
+and [credit guard](https://github.com/github/gh-aw-firewall/blob/v0.28.20/containers/api-proxy/guards/ai-credits-guard.js).
+The ten-minute timeout, twelve-turn bound and disabled retries are independent
+controls; neither workers nor subsequent coordinator runs share this threshold.
 
 ## Local commands
 

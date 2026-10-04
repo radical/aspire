@@ -281,7 +281,7 @@ def validate_reconciliation_decision(packet, decision, run):
             raise ValueError("rerun requires a host-verified current-head transient job")
 
 
-def apply_reconciliation(packet, decision, run, github, clock, scope, *, executor=None, dry_run=True, evidence=None):
+def apply_reconciliation(packet, decision, run, github, clock, scope, *, executor=None, dry_run=True, evidence=None, resume=None):
     """Shared host-only mechanism with explicitly injected effect capabilities."""
     import issue_pr
     import receipts
@@ -336,6 +336,10 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
     if decision["action"] == "wait":
         return {"outcome": "wait", "effects": []}
     identity = receipts.operation_identity(packet, decision)
+    if resume is not None:
+        from recovery import PreparedResume
+        if type(resume) is not PreparedResume:
+            raise ValueError("explicit typed prepared recovery required")
     previous, recovery_result = None, None
     if record is not None:
         previous = next((value for value in record["operations"] if value["identity"] == identity), None)
@@ -344,7 +348,10 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
             # POST again, including after a lost process or deleted local cache.
             if previous["state"] in {"consumed", "uncertain"}:
                 recovery_result = receipts.reconcile_effect(snapshot, previous)
-            if recovery_result is None or dry_run:
+            resuming = resume is not None and previous["state"] == "prepared" and not dry_run
+            if resuming:
+                resume.check(github, packet, snapshot, record)
+            elif recovery_result is None or dry_run:
                 return {"outcome": "replay" if previous["state"] in {"confirmed", "failed"} else "needs-human",
                         "effects": [], "operation": deepcopy(previous)}
         if previous is None:
@@ -386,6 +393,8 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
         if current_id != comment_id or current_record != expected:
             raise ValueError("remote authority changed before mutation; needs-human")
         receipts.ensure_limits(current, record if initializing else current_record, identity, checked_clock(), own_id)
+        if resume is not None:
+            resume.check(github, packet, current, record)
         return current
 
     def persist(candidate):
@@ -424,13 +433,17 @@ def apply_reconciliation(packet, decision, run, github, clock, scope, *, executo
             initializing = False
     else:
         record = deepcopy(record)
-    operation = {
-        "id": str(uuid.uuid4()), "identity": identity, "action": decision["action"],
-        "state": "prepared", "result": None, "run": deepcopy(run), "packetId": packet["packetId"],
-    }
+    if previous is not None:
+        operation = next(value for value in record["operations"] if value["id"] == previous["id"])
+    else:
+        operation = {
+            "id": str(uuid.uuid4()), "identity": identity, "action": decision["action"],
+            "state": "prepared", "result": None, "run": deepcopy(run), "packetId": packet["packetId"],
+        }
+        record["operations"].append(operation)
+        own_id = operation["id"]
+        persist(record)
     own_id = operation["id"]
-    record["operations"].append(operation)
-    persist(record)
     receipts.reserve(record, operation)
     persist(record)
     # Persist the send boundary before the effect. Process loss here is
