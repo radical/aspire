@@ -100,7 +100,9 @@ an honest human handoff, not another initial assignment or guessed PR.
 The intentionally narrow `python-labels-v1` profile changes only
 `.ci-shepherd-pilot/labels.py`; exact-head
 `.ci-shepherd-pilot/test_labels.py` remains unchanged. Eligible PR diffs modify
-only that source file. The source has one single-parameter `normalize_label`
+only that existing source file (`status=modified`); added fixtures or test changes
+use the cloud lane. PR file inventories are identified by unique `filename`
+because the primary API does not supply item IDs. The source has one single-parameter `normalize_label`
 function with optional inert `str` annotations. Repairs preserve its signature,
 returning its parameter or a chain of zero-argument `strip`, `lower`, `casefold` and
 `upper` calls. Source/replacement bodies are limited to16,000 bytes and

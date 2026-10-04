@@ -20,6 +20,18 @@ def proposal():
 
 
 class PilotPatchTests(WorkspaceTest, unittest.TestCase):
+    def test_primary_file_inventory_uses_unique_filename_not_optional_or_invented_id(self):
+        from live import API
+        from github import IncompleteInventory
+        for files in (
+                [{"sha": "a" * 40, "status": "modified"}],
+                [{"filename": patch.SOURCE}, {"filename": patch.SOURCE}]):
+            with self.subTest(files=files), self.assertRaises(ValueError):
+                API(lambda *_: Response(files, {})).pages("repos/radical/aspire/pulls/7/files",
+                                                         identity_key="filename")
+        with self.assertRaises(IncompleteInventory):
+            API(lambda *_: Response([{"filename": patch.SOURCE}], {})).pages("repos/radical/aspire/pulls/7/files")
+
     def test_only_trusted_profile_paths_and_pure_function_are_eligible(self):
         value = proposal()
         patch.validate(value)
@@ -84,7 +96,7 @@ class PilotPatchTests(WorkspaceTest, unittest.TestCase):
         transport = Transport()
         value = proposal()
         transport.values["repos/radical/aspire/pulls/7"] = pr()
-        transport.values["repos/radical/aspire/pulls/7/files"] = [{"id": 1, "filename": patch.SOURCE, "status": "modified"}]
+        transport.values["repos/radical/aspire/pulls/7/files"] = [{"sha": "d" * 40, "filename": patch.SOURCE, "status": "modified"}]
         for path, content in value["files"].items():
             transport.values["repos/radical/aspire/contents/" + path] = {
                 "type": "file", "path": path, "size": len(content.encode()), "encoding": "base64",
