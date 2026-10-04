@@ -174,6 +174,25 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(0, self.api.ledger["chains"][0]["localAttempts"])
         self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
 
+    def test_primary_node_and_check_identity_persist_real_feedback_batch(self):
+        value = self.transport.values["repos/radical/aspire/pulls/7"]
+        value["node_id"] = "PR_kwDOLIR8788AAAABGk2Orw"
+        self.transport.values["repos/radical/aspire/issues"][0]["node_id"] = value["node_id"]
+        self.transport.values["repos/radical/aspire/issues/7/comments"] = []
+        self.transport.values["repos/radical/aspire/commits/" + "a" * 40 + "/check-runs"] = {
+            "total_count": 30, "check_runs": [
+                {"id": 90000000000 + index, "head_sha": "a" * 40, "status": "completed",
+                 "conclusion": "failure", "name": "Fixture tests", "html_url": "https://github.com/check"}
+                for index in range(30)]}
+        packet = self.prepared()
+        chain = self.api.ledger["chains"][0]
+        identity = chain["operations"][0]["identity"]
+        self.assertGreater(len(identity.encode()), 256)
+        self.assertEqual(30, len(packet["observation"]["feedback"]))
+        recovered = state.parse(state.render(self.api.ledger))
+        self.assertEqual(identity, recovered["chains"][0]["operations"][0]["identity"])
+        self.assertEqual(1, recovered["chains"][0]["rounds"])
+
     def test_issue_native_failure_can_retry_without_new_chain_allocation(self):
         issue = {"id": 1008, "number": 8, "node_id": "NODE8", "state": "open",
                  "labels": [{"name": "shepherd-adopted"}], "title": "Bug", "body": "Actual defect"}

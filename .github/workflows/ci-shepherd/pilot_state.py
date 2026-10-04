@@ -89,8 +89,10 @@ def validate(ledger):
             contracts.exact(operation, {"id", "identity", "lane", "state", "at", "nativeActual",
                                        "nativeReserved", "workerActual", "workerReserved", "taskId",
                                        "workerState", "sessionId", "workerAt", "attemptedLocal", "workerVersion"}, "pilot operation")
-            for key in ("id", "identity"):
-                issue_pr.text(operation[key], key)
+            issue_pr.text(operation["id"], "id")
+            # Identity is a serialized head/description plus a bounded feedback
+            # batch, not a single opaque ID. Real node/check IDs exceed 256 bytes.
+            issue_pr.text(operation["identity"], "identity", 16384)
             if operation["id"] in operations:
                 raise ValueError("duplicate operation")
             operations.add(operation["id"])
@@ -205,6 +207,7 @@ def worker_slots(ledger):
 
 
 def reserve(ledger, chain, identity, now, *, local):
+    issue_pr.text(identity, "identity", 16384)
     previous = next((operation for operation in chain["operations"] if operation["identity"] == identity), None)
     if previous is not None:
         return previous
