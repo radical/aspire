@@ -1,4 +1,162 @@
-# CI Shepherd guarded fixture gate
+# CI Shepherd hybrid daily pilot
+
+`pilot` mode manages labeled open issues and PRs in `radical/aspire` only.
+The daily 09:17 UTC sweep is explicitly opt-in. Disabled, unconfigured and
+unchanged waiting sweeps skip the actual native job, not just its prompt.
+The existing `transport-proof`, `observe` and `live` fixture modes retain their
+legacy contracts; the pilot never adopts PR121 or writes its canonical comment.
+
+## Pilot setup and stop controls
+
+The operator must create one open tracker **issue** and one canonical authority
+comment authored by `radical` (numeric user ID1472). Print the initial body with:
+
+```shell
+PYTHONPATH=.github/workflows/ci-shepherd python3 -B -c \
+  'import pilot_state; print(pilot_state.render(pilot_state.new_ledger()))'
+```
+
+Post that exact body once, then configure these repository variables:
+
+| Variable | Value |
+| --- | --- |
+| `CI_SHEPHERD_ENABLE` | `true` to enable; absent/other values disable |
+| `CI_SHEPHERD_TRACKER` | Tracker issue number, never121 |
+| `CI_SHEPHERD_TRACKER_NODE` | Independently verified tracker REST `node_id` |
+| `CI_SHEPHERD_AUTHORITY_COMMENT` | Exact initial authority comment ID |
+
+The existing `CI_SHEPHERD_USER_TOKEN` secret is used only by trusted collection,
+settlement and publication jobs. No new authentication mechanism is introduced.
+At runtime, `/user`, `/users/radical`, repository ID746880239, `radical/aspire`,
+default branch `main`, hosted OIDC identity, tracker node and exact comment
+ownership are reverified. Missing, malformed, replaced or duplicate authority
+fails closed; the pilot never silently creates a replacement ledger.
+
+Label an issue or PR `shepherd-adopted`. `shepherd-hands-off`, adoption removal
+or closure stops new item writes. Re-adoption retains every original counter
+and reservation. Disabling `CI_SHEPHERD_ENABLE` stops new pilot mutations and
+inference. None of these controls promises cancellation of an already-running
+cloud worker. Humans merge and close work.
+
+A native human handoff remains paused while adoption stays unchanged. To
+explicitly resume, remove `shepherd-adopted` or add `shepherd-hands-off`, let a
+sweep observe that stop state, then restore adoption/remove the veto. The
+observed stop-to-adopt transition resumes the same chain, never a new allowance.
+
+The repository authority tracks chain mappings, operation identities, billing,
+reservations and disposition IDs, not log/feedback bodies. Its body is limited
+to60,000 UTF-8 bytes; exhaustion requires human attention, never history
+truncation or a budget reset. Per-chain presentation comments are updated in
+place and are not another authority. Exact owned presentation IDs/markers are
+excluded from feedback; other operator comments remain legitimate input.
+
+## Lifetime policy and accounting
+
+- Up to two local attempts and ten total action rounds per issue-to-PR chain.
+  Failed inference/validation counts. Fresh runs, new heads and verified child
+  PRs never reset counters. Unsupported local scope escalates immediately;
+  cloud escalation is sticky.
+- Native admission reserves30 credits. Chain allowance is500 credits; the
+  repository allowance is1,000 in a rolling24-hour window. Cloud admission
+  reserves the remaining chain allowance. Actual native `ai_credits` and
+  terminal task-session `ai_credits` nano units settle separately, including
+  failed native runs. Missing/premium-request billing is unknown, not zero:
+  its reservation survives the rolling window.
+- Fresh task inventories can resume previously completed work. Changed
+  state/session/version evidence rechecks task detail; unknown resumed sessions
+  hold a worker slot and remaining credit reservation. Additional reported
+  session usage is cumulative and never overwrites billing with a smaller total.
+- At most two in-flight cloud workers across the repository, including external
+  observed workers and unknown send outcomes. One chain cannot begin another
+  action while its mutation is reserved, waiting or uncertain. Polls, CI waits
+  and human waits do not consume rounds or native inference.
+- These are admission/accounting limits, **not hard billing caps**. An admitted
+  response or worker can overshoot. Overshoot is recorded and blocks later
+  admission. Definitive no-send rejection releases worker capacity; an uncertain
+  POST never retries.
+
+The single serialized workflow sweeps the complete adopted intake and both
+explicit task archive lanes once, then uses narrow exact-head/adoption/authority
+guards at send boundaries. The persisted cursor chooses due chains fairly;
+a waiting or exhausted chain does not monopolize the next action.
+
+Current-head checks/statuses and explicit review records determine readiness.
+Approval requires a current-head `APPROVED` review whose reviewer has not been
+re-requested; drafts, conflicts, blocking reviews and pending CI are not
+merge-ready. Supported same-PR feedback is batched into one decision/task.
+Addressed, declined and needs-human dispositions survive subsequent sweeps.
+Completed cloud tasks conservatively disposition their old feedback as
+needs-human rather than pretending task completion proves resolution.
+
+Issue-to-child adoption requires exact operation correlation in every task
+session, authenticated task creator/repository, actual GitHub PR database ID,
+branch artifact and independently fetched REST PR and Git ref mapping. Only
+then may the trusted host add the fixed `shepherd-adopted` label to that child.
+The original chain owns all its counters and spend. Missing PR artifacts cause
+an honest human handoff, not another initial assignment or guessed PR.
+
+## Supported inline profile and credential isolation
+
+The intentionally narrow `python-labels-v1` profile changes only
+`.ci-shepherd-pilot/labels.py`; exact-head
+`.ci-shepherd-pilot/test_labels.py` remains unchanged. Eligible PR diffs modify
+only that source file. The source has one single-parameter `normalize_label`
+function with optional inert `str` annotations. Repairs preserve its signature,
+returning its parameter or a chain of zero-argument `strip`, `lower`, `casefold` and
+`upper` calls. Source/replacement bodies are limited to16,000 bytes and
+64 changed diff lines. No imports, globals, test-runner monkey-patching,
+commands, arbitrary paths or executable API bodies can be proposed.
+Other PRs and all initial issues use the generic cloud lane.
+
+The same fresh native engine emits only a typed proposal through
+`submit_decision`. It receives no GitHub write token or shell/write tools.
+The pinned compiler's `engine.env.GH_AW_MAX_AI_CREDITS` override binds the actual
+AWF execution config to 30 for pilot/schedule and 5 for legacy modes; an expression
+in `max-ai-credits` frontmatter alone is not emitted by v0.89.17. The behavioral
+budget test executes the generated config statements for every supported mode.
+A separate validation job executes this host-owned argv:
+
+```shell
+python3 -B -m unittest discover -s .ci-shepherd-pilot -p 'test_*.py' -v
+```
+
+Validation runs in `python:3.13-slim` Docker, with no network, capabilities,
+credentials or writable host checkout; CPU/memory/PID limits, a read-only mount
+and a90-second timeout bound it. Docker/image availability remains a hosted
+acceptance prerequisite. Unit tests exercise this boundary using process fakes,
+not a claim that hosted Docker has already run.
+
+Validation evidence binds the exact original/replacement bytes, head,
+operation and trusted argv. The separate publisher never checks out or executes
+PR code/hooks. It creates one source blob/tree/commit through Git Data APIs,
+rechecks the exact branch/head/adoption/authority, then updates the ref with
+`force: false`. Native billing settlement runs even when decision evidence is
+missing, malformed or unsuccessful; such evidence cannot authorize code.
+
+Task creation uses only the verified primary REST fields `prompt`, `base_ref`,
+optional `head_ref` and `create_pull_request`, API version `2026-03-10`.
+Task details come from `agents/repos/{owner}/{repo}/tasks/{task_id}`; both
+`is_archived=false` and `is_archived=true` inventory lanes are required. See the
+[primary REST schema](https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json).
+No invented worker hard cap or cancellation endpoint is exposed.
+
+## Pilot validation
+
+```shell
+python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_*.py' -q
+artifacts/ci-shepherd/tooling/gh-aw compile ci-shepherd --validate --no-check-update
+artifacts/ci-shepherd/tooling/gh-aw lint .github/workflows/ci-shepherd.lock.yml --shellcheck
+```
+
+Python contracts cover lifetime2/10 boundaries, shared reservations, unknown
+usage, replay/uncertain sends, independent chains, task/child mappings, takeover,
+stale heads and isolated exact-byte validation. The dedicated
+`validate-agentic-workflows.yml` already consumes every Shepherd Python/policy
+input and runs these tests; no new selector-gated consumer is introduced.
+Actual hosted inline repair, automatic exact-head CI, cloud progress and usage
+remain separate fork-hosted acceptance gates.
+
+## Legacy guarded fixture gate
 
 The manual workflow defaults to `transport-proof`: a fresh native decision and a
 receipt with `outcome: wait` and empty `effects`. `observe` performs deterministic

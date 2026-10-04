@@ -44,7 +44,7 @@ class Audit:
         self.save()
 
 
-def require_host(run, *, environment=None, opener=None):
+def require_host(run, *, environment=None, opener=None, allowed_events=frozenset({"workflow_dispatch"})):
     """Obtain identity from GitHub's TLS-authenticated OIDC service, not a file."""
     environment = os.environ if environment is None else environment
     if environment.get("GITHUB_ACTIONS") != "true" or run["repository"] != live.REPOSITORY:
@@ -72,9 +72,9 @@ def require_host(run, *, environment=None, opener=None):
     claims = contracts.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode())
     expected = {"aud": audience, "iss": "https://token.actions.githubusercontent.com", "repository": live.REPOSITORY,
                 "run_id": run["runId"], "run_attempt": run["runAttempt"], "workflow_sha": run["workflowSha"],
-                "event_name": "workflow_dispatch", "actor": "radical", "repository_id": str(live.REPOSITORY_ID),
+                "actor": "radical", "repository_id": str(live.REPOSITORY_ID),
                 "runner_environment": "github-hosted"}
-    if any(claims.get(key) != value for key, value in expected.items()):
+    if any(claims.get(key) != value for key, value in expected.items()) or claims.get("event_name") not in allowed_events:
         raise ValueError("host identity does not match the sole approved workflow")
     if not isinstance(claims.get("workflow_ref"), str) or not claims["workflow_ref"].startswith(
         live.REPOSITORY + "/" + live.WORKFLOW + "@refs/heads/"
@@ -151,6 +151,18 @@ def output_prompt(packet, context=None, *, resume=None):
 
 def prepare(directory, mode, run, *, transport=None, host_check=require_host, recovery=None):
     contracts.validate_run(run)
+    if mode == "pilot":
+        if recovery is not None:
+            raise ValueError("legacy recovery never authorizes the pilot")
+        import pilot
+        api = pilot.hosted_api(run, os.environ)
+        packet = None if api is None else pilot.prepare(api, run, live.clock())
+        directory = Path(directory)
+        (directory / "trusted").mkdir(parents=True, exist_ok=False)
+        envelope = {"schemaVersion": 1, "packet": packet, "sessionId": None}
+        contracts.write_json(directory / "trusted" / "packet.json", packet)
+        contracts.write_json(directory / "trusted" / "envelope.json", envelope)
+        return packet, envelope, "" if packet is None else pilot.prompt(packet)
     if mode not in {"transport-proof", "observe", "live"}:
         raise ValueError("unknown mode")
     if mode == "transport-proof":
@@ -207,6 +219,20 @@ def apply(directory, evidence_path, decision_path, receipt_path, run, *, transpo
     trusted = Path(directory)
     envelope = contracts.read_json(trusted / "envelope.json")
     packet = contracts.read_json(trusted / "packet.json")
+    if packet is not None and packet.get("kind") == "pilot":
+        import pilot
+        if envelope["packet"] != packet or packet["run"] != run or recovery is not None:
+            raise ValueError("pilot safe-output packet/run substitution")
+        decision = contracts.safe_output(contracts.read_json(decision_path))
+        evidence = contracts.read_json(evidence_path)
+        observed, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
+        if observed != decision:
+            raise ValueError("pilot safe-output differs from actual decision")
+        pilot.validate_decision(packet, decision)
+        # Billing and effects live in the independent always-run settlement job.
+        # The safe-output handler only attests the closed decision.
+        contracts.write_json(receipt_path, {"outcome": "pilot-decision-verified", "effects": []})
+        return
     if envelope["packet"] != packet or packet["run"] != run or envelope["sessionId"] is not None:
         raise ValueError("independent same-run prepare artifact required")
     evidence = contracts.read_json(evidence_path)
@@ -309,13 +335,17 @@ def main(argv=None):
             from recovery import PinnedRecovery
             recovery = PinnedRecovery(run)
         if args.command == "prepare":
-            _, _, prompt = prepare(args.workdir, os.environ.get("SHEPHERD_MODE", "transport-proof"), run, recovery=recovery)
+            mode = "pilot" if os.environ.get("GITHUB_EVENT_NAME") == "schedule" else os.environ.get(
+                "SHEPHERD_MODE", "transport-proof")
+            packet, _, prompt = prepare(args.workdir, mode, run, recovery=recovery)
             # A random multiline delimiter prevents feedback containing newlines
             # from becoming another Actions output. Neither prompt nor API body
             # is interpolated into an executable shell command.
             import secrets
             delimiter = "shepherd_" + secrets.token_hex(24)
             with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                output.write(f"active={'true' if packet is not None else 'false'}\n")
+                output.write(f"pilot={'true' if packet is not None and packet.get('kind') == 'pilot' else 'false'}\n")
                 output.write(f"prompt<<{delimiter}\n{prompt}\n{delimiter}\n")
         else:
             apply(args.trusted, args.evidence, args.decision, args.receipt, run, recovery=recovery)

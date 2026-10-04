@@ -543,7 +543,10 @@ def main(argv=None):
                 raise ValueError("prepare envelope belongs to another run")
             evidence = reasoning.collect(args.session_root, args.logs, args.outcome, args.out)
             observed, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
-            if envelope["packet"]["kind"] == "reconciliation":
+            if envelope["packet"]["kind"] == "pilot":
+                import pilot
+                pilot.validate_decision(envelope["packet"], observed)
+            elif envelope["packet"]["kind"] == "reconciliation":
                 validate_reconciliation_decision(envelope["packet"], observed, host_run())
             else:
                 validate_decision({**envelope, "sessionId": evidence["sessionId"]}, observed, host_run())
