@@ -78,7 +78,8 @@ def source_context(api, observation):
     """Read exact-head files without checking out or executing PR code."""
     if observation["kind"] != "pr":
         return None
-    files = api.api.pages(f"{pilot_github.PREFIX}/pulls/{observation['number']}/files")
+    # PR file entries use filename, not the id field of issues/tasks/comments.
+    files = api.api.pages(f"{pilot_github.PREFIX}/pulls/{observation['number']}/files", identity_key="filename")
     if not files or any(value["filename"] != SOURCE or value["status"] != "modified" for value in files):
         return None
     values = {}

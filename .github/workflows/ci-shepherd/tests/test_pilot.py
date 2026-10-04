@@ -149,7 +149,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
 
     def test_broader_work_escalates_from_inline_packet_without_another_native_round(self):
         self.transport.values["repos/radical/aspire/pulls/7/files"] = [
-            {"id": 1, "filename": pilot_patch.SOURCE, "status": "modified"}]
+            {"sha": "d" * 40, "filename": pilot_patch.SOURCE, "status": "modified"}]
         for path, content in {
             pilot_patch.SOURCE: "def normalize_label(value):\n    return value\n",
             pilot_patch.TEST: "import unittest\n",
@@ -164,6 +164,15 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual("uncertain", result["outcome"])
         self.assertEqual((1, 1, True), (chain["localAttempts"], chain["rounds"], chain["escalated"]))
         self.assertEqual("cloud", chain["operations"][0]["lane"])
+
+    def test_primary_added_source_and_test_files_route_cloud_without_id_assumption(self):
+        self.transport.values["repos/radical/aspire/pulls/7/files"] = [
+            {"sha": "d" * 40, "filename": path, "status": "added"}
+            for path in (pilot_patch.SOURCE, pilot_patch.TEST)]
+        packet = self.prepared()
+        self.assertEqual("cloud", packet["lane"])
+        self.assertEqual(0, self.api.ledger["chains"][0]["localAttempts"])
+        self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
 
     def test_issue_native_failure_can_retry_without_new_chain_allocation(self):
         issue = {"id": 1008, "number": 8, "node_id": "NODE8", "state": "open",

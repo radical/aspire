@@ -245,7 +245,7 @@ class API:
         return response.payload
 
     def pages(self, path, *, key=None, query=None, require_empty_count=False, require_total_count=False,
-              total_count_key="total_count", optional_total_count=False):
+              total_count_key="total_count", optional_total_count=False, identity_key="id"):
         query = dict(query or {})
         items, total = [], None
         for page in range(1, self.max_pages + 1):
@@ -327,7 +327,9 @@ class API:
                     len(values) == 100 and last_page != page or last_page is not None and last_page > page):
                 raise IncompleteInventory("task pagination missing next link; inventory incomplete")
             if not following and (len(values) < 100 or optional_total_count and last_page == page):
-                ids = [item["id"] for item in items]
+                ids = [item.get(identity_key) if isinstance(item, dict) else None for item in items]
+                if any(value is None for value in ids):
+                    raise IncompleteInventory("missing remote inventory identity")
                 issue_pr.unique(ids, "remote inventory identity")
                 if (require_total_count or optional_total_count and total is not None) and len(items) != total:
                     raise IncompleteInventory("inventory total_count contradicts complete pages")
