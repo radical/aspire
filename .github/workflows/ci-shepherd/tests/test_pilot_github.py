@@ -311,6 +311,44 @@ class PilotGitHubTests(unittest.TestCase):
             API(lambda *_: Response({"tasks": []}, {})).pages(
                 "agents/repos/radical/aspire/tasks", key="tasks", require_total_count=True)
 
+    def test_verified_repository_id_alias_collects_pages_using_pinned_named_requests(self):
+        from live import API
+        for repository, repository_id in (("radical/aspire", 746880239), ("microsoft/aspire", 696529789)):
+            with self.subTest(repository=repository):
+                path = f"repos/{repository}/commits/{'a' * 40}/check-runs"
+                alias = f"repositories/{repository_id}/commits/{'a' * 40}/check-runs"
+                calls = []
+
+                def pages(_method, endpoint, _body):
+                    calls.append(endpoint)
+                    first = endpoint.endswith("&page=1")
+                    return Response({"check_runs": [{"id": 1 if first else 2}], "total_count": 2},
+                                    {"Link": f'<https://api.github.com/{alias}?per_page=100&page=2>; rel="next"'}
+                                    if first else {})
+
+                result = API(pages, repository_id=repository_id).pages(
+                    path, key="check_runs", require_total_count=True)
+                self.assertEqual([{"id": 1}, {"id": 2}], result)
+                self.assertEqual([f"{path}?per_page=100&page=1", f"{path}?per_page=100&page=2"], calls)
+
+    def test_repository_id_alias_requires_verified_identity_and_exact_page_basis(self):
+        from live import API
+        path = f"repos/microsoft/aspire/commits/{'a' * 40}/check-runs"
+        alias = f"https://api.github.com/repositories/696529789/commits/{'a' * 40}/check-runs?per_page=100&page=2"
+        for repository_id, url in (
+                (None, alias),
+                (746880239, alias),
+                (696529789, alias.replace("api.github.com", "example.com")),
+                (696529789, alias.replace("a" * 40, "b" * 40)),
+                (696529789, alias.replace("/check-runs", "/status")),
+                (696529789, alias.replace("page=2", "page=3")),
+                (696529789, alias.replace("per_page=100", "per_page=99")),
+                (696529789, alias + "&filter=all")):
+            with self.subTest(repository_id=repository_id, url=url), self.assertRaises(IncompleteInventory):
+                API(lambda *_: Response({"check_runs": [{"id": 1}], "total_count": 2},
+                                        {"Link": f'<{url}>; rel="next"'}),
+                    repository_id=repository_id).pages(path, key="check_runs", require_total_count=True)
+
     def test_primary_countless_link_pagination_completeness_and_fail_closed_boundaries(self):
         from live import API
         path = "agents/repos/radical/aspire/tasks"
