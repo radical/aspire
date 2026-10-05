@@ -62,12 +62,13 @@ excluded from feedback; other operator comments remain legitimate input.
   terminal task-session `ai_credits` nano units settle separately, including
   failed native runs. Missing/premium-request billing is unknown, not zero:
   its reservation survives the rolling window.
-- Fresh task inventories can resume previously completed work. Changed
-  state/session/version evidence rechecks task detail; unknown resumed sessions
+- Fresh direct reads of saved task IDs can resume previously completed work.
+  Every saved task is verified again, including completed receipts; unknown sessions
   hold a worker slot and remaining credit reservation. Additional reported
   session usage is cumulative and never overwrites billing with a smaller total.
-- At most two in-flight cloud workers across the repository, including external
-  observed workers and unknown send outcomes. One chain cannot begin another
+- At most two tracked in-flight cloud workers per tracking authority, including
+  unknown send outcomes. Foreign tasks are neither inspected nor counted.
+  One chain cannot begin another
   action while its mutation is reserved, waiting or uncertain. Polls, CI waits
   and human waits do not consume rounds or native inference.
 - These are admission/accounting limits, **not hard billing caps**. An admitted
@@ -75,10 +76,35 @@ excluded from feedback; other operator comments remain legitimate input.
   admission. Definitive no-send rejection releases worker capacity; an uncertain
   POST never retries.
 
-The single serialized workflow sweeps the complete adopted intake and both
-explicit task archive lanes once, then uses narrow exact-head/adoption/authority
-guards at send boundaries. The persisted cursor chooses due chains fairly;
+The single serialized workflow sweeps the adopted intake and fetches only the
+distinct task IDs saved in its authority, then rechecks those tasks before a
+new cloud send. Repository, requesting actor, session operation marker and
+branch identities must match. An unreadable or malformed completed task becomes
+unknown/pending again, retaining known spend and restoring its reservation.
+Every session must report a known state. A terminal task with any nonterminal
+session is conflicting evidence and remains unknown/pending; historical
+terminal session outcomes need not match the aggregate task outcome.
+An uncertain POST without an ID needs human verification, never automatic
+discovery or another POST. Exact-head/adoption/authority guards remain in place.
+The persisted cursor chooses due chains fairly;
 a waiting or exhausted chain does not monopolize the next action.
+
+Each PR also has a bounded read-only Copilot work-event history, obtained by
+the exact sealed GraphQL POST in `pilot_history.py`. Repository database ID and
+PR node are matched to authenticated REST identity. Starts, finishes, failures,
+requesting users and nullable session IDs are descriptive context, not task IDs
+or proof of current execution. Old unmatched starts do not block work. Unknown
+or incomplete history is explicit and never changes repair fingerprints,
+worker slots, billing or rounds.
+Raw history is excluded from prepared action artifacts and the bounded worker
+request. Cheap hosted logs retain counts and the last five events without
+displacing source or repair feedback.
+
+Every enabled sweep prints a readable subject/head, tracked task/state,
+next action, actual credits/reservations and PR history in its hosted prepare
+log, including waiting sweeps with no native packet. This needs no model call
+or upstream comment writer. Unknown billing retains reservations; task
+completion alone is not a real current-head CI or approval result.
 
 Current-head checks/statuses and explicit review records determine readiness.
 Approval requires a current-head `APPROVED` review whose reviewer has not been
@@ -137,26 +163,13 @@ never repointed. Native admission is still30 credits, chain allowance500 and
 rolling authority allowance1,000; these are independent authority namespaces,
 not a promise of a combined cross-authority billing cap.
 
-Fork capacity remains repository-wide, including unrelated workers. Only the
-manual upstream trial counts Shepherd-owned/in-flight/unknown operations in
-this authority toward max2. Ownership is persisted operation/task correlation,
-not the task creator's login. Before preparation and fresh cloud admission,
-complete both archive inventories and reconcile managed task/session facts.
-Inspect live foreign task details for a target-branch or target-PR collision;
-missing/malformed association evidence vetoes work. Explicit empty base/head
-with no artifacts describes currently unbound chat work, not a confirmed
-collision. This does not prove the task can never bind later; refresh before
-admission and retain head/authority guards. No task is aged out as terminal.
-Foreign tasks with verified IDs, explicit integer count0 and empty sessions/
-artifacts are currently unbound. The observed queued pending stub
-(`state=queued`, count1, empty sessions/artifacts) is also accepted only when
-both inventory and detail say queued. No other count mismatch is accepted;
-managed workers still require complete correlated sessions.
-The upstream-only inventory bound is20 pages per archive lane (at100/page),
-covering the observed751 active and1,357 archived tasks; fork bounds stay
-unchanged. At most128 live foreign task details may be inspected per admission.
-Exhausted bounds or failed reads block work explicitly, never truncate inventory
-or release unknown capacity.
+Both profiles count only Shepherd-started in-flight/unknown operations saved
+in their own authority toward max2, not a combined fork/upstream limit.
+Ownership requires the saved task ID and verified operation/session correlation,
+not just a creator login. Neither profile lists the global task catalog or
+inspects foreign tasks. Other agents can still edit the PR: there is no claim
+of exclusive ownership, and fresh head/adoption/takeover guards remain required.
+Failed own-task reads retain pending state, capacity and unknown credits.
 
 The trial has **one lifetime native action round**: at most one worker request,
 then observation/billing only, even after failure, restart, head change or

@@ -14,10 +14,12 @@ import issue_pr
 import pilot_state as state
 import round as contracts
 import pilot_binding as bindings
+import pilot_history as history
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
 CORRELATION = "ci-shepherd-pilot: "
+WORKER_STATES = state.TERMINAL | {"queued", "in_progress", "idle", "waiting_for_user"}
 
 
 class PresentationUncertain(ValueError):
@@ -26,22 +28,33 @@ class PresentationUncertain(ValueError):
 
 class PilotTransport(live.HTTPTransport):
     def __init__(self, token, *, write=False, binding=bindings.FORK, tracker=None, authority=None):
+        if binding not in {bindings.FORK, bindings.UPSTREAM}:
+            raise ValueError("closed pilot transport binding required")
         super().__init__(token, write=write)
         self.binding = binding
         self.task_repository = binding.repository
         self.tracker, self.authority = tracker, authority
 
+    def is_read(self, method, endpoint, body):
+        if method == "POST" and endpoint == "graphql":
+            history.validate_request(body, self.binding)
+            return True
+        return super().is_read(method, endpoint, body)
+
     def validate_endpoint(self, method, endpoint, body):
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
+        if method == "POST" and endpoint == "graphql":
+            history.validate_request(body, self.binding)
+            return
         if self.binding == bindings.UPSTREAM:
             target = "repos/" + self.binding.repository
             if method == "GET" and (path.path == target or re.fullmatch(
                     re.escape(target) + r"/(?:issues/20722(?:/comments)?|issues/comments/[1-9][0-9]*"
                     r"|pulls/20722(?:/(?:comments|reviews|files))?|commits/[0-9a-f]{40}/(?:check-runs|status))",
                     path.path) or re.fullmatch(
-                        r"agents/repos/microsoft/aspire/tasks(?:/[A-Za-z0-9_-]+)?", path.path)):
+                        r"agents/repos/microsoft/aspire/tasks/[A-Za-z0-9_-]+", path.path)):
                 if body is not None:
                     raise ValueError("GET body forbidden")
                 return
@@ -74,7 +87,7 @@ class PilotTransport(live.HTTPTransport):
             r"|/commits/[0-9a-f]{40}(?:/(?:check-runs|status))?"
             r"|/contents/\.ci-shepherd-pilot/(?:labels|test_labels)\.py"
             r"|/git/(?:commits/[0-9a-f]{40}|ref/heads/[A-Za-z0-9_./-]+))"
-            r"|agents/repos/" + re.escape(REPOSITORY) + r"/tasks(?:/[A-Za-z0-9_-]+)?"
+            r"|agents/repos/" + re.escape(REPOSITORY) + r"/tasks/[A-Za-z0-9_-]+"
         )
         if method == "GET":
             if body is not None or not re.fullmatch(reads, path.path):
@@ -126,10 +139,7 @@ class PilotGitHub:
         self.binding = binding
         self.repository, self.repository_id = binding.repository, binding.repository_id
         self.prefix = "repos/" + self.repository
-        # The approved upstream target currently has 751 active/1357 archived
-        # tasks. Keep fork bounds unchanged; 20 pages/lane bounds this trial.
-        self.transport, self.api = transport, live.API(
-            transport, max_pages=20 if binding == bindings.UPSTREAM else 10)
+        self.transport, self.api = transport, live.API(transport)
         self.tracker, self.authority_id, self.write = tracker, authority_id, write
         if not isinstance(tracker_node, str) or not tracker_node:
             raise ValueError("pinned tracker node required")
@@ -155,8 +165,6 @@ class PilotGitHub:
                 raise ValueError("upstream requires separate controller authority")
         self.ledger = None
         self.expected = None
-        self.tasks = {}
-        self.external_slots = 0
         self.packet_time = None
         self.high_water = None
         self.clock = live.clock
@@ -299,12 +307,19 @@ class PilotGitHub:
             feedback = []
         initial_due = not chain["operations"] or (
             chain["operations"][-1]["state"] in {"failed", "no-send"} and chain["operations"][-1]["taskId"] is None)
+        work_history = None
+        if kind == "pr":
+            try:
+                work_history = history.read(self.transport, self.binding, number, node)
+            except IncompleteInventory:
+                work_history = {"complete": False, "events": []}
         return {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
                 "attention": attention, "pendingCI": pending_ci, "actionable": active and attention is None and (
                     bool(feedback) if kind == "pr" else initial_due),
                 "title": value.get("title", "")[:300], "body": (value.get("body") or "")[:2000],
-                "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None}
+                "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
+                "workHistory": work_history}
 
     def guard(self, chain, observation, *, effect=True):
         if effect:
@@ -330,40 +345,44 @@ class PilotGitHub:
             self.high_water = now
         return fresh
 
-    def inventory(self):
-        tasks = {}
-        for archived in ("false", "true"):
-            for task in self.api.pages(f"agents/repos/{self.repository}/tasks", key="tasks",
-                                       query={"is_archived": archived}, optional_total_count=True,
-                                       total_count_key="total_archived_count" if archived == "true" else "total_active_count"):
-                if task["id"] in tasks:
-                    raise IncompleteInventory("task present in both archive lanes")
-                tasks[task["id"]] = task
-        self.tasks = tasks
-        known = {operation["taskId"] for chain in self.ledger["chains"] for operation in chain["operations"]}
-        self.external_slots = sum(task["id"] not in known and task["state"] not in state.TERMINAL
-                                  for task in tasks.values())
-
     def task_detail(self, task_id, chain, operation):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", task_id):
             raise ValueError("invalid task id")
         task = self.api.get(f"agents/repos/{self.repository}/tasks/{task_id}")
+        return self.verify_task(task, task_id, chain, operation)
+
+    def verify_task(self, task, task_id, chain, operation):
         if (task["id"] != task_id or task["repository"]["id"] != self.repository_id
                 or task["creator"]["id"] != self.actor["id"] or not isinstance(task.get("sessions"), list)
-                or task.get("session_count") != len(task["sessions"]) or not task["sessions"]
-                or not isinstance(task.get("artifacts"), list)):
+                or type(task.get("session_count")) is not int
+                or task["session_count"] != len(task["sessions"]) or not task["sessions"]
+                or not isinstance(task.get("artifacts"), list)
+                or task["state"] not in WORKER_STATES):
             raise IncompleteInventory("task/session/artifact source identity unavailable")
+        if task.get("updated_at") is not None:
+            issue_pr.timestamp(task["updated_at"])
+        number = chain["child"] or chain["origin"]
+        branch = self.mapping(number)["head"]["ref"] if chain["child"] is not None or chain["kind"] == "pr" else None
         correlations = []
         nano, billed = 0, True
         expected = {"chain": chain["id"], "operation": operation["id"], "origin": chain["origin"]}
         for session in task["sessions"]:
             if session["task_id"] != task_id or session["repository"]["id"] != self.repository_id:
                 raise ValueError("session source mismatch")
-            if self.binding == bindings.UPSTREAM and (
-                    session.get("user", {}).get("id") != self.actor["id"]
+            session_state = session.get("state")
+            if not isinstance(session_state, str) or session_state not in WORKER_STATES:
+                raise ValueError("session state unavailable or invalid")
+            # Historical terminal outcomes can differ from the aggregate.
+            # A terminal task with any live session is conflicting evidence,
+            # never permission to release a worker slot or its reservation.
+            if task["state"] in state.TERMINAL and session_state not in state.TERMINAL:
+                raise ValueError("terminal task has a nonterminal session")
+            issue_pr.text(session["id"], "task session ID")
+            if (session.get("user", {}).get("id") != self.actor["id"]
                     or session.get("base_ref") != "main"
-                    or session.get("head_ref") != "copilot/restrict-workflows-to-microsoft-aspire"):
-                raise ValueError("upstream session actor/branch mismatch")
+                    or not isinstance(session.get("head_ref"), str) or not session["head_ref"]
+                    or branch is not None and session["head_ref"] != branch):
+                raise ValueError("session actor/branch mismatch")
             lines = [line[len(CORRELATION):] for line in session["prompt"].splitlines() if line.startswith(CORRELATION)]
             if len(lines) != 1 or contracts.loads(lines[0]) != expected:
                 raise ValueError("session operation correlation mismatch")
@@ -375,110 +394,34 @@ class PilotGitHub:
                 nano += state.amount(usage["amount"])
         if len(correlations) != len(set(correlations)):
             raise ValueError("duplicate task sessions")
-        return task, nano / 1e9 if billed else None
+        return task, state.amount(nano / 1e9) if billed else None
 
     def admission_slots(self, head_ref):
-        if self.binding == bindings.FORK:
-            return self.external_slots + state.worker_slots(self.ledger)
-        known = {operation["taskId"] for chain in self.ledger["chains"] for operation in chain["operations"]}
-        target_id = self.mapping(self.binding.subject)["id"]
-        unbound = 0
-        queued_pending = 0
-        inspected = 0
-        for task in self.tasks.values():
-            if task["id"] in known or task["state"] in state.TERMINAL:
-                continue
-            inspected += 1
-            if inspected > 128:
-                raise ValueError("upstream foreign-task association inspection bound exceeded")
-            # Unrelated upstream work does not occupy this authority's cap, but
-            # every live foreign task must prove it is not on the target branch.
-            detail = self.api.get(f"agents/repos/{self.repository}/tasks/{task['id']}")
-            sessions = detail.get("sessions")
-            queued_stub = (task["state"] == detail.get("state") == "queued"
-                           and type(detail.get("session_count")) is int and detail["session_count"] == 1
-                           and sessions == [] and detail.get("artifacts") == [])
-            if (detail.get("id") != task["id"] or detail.get("repository", {}).get("id") != self.repository_id
-                    or not isinstance(sessions, list) or type(detail.get("session_count")) is not int
-                    or detail["session_count"] != len(sessions) and not queued_stub
-                    or not isinstance(detail.get("artifacts"), list)):
-                raise ValueError("foreign task branch association unavailable")
-            if not sessions:
-                if detail["artifacts"]:
-                    raise ValueError("session-free foreign task artifact association unavailable")
-                # A queued foreign task can explicitly have no session yet.
-                # This proves only current unbound state, never future inactivity.
-                # Live queued stub: session_count=1, sessions=[], artifacts=[].
-                # Accept that observed pending shape only when both states agree;
-                # managed tasks still require fully correlated sessions.
-                unbound += 1
-                queued_pending += queued_stub
-                continue
-            heads = []
-            for session in sessions:
-                if (session.get("task_id") != task["id"]
-                        or session.get("repository", {}).get("id") != self.repository_id
-                        or not isinstance(session.get("head_ref"), str)
-                        or not isinstance(session.get("base_ref"), str)
-                        or bool(session["head_ref"]) != bool(session["base_ref"])):
-                    raise ValueError("foreign session branch association unavailable")
-                heads.append(session["head_ref"])
-            for artifact in detail["artifacts"]:
-                if artifact.get("provider") != "github" or not isinstance(artifact.get("data"), dict):
-                    raise ValueError("foreign task artifact association unavailable")
-                if artifact.get("type") == "branch":
-                    branch = artifact["data"].get("head_ref")
-                    if not isinstance(branch, str) or not branch:
-                        raise ValueError("foreign task branch artifact unavailable")
-                    heads.append(branch)
-                elif artifact.get("type") == "pull":
-                    if type(artifact["data"].get("id")) is not int:
-                        raise ValueError("foreign task PR artifact unavailable")
-                    if artifact["data"]["id"] == target_id:
-                        raise ValueError("active task already owns target PR")
-                else:
-                    raise ValueError("foreign task artifact association unavailable")
-            if head_ref in heads:
-                raise ValueError("active task already owns target branch")
-            unbound += all(not head for head in heads) and not detail["artifacts"]
-        if unbound:
-            print(f"CI Shepherd upstream admission observed {unbound} explicitly unbound foreign tasks; "
-                  "no current branch/PR association, not proof of future inactivity.", file=sys.stderr)
-        if queued_pending:
-            print(f"CI Shepherd upstream admission observed {queued_pending} queued pending-association placeholders "
-                  "(session_count=1, sessions=[], artifacts=[]); not proof of eventual inactivity.", file=sys.stderr)
         return state.worker_slots(self.ledger)
 
     def reconcile_workers(self):
+        details = {}
         for chain in self.ledger["chains"]:
             for operation in chain["operations"]:
-                if operation["taskId"] is None:
+                task_id = operation["taskId"]
+                if task_id is None:
                     continue
-                if operation["taskId"] not in self.tasks:
-                    operation["workerState"] = "unknown"
-                    operation["state"] = "waiting"
-                    operation["workerReserved"] = max(
-                        operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
-                    continue
-                inventory = self.tasks[operation["taskId"]]
-                version = {key: inventory.get(key) for key in ("state", "session_count", "updated_at")}
-                if (operation["workerState"] in state.TERMINAL and operation["workerActual"] is not None
-                        and operation["workerReserved"] == 0
-                        and operation["workerVersion"] == version and all(version[key] is not None for key in version)):
-                    continue
-                # Fresh task state always overrides a terminal cached receipt.
-                # A resumed/new session holds capacity before detail validation.
-                operation["workerState"] = inventory["state"]
-                if inventory["state"] not in state.TERMINAL:
-                    operation["state"] = "waiting"
-                    operation["workerReserved"] = max(
-                        operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
                 try:
-                    task, usage = self.task_detail(operation["taskId"], chain, operation)
-                    if task["state"] != inventory["state"] or (
-                            inventory.get("session_count") is not None and task["session_count"] != inventory["session_count"]):
-                        raise ValueError("fresh task inventory/detail changed; observe again")
-                except (ValueError, KeyError) as error:
+                    # One fresh direct GET per saved ID, even for an unchanged
+                    # completed receipt. No catalog or foreign-task inspection.
+                    if task_id not in details:
+                        if not re.fullmatch(r"[A-Za-z0-9_-]+", task_id):
+                            raise ValueError("invalid task ID")
+                        try:
+                            details[task_id] = self.api.get(f"agents/repos/{self.repository}/tasks/{task_id}")
+                        except IncompleteInventory as error:
+                            details[task_id] = error
+                    if isinstance(details[task_id], IncompleteInventory):
+                        raise details[task_id]
+                    task, usage = self.verify_task(details[task_id], task_id, chain, operation)
+                    if usage is not None and operation["workerActual"] is not None and usage < operation["workerActual"]:
+                        raise ValueError("task billing moved backwards")
+                except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
                     operation.update(workerState="unknown", state="waiting")
                     operation["workerReserved"] = max(
                         operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
@@ -487,15 +430,14 @@ class PilotGitHub:
                 operation["workerState"] = task["state"]
                 operation["workerVersion"] = {key: task.get(key) for key in ("state", "session_count", "updated_at")}
                 if usage is not None:
-                    if operation["workerActual"] is not None and usage < operation["workerActual"]:
-                        raise ValueError("task billing moved backwards")
                     if usage != operation["workerActual"]:
                         operation.update(workerActual=usage, workerAt=issue_pr.stamp(self.clock()))
                     operation["workerReserved"] = 0
                 if task["state"] not in state.TERMINAL or usage is None:
+                    operation["state"] = "waiting"
                     operation["workerReserved"] = max(
                         operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
-                if task["state"] in state.TERMINAL:
+                if task["state"] in state.TERMINAL and usage is not None:
                     state.finish(operation, "completed" if task["state"] == "completed" else "failed")
                     if task["state"] == "completed":
                         basis = contracts.loads(operation["identity"].split(":round:", 1)[0])
@@ -574,7 +516,6 @@ class PilotGitHub:
     def sweep(self):
         if self.ledger is None:
             raise ValueError("authenticated authority must be read before discovery")
-        self.inventory()
         self.reconcile_workers()
         for chain in self.ledger["chains"]:
             if chain["child"] is not None and chain["childAdoption"] in {"reserved", "sent", "uncertain"}:
@@ -596,13 +537,8 @@ class PilotGitHub:
                 chain["state"] = "open"
         return observations
 
-    def status(self, chain, observation, now):
+    def next_action(self, chain, observation):
         operation = chain["operations"][-1] if chain["operations"] else None
-        lane = operation["lane"] if operation else ("cloud" if chain["escalated"] else "local")
-        actual = sum(sum(op[key] or 0 for key in ("nativeActual", "workerActual")) for op in chain["operations"])
-        reserved = state.chain_spend(chain) - actual
-        dispositions = {value: list(chain["dispositions"].values()).count(value)
-                        for value in ("addressed", "declined", "needs-human")}
         if chain["state"] != "open":
             blocker = "Human handoff / adoption removed; no new item writes."
         elif observation["attention"] is not None:
@@ -611,6 +547,8 @@ class PilotGitHub:
             blocker = "Worker needs human input; open the task. No inference."
         elif state.pending(chain):
             blocker = "Tracked work / uncertain send; observe only, never retry."
+        elif self.binding == bindings.UPSTREAM and chain["rounds"] >= 1:
+            blocker = "Single upstream lifetime action round consumed; human attention required."
         elif (chain["kind"] == "issue" and chain["child"] is None and operation is not None
               and operation["state"] == "completed" and operation["taskId"] is not None):
             blocker = "Completed task has no verified child PR; human handoff required."
@@ -624,6 +562,17 @@ class PilotGitHub:
             blocker = "Waiting for human review / supported new feedback; no inference."
         else:
             blocker = "Bounded repair batch due."
+        return blocker
+
+    def status(self, chain, observation, now):
+        operation = chain["operations"][-1] if chain["operations"] else None
+        lane = operation["lane"] if operation else (
+            "cloud" if chain["escalated"] or self.binding == bindings.UPSTREAM else "local")
+        actual = sum(sum(op[key] or 0 for key in ("nativeActual", "workerActual")) for op in chain["operations"])
+        reserved = state.chain_spend(chain) - actual
+        dispositions = {value: list(chain["dispositions"].values()).count(value)
+                        for value in ("addressed", "declined", "needs-human")}
+        blocker = self.next_action(chain, observation)
         task = "" if not operation or not operation["taskId"] else (
             f"\nTask: https://github.com/{self.repository}/agents/tasks/{operation['taskId']}")
         last = "" if operation is None else f" Last action: {operation['state']}."
@@ -634,10 +583,28 @@ class PilotGitHub:
                 f"{dispositions['needs-human']} needs-human.\n{blocker}{last}\nEvidence: {observation['url']}{task}\n"
                 f"{state.STATUS_MARKER}\nChain: {chain['id']}")
 
+    def log_status(self, chain, observation, now):
+        operation = chain["operations"][-1] if chain["operations"] else None
+        task = operation["taskId"] if operation else None
+        worker = (operation["workerState"] or operation["state"]) if operation else "not started"
+        unknown = any(op["nativeActual"] is None or (
+            (op["taskId"] is not None or op["workerReserved"] > 0) and op["workerActual"] is None)
+                      for op in chain["operations"])
+        actual = sum(sum(op[key] or 0 for key in ("nativeActual", "workerActual")) for op in chain["operations"])
+        reserved = state.chain_spend(chain) - actual
+        summary = (f"CI Shepherd {self.repository} {observation['kind']} #{observation['number']} "
+                   f"head {observation['head']}\nTracked task: {task or 'no saved ID'}; state: {worker}. "
+                   f"Action rounds: {chain['rounds']}.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}; "
+                   f"billing: {'unknown amounts remain reserved' if unknown else 'known reported amounts'}.\n"
+                   f"Next action: {self.next_action(chain, observation)}")
+        if observation.get("workHistory") is not None:
+            summary += "\n" + history.describe(observation["workHistory"])
+        print(summary)
+
     def publish_status(self, chain, observation, now):
         if self.binding == bindings.UPSTREAM:
             # Upstream host writes are limited to the single task request.
-            # The canonical fork authority remains the trial's status surface.
+            # Plain hosted logs remain available when the native job skips.
             return
         if not self.write or not observation["managed"] or chain["state"] not in {"open", "human"}:
             return

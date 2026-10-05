@@ -40,6 +40,8 @@ def prepare(api, run, now, *, present=True):
     api.read_authority()
     observations = api.sweep()
     api.persist()
+    for chain in api.ledger["chains"]:
+        api.log_status(chain, observations[chain["child"] or chain["origin"]], now)
     if present:
         for chain in api.ledger["chains"]:
             observed = observations[chain["child"] or chain["origin"]]
@@ -74,9 +76,14 @@ def prepare(api, run, now, *, present=True):
             continue
         api.guard(chain, observed)
         api.persist()
+        # Full history has already been presented in the cheap sweep. Keep it
+        # out of action artifacts as well as worker prompts: descriptive pages
+        # must not strand an admitted round at the bounded JSON read boundary.
+        action_observation = {key: value for key, value in observed.items() if key != "workHistory"}
         return {"schemaVersion": 1, "kind": "pilot", "packetId": str(uuid.uuid4()), "run": deepcopy(run),
                 "chain": chain["id"], "operation": operation["id"], "preparedAt": issue_pr.stamp(now),
-                "observation": observed, "lane": operation["lane"], "context": context if operation["lane"] == "local" else None,
+                "observation": action_observation, "lane": operation["lane"],
+                "context": context if operation["lane"] == "local" else None,
                 "target": api.binding.name, "trialBrief": bindings.brief(api.binding, observed["head"])}
     api.persist()
     return None
@@ -117,6 +124,9 @@ def validate_decision(packet, decision):
 def worker_prompt(api, chain, operation, packet):
     correlation = {"chain": chain["id"], "operation": operation["id"], "origin": chain["origin"]}
     observed = packet["observation"]
+    # Descriptive history belongs in cheap hosted logs, not the bounded repair
+    # request. A valid multi-page timeline must not exhaust the worker prompt.
+    repair_context = {key: value for key, value in observed.items() if key != "workHistory"}
     revision_label = "Source head" if observed["kind"] == "pr" else "Host-bound issue title/body digest"
     return github.CORRELATION + json.dumps(correlation, separators=(",", ":")) + "\n" + (
         f"Repair one cohesive batch for {api.repository} {observed['kind']} #{observed['number']}. "
@@ -142,18 +152,17 @@ def worker_prompt(api, chain, operation, packet):
         "Task completion alone does not prove current-head CI or readiness.\n"
         + bindings.policy(api.binding) + "\n"
         "Exact-head trial brief (ignore after head drift): " + json.dumps(bindings.brief(api.binding, observed["head"])) + "\n"
-        "Bounded source/feedback JSON:\n" + json.dumps(observed, ensure_ascii=True))
+        "Bounded source/feedback JSON:\n" + json.dumps(repair_context, ensure_ascii=True))
 
 
 def dispatch(api, chain, operation, packet, now):
-    api.inventory()
     api.reconcile_workers()
     api.persist()
     if any(other is not operation and other["state"] in {"reserved", "sent", "waiting", "uncertain"}
            for other in chain["operations"]):
         raise ValueError("chain has freshly resumed pending work")
     if api.admission_slots(packet["observation"]["headRef"]) >= 2:
-        raise ValueError("repository worker capacity exhausted")
+        raise ValueError("tracking authority worker capacity exhausted")
     observed = packet["observation"]
     body = {"prompt": worker_prompt(api, chain, operation, packet), "base_ref": "main",
             "create_pull_request": observed["kind"] == "issue"}
@@ -181,8 +190,9 @@ def dispatch(api, chain, operation, packet, now):
         operation["workerState"] = task["state"]
     except RejectedEffect:
         state.finish(operation, "no-send")
-    except (LostResponse, IncompleteInventory):
+    except (LostResponse, IncompleteInventory, ValueError, KeyError, TypeError, AttributeError, OverflowError):
         state.finish(operation, "uncertain")
+        operation["workerState"] = "unknown"
     api.persist()
     return {"outcome": operation["state"], "taskId": operation["taskId"]}
 
@@ -326,7 +336,9 @@ def main(argv=None):
             # explain exhaustion/expiry while still honoring takeover/head.
             api.packet_time = None
             if not disabled:
-                api.publish_status(chain, api.observe(chain), live.clock())
+                observation = api.observe(chain)
+                api.log_status(chain, observation, live.clock())
+                api.publish_status(chain, observation, live.clock())
         contracts.write_json(args.result, result)
         if result.get("outcome") in {"failed", "uncertain"}:
             print(f"CI Shepherd action requires attention: {result}", file=sys.stderr)
