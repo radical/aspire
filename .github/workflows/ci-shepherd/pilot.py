@@ -60,7 +60,7 @@ def prepare(api, run, now, *, present=True):
             api.persist()
             return None
         observed = observations[chain["child"] or chain["origin"]]
-        if api.binding == bindings.UPSTREAM and chain["rounds"] >= 1:
+        if chain["rounds"] >= api.binding.round_limit:
             candidates[observed["number"]]["actionable"] = False
             continue
         context = None if chain["escalated"] or api.binding != bindings.FORK else patch.source_context(api, observed)

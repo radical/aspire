@@ -111,18 +111,57 @@ class PilotBindingTests(unittest.TestCase):
         self.assertEqual(0, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
         self.assertEqual([], transport.reads)
 
-    def test_trial_one_round_persists_and_never_redispatches_after_worker_completion(self):
+    def test_trial_five_rounds_preserve_history_across_restarts_and_reject_sixth(self):
         api, transport = self.api()
-        packet = pilot.prepare(api, RUN, api.clock(), present=False)
-        chain = api.ledger["chains"][0]
-        operation = chain["operations"][0]
-        state.settle_native(operation, 2)
-        state.finish(operation, "completed")
-        api.persist()
+        previous = []
+        for number in range(1, 6):
+            fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+            fresh.clock = api.clock
+            packet = pilot.prepare(fresh, RUN, api.clock(), present=False)
+            self.assertIsNotNone(packet, f"Round {number} must remain admissible after restart")
+            chain = fresh.ledger["chains"][0]
+            self.assertEqual(number, chain["rounds"])
+            self.assertEqual(previous, chain["operations"][:-1])
+            self.assertEqual(2 * (number - 1) + 30, state.chain_spend(chain))
+            operation = chain["operations"][-1]
+            self.assertEqual(operation["id"], packet["operation"])
+            state.settle_native(operation, 2)
+            state.finish(operation, "completed")
+            fresh.persist()
+            previous = deepcopy(chain["operations"])
+            self.assertEqual(fresh.ledger, state.parse(transport.comments[0]["body"]))
+        before = deepcopy(fresh.ledger)
+        writes = deepcopy(transport.writes)
         fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+        fresh.clock = api.clock
         self.assertIsNone(pilot.prepare(fresh, RUN, api.clock(), present=False))
-        self.assertEqual(1, fresh.ledger["chains"][0]["rounds"])
-        self.assertEqual(2, state.chain_spend(fresh.ledger["chains"][0]))
+        self.assertEqual(before, fresh.ledger)
+        self.assertEqual(writes, transport.writes)
+        chain = fresh.ledger["chains"][0]
+        self.assertEqual(10, state.chain_spend(chain))
+        observed = fresh.observe(chain)
+        self.assertIn("action rounds: 5/5.", fresh.status(chain, observed, api.clock()))
+        self.assertEqual("Lifetime action round limit (5) reached; human attention required.",
+                         fresh.next_action(chain, observed))
+
+    def test_trial_fresh_effect_guard_allows_fifth_but_rejects_over_limit(self):
+        api, transport = self.api()
+        api.read_authority()
+        value = transport.values["repos/microsoft/aspire/pulls/20722"]
+        chain = state.adopt(api.ledger, 20722, "pr", value["node_id"])
+        observed = api.observe(chain)
+        for number in range(1, 7):
+            operation = state.reserve(api.ledger, chain, github.fingerprint(observed) + f":round:{number}",
+                                      api.clock(), local=False)
+            api.persist()
+            if number == 5:
+                self.assertEqual(observed, api.guard(chain, observed))
+            elif number == 6:
+                with self.assertRaisesRegex(ValueError, "round limit"):
+                    api.guard(chain, observed)
+            state.settle_native(operation, 2)
+            state.finish(operation, "completed")
+            api.persist()
 
     def test_trial_unknown_managed_tasks_keep_owned_slots(self):
         api, transport = self.api()

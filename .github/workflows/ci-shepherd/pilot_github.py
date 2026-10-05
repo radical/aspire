@@ -356,6 +356,8 @@ class PilotGitHub:
         if fingerprint(fresh) != fingerprint(observation):
             raise ValueError("subject basis changed")
         self.authority_guard()
+        if effect and chain["rounds"] > self.binding.round_limit:
+            raise ValueError("lifetime action round limit exceeded")
         if effect and (chain["state"] != "open" or state.chain_spend(chain) > state.CHAIN_ALLOWANCE or state.repository_spend(
                 self.ledger, self.clock()) > state.REPOSITORY_ALLOWANCE):
             raise ValueError("chain/repository authority or credit allowance exhausted")
@@ -573,12 +575,12 @@ class PilotGitHub:
             blocker = "Worker needs human input; open the task. No inference."
         elif state.pending(chain):
             blocker = "Tracked work / uncertain send; observe only, never retry."
-        elif self.binding == bindings.UPSTREAM and chain["rounds"] >= 1:
-            blocker = "Single upstream lifetime action round consumed; human attention required."
+        elif chain["rounds"] >= self.binding.round_limit:
+            blocker = f"Lifetime action round limit ({self.binding.round_limit}) reached; human attention required."
         elif (chain["kind"] == "issue" and chain["child"] is None and operation is not None
               and operation["state"] == "completed" and operation["taskId"] is not None):
             blocker = "Completed task has no verified child PR; human handoff required."
-        elif chain["rounds"] >= 10 or state.chain_spend(chain) >= state.CHAIN_ALLOWANCE:
+        elif state.chain_spend(chain) >= state.CHAIN_ALLOWANCE:
             blocker = "Lifetime allowance exhausted; human attention required."
         elif observation["ready"]:
             blocker = "Current-head checks and approval verified; human merge required."
@@ -603,7 +605,7 @@ class PilotGitHub:
             f"\nTask: https://github.com/{self.repository}/tasks/{operation['taskId']}")
         last = "" if operation is None else f" Last action: {operation['state']}."
         return (f"[automated] CI Shepherd - {lane}\n\nLocal attempts: {chain['localAttempts']}/2; "
-                f"action rounds: {chain['rounds']}/10.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}. "
+                f"action rounds: {chain['rounds']}/{self.binding.round_limit}.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}. "
                 "Unknown billing retains its reservation; these are not hard billing caps.\n\n"
                 f"Feedback dispositions: {dispositions['addressed']} addressed, {dispositions['declined']} declined, "
                 f"{dispositions['needs-human']} needs-human.\n{blocker}{last}\nEvidence: {observation['url']}{task}\n"
@@ -620,7 +622,7 @@ class PilotGitHub:
         reserved = state.chain_spend(chain) - actual
         summary = (f"CI Shepherd {self.repository} {observation['kind']} #{observation['number']} "
                    f"head {observation['head']}\nTracked task: {task or 'no saved ID'}; state: {worker}. "
-                   f"Action rounds: {chain['rounds']}.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}; "
+                   f"Action rounds: {chain['rounds']}/{self.binding.round_limit}.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}; "
                    f"billing: {'unknown amounts remain reserved' if unknown else 'known reported amounts'}.\n"
                    f"Next action: {self.next_action(chain, observation)}")
         if observation.get("workHistory") is not None:
