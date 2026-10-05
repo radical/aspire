@@ -259,6 +259,68 @@ rechecks the exact branch/head/adoption/authority, then updates the ref with
 `force: false`. Native billing settlement runs even when decision evidence is
 missing, malformed or unsuccessful; such evidence cannot authorize code.
 
+## Local upstream pilot
+
+`local.py` runs the same `pilot.prepare` / `pilot.settle` controller and policy
+for the fixed PR20722 trial on a POSIX machine. GitHub Copilot repair workers
+remain remote. The Actions workflow stays available for later hosted execution;
+its GitHub-hosted identity checks are unchanged, not emulated locally.
+
+The operator explicitly selects the existing tracker/comment and authenticates
+as radical through `gh`. The adapter verifies the same actor/repository/tracker
+identities as the hosted pilot. It never initializes or resets the authority.
+Tracking remains in the existing GitHub comment, not local files.
+
+Before local effects, disable the hosted Shepherd workflow and finish or cancel
+its existing runs. The local adapter rechecks disabled state and complete hosted
+run inventory at authority/effect boundaries. A machine-wide per-authority lock
+also rejects a second local controller, even with a different output directory.
+The global `CI_SHEPHERD_ENABLE` variable and item takeover/removal still apply.
+
+```shell
+gh workflow disable ci-shepherd.lock.yml --repo radical/aspire
+
+python3 -B .github/workflows/ci-shepherd/local.py observe \
+  --tracker 127 --authority 5983713607 \
+  --tracker-node I_kwDOLIR8788AAAABU-aGuQ \
+  --workdir artifacts/ci-shepherd/local
+
+python3 -B .github/workflows/ci-shepherd/local.py watch \
+  --tracker 127 --authority 5983713607 \
+  --tracker-node I_kwDOLIR8788AAAABU-aGuQ \
+  --workdir artifacts/ci-shepherd/local --interval 60
+```
+
+`observe` is read-only and needs no hosted disable. `run` executes one sweep;
+`watch` repeats cheap sweeps and invokes inference only when shared admission
+selects due work. Commit reviewed source first: live modes reject dirty source
+and stop before another sweep or repair effect if the source changes. Billing
+settlement remains independent of that source check.
+
+**Every admitted decision uses a fresh agent.** A new Copilot1.0.92-3 process,
+UUID, temporary home and working directory outside the checkout receive only
+the actual workflow prompt body populated by the current `pilot.prompt(packet)`.
+No resumed conversation, user/repository instructions, memory, plugins or
+follow-up coaching are supplied. The sole tool is `safeoutputs-submit_decision`,
+implemented locally by a stdio server that can only record one proposal.
+The same host-event validation requires a fresh session, verified version,
+exact tool grants, one successful submission and matching final JSON.
+
+Inference uses the operator's Copilot allowance and the existing30-credit native
+admission setting. The CLI authentication token is kept out of prompts and
+stripped from tool environments; the decision server has no GitHub client.
+Local execution is not a hosted firewall/permissions proof.
+
+Actual native billing uses the same cumulative
+`session.usage_checkpoint.data.totalNanoAiu` source as pinned gh-aw, divided by
+1e9. Missing billing retains the reservation; a failed decision cannot start a
+worker. Process, session, prompt, normalized usage and result receipts are kept
+under the selected output directory. Native failure or uncertain send stops
+the runner rather than silently spending another round.
+
+Stop the local process before re-enabling the hosted workflow. Do not run both
+controllers or edit the tracking comment to recover a stalled operation.
+
 Task creation uses only the verified primary REST fields `prompt`, `base_ref`,
 optional `head_ref` and `create_pull_request`, API version `2026-03-10`.
 Task details come from `agents/repos/{owner}/{repo}/tasks/{task_id}`; both

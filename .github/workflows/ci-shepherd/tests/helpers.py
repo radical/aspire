@@ -139,6 +139,36 @@ class FakeClock:
         self.now += timedelta(**kwargs)
 
 
+class FakePilotProcess:
+    def __init__(self, transform=lambda events: events, returncode=0):
+        self.launches = []
+        self.transform = transform
+        self.returncode = returncode
+
+    def __call__(self, argv, **kwargs):
+        from subprocess import CompletedProcess
+        self.launches.append((argv, kwargs))
+        session = argv[argv.index("--session-id") + 1]
+        packet = json.loads((Path(kwargs["cwd"]) / "packet.json").read_text())
+        decision = {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
+                    "action": "cloud", "replacement": None,
+                    "dispositions": {item["id"]: "addressed" for item in packet["observation"]["feedback"]}}
+        events = host_events(session, decision, calls=[{
+            "toolName": "safeoutputs-submit_decision", "toolCallId": "call-1",
+            "arguments": {"decision": json.dumps(decision)},
+        }])
+        events.insert(-1, {"type": "session.usage_checkpoint", "data": {"totalNanoAiu": 2000000000}})
+        events = self.transform(events)
+        folder = Path(kwargs["env"]["COPILOT_HOME"]) / "session-state" / session
+        folder.mkdir(parents=True)
+        (folder / "events.jsonl").write_text(jsonl(events))
+        logs = Path(kwargs["cwd"]) / "logs"
+        logs.mkdir()
+        (logs / "native.log").write_text(wire_report(["safeoutputs-submit_decision"]))
+        (Path(kwargs["cwd"]) / "decision.json").write_text(json.dumps(decision))
+        return CompletedProcess(argv, self.returncode, "", "")
+
+
 def subject(kind="pr", number=7):
     return {"repository": "owner/repo", "kind": kind, "number": number}
 
