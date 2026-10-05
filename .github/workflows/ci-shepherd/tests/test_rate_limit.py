@@ -3,12 +3,14 @@ from email.utils import format_datetime
 import io
 import json
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from helpers import reconciliation_decision, reconciliation_evidence
 from test_live import FakeService
 import live
+import pilot_github
 import receipts
 import round as contracts
 
@@ -78,6 +80,69 @@ class WindowOpener:
 
 
 class RateLimitTests(unittest.TestCase):
+    def test_large_check_pages_are_complete_without_expanding_packet_limit(self):
+        opener = WindowOpener()
+        first_page = None
+
+        def page(method, endpoint, body):
+            nonlocal first_page
+            number = int(parse_qs(urlparse(endpoint).query)["page"][0])
+            start = (number - 1) * 100
+            payload = {"total_count": 452, "check_runs": [
+                {"id": index, "output": {"summary": "CI check metadata " * 220}}
+                for index in range(start + 1, min(start + 100, 452) + 1)]}
+            if number == 1:
+                first_page = json.dumps(payload)
+            return live.Response(payload, {})
+
+        opener.service.transport = page
+        transport = pilot_github.PilotTransport("credential")
+        transport.opener = opener
+        checks = live.API(transport).pages(
+            f"repos/{live.REPOSITORY}/commits/{live.INITIAL_HEAD}/check-runs",
+            key="check_runs", require_total_count=True)
+        self.assertEqual(list(range(1, 453)), [check["id"] for check in checks])
+        self.assertEqual(5, len(opener.requests))
+        self.assertGreater(len(first_page.encode()), contracts.MAX_JSON_BYTES)
+        with self.assertRaisesRegex(ValueError, "JSON exceeds size limit"):
+            contracts.loads(first_page)
+
+    def test_api_json_accepts_exact_eight_mib_boundary(self):
+        bound = 8 * 1024 * 1024
+        value = {"value": "x" * (bound - len(json.dumps({"value": ""}).encode()))}
+        self.assertEqual(bound, len(json.dumps(value).encode()))
+        opener = WindowOpener()
+        opener.service.transport = lambda *_: live.Response(value, {})
+        response = live.HTTPTransport("credential", opener=opener)("GET", f"repos/{live.REPOSITORY}", None)
+        self.assertEqual(value, response.payload)
+        self.assertEqual(1, len(opener.requests))
+
+    def test_api_json_over_boundary_preserves_read_failure_and_write_uncertainty(self):
+        bound = 8 * 1024 * 1024
+        value = {"value": "x" * (bound + 1 - len(json.dumps({"value": ""}).encode()))}
+        self.assertEqual(bound + 1, len(json.dumps(value).encode()))
+        for method, endpoint, body, exception in (
+                ("GET", f"repos/{live.REPOSITORY}", None, live.IncompleteInventory),
+                ("POST", f"agents/repos/{live.REPOSITORY}/tasks", {}, live.LostResponse)):
+            with self.subTest(method=method):
+                opener = WindowOpener()
+                opener.service.transport = lambda *_: live.Response(value, {})
+                transport = live.HTTPTransport("credential", write=True, opener=opener)
+                with self.assertRaisesRegex(exception, "API JSON response exceeds 8388608-byte limit"):
+                    transport(method, endpoint, body)
+                self.assertEqual(1, len(opener.requests))
+
+    def test_large_api_json_keeps_duplicate_constant_and_syntax_validation(self):
+        prefix = '{"padding":"' + "x" * contracts.MAX_JSON_BYTES + '",'
+        for suffix in ('"value":1,"value":2}', '"value":NaN}', '"value":}'):
+            with self.subTest(suffix=suffix):
+                opener = WindowOpener()
+                raw = (prefix + suffix).encode()
+                with patch.object(opener, "open", return_value=WindowOpener.response(raw, {})) as opened:
+                    with self.assertRaisesRegex(live.IncompleteInventory, "unavailable or invalid"):
+                        live.HTTPTransport("credential", opener=opener)("GET", f"repos/{live.REPOSITORY}", None)
+                    opened.assert_called_once()
+
     def test_fixed_compare_endpoint_is_allowed_but_traversal_is_not(self):
         opener = WindowOpener()
         transport = live.HTTPTransport("credential", opener=opener)

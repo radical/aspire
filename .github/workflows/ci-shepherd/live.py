@@ -37,6 +37,8 @@ TASK_STATES = {"queued", "in_progress", "idle", "waiting_for_user", "completed",
                "failed", "timed_out", "cancelled"}
 CORRELATION = "ci-shepherd-correlation: "
 MAX_BYTES = 256 * 1024
+# Full GitHub check pages must not share the smaller action-packet bound.
+MAX_API_JSON_BYTES = 8 * 1024 * 1024
 MAX_GET_WAIT_SECONDS = 180
 
 
@@ -203,12 +205,16 @@ class HTTPTransport:
             raise exception(f"{method} {self._safe_path(path.path)} response unavailable; no retry") from None
         try:
             with response:
-                raw = response.read(MAX_BYTES + 1)
-                if len(raw) > MAX_BYTES:
-                    raise (IncompleteInventory if read else LostResponse)("API result exceeds limit")
-                payload = contracts.loads(raw.decode("utf-8"))
+                raw = response.read(MAX_API_JSON_BYTES + 1)
+                if len(raw) > MAX_API_JSON_BYTES:
+                    raise (IncompleteInventory if read else LostResponse)(
+                        f"API JSON response exceeds {MAX_API_JSON_BYTES}-byte limit; " +
+                        self._diagnostic(method, path.path, response.status, response.headers))
+                payload = contracts.loads(raw.decode("utf-8"), max_bytes=MAX_API_JSON_BYTES)
                 self._observe_quota(response.headers)
                 return Response(payload, dict(response.headers), response.status)
+        except (IncompleteInventory, LostResponse):
+            raise
         except (ValueError, UnicodeError, OSError, HTTPException) as error:
             exception = IncompleteInventory if read else LostResponse
             raise exception("API result unavailable or invalid; no retry; " +
