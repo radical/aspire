@@ -115,6 +115,7 @@ jobs:
           SHEPHERD_RESUME_PREPARED: ${{ inputs.resume_prepared && 'true' || 'false' }}
           CI_SHEPHERD_USER_TOKEN: ${{ (inputs.mode == 'pilot' || github.event_name == 'schedule') && vars.CI_SHEPHERD_ENABLE == 'true' && secrets.CI_SHEPHERD_USER_TOKEN || (inputs.mode != 'pilot' && github.event_name != 'schedule' && inputs.mode != 'transport-proof' && secrets.CI_SHEPHERD_USER_TOKEN) || '' }}
           CI_SHEPHERD_ENABLE: ${{ vars.CI_SHEPHERD_ENABLE }}
+          CI_SHEPHERD_REMINDER_DELAY_SECONDS: ${{ vars.CI_SHEPHERD_REMINDER_DELAY_SECONDS || '60' }}
           CI_SHEPHERD_TRACKER: ${{ vars.CI_SHEPHERD_TRACKER }}
           CI_SHEPHERD_TRACKER_NODE: ${{ vars.CI_SHEPHERD_TRACKER_NODE }}
           CI_SHEPHERD_AUTHORITY_COMMENT: ${{ vars.CI_SHEPHERD_AUTHORITY_COMMENT }}

@@ -18,6 +18,7 @@ import pilot_state as state
 import reasoning
 import round as contracts
 import pilot_binding as bindings
+import pilot_reminders as reminders
 
 
 def configuration(environment, *, billing=False):
@@ -30,7 +31,8 @@ def configuration(environment, *, billing=False):
     if any(not environment.get(key) for key in required):
         return None
     return {"tracker": int(environment[required[0]]), "authority": int(environment[required[1]]),
-            "node": environment[required[2]], "binding": binding}
+            "node": environment[required[2]], "binding": binding,
+            "reminderDelay": 60 if billing else reminders.delay(environment.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS", "60"))}
 
 
 def prepare(api, run, now, *, present=True):
@@ -45,6 +47,7 @@ def prepare(api, run, now, *, present=True):
     if present:
         for chain in api.ledger["chains"]:
             observed = observations[chain["child"] or chain["origin"]]
+            reminders.process(api, chain, observed, now)
             try:
                 api.publish_status(chain, observed, now)
             except (github.PresentationUncertain, LostResponse) as error:
@@ -263,10 +266,12 @@ def hosted_api(run, environment, *, billing=False):
         return None
     from hosted import require_host
     require_host(run, allowed_events={"workflow_dispatch", "schedule"})
-    return github.PilotGitHub(github.PilotTransport(environment.get("CI_SHEPHERD_USER_TOKEN"), write=True,
+    api = github.PilotGitHub(github.PilotTransport(environment.get("CI_SHEPHERD_USER_TOKEN"), write=True,
                                                    binding=config["binding"], tracker=config["tracker"],
                                                    authority=config["authority"]),
                              config["tracker"], config["authority"], config["node"], write=True, binding=config["binding"])
+    api.reminder_delay = config["reminderDelay"]
+    return api
 
 
 def output(name, value):

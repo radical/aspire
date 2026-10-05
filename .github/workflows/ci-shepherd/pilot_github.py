@@ -15,6 +15,7 @@ import pilot_state as state
 import round as contracts
 import pilot_binding as bindings
 import pilot_history as history
+import pilot_reminders as reminders
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
@@ -48,6 +49,9 @@ class PilotTransport(live.HTTPTransport):
         if method == "POST" and endpoint == "graphql":
             history.validate_request(body, self.binding)
             return
+        if method == "GET" and path.path == f"repos/{self.binding.repository}/actions/runs" and body is None:
+            reminders.validate_runs_endpoint(path, self.binding)
+            return
         if self.binding == bindings.UPSTREAM:
             target = "repos/" + self.binding.repository
             if method == "GET" and (path.path == target or re.fullmatch(
@@ -65,6 +69,10 @@ class PilotTransport(live.HTTPTransport):
                         or body["head_ref"] != "copilot/restrict-workflows-to-microsoft-aspire"
                         or body["create_pull_request"] is not False):
                     raise ValueError("upstream trial task body mismatch")
+                return
+            if (method == "POST" and self.write and endpoint == target + "/issues/20722/comments"
+                    and isinstance(body, dict) and set(body) == {"body"}
+                    and reminders.valid_body(body["body"], self.binding.repository, 20722)):
                 return
             if method in {"POST", "PATCH"} and path.path.startswith(target + "/"):
                 raise ValueError("upstream host publication is not authorized")
@@ -168,6 +176,7 @@ class PilotGitHub:
         self.packet_time = None
         self.high_water = None
         self.clock = live.clock
+        self.reminder_delay = 60
 
     def owned(self, comment):
         return comment.get("user", {}).get("id") == self.actor["id"] and comment["user"].get("login") == self.actor["login"]
@@ -242,6 +251,8 @@ class PilotGitHub:
             for comment in self.api.pages(endpoint):
                 if comment["id"] == chain["statusId"] and self.owned(comment) and state.STATUS_MARKER in comment.get("body", ""):
                     continue
+                if self.owned(comment) and reminders.valid_body(comment.get("body"), self.repository, number):
+                    continue
                 identity = f"{prefix}:{comment['id']}:{comment['updated_at']}"
                 if identity not in chain["dispositions"]:
                     feedback.append({"id": identity, "body": comment["body"][:2000], "url": comment.get("html_url", "")})
@@ -255,7 +266,10 @@ class PilotGitHub:
             json.dumps([value.get("title"), value.get("body")], ensure_ascii=True).encode()).hexdigest()
         head = value["head"]["sha"] if kind == "pr" else description
         ready, pending_ci, checks, reviews = False, False, [], []
+        workflow = {"approval": None, "pending": False, "green": True, "attention": None}
         if kind == "pr" and active:
+            workflow = reminders.workflow_evidence(self, head)
+            pending_ci = workflow["pending"]
             checks = self.api.pages(f"{self.prefix}/commits/{head}/check-runs", key="check_runs",
                                     require_total_count=True)
             statuses = self.api.get(f"{self.prefix}/commits/{head}/status")
@@ -271,6 +285,8 @@ class PilotGitHub:
                 if check["status"] != "completed":
                     pending_ci = True
                 elif check["conclusion"] in {"failure", "timed_out", "action_required"}:
+                    if check["conclusion"] == "action_required" and workflow["approval"] is not None:
+                        continue
                     identity = f"check:{check['id']}:{head}:{check['conclusion']}"
                     if identity not in chain["dispositions"]:
                         feedback.append({"id": identity, "body": check["name"] + ": " + check["conclusion"],
@@ -294,7 +310,7 @@ class PilotGitHub:
             requested = {reviewer["id"] for reviewer in value["requested_reviewers"]}
             approved = any(review["state"] == "APPROVED" and review["commit_id"] == head and reviewer not in requested
                            for reviewer, review in latest.items())
-            ci_green = bool(checks or latest_statuses) and not pending_ci and all(
+            ci_green = workflow["green"] and bool(checks or latest_statuses) and not pending_ci and all(
                 check["status"] == "completed" and check["conclusion"] in {"success", "neutral", "skipped"}
                 for check in checks
             ) and all(status["state"] == "success" for status in latest_statuses.values())
@@ -315,7 +331,9 @@ class PilotGitHub:
                 work_history = {"complete": False, "events": []}
         return {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
-                "attention": attention, "pendingCI": pending_ci, "actionable": active and attention is None and (
+                "attention": attention, "pendingCI": pending_ci,
+                "approval": workflow["approval"], "workflowAttention": workflow["attention"],
+                "actionable": active and attention is None and workflow["attention"] is None and workflow["approval"] is None and (
                     bool(feedback) if kind == "pr" else initial_due),
                 "title": value.get("title", "")[:300], "body": (value.get("body") or "")[:2000],
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
@@ -331,6 +349,10 @@ class PilotGitHub:
             raise ValueError("subject management removed or hands-off")
         if effect and fresh["attention"] is not None:
             raise ValueError(fresh["attention"])
+        if effect and fresh["workflowAttention"] is not None:
+            raise ValueError(fresh["workflowAttention"] + " No repair.")
+        if effect and fresh["approval"] is not None:
+            raise ValueError("current-head workflows require human approval; no repair")
         if fingerprint(fresh) != fingerprint(observation):
             raise ValueError("subject basis changed")
         self.authority_guard()
@@ -540,7 +562,11 @@ class PilotGitHub:
     def next_action(self, chain, observation):
         operation = chain["operations"][-1] if chain["operations"] else None
         if chain["state"] != "open":
-            blocker = "Human handoff / adoption removed; no new item writes."
+            blocker = "Human handoff / adoption removed; no new repairs."
+        elif observation["workflowAttention"] is not None:
+            blocker = observation["workflowAttention"] + " No inference."
+        elif observation["approval"] is not None:
+            blocker = "Current-head workflows require human approval; no inference."
         elif observation["attention"] is not None:
             blocker = observation["attention"] + " No inference."
         elif operation is not None and operation["workerState"] == "waiting_for_user":
@@ -574,7 +600,7 @@ class PilotGitHub:
                         for value in ("addressed", "declined", "needs-human")}
         blocker = self.next_action(chain, observation)
         task = "" if not operation or not operation["taskId"] else (
-            f"\nTask: https://github.com/{self.repository}/agents/tasks/{operation['taskId']}")
+            f"\nTask: https://github.com/{self.repository}/tasks/{operation['taskId']}")
         last = "" if operation is None else f" Last action: {operation['state']}."
         return (f"[automated] CI Shepherd - {lane}\n\nLocal attempts: {chain['localAttempts']}/2; "
                 f"action rounds: {chain['rounds']}/10.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}. "
@@ -599,11 +625,13 @@ class PilotGitHub:
                    f"Next action: {self.next_action(chain, observation)}")
         if observation.get("workHistory") is not None:
             summary += "\n" + history.describe(observation["workHistory"])
+        if observation["workflowAttention"] is not None:
+            summary += "\n" + observation["workflowAttention"]
         print(summary)
 
     def publish_status(self, chain, observation, now):
         if self.binding == bindings.UPSTREAM:
-            # Upstream host writes are limited to the single task request.
+            # Upstream comments are limited to fixed delayed human reminders.
             # Plain hosted logs remain available when the native job skips.
             return
         if not self.write or not observation["managed"] or chain["state"] not in {"open", "human"}:

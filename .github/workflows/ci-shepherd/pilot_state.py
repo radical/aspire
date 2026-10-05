@@ -7,6 +7,7 @@ import uuid
 
 import issue_pr
 import round as contracts
+import pilot_reminders as reminders
 
 MARKER = "<!-- ci-shepherd:pilot:v1 -->"
 STATUS_MARKER = "<!-- ci-shepherd:pilot-status:v1 -->"
@@ -38,7 +39,9 @@ def validate(ledger):
     for chain in ledger["chains"]:
         contracts.exact(chain, {"id", "origin", "kind", "node", "child", "childNode", "state", "localAttempts",
                                 "rounds", "escalated", "operations", "dispositions", "statusId", "statusPending",
-                                "childAdoption"}, "chain")
+                                "childAdoption"} | ({"reminder"} if "reminder" in chain else set()), "chain")
+        if "reminder" in chain:
+            reminders.validate(chain["reminder"])
         issue_pr.text(chain["id"], "chain id")
         if chain["id"] in chains:
             raise ValueError("duplicate chain identity")
