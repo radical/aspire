@@ -1,0 +1,3292 @@
+{
+  "now": "2026-10-05T19:11:41+00:00",
+  "windows": {
+    "current": {
+      "start": "2026-09-28",
+      "end": "2026-10-04"
+    },
+    "prior": {
+      "start": "2026-09-21",
+      "end": "2026-09-27"
+    },
+    "last_five_weekdays": [
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02"
+    ]
+  },
+  "config": {
+    "rolling_window_days": 7,
+    "graph_history_days": 21,
+    "history_retention_days": 180,
+    "health_thresholds": {
+      "green": 90,
+      "yellow": 75
+    },
+    "primary_lane": "github-ci-main",
+    "diagnostics_lane": "github-ci-main",
+    "pr_ci": {
+      "id": "github-pr-ci",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "pull_request",
+      "label": "PR CI",
+      "attempt_one_population": true
+    },
+    "lanes": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "label": "GitHub CI \u2014 main",
+        "primary": true,
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "label": "GitHub outerloop \u2014 main",
+        "primary": false,
+        "diagnostics": true
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "definition_name": "microsoft-aspire",
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "label": "AzDO internal \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      },
+      {
+        "id": "azdo-source-index-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1693,
+        "definition_name": "microsoft-aspire-source-index",
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "schedule"
+        ],
+        "label": "AzDO source index \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      }
+    ]
+  },
+  "history": {
+    "lane_identity": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "definition_name": null,
+        "eligible_reasons": [],
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "definition_name": null,
+        "eligible_reasons": [],
+        "diagnostics": true
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "event": null,
+        "branch": "refs/heads/main",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "definition_name": "microsoft-aspire",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "diagnostics": false
+      },
+      {
+        "id": "azdo-source-index-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "event": null,
+        "branch": "refs/heads/main",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1693,
+        "definition_name": "microsoft-aspire-source-index",
+        "eligible_reasons": [
+          "schedule"
+        ],
+        "diagnostics": false
+      }
+    ],
+    "coverage": {
+      "start": "2026-08-30",
+      "end": "2026-10-04",
+      "days": 36,
+      "reduced": true,
+      "refresh_days": 36
+    },
+    "lanes": {
+      "github-ci-main": [
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 5,
+          "failed": 2,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 1,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [
+            1
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 4,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 2,
+          "other_failed": 3,
+          "evidence_reasons": {
+            "no_failed_test": 3
+          },
+          "failed_test_case_counts": [
+            1,
+            1
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 3,
+          "failed": 8,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 4,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            7,
+            1,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 3,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            1,
+            3,
+            1
+          ],
+          "max_failed_test_cases": 3
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 2,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            1,
+            2
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 34.1,
+          "rolling_passed": 15,
+          "rolling_failed": 29,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 34.1,
+          "rolling_passed": 15,
+          "rolling_failed": 29,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 27.0,
+          "rolling_passed": 10,
+          "rolling_failed": 27,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": 20.0,
+          "rolling_passed": 7,
+          "rolling_failed": 28,
+          "test_failed": 4,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            2,
+            2,
+            2
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 1,
+          "failed": 5,
+          "rolling_pass_rate": 16.7,
+          "rolling_passed": 5,
+          "rolling_failed": 25,
+          "test_failed": 5,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1,
+            1,
+            3,
+            2,
+            1
+          ],
+          "max_failed_test_cases": 3
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 13.3,
+          "rolling_passed": 4,
+          "rolling_failed": 26,
+          "test_failed": 3,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            9,
+            2,
+            2
+          ],
+          "max_failed_test_cases": 9
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 10.3,
+          "rolling_passed": 3,
+          "rolling_failed": 26,
+          "test_failed": 5,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            2,
+            1,
+            3
+          ],
+          "max_failed_test_cases": 3
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 1,
+          "failed": 1,
+          "rolling_pass_rate": 10.0,
+          "rolling_passed": 3,
+          "rolling_failed": 27,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 8.3,
+          "rolling_passed": 3,
+          "rolling_failed": 33,
+          "test_failed": 4,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            10,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 10
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 1,
+          "failed": 12,
+          "rolling_pass_rate": 8.2,
+          "rolling_passed": 4,
+          "rolling_failed": 45,
+          "test_failed": 4,
+          "other_failed": 8,
+          "evidence_reasons": {
+            "no_failed_test": 8
+          },
+          "failed_test_case_counts": [
+            2,
+            2,
+            1,
+            7
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": 9.4,
+          "rolling_passed": 5,
+          "rolling_failed": 48,
+          "test_failed": 2,
+          "other_failed": 7,
+          "evidence_reasons": {
+            "artifact_outside_attempt": 1,
+            "no_failed_test": 6
+          },
+          "failed_test_case_counts": [
+            1,
+            1
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": 9.3,
+          "rolling_passed": 5,
+          "rolling_failed": 49,
+          "test_failed": 1,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            2
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 9.6,
+          "rolling_passed": 5,
+          "rolling_failed": 47,
+          "test_failed": 6,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            7,
+            7,
+            7,
+            7,
+            7,
+            7
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.7,
+          "rolling_passed": 6,
+          "rolling_failed": 50,
+          "test_failed": 8,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            2,
+            3,
+            39,
+            2,
+            3,
+            1,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 39
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 9.1,
+          "rolling_passed": 5,
+          "rolling_failed": 50,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 10.2,
+          "rolling_passed": 5,
+          "rolling_failed": 44,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.6,
+          "rolling_passed": 5,
+          "rolling_failed": 42,
+          "test_failed": 5,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 5
+          },
+          "failed_test_case_counts": [
+            40,
+            1,
+            1,
+            2,
+            1
+          ],
+          "max_failed_test_cases": 40
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 13,
+          "rolling_pass_rate": 6.1,
+          "rolling_passed": 3,
+          "rolling_failed": 46,
+          "test_failed": 5,
+          "other_failed": 8,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 8
+          },
+          "failed_test_case_counts": [
+            4,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_failed_test_cases": 4
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 2,
+          "failed": 11,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 4,
+          "rolling_failed": 51,
+          "test_failed": 3,
+          "other_failed": 8,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 8
+          },
+          "failed_test_case_counts": [
+            1,
+            27,
+            1
+          ],
+          "max_failed_test_cases": 27
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 3,
+          "failed": 7,
+          "rolling_pass_rate": 11.9,
+          "rolling_passed": 7,
+          "rolling_failed": 52,
+          "test_failed": 2,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 5
+          },
+          "failed_test_case_counts": [
+            1,
+            1
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 1,
+          "failed": 13,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 7,
+          "rolling_failed": 55,
+          "test_failed": 9,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 4
+          },
+          "failed_test_case_counts": [
+            2,
+            154,
+            1,
+            1,
+            1,
+            1,
+            2,
+            2,
+            1
+          ],
+          "max_failed_test_cases": 154
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 10.9,
+          "rolling_passed": 7,
+          "rolling_failed": 57,
+          "test_failed": 3,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            2,
+            326,
+            1
+          ],
+          "max_failed_test_cases": 326
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "test_failed": 6,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 4
+          },
+          "failed_test_case_counts": [
+            64,
+            81,
+            1,
+            1,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 81
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 12.5,
+          "rolling_passed": 7,
+          "rolling_failed": 49,
+          "test_failed": 4,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1,
+            1,
+            2,
+            2
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 2,
+          "failed": 7,
+          "rolling_pass_rate": 13.5,
+          "rolling_passed": 7,
+          "rolling_failed": 45,
+          "test_failed": 3,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 4
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 6,
+          "rolling_failed": 47,
+          "test_failed": 8,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 1
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            1,
+            2,
+            2,
+            2,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 2,
+          "failed": 6,
+          "rolling_pass_rate": 14.9,
+          "rolling_passed": 7,
+          "rolling_failed": 40,
+          "test_failed": 5,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 1
+          },
+          "failed_test_case_counts": [
+            4,
+            1,
+            1,
+            1,
+            1
+          ],
+          "max_failed_test_cases": 4
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 1,
+          "failed": 5,
+          "rolling_pass_rate": 16.0,
+          "rolling_passed": 8,
+          "rolling_failed": 42,
+          "test_failed": 3,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            2,
+            1
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 18.0,
+          "rolling_passed": 9,
+          "rolling_failed": 41,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        }
+      ],
+      "github-outerloop-main": [
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "unsupported_or_malformed": 1
+          },
+          "failed_test_case_counts": [],
+          "max_failed_test_cases": 0
+        }
+      ],
+      "azdo-internal-main": [
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 23
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 24
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 33
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 23
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 20
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 9,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 17
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 40
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 2,
+          "failed": 1,
+          "rolling_pass_rate": 5.0,
+          "rolling_passed": 2,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 3,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 6,
+          "failed": 1,
+          "rolling_pass_rate": 22.0,
+          "rolling_passed": 9,
+          "rolling_failed": 32
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 3,
+          "failed": 1,
+          "rolling_pass_rate": 31.6,
+          "rolling_passed": 12,
+          "rolling_failed": 26
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 2,
+          "failed": 3,
+          "rolling_pass_rate": 43.8,
+          "rolling_passed": 14,
+          "rolling_failed": 18
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 9,
+          "failed": 0,
+          "rolling_pass_rate": 62.2,
+          "rolling_passed": 23,
+          "rolling_failed": 14
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 5,
+          "failed": 1,
+          "rolling_pass_rate": 80.0,
+          "rolling_passed": 28,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 5,
+          "failed": 0,
+          "rolling_pass_rate": 83.8,
+          "rolling_passed": 31,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 83.8,
+          "rolling_passed": 31,
+          "rolling_failed": 6
+        }
+      ],
+      "azdo-source-index-main": [
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 100.0,
+          "rolling_passed": 1,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 100.0,
+          "rolling_passed": 2,
+          "rolling_failed": 0
+        }
+      ]
+    }
+  },
+  "lanes": {
+    "github-ci-main": {
+      "id": "github-ci-main",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "branch": "main",
+      "label": "GitHub CI \u2014 main",
+      "primary": true,
+      "diagnostics": true,
+      "recent": [
+        7,
+        43
+      ],
+      "current": [
+        9,
+        50
+      ],
+      "prior": [
+        7,
+        65
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 7.2,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 37244063228,
+        "identity": "github:37244063228",
+        "source": "github",
+        "created_at": "2026-10-04T23:31:23Z",
+        "initial_conclusion": "success",
+        "final_conclusion": "success"
+      }
+    },
+    "github-outerloop-main": {
+      "id": "github-outerloop-main",
+      "provider": "github-actions",
+      "workflow": "tests-outerloop.yml",
+      "event": "schedule",
+      "branch": "main",
+      "label": "GitHub outerloop \u2014 main",
+      "primary": false,
+      "diagnostics": true,
+      "recent": [
+        0,
+        5
+      ],
+      "current": [
+        0,
+        7
+      ],
+      "prior": [
+        0,
+        7
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 37171969074,
+        "identity": "github:37171969074",
+        "source": "github",
+        "created_at": "2026-10-04T02:44:23Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "azdo-internal-main": {
+      "id": "azdo-internal-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1602,
+      "definition_name": "microsoft-aspire",
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "batchedCI",
+        "individualCI"
+      ],
+      "label": "AzDO internal \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        25,
+        31
+      ],
+      "current": [
+        31,
+        37
+      ],
+      "prior": [
+        3,
+        41
+      ],
+      "change": {
+        "label": "\u2191 76 pts",
+        "delta": 76.5,
+        "meaningful": true
+      },
+      "health": {
+        "level": "yellow",
+        "label": "\ud83d\udfe1 Watch"
+      },
+      "latest": {
+        "id": 3095355,
+        "identity": "azure-devops:3095355",
+        "source": "azure-devops",
+        "created_at": "2026-10-04T23:37:16.9987878Z",
+        "initial_conclusion": "success",
+        "final_conclusion": "success"
+      }
+    },
+    "azdo-source-index-main": {
+      "id": "azdo-source-index-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1693,
+      "definition_name": "microsoft-aspire-source-index",
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "schedule"
+      ],
+      "label": "AzDO source index \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        0,
+        0
+      ],
+      "current": [
+        2,
+        2
+      ],
+      "prior": [
+        0,
+        0
+      ],
+      "change": {
+        "label": "\u2014",
+        "delta": null,
+        "meaningful": false
+      },
+      "health": {
+        "level": "green",
+        "label": "\ud83d\udfe2 Healthy"
+      },
+      "latest": {
+        "id": 3094871,
+        "identity": "azure-devops:3094871",
+        "source": "azure-devops",
+        "created_at": "2026-10-04T00:00:01.2052175Z",
+        "initial_conclusion": "success",
+        "final_conclusion": "success"
+      }
+    }
+  },
+  "reruns": {
+    "runs": 3,
+    "recovered": 1,
+    "human": 3,
+    "bot": 0,
+    "unrecovered": 2
+  },
+  "pr_ci": {
+    "label": "PR CI",
+    "current": {
+      "triggered": 443,
+      "evaluated": 254,
+      "initial_green": 105,
+      "final_green": 205,
+      "initial_failed": 149,
+      "rerun_recovered": 100,
+      "final_failed": 38,
+      "final_cancelled_after_rerun": 11,
+      "excluded": {
+        "superseded": 127,
+        "awaiting_approval": 32,
+        "ci_skipped": 30,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 105,
+        "p50": 24.833333333333332,
+        "p90": 41.77333333333333
+      },
+      "red_minutes": {
+        "n": 144,
+        "p50": 42.05,
+        "p90": 57.28833333333334
+      },
+      "attempt_one_minutes": {
+        "n": 249,
+        "p50": 36.45,
+        "p90": 55.093333333333334
+      },
+      "duration_unreliable": 5
+    },
+    "prior": {
+      "triggered": 603,
+      "evaluated": 348,
+      "initial_green": 126,
+      "final_green": 253,
+      "initial_failed": 222,
+      "rerun_recovered": 127,
+      "final_failed": 62,
+      "final_cancelled_after_rerun": 33,
+      "excluded": {
+        "superseded": 187,
+        "awaiting_approval": 36,
+        "ci_skipped": 32,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 126,
+        "p50": 27.525,
+        "p90": 42.38333333333333
+      },
+      "red_minutes": {
+        "n": 219,
+        "p50": 43.25,
+        "p90": 68.62
+      },
+      "attempt_one_minutes": {
+        "n": 345,
+        "p50": 39.166666666666664,
+        "p90": 60.00000000000001
+      },
+      "duration_unreliable": 3
+    },
+    "last_five_weekdays": {
+      "triggered": 371,
+      "evaluated": 201,
+      "initial_green": 77,
+      "final_green": 160,
+      "initial_failed": 124,
+      "rerun_recovered": 83,
+      "final_failed": 30,
+      "final_cancelled_after_rerun": 11,
+      "excluded": {
+        "superseded": 118,
+        "awaiting_approval": 30,
+        "ci_skipped": 22,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 77,
+        "p50": 26.833333333333332,
+        "p90": 42.68
+      },
+      "red_minutes": {
+        "n": 119,
+        "p50": 43.61666666666667,
+        "p90": 57.49333333333333
+      },
+      "attempt_one_minutes": {
+        "n": 196,
+        "p50": 39.608333333333334,
+        "p90": 55.34166666666667
+      },
+      "duration_unreliable": 5
+    },
+    "trend": [
+      {
+        "date": "2026-09-05",
+        "initial": 40.0,
+        "final": 61.42857142857143,
+        "recovered": 21.428571428571427,
+        "n": 490,
+        "duration_p50": 26.366666666666667,
+        "duration_p90": 42.84166666666666
+      },
+      {
+        "date": "2026-09-06",
+        "initial": 38.923395445134574,
+        "final": 61.697722567287784,
+        "recovered": 22.77432712215321,
+        "n": 483,
+        "duration_p50": 26.59166666666667,
+        "duration_p90": 42.34500000000007
+      },
+      {
+        "date": "2026-09-07",
+        "initial": 34.93150684931507,
+        "final": 58.67579908675799,
+        "recovered": 23.744292237442924,
+        "n": 438,
+        "duration_p50": 26.716666666666665,
+        "duration_p90": 45.21333333333334
+      },
+      {
+        "date": "2026-09-08",
+        "initial": 33.68983957219251,
+        "final": 60.6951871657754,
+        "recovered": 27.005347593582886,
+        "n": 374,
+        "duration_p50": 26.90833333333333,
+        "duration_p90": 50.41833333333335
+      },
+      {
+        "date": "2026-09-09",
+        "initial": 31.686046511627907,
+        "final": 57.26744186046512,
+        "recovered": 25.58139534883721,
+        "n": 344,
+        "duration_p50": 26.616666666666667,
+        "duration_p90": 52.18666666666667
+      },
+      {
+        "date": "2026-09-10",
+        "initial": 27.272727272727273,
+        "final": 51.94805194805195,
+        "recovered": 24.675324675324674,
+        "n": 308,
+        "duration_p50": 26.666666666666668,
+        "duration_p90": 52.626666666666665
+      },
+      {
+        "date": "2026-09-11",
+        "initial": 24.719101123595507,
+        "final": 53.558052434456926,
+        "recovered": 28.83895131086142,
+        "n": 267,
+        "duration_p50": 27.03333333333333,
+        "duration_p90": 54.93833333333334
+      },
+      {
+        "date": "2026-09-12",
+        "initial": 21.991701244813278,
+        "final": 55.18672199170125,
+        "recovered": 33.19502074688797,
+        "n": 241,
+        "duration_p50": 27.075000000000003,
+        "duration_p90": 56.66333333333335
+      },
+      {
+        "date": "2026-09-13",
+        "initial": 21.487603305785125,
+        "final": 52.06611570247934,
+        "recovered": 30.578512396694215,
+        "n": 242,
+        "duration_p50": 27.05,
+        "duration_p90": 59.923333333333346
+      },
+      {
+        "date": "2026-09-14",
+        "initial": 24.829931972789115,
+        "final": 55.78231292517007,
+        "recovered": 30.952380952380953,
+        "n": 294,
+        "duration_p50": 27.1,
+        "duration_p90": 57.733333333333334
+      },
+      {
+        "date": "2026-09-15",
+        "initial": 26.95924764890282,
+        "final": 58.62068965517241,
+        "recovered": 31.661442006269592,
+        "n": 319,
+        "duration_p50": 27.766666666666666,
+        "duration_p90": 60.20333333333335
+      },
+      {
+        "date": "2026-09-16",
+        "initial": 27.5974025974026,
+        "final": 58.76623376623377,
+        "recovered": 31.16883116883117,
+        "n": 308,
+        "duration_p50": 27.816666666666666,
+        "duration_p90": 63.15
+      },
+      {
+        "date": "2026-09-17",
+        "initial": 27.68166089965398,
+        "final": 61.937716262975776,
+        "recovered": 34.2560553633218,
+        "n": 289,
+        "duration_p50": 28.333333333333332,
+        "duration_p90": 65.08666666666666
+      },
+      {
+        "date": "2026-09-18",
+        "initial": 24.46808510638298,
+        "final": 54.60992907801418,
+        "recovered": 30.141843971631207,
+        "n": 282,
+        "duration_p50": 28.95,
+        "duration_p90": 66.26666666666667
+      },
+      {
+        "date": "2026-09-19",
+        "initial": 25.26690391459075,
+        "final": 53.736654804270465,
+        "recovered": 28.469750889679716,
+        "n": 281,
+        "duration_p50": 29.183333333333334,
+        "duration_p90": 66.14666666666668
+      },
+      {
+        "date": "2026-09-20",
+        "initial": 24.444444444444443,
+        "final": 54.81481481481482,
+        "recovered": 30.37037037037037,
+        "n": 270,
+        "duration_p50": 29.266666666666666,
+        "duration_p90": 66.28666666666666
+      },
+      {
+        "date": "2026-09-21",
+        "initial": 19.92337164750958,
+        "final": 54.02298850574713,
+        "recovered": 34.099616858237546,
+        "n": 261,
+        "duration_p50": 33.016666666666666,
+        "duration_p90": 68.5
+      },
+      {
+        "date": "2026-09-22",
+        "initial": 18.773946360153257,
+        "final": 54.02298850574713,
+        "recovered": 35.24904214559387,
+        "n": 261,
+        "duration_p50": 36.16666666666667,
+        "duration_p90": 69.63333333333334
+      },
+      {
+        "date": "2026-09-23",
+        "initial": 24.262295081967213,
+        "final": 57.049180327868854,
+        "recovered": 32.78688524590164,
+        "n": 305,
+        "duration_p50": 38.49166666666667,
+        "duration_p90": 68.46666666666671
+      },
+      {
+        "date": "2026-09-24",
+        "initial": 31.097560975609756,
+        "final": 64.32926829268293,
+        "recovered": 33.23170731707317,
+        "n": 328,
+        "duration_p50": 39.18333333333333,
+        "duration_p90": 66.15333333333334
+      },
+      {
+        "date": "2026-09-25",
+        "initial": 36.04651162790697,
+        "final": 71.80232558139535,
+        "recovered": 35.75581395348837,
+        "n": 344,
+        "duration_p50": 39.4,
+        "duration_p90": 60.55
+      },
+      {
+        "date": "2026-09-26",
+        "initial": 36.25730994152047,
+        "final": 72.51461988304094,
+        "recovered": 36.25730994152047,
+        "n": 342,
+        "duration_p50": 39.166666666666664,
+        "duration_p90": 60.10666666666667
+      },
+      {
+        "date": "2026-09-27",
+        "initial": 36.206896551724135,
+        "final": 72.70114942528735,
+        "recovered": 36.49425287356322,
+        "n": 348,
+        "duration_p50": 39.166666666666664,
+        "duration_p90": 60.00000000000001
+      },
+      {
+        "date": "2026-09-28",
+        "initial": 40.78549848942598,
+        "final": 74.62235649546828,
+        "recovered": 33.8368580060423,
+        "n": 331,
+        "duration_p50": 38.86666666666667,
+        "duration_p90": 58.4
+      },
+      {
+        "date": "2026-09-29",
+        "initial": 43.40277777777778,
+        "final": 76.38888888888889,
+        "recovered": 32.986111111111114,
+        "n": 288,
+        "duration_p50": 38.44166666666666,
+        "duration_p90": 55.896666666666675
+      },
+      {
+        "date": "2026-09-30",
+        "initial": 44.67213114754098,
+        "final": 80.73770491803279,
+        "recovered": 36.0655737704918,
+        "n": 244,
+        "duration_p50": 38.18333333333333,
+        "duration_p90": 55.13333333333333
+      },
+      {
+        "date": "2026-10-01",
+        "initial": 38.888888888888886,
+        "final": 79.48717948717949,
+        "recovered": 40.598290598290596,
+        "n": 234,
+        "duration_p50": 39.96666666666667,
+        "duration_p90": 55.39666666666667
+      },
+      {
+        "date": "2026-10-02",
+        "initial": 37.219730941704036,
+        "final": 79.37219730941705,
+        "recovered": 42.152466367713004,
+        "n": 223,
+        "duration_p50": 39.233333333333334,
+        "duration_p90": 55.60666666666667
+      },
+      {
+        "date": "2026-10-03",
+        "initial": 41.43426294820717,
+        "final": 81.67330677290836,
+        "recovered": 40.2390438247012,
+        "n": 251,
+        "duration_p50": 36.94166666666666,
+        "duration_p90": 55.34166666666667
+      },
+      {
+        "date": "2026-10-04",
+        "initial": 41.338582677165356,
+        "final": 80.70866141732283,
+        "recovered": 39.37007874015748,
+        "n": 254,
+        "duration_p50": 36.45,
+        "duration_p90": 55.093333333333334
+      }
+    ]
+  },
+  "failure_evidence_lanes": {
+    "github-ci-main": {
+      "label": "GitHub CI \u2014 main",
+      "test": {
+        "current": [
+          29,
+          41
+        ],
+        "prior": [
+          28,
+          58
+        ],
+        "change": {
+          "label": "\u2191 22 pts",
+          "delta": 22.5,
+          "meaningful": true,
+          "direction": "\ud83d\udd34 Worsening"
+        }
+      },
+      "other": {
+        "current": [
+          12,
+          41
+        ],
+        "prior": [
+          30,
+          58
+        ]
+      }
+    },
+    "github-outerloop-main": {
+      "label": "GitHub outerloop \u2014 main",
+      "test": {
+        "current": [
+          0,
+          7
+        ],
+        "prior": [
+          0,
+          7
+        ],
+        "change": {
+          "label": "\u2248 flat",
+          "delta": 0.0,
+          "meaningful": false,
+          "direction": "\u26aa Flat"
+        }
+      },
+      "other": {
+        "current": [
+          7,
+          7
+        ],
+        "prior": [
+          7,
+          7
+        ]
+      }
+    }
+  },
+  "evidence_coverage": {
+    "github-ci-main": {
+      "artifact_outside_attempt": 1,
+      "no_failed_test": 34,
+      "unsupported_or_malformed": 42
+    },
+    "github-outerloop-main": {
+      "missing_artifact": 26,
+      "unsupported_or_malformed": 4
+    }
+  },
+  "evidence_incidents": {
+    "github-ci-main": [
+      {
+        "date": "2026-09-08",
+        "failed_test_cases": 2
+      },
+      {
+        "date": "2026-09-09",
+        "failed_test_cases": 3
+      },
+      {
+        "date": "2026-09-10",
+        "failed_test_cases": 9
+      },
+      {
+        "date": "2026-09-11",
+        "failed_test_cases": 3
+      },
+      {
+        "date": "2026-09-13",
+        "failed_test_cases": 10
+      },
+      {
+        "date": "2026-09-14",
+        "failed_test_cases": 7
+      },
+      {
+        "date": "2026-09-15",
+        "failed_test_cases": 1
+      },
+      {
+        "date": "2026-09-16",
+        "failed_test_cases": 2
+      },
+      {
+        "date": "2026-09-17",
+        "failed_test_cases": 7
+      },
+      {
+        "date": "2026-09-18",
+        "failed_test_cases": 39
+      },
+      {
+        "date": "2026-09-21",
+        "failed_test_cases": 40
+      },
+      {
+        "date": "2026-09-22",
+        "failed_test_cases": 4
+      },
+      {
+        "date": "2026-09-23",
+        "failed_test_cases": 27
+      },
+      {
+        "date": "2026-09-24",
+        "failed_test_cases": 1
+      },
+      {
+        "date": "2026-09-25",
+        "failed_test_cases": 154
+      },
+      {
+        "date": "2026-09-26",
+        "failed_test_cases": 326
+      },
+      {
+        "date": "2026-09-27",
+        "failed_test_cases": 1
+      },
+      {
+        "date": "2026-09-28",
+        "failed_test_cases": 81
+      },
+      {
+        "date": "2026-09-29",
+        "failed_test_cases": 2
+      },
+      {
+        "date": "2026-09-30",
+        "failed_test_cases": 1
+      },
+      {
+        "date": "2026-10-01",
+        "failed_test_cases": 2
+      },
+      {
+        "date": "2026-10-02",
+        "failed_test_cases": 4
+      },
+      {
+        "date": "2026-10-03",
+        "failed_test_cases": 2
+      }
+    ],
+    "github-outerloop-main": []
+  },
+  "chart": [
+    {
+      "date": "2026-09-05",
+      "passed": 1,
+      "failed": 0,
+      "rolling_pass_rate": 34.1,
+      "rolling_passed": 15,
+      "rolling_failed": 29,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-06",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 34.1,
+      "rolling_passed": 15,
+      "rolling_failed": 29,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-07",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 27.0,
+      "rolling_passed": 10,
+      "rolling_failed": 27,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-08",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": 20.0,
+      "rolling_passed": 7,
+      "rolling_failed": 28,
+      "test_failed": 4,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 2
+      },
+      "failed_test_case_counts": [
+        1,
+        2,
+        2,
+        2
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-09-09",
+      "passed": 1,
+      "failed": 5,
+      "rolling_pass_rate": 16.7,
+      "rolling_passed": 5,
+      "rolling_failed": 25,
+      "test_failed": 5,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        1,
+        1,
+        3,
+        2,
+        1
+      ],
+      "max_failed_test_cases": 3
+    },
+    {
+      "date": "2026-09-10",
+      "passed": 0,
+      "failed": 8,
+      "rolling_pass_rate": 13.3,
+      "rolling_passed": 4,
+      "rolling_failed": 26,
+      "test_failed": 3,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "no_failed_test": 5
+      },
+      "failed_test_case_counts": [
+        9,
+        2,
+        2
+      ],
+      "max_failed_test_cases": 9
+    },
+    {
+      "date": "2026-09-11",
+      "passed": 0,
+      "failed": 7,
+      "rolling_pass_rate": 10.3,
+      "rolling_passed": 3,
+      "rolling_failed": 26,
+      "test_failed": 5,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 2
+      },
+      "failed_test_case_counts": [
+        1,
+        1,
+        2,
+        1,
+        3
+      ],
+      "max_failed_test_cases": 3
+    },
+    {
+      "date": "2026-09-12",
+      "passed": 1,
+      "failed": 1,
+      "rolling_pass_rate": 10.0,
+      "rolling_passed": 3,
+      "rolling_failed": 27,
+      "test_failed": 0,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "no_failed_test": 1
+      },
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-13",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": 8.3,
+      "rolling_passed": 3,
+      "rolling_failed": 33,
+      "test_failed": 4,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 2
+      },
+      "failed_test_case_counts": [
+        1,
+        10,
+        1,
+        1
+      ],
+      "max_failed_test_cases": 10
+    },
+    {
+      "date": "2026-09-14",
+      "passed": 1,
+      "failed": 12,
+      "rolling_pass_rate": 8.2,
+      "rolling_passed": 4,
+      "rolling_failed": 45,
+      "test_failed": 4,
+      "other_failed": 8,
+      "evidence_reasons": {
+        "no_failed_test": 8
+      },
+      "failed_test_case_counts": [
+        2,
+        2,
+        1,
+        7
+      ],
+      "max_failed_test_cases": 7
+    },
+    {
+      "date": "2026-09-15",
+      "passed": 2,
+      "failed": 9,
+      "rolling_pass_rate": 9.4,
+      "rolling_passed": 5,
+      "rolling_failed": 48,
+      "test_failed": 2,
+      "other_failed": 7,
+      "evidence_reasons": {
+        "artifact_outside_attempt": 1,
+        "no_failed_test": 6
+      },
+      "failed_test_case_counts": [
+        1,
+        1
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-09-16",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": 9.3,
+      "rolling_passed": 5,
+      "rolling_failed": 49,
+      "test_failed": 1,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "no_failed_test": 5
+      },
+      "failed_test_case_counts": [
+        2
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-09-17",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": 9.6,
+      "rolling_passed": 5,
+      "rolling_failed": 47,
+      "test_failed": 6,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "max_failed_test_cases": 7
+    },
+    {
+      "date": "2026-09-18",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.7,
+      "rolling_passed": 6,
+      "rolling_failed": 50,
+      "test_failed": 8,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 2
+      },
+      "failed_test_case_counts": [
+        2,
+        3,
+        39,
+        2,
+        3,
+        1,
+        1,
+        1
+      ],
+      "max_failed_test_cases": 39
+    },
+    {
+      "date": "2026-09-19",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 9.1,
+      "rolling_passed": 5,
+      "rolling_failed": 50,
+      "test_failed": 0,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "no_failed_test": 1
+      },
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-20",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 10.2,
+      "rolling_passed": 5,
+      "rolling_failed": 44,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-21",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.6,
+      "rolling_passed": 5,
+      "rolling_failed": 42,
+      "test_failed": 5,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 5
+      },
+      "failed_test_case_counts": [
+        40,
+        1,
+        1,
+        2,
+        1
+      ],
+      "max_failed_test_cases": 40
+    },
+    {
+      "date": "2026-09-22",
+      "passed": 0,
+      "failed": 13,
+      "rolling_pass_rate": 6.1,
+      "rolling_passed": 3,
+      "rolling_failed": 46,
+      "test_failed": 5,
+      "other_failed": 8,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 8
+      },
+      "failed_test_case_counts": [
+        4,
+        1,
+        1,
+        1,
+        2
+      ],
+      "max_failed_test_cases": 4
+    },
+    {
+      "date": "2026-09-23",
+      "passed": 2,
+      "failed": 11,
+      "rolling_pass_rate": 7.3,
+      "rolling_passed": 4,
+      "rolling_failed": 51,
+      "test_failed": 3,
+      "other_failed": 8,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 8
+      },
+      "failed_test_case_counts": [
+        1,
+        27,
+        1
+      ],
+      "max_failed_test_cases": 27
+    },
+    {
+      "date": "2026-09-24",
+      "passed": 3,
+      "failed": 7,
+      "rolling_pass_rate": 11.9,
+      "rolling_passed": 7,
+      "rolling_failed": 52,
+      "test_failed": 2,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 5
+      },
+      "failed_test_case_counts": [
+        1,
+        1
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-09-25",
+      "passed": 1,
+      "failed": 13,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 7,
+      "rolling_failed": 55,
+      "test_failed": 9,
+      "other_failed": 4,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 4
+      },
+      "failed_test_case_counts": [
+        2,
+        154,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        1
+      ],
+      "max_failed_test_cases": 154
+    },
+    {
+      "date": "2026-09-26",
+      "passed": 0,
+      "failed": 3,
+      "rolling_pass_rate": 10.9,
+      "rolling_passed": 7,
+      "rolling_failed": 57,
+      "test_failed": 3,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        2,
+        326,
+        1
+      ],
+      "max_failed_test_cases": 326
+    },
+    {
+      "date": "2026-09-27",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "test_failed": 1,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        1
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-09-28",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "test_failed": 6,
+      "other_failed": 4,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 4
+      },
+      "failed_test_case_counts": [
+        64,
+        81,
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_failed_test_cases": 81
+    },
+    {
+      "date": "2026-09-29",
+      "passed": 0,
+      "failed": 4,
+      "rolling_pass_rate": 12.5,
+      "rolling_passed": 7,
+      "rolling_failed": 49,
+      "test_failed": 4,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        1,
+        1,
+        2,
+        2
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-09-30",
+      "passed": 2,
+      "failed": 7,
+      "rolling_pass_rate": 13.5,
+      "rolling_passed": 7,
+      "rolling_failed": 45,
+      "test_failed": 3,
+      "other_failed": 4,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 4
+      },
+      "failed_test_case_counts": [
+        1,
+        1,
+        1
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-10-01",
+      "passed": 2,
+      "failed": 9,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 6,
+      "rolling_failed": 47,
+      "test_failed": 8,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 1
+      },
+      "failed_test_case_counts": [
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-10-02",
+      "passed": 2,
+      "failed": 6,
+      "rolling_pass_rate": 14.9,
+      "rolling_passed": 7,
+      "rolling_failed": 40,
+      "test_failed": 5,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 1
+      },
+      "failed_test_case_counts": [
+        4,
+        1,
+        1,
+        1,
+        1
+      ],
+      "max_failed_test_cases": 4
+    },
+    {
+      "date": "2026-10-03",
+      "passed": 1,
+      "failed": 5,
+      "rolling_pass_rate": 16.0,
+      "rolling_passed": 8,
+      "rolling_failed": 42,
+      "test_failed": 3,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "unsupported_or_malformed": 2
+      },
+      "failed_test_case_counts": [
+        1,
+        2,
+        1
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-10-04",
+      "passed": 1,
+      "failed": 0,
+      "rolling_pass_rate": 18.0,
+      "rolling_passed": 9,
+      "rolling_failed": 41,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "max_failed_test_cases": 0
+    }
+  ],
+  "verdict": "holding",
+  "collection": {
+    "mode": "bootstrap",
+    "refresh_dates": [
+      "2026-08-30",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-05",
+      "2026-09-06",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-12",
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-19",
+      "2026-09-20",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-26",
+      "2026-09-27",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04"
+    ],
+    "fetched_records": 471,
+    "fetched_pr_records": 2661,
+    "active_records": 471,
+    "active_pr_records": 2661,
+    "reused_records": 0,
+    "replaced_records": 469,
+    "lane_seconds": {
+      "github-pr-ci": 277.103,
+      "github-ci-main": 2.194,
+      "github-outerloop-main": 24.641,
+      "azdo-internal-main": 5.022,
+      "azdo-source-index-main": 6.442
+    },
+    "provider_commands": 1804,
+    "provider_retries": 0,
+    "evidence": {
+      "selected_failed_runs": 241,
+      "cache_hits": 0,
+      "artifact_list_requests": 241,
+      "artifact_downloads": 335
+    },
+    "collection_seconds": 317.036,
+    "total_seconds": 1439.041
+  },
+  "execution_source": {
+    "commit": "efc210c6af89ea6e0c74d03f9a648d919ae6c9a5",
+    "dirty": false,
+    "paths": [
+      "aspire-rolling-ci-health.prompt.txt",
+      "scripts/ci_health.py",
+      "aspire-ci-report-common.prompt.txt",
+      "scripts/test_ci_health.py"
+    ]
+  }
+}
