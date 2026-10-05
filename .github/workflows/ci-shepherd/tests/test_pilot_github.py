@@ -62,6 +62,8 @@ class Transport:
             return Response({"tasks": []}, {})
         if path.endswith("/check-runs"):
             return Response({"check_runs": [], "total_count": 0}, {})
+        if path.endswith("/actions/runs"):
+            return Response({"workflow_runs": [], "total_count": 0}, {})
         if path.endswith("/status"):
             return Response({"statuses": [], "state": "pending"}, {})
         return Response(deepcopy(self.values.get(path, [])), {})

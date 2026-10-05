@@ -24,6 +24,7 @@ Post that exact body once, then configure these repository variables:
 | `CI_SHEPHERD_TRACKER` | Tracker issue number, never121 |
 | `CI_SHEPHERD_TRACKER_NODE` | Independently verified tracker REST `node_id` |
 | `CI_SHEPHERD_AUTHORITY_COMMENT` | Exact initial authority comment ID |
+| `CI_SHEPHERD_REMINDER_DELAY_SECONDS` | Optional whole seconds, 1-86,400; default `60` |
 
 The existing `CI_SHEPHERD_USER_TOKEN` secret is used only by trusted collection,
 settlement and publication jobs. No new authentication mechanism is introduced.
@@ -49,6 +50,34 @@ to60,000 UTF-8 bytes; exhaustion requires human attention, never history
 truncation or a budget reset. Per-chain presentation comments are updated in
 place and are not another authority. Exact owned presentation IDs/markers are
 excluded from feedback; other operator comments remain legitimate input.
+
+## Delayed human reminders
+
+An enabled cheap sweep records explicit PR blockers: a current-head workflow
+run with `action_required`, a saved worker waiting for user input, or a native
+human handoff. Ordinary pending CI, drafts and review waits do not start timers.
+Workflow run IDs, repository/head identity and complete pagination are verified;
+unreadable evidence is unknown, never proof of approval or green CI.
+Unknown current-head workflow evidence pauses both native admission and repair
+effects until a complete fresh read succeeds.
+
+After the delay, the next cheap sweep rechecks the head, adoption, takeover,
+blocker and authority before posting one fixed `[automated] @radical` comment
+with a workflow, task or PR link. This is earliest eligibility, not exact
+delivery: the existing daily/manual schedule is unchanged.
+
+The optional per-chain reminder in `pilot_state.py` preserves old authorities
+without migrations or counter resets. Resolution, a new head or a different
+blocker kind starts a new episode; changing workflow run IDs does not.
+Unknown workflow or saved-task reads retain the timer and send receipt without
+sending. The send boundary is persisted first; an uncertain POST never blindly
+retries. An exact owned marked comment can confirm a lost
+response. Owned reminders are excluded from repair feedback. Notifications use
+no native rounds, worker slots or credits and do not approve workflows or merge.
+
+Both profiles support reminders. The upstream PR20722 comment capability accepts
+only this fixed body and a host-generated episode marker, not general comments
+or edits. Disabling the pilot or removing adoption stops new notifications.
 
 ## Lifetime policy and accounting
 
@@ -103,7 +132,7 @@ displacing source or repair feedback.
 Every enabled sweep prints a readable subject/head, tracked task/state,
 next action, actual credits/reservations and PR history in its hosted prepare
 log, including waiting sweeps with no native packet. This needs no model call
-or upstream comment writer. Unknown billing retains reservations; task
+or a status comment writer. Unknown billing retains reservations; task
 completion alone is not a real current-head CI or approval result.
 
 Current-head checks/statuses and explicit review records determine readiness.
@@ -144,7 +173,8 @@ with `mode=pilot`, `target=upstream-20722` selects only `microsoft/aspire`
 (repository ID `696529789`), PR `20722`, existing branch
 `copilot/restrict-workflows-to-microsoft-aspire`, base `main`. Scheduled runs
 always select `target=fork`. There is no upstream workflow installation,
-schedule, general repository selector or host Git Data/comment writer.
+schedule, general repository selector, host Git Data writer or general
+comment writer. Only fixed delayed human reminder comments are permitted.
 
 Use a **separate fork-hosted authority**, not tracker122 or its comment:
 `CI_SHEPHERD_UPSTREAM_TRACKER=127`,
@@ -215,7 +245,8 @@ missing, malformed or unsuccessful; such evidence cannot authorize code.
 Task creation uses only the verified primary REST fields `prompt`, `base_ref`,
 optional `head_ref` and `create_pull_request`, API version `2026-03-10`.
 Task details come from `agents/repos/{owner}/{repo}/tasks/{task_id}`; both
-`is_archived=false` and `is_archived=true` inventory lanes are required.
+`is_archived=false` and `is_archived=true` inventory lanes are required only by
+legacy fixture modes. Normal pilot profiles read saved task IDs only.
 Primary task responses require only `tasks`; lane counts are optional and
 validated when present. Without counts, bounded Link pagination establishes
 completeness. Live links can omit the archive filter: every next request keeps
