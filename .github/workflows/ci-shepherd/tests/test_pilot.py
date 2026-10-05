@@ -63,23 +63,20 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(2, self.api.ledger["chains"][0]["operations"][0]["nativeActual"])
         self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
 
-    def test_fresh_settlement_instance_refreshes_two_external_workers_before_admission(self):
+    def test_fresh_settlement_ignores_external_workers_without_catalog_reads(self):
         packet = self.prepared()
         original = self.transport.__call__
 
         def transport(method, endpoint, body):
-            if method == "GET" and "/tasks?" in endpoint:
-                return pilot_github.Response({"tasks": [] if "is_archived=true" in endpoint else [
-                    {"id": "foreign1", "state": "in_progress"}, {"id": "foreign2", "state": "queued"}]}, {})
+            if method == "GET" and "/tasks" in endpoint:
+                self.fail("no saved task IDs, so no task GET is allowed")
             return original(method, endpoint, body)
 
         fresh = pilot_github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
-        self.assertEqual(0, fresh.external_slots)
         result = pilot.settle(fresh, packet, reconciliation_evidence(self.decision(packet)), 2, self.clock())
-        self.assertEqual("failed", result["outcome"])
-        self.assertEqual(2, fresh.external_slots)
+        self.assertEqual("uncertain", result["outcome"])
         self.assertEqual(2, fresh.ledger["chains"][0]["operations"][0]["nativeActual"])
-        self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
+        self.assertEqual(1, len([write for write in self.transport.writes if write[1].endswith("/tasks")]))
 
     def test_disabled_real_entrypoint_authenticates_separate_job_and_settles_without_effects(self):
         packet = self.prepared()

@@ -31,8 +31,20 @@ class Transport:
             "repos/radical/aspire/issues/99/comments": self.comments,
         }
         self.writes = []
+        self.reads = []
+        self.history = []
 
     def __call__(self, method, endpoint, body):
+        if method == "POST" and endpoint == "graphql":
+            self.reads.append((method, endpoint, body))
+            variables = body["variables"]
+            repository = variables["owner"] + "/" + variables["name"]
+            value = self.values[f"repos/{repository}/pulls/{variables['number']}"]
+            return Response({"data": {"repository": {
+                "databaseId": value["base"]["repo"]["id"], "nameWithOwner": repository,
+                "pullRequest": {"id": value["node_id"], "number": value["number"], "timelineItems": {
+                    "nodes": deepcopy(self.history), "pageInfo": {
+                        "hasNextPage": False, "endCursor": "last" if self.history else None}}}}}}, {})
         if method != "GET":
             self.writes.append((method, endpoint, body))
             if endpoint.endswith("/comments/500"):
@@ -40,6 +52,7 @@ class Transport:
                 return Response(deepcopy(self.comments[0]), {}, 200)
             raise LostResponse("unknown write")
         path = endpoint.split("?")[0]
+        self.reads.append((method, endpoint, body))
         if path in self.values:
             value = deepcopy(self.values[path])
             if isinstance(value, dict) and "/issues/" in path and "number" in value:
@@ -166,13 +179,13 @@ class PilotGitHubTests(unittest.TestCase):
             "ref": "refs/heads/fix-9", "object": {"sha": "a" * 40}}
         task = {"id": "TASK1", "state": "completed", "repository": {"id": 746880239}, "creator": {"id": 1472},
                 "session_count": 1, "sessions": [{"id": "SESSION1", "task_id": "TASK1", "repository": {"id": 746880239},
+                    "user": {"id": 1472}, "state": "completed",
                     "prompt": pilot.CORRELATION + json.dumps({
                         "chain": chain["id"], "operation": operation["id"], "origin": 8}),
                     "head_ref": "fix-9", "base_ref": "main", "usage": {"type": "ai_credits", "amount": 1500000000}}],
                 "artifacts": [{"provider": "github", "type": "pull", "data": {"id": 1009, "global_id": ""}},
                               {"provider": "github", "type": "branch", "data": {"head_ref": "fix-9", "base_ref": "main"}}]}
         self.transport.values["agents/repos/radical/aspire/tasks/TASK1"] = task
-        self.api.tasks = {"TASK1": task}
         self.api.persist()
         return chain, operation, task
 
@@ -256,53 +269,34 @@ class PilotGitHubTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "basis"):
             self.api.guard(chain, observed)
 
-    def test_primary_empty_task_lanes_use_exact_active_and_archived_counts(self):
+    def test_empty_saved_ids_read_no_task_catalog_or_detail(self):
         self.api.read_authority()
-        self.api.inventory()
-        self.assertEqual({}, self.api.tasks)
-        original = self.transport.__call__
+        self.transport.reads.clear()
+        self.api.reconcile_workers()
+        self.assertEqual([], self.transport.reads)
 
-        def wrong_lane(method, endpoint, body):
-            if "/tasks?" in endpoint:
-                return Response({"tasks": [], "total_active_count": 0, "total_archived_count": 1}, {})
-            return original(method, endpoint, body)
-
-        self.api.api.transport = wrong_lane
-        with self.assertRaises(IncompleteInventory):
-            self.api.inventory()
-
-    def test_primary_nonempty_lane_counts_must_match_complete_inventory(self):
+    def test_foreign_catalog_is_never_requested_or_counted(self):
         self.api.read_authority()
         original = self.transport.__call__
 
-        def inventory(method, endpoint, body):
-            if "/tasks?" in endpoint:
-                archived = "is_archived=true" in endpoint
-                return Response({"tasks": [] if archived else [{"id": "EXTERNAL", "state": "in_progress"}],
-                                 "total_active_count": 1, "total_archived_count": 0}, {})
+        def no_catalog(method, endpoint, body):
+            if "/tasks" in endpoint:
+                self.fail("foreign catalog/detail request")
             return original(method, endpoint, body)
 
-        self.api.api.transport = inventory
-        self.api.inventory()
-        self.assertEqual(1, self.api.external_slots)
+        self.api.api.transport = no_catalog
+        self.api.reconcile_workers()
+        self.assertEqual(0, self.api.admission_slots("fix-7"))
 
-    def test_primary_tasks_only_both_lanes_preserve_external_capacity(self):
-        self.api.read_authority()
-        original = self.transport.__call__
-
-        def inventory(method, endpoint, body):
-            if "/tasks?" in endpoint:
-                archived = "is_archived=true" in endpoint
-                tasks = [{"id": f"{archived}-{index}", "state": status, "created_at": "2026-10-04T00:00:00Z"}
-                         for index, status in enumerate(
-                             ["cancelled"] * 6 if archived else ["completed", "completed", "cancelled", "in_progress"])]
-                return Response({"tasks": tasks}, {})
-            return original(method, endpoint, body)
-
-        self.api.api.transport = inventory
-        self.api.inventory()
-        self.assertEqual(10, len(self.api.tasks))
-        self.assertEqual(1, self.api.external_slots)
+    def test_completed_receipt_always_refreshes_its_saved_task(self):
+        chain, operation, task = self.issue_worker()
+        task["updated_at"] = "2026-10-04T00:00:00Z"
+        self.api.reconcile_workers()
+        self.transport.reads.clear()
+        self.api.reconcile_workers()
+        self.assertEqual(["agents/repos/radical/aspire/tasks/TASK1"],
+                         [endpoint for _, endpoint, _ in self.transport.reads if "/tasks" in endpoint])
+        self.assertEqual("completed", operation["state"])
 
     def test_primary_optional_counts_validate_present_values_without_requiring_them(self):
         from live import API
@@ -398,7 +392,7 @@ class PilotGitHubTests(unittest.TestCase):
         self.assertEqual(0, state.worker_slots(self.api.ledger))
         self.assertEqual(3.5, state.chain_spend(chain))
         task["state"] = "in_progress"
-        task["sessions"].append({**task["sessions"][0], "id": "SESSION2", "usage": None})
+        task["sessions"].append({**task["sessions"][0], "id": "SESSION2", "state": "in_progress", "usage": None})
         task["session_count"] = 2
         self.api.reconcile_workers()
         self.assertEqual("waiting", operation["state"])
@@ -413,6 +407,7 @@ class PilotGitHubTests(unittest.TestCase):
         self.assertEqual(500, state.chain_spend(chain))
         self.assertEqual(1, state.worker_slots(self.api.ledger))
         task["state"] = "completed"
+        task["sessions"][1]["state"] = "completed"
         self.api.reconcile_workers()
         self.assertEqual(5.5, state.chain_spend(chain))
         self.assertEqual(0, state.worker_slots(self.api.ledger))
@@ -421,7 +416,7 @@ class PilotGitHubTests(unittest.TestCase):
         chain, operation, task = self.issue_worker()
         self.api.reconcile_workers()
         task["state"] = "in_progress"
-        task["sessions"].append({**task["sessions"][0], "id": "SESSION2", "prompt": "Human follow-up"})
+        task["sessions"].append({**task["sessions"][0], "id": "SESSION2", "state": "in_progress", "prompt": "Human follow-up"})
         task["session_count"] = 2
         self.api.reconcile_workers()
         self.assertEqual("unknown", operation["workerState"])
@@ -432,7 +427,7 @@ class PilotGitHubTests(unittest.TestCase):
     def test_disappearing_previously_terminal_worker_holds_unknown_capacity(self):
         chain, operation, task = self.issue_worker()
         self.api.reconcile_workers()
-        self.api.tasks = {}
+        del self.transport.values["agents/repos/radical/aspire/tasks/TASK1"]
         self.api.reconcile_workers()
         self.assertEqual("unknown", operation["workerState"])
         self.assertEqual(1, state.worker_slots(self.api.ledger))

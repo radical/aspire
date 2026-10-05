@@ -173,7 +173,11 @@ class HTTPTransport:
         ):
             raise ValueError("hosted write endpoint is not allowed")
 
+    def is_read(self, method, endpoint, body):
+        return method == "GET"
+
     def request(self, method, endpoint, body):
+        read = self.is_read(method, endpoint, body)
         path = urlparse(endpoint)
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2026-03-10", "User-Agent": "ci-shepherd-fixture"}
@@ -191,22 +195,22 @@ class HTTPTransport:
             diagnostic = self._diagnostic(method, path.path, error.code, error.headers)
             if method == "POST" and path.path.endswith("/tasks") and error.code in {400, 401, 403, 422}:
                 raise RejectedEffect("task rejected; " + diagnostic) from None
-            if method != "GET":
+            if not read:
                 raise LostResponse("write result uncertain; no retry; " + diagnostic) from None
-            raise IncompleteInventory("GET unavailable; " + diagnostic) from None
-        except (OSError, URLError) as error:
-            exception = IncompleteInventory if method == "GET" else LostResponse
+            raise IncompleteInventory(("GET unavailable; " if method == "GET" else "read unavailable; ") + diagnostic) from None
+        except (OSError, URLError, HTTPException) as error:
+            exception = IncompleteInventory if read else LostResponse
             raise exception(f"{method} {self._safe_path(path.path)} response unavailable; no retry") from None
         try:
             with response:
                 raw = response.read(MAX_BYTES + 1)
                 if len(raw) > MAX_BYTES:
-                    raise (IncompleteInventory if method == "GET" else LostResponse)("API result exceeds limit")
+                    raise (IncompleteInventory if read else LostResponse)("API result exceeds limit")
                 payload = contracts.loads(raw.decode("utf-8"))
                 self._observe_quota(response.headers)
                 return Response(payload, dict(response.headers), response.status)
         except (ValueError, UnicodeError, OSError, HTTPException) as error:
-            exception = IncompleteInventory if method == "GET" else LostResponse
+            exception = IncompleteInventory if read else LostResponse
             raise exception("API result unavailable or invalid; no retry; " +
                             self._diagnostic(method, path.path, response.status, response.headers)) from None
 
