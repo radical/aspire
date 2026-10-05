@@ -31,6 +31,7 @@ on:
       - '.github/workflows/run-tests.yml'
       - '.github/workflows/build-cli-e2e-image.yml'
       - 'eng/scripts/verify-nonblocking-test-results.ps1'
+      - 'eng/testing/CITestsProperties.props'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

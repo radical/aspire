@@ -226,6 +226,14 @@ Highlights:
   Dedicated package-input directories use broad `/**` rules when enumerating
   files or RIDs would let a newly added input silently miss its consumers.
 
+Native Dashboard validation is a custom job, not an MSBuild test-project
+selection. Its path rule explicitly covers the native browser fixture's shared
+timeout input (`tests/Shared/AsyncTestHelpers.cs`) and telemetry input
+(`tests/Shared/Telemetry/TelemetryTestHelpers.cs`). Layer 1 selects the managed
+consumers of those files but does not select the packaged native Dashboard job.
+Keep these direct runtime dependencies in the native path rule rather than
+deriving native validation from every change to the browser test project.
+
 ### Project rules (`affected_project_rules`)
 
 An affected **production/non-test** project → a target set, matched by

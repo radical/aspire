@@ -328,6 +328,13 @@ Each `CITestsProperty` item has three attributes:
 2. **PowerShell scripts** (`build-test-matrix.ps1`) parse the `.props` XML at startup to build the defaults dictionary and copy properties generically — no per-property code blocks.
 3. **GitHub Actions workflows** (`run-tests.yml`) read properties from the opaque `properties` JSON string with bespoke `if:` conditions for each property that controls unique workflow behavior.
 
+Both `tests-outerloop.yml` and `tests-quarantine.yml` include
+`eng/testing/CITestsProperties.props` in their PR path filters because the
+specialized runsheet builder imports this registry. A registry-only change
+therefore triggers specialized PR smoke validation of the emitted metadata.
+Outerloop-only inputs, such as the advisory artifact filter, do not trigger
+quarantine validation.
+
 `NonBlockingTestFailures` is a narrow opt-in for test projects whose results
 should remain visible without gating the workflow. Known test outcomes such as
 failed tests, session aborts, and test-host crashes are reported in the job
