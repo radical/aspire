@@ -59,6 +59,11 @@ credit allowances. Complete pagination and duplicate-key/non-finite JSON
 rejection remain required. Oversized responses report the API bound explicitly;
 uncertain write results remain non-retryable.
 
+GitHub's `Link` header can use `/repositories/<id>/...` instead of the requested
+`/repos/<owner>/<name>/...` path. The pilot accepts that alias only for its verified
+repository ID, with the same endpoint, head and page query. Subsequent requests
+are rebuilt from the pinned named path, never followed from response URLs.
+
 ## Delayed human reminders
 
 An enabled cheap sweep records explicit PR blockers: a current-head workflow

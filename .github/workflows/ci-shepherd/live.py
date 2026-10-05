@@ -245,8 +245,11 @@ class HTTPTransport:
 
 
 class API:
-    def __init__(self, transport, *, max_pages=10):
+    def __init__(self, transport, *, max_pages=10, repository_id=None):
+        if repository_id is not None:
+            issue_pr.positive(repository_id, "repository id")
         self.transport, self.max_pages = transport, max_pages
+        self.repository_id = repository_id
 
     def get(self, endpoint):
         response = self.transport("GET", endpoint, None)
@@ -258,6 +261,12 @@ class API:
               total_count_key="total_count", optional_total_count=False, identity_key="id"):
         query = dict(query or {})
         items, total = [], None
+        expected_paths = {"/" + path}
+        named = re.fullmatch(r"repos/[^/]+/[^/]+(?P<suffix>/.*)?", path)
+        if self.repository_id is not None and named is not None:
+            # GitHub Link headers use /repositories/<id>/commits/<sha>/check-runs.
+            # Accept only the verified repository's alias; rebuild named requests below.
+            expected_paths.add(f"/repositories/{self.repository_id}" + (named.group("suffix") or ""))
         for page in range(1, self.max_pages + 1):
             endpoint = path + "?" + urlencode({**query, "per_page": 100, "page": page})
             response = self.transport("GET", endpoint, None)
@@ -325,7 +334,7 @@ class API:
                     if match[2] != "next":
                         continue
                     parsed = urlparse(match[1])
-                    if following or parsed.scheme != "https" or parsed.netloc != "api.github.com" or parsed.path != "/" + path or parsed.fragment:
+                    if following or parsed.scheme != "https" or parsed.netloc != "api.github.com" or parsed.path not in expected_paths or parsed.fragment:
                         raise IncompleteInventory("foreign or ambiguous next page")
                     expected = {k: [str(v)] for k, v in {**query, "per_page": 100, "page": page + 1}.items()}
                     if parse_qs(parsed.query, strict_parsing=True) != expected:

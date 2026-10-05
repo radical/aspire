@@ -147,7 +147,7 @@ class PilotGitHub:
         self.binding = binding
         self.repository, self.repository_id = binding.repository, binding.repository_id
         self.prefix = "repos/" + self.repository
-        self.transport, self.api = transport, live.API(transport)
+        self.transport, self.api = transport, live.API(transport, repository_id=self.repository_id)
         self.tracker, self.authority_id, self.write = tracker, authority_id, write
         if not isinstance(tracker_node, str) or not tracker_node:
             raise ValueError("pinned tracker node required")
