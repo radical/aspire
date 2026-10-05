@@ -6,7 +6,7 @@ import json
 import hashlib
 import re
 import sys
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from github import IncompleteInventory, LostResponse, Response
 import live
@@ -24,6 +24,10 @@ WORKER_STATES = state.TERMINAL | {"queued", "in_progress", "idle", "waiting_for_
 
 
 class PresentationUncertain(ValueError):
+    pass
+
+
+class AuthorityUncertain(ValueError):
     pass
 
 
@@ -48,6 +52,15 @@ class PilotTransport(live.HTTPTransport):
             raise ValueError("invalid pilot endpoint")
         if method == "POST" and endpoint == "graphql":
             history.validate_request(body, self.binding)
+            return
+        if method == "GET" and re.fullmatch(
+                re.escape(f"repos/{self.binding.repository}") + r"/check-runs/[1-9][0-9]*/annotations", path.path):
+            parameters = parse_qs(path.query, strict_parsing=True)
+            if (body is not None or set(parameters) != {"page", "per_page"}
+                    or parameters["per_page"] != ["100"] or len(parameters["page"]) != 1
+                    or not re.fullmatch(r"[1-9][0-9]*", parameters["page"][0])
+                    or int(parameters["page"][0]) > 10):
+                raise ValueError("only bounded check annotation GETs are allowed")
             return
         if method == "GET" and path.path == f"repos/{self.binding.repository}/actions/runs" and body is None:
             reminders.validate_runs_endpoint(path, self.binding)
@@ -214,8 +227,11 @@ class PilotGitHub:
             if not isinstance(response, Response) or response.status != 200 or response.payload.get("id") != self.authority_id:
                 raise LostResponse("ledger write result unknown")
         except LostResponse:
-            if self.read_authority() != self.ledger:
-                raise ValueError("authority publication uncertain; no retry") from None
+            try:
+                if self.read_authority() != self.ledger:
+                    raise AuthorityUncertain("authority publication uncertain; no retry")
+            except (ValueError, KeyError, TypeError) as error:
+                raise AuthorityUncertain("authority publication uncertain; no retry") from error
         self.expected = deepcopy(self.ledger)
 
     def mapping(self, number):
@@ -266,6 +282,7 @@ class PilotGitHub:
             json.dumps([value.get("title"), value.get("body")], ensure_ascii=True).encode()).hexdigest()
         head = value["head"]["sha"] if kind == "pr" else description
         ready, pending_ci, checks, reviews = False, False, [], []
+        diagnostics, ci_wait = [], None
         workflow = {"approval": None, "pending": False, "green": True, "attention": None}
         if kind == "pr" and active:
             workflow = reminders.workflow_evidence(self, head)
@@ -278,19 +295,55 @@ class PilotGitHub:
             latest_statuses = {}
             for status in statuses["statuses"]:
                 latest_statuses.setdefault(status["context"], status)
-            # check-runs defaults to filter=latest; every reported check must bind this head.
+            # Validate the entire named-repository, filter=latest connection
+            # before deriving any annotation IDs. Never follow output URLs.
             for check in checks:
+                issue_pr.positive(check["id"], "check run")
                 if check["head_sha"] != head:
                     raise ValueError("check run belongs to old head")
+            diagnostics = self.check_diagnostics(checks)
+            by_id = {item["checkId"]: item for item in diagnostics}
+            failures = [check for check in checks if check["status"] == "completed"
+                        and check["conclusion"] not in {"success", "neutral", "skipped"}]
+            # Classification uses raw inventory, not disposition-filtered feedback.
+            # A NOTICE about scarcity is not evidence that a failing job is infra.
+            infra_only = bool(failures) and all(
+                check["conclusion"] == "cancelled" or check["conclusion"] in {"failure", "timed_out"}
+                and by_id.get(check["id"], {}).get("infrastructure") is True
+                for check in failures)
+            status_failure = any(status["state"] in {"failure", "error"} for status in latest_statuses.values())
+            workflow_failures = workflow.get("failures", [])
+            if (infra_only and not status_failure and not workflow["attention"]
+                    and all(conclusion == "cancelled" or type(suite) is int and any(
+                        check.get("check_suite", {}).get("id") == suite for check in failures)
+                            for suite, conclusion in workflow_failures)):
+                ci_wait = "Infrastructure/cancellation-only CI; wait or rerun required, no code repair."
+            elif not failures and workflow_failures and all(
+                    conclusion == "cancelled" for _, conclusion in workflow_failures) and not status_failure:
+                ci_wait = "Cancellation-only CI; rerun required, outage not established."
+            for check in checks:
                 if check["status"] != "completed":
                     pending_ci = True
-                elif check["conclusion"] in {"failure", "timed_out", "action_required"}:
+                elif check["conclusion"] not in {"success", "neutral", "skipped"} and ci_wait is None:
                     if check["conclusion"] == "action_required" and workflow["approval"] is not None:
                         continue
                     identity = f"check:{check['id']}:{head}:{check['conclusion']}"
                     if identity not in chain["dispositions"]:
                         feedback.append({"id": identity, "body": check["name"] + ": " + check["conclusion"],
                                          "url": check["html_url"]})
+            if ci_wait is None:
+                for run in workflow.get("failedRuns", []):
+                    if workflow["approval"] is not None and run["conclusion"] == "action_required":
+                        continue
+                    if type(run["suite"]) is int and any(
+                            check.get("check_suite", {}).get("id") == run["suite"] for check in failures):
+                        continue
+                    # A terminal workflow can fail before exposing any jobs.
+                    # Its verified run is investigation evidence, not a cause.
+                    identity = f"workflow:{run['id']}:{head}:{run['conclusion']}"
+                    if identity not in chain["dispositions"]:
+                        feedback.append({"id": identity, "body": "Workflow: " + run["conclusion"] + "; cause unknown",
+                                         "url": run["url"]})
             for status in latest_statuses.values():
                 pending_ci |= status["state"] == "pending"
                 if status["state"] in {"failure", "error"}:
@@ -332,12 +385,88 @@ class PilotGitHub:
         return {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
                 "attention": attention, "pendingCI": pending_ci,
+                "ciWait": ci_wait, "reviewOnly": ci_wait is not None, "diagnostics": diagnostics,
                 "approval": workflow["approval"], "workflowAttention": workflow["attention"],
-                "actionable": active and attention is None and workflow["attention"] is None and workflow["approval"] is None and (
+                "actionable": active and not pending_ci and attention is None and workflow["attention"] is None and workflow["approval"] is None and (
                     bool(feedback) if kind == "pr" else initial_due),
                 "title": value.get("title", "")[:300], "body": (value.get("body") or "")[:2000],
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
                 "workHistory": work_history}
+
+    def check_diagnostics(self, checks):
+        remaining_pages, remaining_bytes = 10, 32000
+        result = []
+
+        def bounded_get(method, endpoint, body):
+            nonlocal remaining_pages
+            if remaining_pages <= 0:
+                raise IncompleteInventory("annotation request budget exhausted")
+            remaining_pages -= 1
+            return self.transport(method, endpoint, body)
+
+        for check in checks:
+            if check["status"] != "completed" or check["conclusion"] in {"success", "neutral", "skipped", "cancelled"}:
+                continue
+            item = {"checkId": check["id"], "complete": False, "infrastructure": False}
+            try:
+                output = check.get("output")
+                if not isinstance(output, dict) or type(output.get("annotations_count")) is not int or output["annotations_count"] < 0:
+                    raise IncompleteInventory("annotation count unavailable")
+                for key in ("title", "summary", "text"):
+                    if output.get(key) is not None and not isinstance(output[key], str):
+                        raise IncompleteInventory("malformed check output")
+                # REST returns [{path, annotation_level, title, message,
+                # raw_details, ...}], with nullable text and NO id.
+                # https://docs.github.com/en/rest/checks/runs#list-check-run-annotations
+                if remaining_pages <= 0 or remaining_bytes <= 0:
+                    raise IncompleteInventory("aggregate annotation budget exhausted")
+                annotations = live.API(bounded_get, repository_id=self.repository_id).pages(
+                    f"{self.prefix}/check-runs/{check['id']}/annotations", identity_key=None,
+                    max_pages=remaining_pages, max_bytes=remaining_bytes)
+                if len(annotations) != output["annotations_count"]:
+                    raise IncompleteInventory("annotation count contradicts complete pages")
+                remaining_bytes -= len(json.dumps(annotations, ensure_ascii=True).encode())
+                failures = []
+                snippets = []
+                for annotation in annotations:
+                    if not isinstance(annotation, dict):
+                        raise IncompleteInventory("malformed annotation")
+                    if (not isinstance(annotation.get("path"), str)
+                            or not isinstance(annotation.get("blob_href"), str)
+                            or type(annotation.get("start_line")) is not int or annotation["start_line"] <= 0
+                            or type(annotation.get("end_line")) is not int or annotation["end_line"] < annotation["start_line"]
+                            or any(key not in annotation or annotation[key] is not None and (
+                                type(annotation[key]) is not int or annotation[key] <= 0)
+                                   for key in ("start_column", "end_column"))):
+                        raise IncompleteInventory("annotation location missing/malformed")
+                    for key in ("title", "message", "raw_details"):
+                        if key not in annotation or annotation[key] is not None and not isinstance(annotation[key], str):
+                            raise IncompleteInventory("annotation text missing/malformed")
+                    if "annotation_level" not in annotation or annotation["annotation_level"] not in {"notice", "warning", "failure", None}:
+                        raise IncompleteInventory("annotation level malformed")
+                    if annotation.get("annotation_level") == "failure":
+                        failures.append(annotation)
+                    snippets.append({"path": annotation["path"][:500],
+                                     "start_line": annotation["start_line"], "end_line": annotation["end_line"],
+                                     "annotation_level": annotation["annotation_level"],
+                                     **{key: annotation[key][:500] if annotation[key] is not None else None
+                                        for key in ("title", "message", "raw_details")}})
+                # Match the failure-level GitHub runner error, not job names or
+                # warnings: "The hosted runner lost communication with the server."
+                # Some runner errors instead start with "The runner <name> ...".
+                infrastructure = (bool(failures) and all(annotation.get("annotation_level") is not None
+                                                        for annotation in annotations) and all(re.search(
+                    r"\bThe (?:hosted )?runner\b[^\n]*\blost communication with the server\b",
+                    " ".join(annotation.get(key) or "" for key in ("title", "message", "raw_details")),
+                    re.IGNORECASE) for annotation in failures))
+                item.update(complete=True, infrastructure=infrastructure,
+                            output={key: (output.get(key) or "")[:1000] for key in ("title", "summary", "text")},
+                            annotations=snippets)
+            except (IncompleteInventory, ValueError, KeyError, TypeError) as error:
+                item["unknown"] = str(error)
+                print(f"CI Shepherd check {check['id']} diagnostics unknown: {error}", file=sys.stderr)
+            result.append(item)
+        return result
 
     def guard(self, chain, observation, *, effect=True):
         if effect:
@@ -353,6 +482,8 @@ class PilotGitHub:
             raise ValueError(fresh["workflowAttention"] + " No repair.")
         if effect and fresh["approval"] is not None:
             raise ValueError("current-head workflows require human approval; no repair")
+        if effect and (fresh["pendingCI"] or fresh.get("ciWait") is not None and not fresh["actionable"]):
+            raise ValueError("current-head CI wait; no repair")
         if fingerprint(fresh) != fingerprint(observation):
             raise ValueError("subject basis changed")
         self.authority_guard()
@@ -586,8 +717,12 @@ class PilotGitHub:
             blocker = "Current-head checks and approval verified; human merge required."
         elif observation["pendingCI"]:
             blocker = "Waiting for current-head CI; no inference."
+        elif observation.get("ciWait") is not None and not observation["actionable"]:
+            blocker = observation["ciWait"] + " No inference."
         elif not observation["actionable"]:
             blocker = "Waiting for human review / supported new feedback; no inference."
+        elif observation.get("reviewOnly"):
+            blocker = "Bounded review-only repair batch due; CI still requires wait/rerun."
         else:
             blocker = "Bounded repair batch due."
         return blocker

@@ -71,7 +71,7 @@ class PilotBindingTests(unittest.TestCase):
         worker = pilot.worker_prompt(api, api.ledger["chains"][0], api.ledger["chains"][0]["operations"][0], packet)
         self.assertIn("https://github.com/radical/aspire/issues/127#issuecomment-700", worker)
         self.assertIn("Never edit labeler workflows", worker)
-        self.assertIn("always-true conditionals", worker)
+        self.assertIn("ordinary current-PR CI or review feedback", worker)
         decision = {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
                     "action": "cloud", "replacement": None, "dispositions": {feedback["id"]: "addressed"}}
         pilot.settle(api, packet, reconciliation_evidence(decision), 2, api.clock())

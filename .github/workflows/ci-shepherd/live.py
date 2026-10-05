@@ -258,8 +258,11 @@ class API:
         return response.payload
 
     def pages(self, path, *, key=None, query=None, require_empty_count=False, require_total_count=False,
-              total_count_key="total_count", optional_total_count=False, identity_key="id"):
+              total_count_key="total_count", optional_total_count=False, identity_key="id",
+              max_pages=None, max_bytes=None):
         query = dict(query or {})
+        if max_pages is not None and (type(max_pages) is not int or max_pages <= 0):
+            raise IncompleteInventory("invalid pagination budget")
         items, total = [], None
         expected_paths = {"/" + path}
         named = re.fullmatch(r"repos/[^/]+/[^/]+(?P<suffix>/.*)?", path)
@@ -267,7 +270,7 @@ class API:
             # GitHub Link headers use /repositories/<id>/commits/<sha>/check-runs.
             # Accept only the verified repository's alias; rebuild named requests below.
             expected_paths.add(f"/repositories/{self.repository_id}" + (named.group("suffix") or ""))
-        for page in range(1, self.max_pages + 1):
+        for page in range(1, min(self.max_pages, self.max_pages if max_pages is None else max_pages) + 1):
             endpoint = path + "?" + urlencode({**query, "per_page": 100, "page": page})
             response = self.transport("GET", endpoint, None)
             if not isinstance(response, Response) or response.status != 200:
@@ -284,6 +287,8 @@ class API:
                     raise IncompleteInventory("inventory total_count missing/malformed/changed")
                 total = count
             items.extend(values)
+            if max_bytes is not None and len(json.dumps(items, ensure_ascii=True).encode()) > max_bytes:
+                raise IncompleteInventory("aggregate inventory byte bound exceeded")
             if require_empty_count and not items and (
                 not isinstance(payload, dict) or type(payload.get("total_count")) is not int or payload["total_count"] != 0
             ):
@@ -301,7 +306,7 @@ class API:
                     match = re.fullmatch(r'\s*<([^>]+)>;\s*rel="(next|prev|first|last)"\s*', part)
                     if not match:
                         raise IncompleteInventory("malformed Link")
-                    if optional_total_count:
+                    if optional_total_count or identity_key is None:
                         # The task API may return {"tasks": [...]} without counts.
                         # In that case Link is the completeness witness, not an
                         # invented zero. Validate all relations before trusting it.
@@ -313,7 +318,7 @@ class API:
                         # Live task links omit is_archived. Requests are rebuilt
                         # from the pinned query, never from the returned URL.
                         if (match[2] in relations or parsed.scheme != "https" or parsed.netloc != "api.github.com"
-                                or parsed.path != "/" + path or parsed.fragment
+                                or parsed.path not in expected_paths or parsed.fragment
                                 or parameters.get("per_page") != ["100"]
                                 or any(name not in expected or value != expected[name] for name, value in parameters.items())
                                 or len(page_values) != 1 or not re.fullmatch(r"[1-9][0-9]*", page_values[0])):
@@ -340,16 +345,19 @@ class API:
                     if parse_qs(parsed.query, strict_parsing=True) != expected:
                         raise IncompleteInventory("nonsequential or changed pagination")
                     following = True
-            if optional_total_count and following and last_page is not None and last_page <= page:
+            if (optional_total_count or identity_key is None) and following and last_page is not None and last_page <= page:
                 raise IncompleteInventory("contradictory next/last pagination")
-            if optional_total_count and not following and (
+            if (optional_total_count or identity_key is None) and not following and (
                     len(values) == 100 and last_page != page or last_page is not None and last_page > page):
                 raise IncompleteInventory("task pagination missing next link; inventory incomplete")
-            if not following and (len(values) < 100 or optional_total_count and last_page == page):
-                ids = [item.get(identity_key) if isinstance(item, dict) else None for item in items]
-                if any(value is None for value in ids):
-                    raise IncompleteInventory("missing remote inventory identity")
-                issue_pr.unique(ids, "remote inventory identity")
+            if not following and (len(values) < 100 or (optional_total_count or identity_key is None) and last_page == page):
+                # Check annotations are an explicitly idless bare array. Other
+                # collections still require their default remote identities.
+                if identity_key is not None:
+                    ids = [item.get(identity_key) if isinstance(item, dict) else None for item in items]
+                    if any(value is None for value in ids):
+                        raise IncompleteInventory("missing remote inventory identity")
+                    issue_pr.unique(ids, "remote inventory identity")
                 if (require_total_count or optional_total_count and total is not None) and len(items) != total:
                     raise IncompleteInventory("inventory total_count contradicts complete pages")
                 return items

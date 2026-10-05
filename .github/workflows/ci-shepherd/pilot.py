@@ -71,23 +71,29 @@ def prepare(api, run, now, *, present=True):
             continue
         identity = github.fingerprint(observed) + f":round:{chain['rounds'] + 1}"
         try:
-            operation = state.reserve(api.ledger, chain, identity, now, local=context is not None)
+            operation_id = str(uuid.uuid4())
+            packet = {"schemaVersion": 1, "kind": "pilot", "packetId": str(uuid.uuid4()), "run": deepcopy(run),
+                      "chain": chain["id"], "operation": operation_id, "preparedAt": issue_pr.stamp(now),
+                      "observation": {key: deepcopy(value) for key, value in observed.items() if key != "workHistory"},
+                      "lane": "cloud" if chain["escalated"] else "local", "context": context,
+                      "target": api.binding.name, "trialBrief": bindings.brief(api.binding, observed["head"])}
+            # Bound the COMPLETE serialized task body before reserving a round
+            # or spending native credits, including JSON escaping and UUIDs.
+            bound_worker_request(api, chain, {"id": operation_id}, packet)
+            if len(json.dumps(packet, ensure_ascii=True).encode()) > contracts.MAX_JSON_BYTES:
+                raise ValueError("internal packet bound exceeded")
+            api.guard(chain, observed)
+            operation = state.reserve(api.ledger, chain, identity, now, local=context is not None,
+                                      operation_id=operation_id)
         except ValueError as error:
             # Admission rejection is a visible wait, not a successful action.
             print(f"CI Shepherd chain {chain['origin']} paused: {error}", file=sys.stderr)
             candidates[observed["number"]]["actionable"] = False
             continue
-        api.guard(chain, observed)
         api.persist()
-        # Full history has already been presented in the cheap sweep. Keep it
-        # out of action artifacts as well as worker prompts: descriptive pages
-        # must not strand an admitted round at the bounded JSON read boundary.
-        action_observation = {key: value for key, value in observed.items() if key != "workHistory"}
-        return {"schemaVersion": 1, "kind": "pilot", "packetId": str(uuid.uuid4()), "run": deepcopy(run),
-                "chain": chain["id"], "operation": operation["id"], "preparedAt": issue_pr.stamp(now),
-                "observation": action_observation, "lane": operation["lane"],
-                "context": context if operation["lane"] == "local" else None,
-                "target": api.binding.name, "trialBrief": bindings.brief(api.binding, observed["head"])}
+        packet.update(operation=operation["id"], lane=operation["lane"],
+                      context=context if operation["lane"] == "local" else None)
+        return packet
     api.persist()
     return None
 
@@ -145,8 +151,17 @@ def worker_prompt(api, chain, operation, packet):
         f"require author radical/1472, marker {state.MARKER}, chain {chain['id']}, operation {operation['id']}, "
         "persisted state sent/waiting and task identity belonging to this operation. "
         "Stop all new writes if authority, adoption or source identity is unavailable or replaced. "
-        "Do not infer cancellation of work already underway. Make one minimal non-forced repair commit; "
-        "report exact changed files, test command/result, resulting head and "
+        "Do not infer cancellation of work already underway. Diagnose unknown CI failures using logs, "
+        "artifacts and annotations; check names alone do not establish a cause. Repair only a verified cause. "
+        "If source or failed-step evidence establishes a dependency gate that only reports dependent-job "
+        "failure, inspect the underlying failures rather than 'fixing' the aggregate gate. Keep aggregate "
+        "checks in CI/readiness; never ignore one solely from its name. Unknown gate evidence remains "
+        "investigatable. Do not weaken the gate or branch protection. "
+        "When reviewOnly is true, repair review feedback only; CI requires wait/rerun, not code changes. "
+        "Do not rerun workflows; report the rerun requirement without a mutation. "
+        "Report a concrete human-only blocker if necessary, not unsupported scope guessed from job names. "
+        "Make at most one actual minimal non-forced repair commit when warranted; never an artificial commit. "
+        "Report exact changed files, test command/result, resulting head and "
         "addressed/declined/needs-human disposition for EVERY feedback ID below. "
         "Prefix public replies [automated] . Include final commit trailer "
         "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>. "
@@ -158,6 +173,40 @@ def worker_prompt(api, chain, operation, packet):
         "Bounded source/feedback JSON:\n" + json.dumps(repair_context, ensure_ascii=True))
 
 
+def worker_request(api, chain, operation, packet):
+    observed = packet["observation"]
+    body = {"prompt": worker_prompt(api, chain, operation, packet), "base_ref": "main",
+            "create_pull_request": observed["kind"] == "issue"}
+    if observed["kind"] == "pr":
+        body["head_ref"] = observed["headRef"]
+    return body
+
+
+def bound_worker_request(api, chain, operation, packet):
+    # Only descriptive strings may be shortened. IDs, hashes, branch names and
+    # the entire feedback inventory survive unchanged in BOTH agent inputs.
+    descriptive = {"title", "body", "url", "path", "summary", "text", "message", "raw_details"}
+
+    def shorten(value, limit):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in descriptive and isinstance(item, str) and len(item) > limit:
+                    value[key] = item[:limit] + " [truncated]"
+                else:
+                    shorten(item, limit)
+        elif isinstance(value, list):
+            for item in value:
+                shorten(item, limit)
+
+    for limit in (None, 1000, 500, 200, 80, 0):
+        if limit is not None:
+            shorten(packet["observation"], limit)
+        body = worker_request(api, chain, operation, packet)
+        if len(json.dumps(body, ensure_ascii=True, allow_nan=False).encode()) <= 20000:
+            return body
+    raise ValueError("mandatory worker request fields exceed 20000 bytes; no inference/reservation")
+
+
 def dispatch(api, chain, operation, packet, now):
     api.reconcile_workers()
     api.persist()
@@ -167,19 +216,18 @@ def dispatch(api, chain, operation, packet, now):
     if api.admission_slots(packet["observation"]["headRef"]) >= 2:
         raise ValueError("tracking authority worker capacity exhausted")
     observed = packet["observation"]
-    body = {"prompt": worker_prompt(api, chain, operation, packet), "base_ref": "main",
-            "create_pull_request": observed["kind"] == "issue"}
-    if observed["kind"] == "pr":
-        body["head_ref"] = observed["headRef"]
-    if len(body["prompt"].encode()) > 20000:
-        raise ValueError("worker prompt bound exceeded")
-    state.reserve_worker(api.ledger, chain, operation, now)
-    api.persist()
-    api.guard(chain, observed)
-    state.sent(operation)
-    api.persist()
-    api.guard(chain, observed)
+    body = worker_request(api, chain, operation, packet)
+    if len(json.dumps(body, ensure_ascii=True, allow_nan=False).encode()) > 20000:
+        raise ValueError("worker request bound exceeded")
+    attempted = False
     try:
+        state.reserve_worker(api.ledger, chain, operation, now)
+        api.persist()
+        api.guard(chain, observed)
+        state.sent(operation)
+        api.persist()
+        api.guard(chain, observed)
+        attempted = True
         response = api.transport("POST", f"agents/repos/{api.repository}/tasks", body)
         if (not isinstance(response, Response) or response.status != 201 or not isinstance(response.payload, dict)
                 or not isinstance(response.payload.get("id"), str)):
@@ -193,9 +241,15 @@ def dispatch(api, chain, operation, packet, now):
         operation["workerState"] = task["state"]
     except RejectedEffect:
         state.finish(operation, "no-send")
-    except (LostResponse, IncompleteInventory, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+    except github.AuthorityUncertain:
         state.finish(operation, "uncertain")
         operation["workerState"] = "unknown"
+        raise
+    except (LostResponse, IncompleteInventory, ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
+        state.finish(operation, "uncertain" if attempted else "no-send")
+        if attempted:
+            operation["workerState"] = "unknown"
+        print(f"CI Shepherd dispatch {'uncertain' if attempted else 'not attempted'}: {error}", file=sys.stderr)
     api.persist()
     return {"outcome": operation["state"], "taskId": operation["taskId"]}
 
@@ -228,6 +282,15 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             raise ValueError("pilot packet expired or clock rolled backwards")
         proposal = validate_decision(packet, decision)
         api.guard(chain, packet["observation"])
+        # A PR's declined feedback requires neither repair nor human input.
+        # Issue-body implementation and actual inline patches are independent
+        # of feedback dispositions and must retain their existing semantics.
+        if (packet["observation"]["kind"] == "pr" and decision["action"] != "patch"
+                and all(value == "declined" for value in decision["dispositions"].values())):
+            chain["dispositions"].update(decision["dispositions"])
+            state.finish(operation, "completed")
+            api.persist()
+            return {"outcome": "declined"}
         if decision["action"] == "human":
             chain["dispositions"].update(decision["dispositions"])
             chain["state"] = "human"
@@ -242,6 +305,10 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             operation["lane"] = "cloud"
             api.persist()
         return dispatch(api, chain, operation, packet, now)
+    except github.AuthorityUncertain:
+        # No compensating publication or refund when the authority write itself
+        # is unknown. The persisted send boundary remains non-retryable.
+        raise
     except (ValueError, KeyError) as error:
         # Explicitly fail an unsent action; once sent, a failed verification must
         # hold capacity rather than masquerade as a no-send/refund.

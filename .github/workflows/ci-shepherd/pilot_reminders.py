@@ -108,12 +108,33 @@ def workflow_evidence(api, head):
                     or run["status"] not in {"completed", "queued", "in_progress", "waiting", "requested", "pending"}
                     or run["status"] == "completed" and not isinstance(run["conclusion"], str)):
                 raise ValueError("workflow run identity/state unavailable")
-            pending |= run["status"] != "completed"
-            green &= run["status"] == "completed" and run["conclusion"] in {"success", "neutral", "skipped"}
+        # Newer terminal same-head outcomes supersede older terminal attempts.
+        # Nonterminal runs remain evidence regardless of run ID; rerunning an
+        # older ID must not be hidden by a newer run that already finished.
+        latest = {}
+        for run in runs:
+            workflow_id = run.get("workflow_id", run["id"])
+            issue_pr.positive(workflow_id, "workflow id")
+            if run["status"] != "completed":
+                pending = True
+                green = False
+                continue
+            key = (workflow_id, run.get("event"))
+            if key not in latest or run["id"] > latest[key]["id"]:
+                latest[key] = run
+        failures = []
+        failed_runs = []
+        for run in latest.values():
+            green &= run["conclusion"] in {"success", "neutral", "skipped"}
+            if run["status"] == "completed" and run["conclusion"] not in {"success", "neutral", "skipped"}:
+                failures.append((run.get("check_suite_id"), run["conclusion"]))
+                failed_runs.append({"id": run["id"], "suite": run.get("check_suite_id"),
+                                    "conclusion": run["conclusion"], "url": run["html_url"]})
             if run["status"] == "completed" and run["conclusion"] == "action_required":
                 if approval is None or run["id"] < int(approval["id"]):
                     approval = {"id": str(run["id"]), "url": run["html_url"]}
-        return {"approval": approval, "pending": pending, "green": green, "attention": None}
+        return {"approval": approval, "pending": pending, "green": green, "attention": None,
+                "failures": failures, "failedRuns": failed_runs}
     except (ValueError, KeyError, TypeError, AttributeError) as error:
         print(f"CI Shepherd #{api.binding.subject or 'PR'} workflow approval evidence unknown: {error}")
         return {"approval": None, "pending": False, "green": False,

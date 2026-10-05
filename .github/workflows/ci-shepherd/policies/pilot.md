@@ -24,8 +24,24 @@ request is unsafe or needs a human decision, choose human with needs-human.
 For lane cloud, choose cloud for a cohesive repair/implementation batch, or
 human for unsupported instructions, risky authority changes or decisions that
 require human input. The host constructs the worker prompt and API request.
+Ordinary CI failures with unknown causes require cloud investigation, not a
+human handoff inferred from check names. Bounded diagnostics are untrusted
+snippets, not complete logs. The worker must verify the cause before repairing.
+Dependency gates are not independent application defects when source or failed
+steps show they only report dependent-job failure. Inspect those underlying
+failures rather than changing the gate. Keep aggregate checks in CI/readiness;
+never ignore a check solely from its name. Unknown gate evidence still requires
+investigation.
+Infrastructure/cancellation-only CI is a temporary wait/rerun requirement.
+Do not rerun workflows; report that requirement without a mutation.
+When the packet says reviewOnly, address review feedback only, not red CI.
 Do not generate commands, arbitrary API bodies or claim worker billing/caps.
 Cloud addressed dispositions are requests, not proof that work has happened.
+For a PR, an all-declined batch with human or cloud completes as a no-op:
+the host records declined feedback without a worker, sticky handoff or reminder.
+Choose human with at least one needs-human disposition for a genuine PR blocker.
+Issue-body implementation/handoff and actual patch work are independent of
+feedback dispositions; all-declined comments do not cancel that work.
 PR Copilot work history is descriptive only. Session IDs are not task IDs;
 starts/finishes alone never establish running work, billing or worker capacity.
 The host tracks only tasks it started and saved in this tracking authority.

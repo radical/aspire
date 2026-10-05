@@ -212,7 +212,7 @@ def worker_slots(ledger):
                for chain in ledger["chains"] for operation in chain["operations"])
 
 
-def reserve(ledger, chain, identity, now, *, local):
+def reserve(ledger, chain, identity, now, *, local, operation_id=None):
     issue_pr.text(identity, "identity", 16384)
     previous = next((operation for operation in chain["operations"] if operation["identity"] == identity), None)
     if previous is not None:
@@ -230,7 +230,7 @@ def reserve(ledger, chain, identity, now, *, local):
     lane = "cloud" if chain["escalated"] else "local"
     if lane == "cloud" and worker_slots(ledger) >= 2:
         raise ValueError("cloud worker capacity exhausted")
-    operation = {"id": str(uuid.uuid4()), "identity": identity, "lane": lane, "state": "reserved",
+    operation = {"id": operation_id or str(uuid.uuid4()), "identity": identity, "lane": lane, "state": "reserved",
                  "at": issue_pr.stamp(now), "nativeActual": None, "nativeReserved": NATIVE_RESERVE,
                  "workerActual": None, "workerReserved": 0, "taskId": None, "workerState": None,
                  "sessionId": None, "workerAt": None, "attemptedLocal": lane == "local", "workerVersion": None}

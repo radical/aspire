@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import contextmanager
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -251,17 +252,115 @@ def sweep(api, directory, revision, *, executor=execute):
     return result
 
 
+def resume(api, operation_id, expected_head, now):
+    """Explicitly unmask one completed upstream native handoff, without work."""
+    if api.binding != bindings.UPSTREAM or not api.write:
+        raise ValueError("resume requires the fixed upstream local writer")
+    if not isinstance(expected_head, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_head):
+        raise ValueError("resume requires an exact expected current head")
+    api.read_authority()
+    original = deepcopy(api.ledger)
+    try:
+        chain = state.find_chain(api.ledger, bindings.UPSTREAM.subject)
+        if (chain is None or chain["kind"] != "pr" or chain["child"] is not None
+                or chain["state"] != "human" or not chain["operations"]):
+            raise ValueError("not an upstream native handoff")
+        latest = chain["operations"][-1]
+        if (latest["id"] != operation_id or latest["state"] != "completed"
+                or latest["taskId"] is not None or latest["sessionId"] is None
+                or latest["workerState"] is not None or latest["workerAt"] is not None
+                or latest["workerActual"] not in {None, 0}):
+            raise ValueError("latest exact completed native handoff required")
+        if (state.pending(chain) or chain["rounds"] >= api.binding.round_limit
+                or state.chain_spend(chain) + state.NATIVE_RESERVE > state.CHAIN_ALLOWANCE
+                or state.repository_spend(api.ledger, now) + state.NATIVE_RESERVE > state.REPOSITORY_ALLOWANCE
+                or state.worker_slots(api.ledger) >= 2):
+            raise ValueError("resume prospective admission budget/round/pending limit")
+        # Direct GETs only. Reconciliation would alter billing/history and could
+        # reinsert old worker dispositions into the deliberately unmasked batch.
+        for current in api.ledger["chains"]:
+            if state.pending(current):
+                raise ValueError("unresolved authority work")
+            for operation in current["operations"]:
+                if operation["nativeActual"] is None or operation["nativeReserved"] or operation["workerReserved"]:
+                    raise ValueError("unknown billing/reservation; no resume")
+                if operation["taskId"] is None and (
+                        operation["workerState"] not in {None, "failed"} or operation["workerActual"] not in {None, 0}):
+                    raise ValueError("unresolved/missing worker identity")
+                if operation["taskId"] is not None:
+                    task, usage = api.task_detail(operation["taskId"], current, operation)
+                    if (task["state"] not in state.TERMINAL or operation["workerState"] not in state.TERMINAL
+                            or usage is None or usage != operation["workerActual"]):
+                        raise ValueError("saved task resumed or billing changed/unknown")
+        basis = contracts.loads(latest["identity"].rsplit(":round:", 1)[0])
+        batch = basis.get("feedback")
+        if (not isinstance(batch, list) or not batch or any(not isinstance(item, str) for item in batch)
+                or len(batch) != len(set(batch)) or basis.get("number") != chain["origin"]
+                or basis.get("node") != chain["node"] or basis.get("head") != expected_head
+                or any(item not in chain["dispositions"] for item in batch)):
+            raise ValueError("saved handoff batch/head unavailable")
+        for operation in chain["operations"][:-1]:
+            if operation["taskId"] is not None:
+                old = contracts.loads(operation["identity"].rsplit(":round:", 1)[0])
+                if set(batch) & set(old.get("feedback", [])):
+                    raise ValueError("handoff overlaps older completed worker feedback")
+        removed = [item for item in batch if chain["dispositions"][item] == "needs-human"]
+        if not removed and not all(chain["dispositions"][item] == "declined" for item in batch):
+            raise ValueError("latest handoff has no needs-human feedback and is not all declined")
+        chain["state"] = "open"
+        for item in removed:
+            del chain["dispositions"][item]
+        reminder = chain.get("reminder")
+        if (reminder is not None and reminder["kind"] == "native-handoff"
+                and reminder["reason"] == operation_id and reminder["head"] == expected_head):
+            del chain["reminder"]
+        # Compare freshness only AFTER unmasking. Resume is an admission change,
+        # not repair: a pending/infra wait may legitimately be reopened.
+        observed = api.observe(chain)
+        if observed["head"] != expected_head or not observed["managed"]:
+            raise ValueError("resume source head/management changed")
+        visible = {item["id"] for item in observed["feedback"]}
+        missing = set(removed) - visible
+        # Same-head reruns can supersede failed-check IDs even after recovery.
+        # The operator authorizes this exact saved batch, not those old checks'
+        # continued existence. Vanished/edited non-CI feedback remains stale.
+        if (basis.get("description") != observed["description"] or any(
+                not item.startswith(("check:", "status:", "workflow:")) for item in missing)):
+            raise ValueError("saved handoff feedback/source changed")
+        api.guard(chain, observed, effect=False)
+        # The guard may perform slow reads. Do not publish an admission change
+        # if any history/counter/billing changed during that boundary.
+        expected = deepcopy(original)
+        resumed = state.find_chain(expected, chain["origin"])
+        resumed["state"] = "open"
+        for item in removed:
+            del resumed["dispositions"][item]
+        if reminder is not None and "reminder" not in chain:
+            resumed.pop("reminder")
+        if api.ledger != expected:
+            raise ValueError("resume authority history/budget changed")
+        api.persist()
+        return {"outcome": "resumed; no inference", "operation": operation_id, "head": expected_head}
+    except (ValueError, KeyError, TypeError):
+        api.ledger = original
+        raise
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["observe", "run", "watch"])
+    parser.add_argument("mode", choices=["observe", "run", "watch", "resume"])
     parser.add_argument("--tracker", type=int, required=True)
     parser.add_argument("--authority", type=int, required=True)
     parser.add_argument("--tracker-node", required=True)
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--interval", type=int, default=60)
+    parser.add_argument("--operation")
+    parser.add_argument("--expected-head")
     args = parser.parse_args(argv)
     if args.interval < 30:
         parser.error("interval must be at least 30 seconds")
+    if args.mode == "resume" and (not args.operation or not args.expected_head):
+        parser.error("resume requires --operation and --expected-head")
     try:
         token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
         revision = command(["git", "--no-pager", "-C", str(ROOT), "rev-parse", "HEAD"])
@@ -274,7 +373,7 @@ def main(argv=None):
             for chain in api.ledger["chains"]:
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())
             return 0
-        if not command(["copilot", "--no-auto-update", "--version"]).startswith("GitHub Copilot CLI 1.0.92-3."):
+        if args.mode != "resume" and not command(["copilot", "--no-auto-update", "--version"]).startswith("GitHub Copilot CLI 1.0.92-3."):
             raise ValueError("local decision engine must match the pinned Copilot1.0.92-3")
         lock_root = Path.home() / ".copilot" / "ci-shepherd" / "locks"
         with authority_lock(lock_root, args.authority):
@@ -282,6 +381,9 @@ def main(argv=None):
                 require_source(revision)
                 require_idle_actions(token)
                 api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=True, revision=revision)
+                if args.mode == "resume":
+                    print(json.dumps(resume(api, args.operation, args.expected_head, live.clock())), flush=True)
+                    return 0
                 result = sweep(api, args.workdir / str(uuid.uuid4()), revision)
                 if result["outcome"] in {"failed", "uncertain", "no-send"}:
                     return 1

@@ -39,10 +39,10 @@ and reservation. Disabling `CI_SHEPHERD_ENABLE` stops new pilot mutations and
 inference. None of these controls promises cancellation of an already-running
 cloud worker. Humans merge and close work.
 
-A native human handoff remains paused while adoption stays unchanged. To
-explicitly resume, remove `shepherd-adopted` or add `shepherd-hands-off`, let a
-sweep observe that stop state, then restore adoption/remove the veto. The
-observed stop-to-adopt transition resumes the same chain, never a new allowance.
+A native human handoff remains paused while adoption stays unchanged. The fixed
+upstream trial supports an explicit local `resume` admission change described
+below; a policy update alone never reopens a handoff. The existing observed
+stop-to-adopt transition also retains the same chain, never a new allowance.
 
 The repository authority tracks chain mappings, operation identities, billing,
 reservations and disposition IDs, not log/feedback bodies. Its body is limited
@@ -118,6 +118,48 @@ or edits. Disabling the pilot or removing adoption stops new notifications.
   admission. Definitive no-send rejection releases worker capacity; an uncertain
   POST never retries.
 
+  Pending current-head CI pauses native admission and repair dispatch, including
+  fresh review feedback. Complete terminal infrastructure/cancellation-only CI
+  waits cheaply for recovery or a required rerun, without a sticky human handoff.
+  Fresh review feedback can proceed as **review-only** repair while that CI is red.
+  Failed/error commit statuses and unknown or genuine failing checks prevent
+  infrastructure-only classification even when their feedback was dispositioned.
+  Older completed workflow runs superseded by a newer terminal run of the same workflow
+  and event on the same head do not keep recovered CI waiting. Actually pending
+  runs are never suppressed. A terminal workflow failure without failing jobs
+  still supplies explicit unknown-cause investigation feedback.
+
+  The shared observation projects untrusted check output and annotations from
+  IDs derived only from the verified named-repository exact-head check connection.
+  The annotation endpoint returns a bare, idless array with nullable text fields;
+  `live.API.pages(identity_key=None)` is explicit for this collection, while
+  ordinary inventories still require identities. Annotation reads have a shared
+  ten-request/page and 32,000-byte serialized aggregate bound and must match
+  `output.annotations_count`. Missing, malformed, incomplete or unavailable
+  diagnostics are logged as unknown, never successful empty evidence.
+  Positive infrastructure classification requires complete failure-level runner
+  disconnection evidence; a runner-scarcity NOTICE is not enough. Cancellation
+  alone establishes a rerun requirement, not an outage.
+
+  Aggregate dependency gates remain in inventory/readiness. When source or failed
+  steps establish that a gate merely reports dependent-job failure, the worker
+  investigates those underlying failures rather than changing the gate. For
+  example, `ci.yml`'s Final Results job reports dependency status, and
+  `analyze-ci-failure.lock.yml` uses failed-step evidence to distinguish gates.
+  A check name alone never authorizes ignoring it; unknown aggregate evidence
+  can conservatively remain investigatable. No job-list API scope is added.
+
+  Before reserving native credits or a round, `pilot.py` bounds the complete
+  serialized worker request to 20,000 bytes, including JSON escaping, instruction
+  preamble, authority correlation and every feedback ID. Descriptive strings can
+  be shortened with an explicit truncation marker; both native and worker receive
+  the same projected evidence. Mandatory fields that cannot fit pause visibly
+  without inference/reservation. Internal packets remain limited to 256 KiB.
+  An unattempted task POST rejected by any fresh dispatch guard releases only its
+  unused worker reservation, retaining native billing and the consumed round.
+  Attempted/unknown writes and uncertain authority publications remain
+  non-retryable and retain capacity protections.
+
 The single serialized workflow sweeps the adopted intake and fetches only the
 distinct task IDs saved in its authority, then rechecks those tasks before a
 new cloud send. Repository, requesting actor, session operation marker and
@@ -153,6 +195,12 @@ Approval requires a current-head `APPROVED` review whose reviewer has not been
 re-requested; drafts, conflicts, blocking reviews and pending CI are not
 merge-ready. Supported same-PR feedback is batched into one decision/task.
 Addressed, declined and needs-human dispositions survive subsequent sweeps.
+An all-declined PR native batch using `human` or `cloud` completes without a
+worker or sticky handoff/reminder. Its declined dispositions, actual native
+billing and consumed round persist; the chain stays open for fresh feedback.
+A sticky PR native handoff requires at least one `needs-human` disposition.
+Issue-body implementation/handoff and actual inline patches retain their
+semantics independently of comment dispositions.
 Completed cloud tasks conservatively disposition their old feedback as
 needs-human rather than pretending task completion proves resolution.
 
@@ -221,12 +269,22 @@ effects and status; it is policy, not a field in the persisted JSON. Existing
 rounds, operations and credits survive failure, restart, head change and
 stop/re-adoption without resets. Unknown sends remain reserved and block a
 new round until reconciled.
-The worker must refresh the full fork authority URL before writes, and only
-repair bounded repository guards/always-true workflow conditionals plus their
-pinned-compiler generated updates. Labeler workflows, authentication changes,
-permission broadening, test weakening, merge and force-push remain forbidden.
+The worker must refresh the full fork authority URL before writes, and may
+investigate and repair one bounded batch of ordinary current-PR CI/review
+feedback. Failed job names alone do not diagnose a cause or justify a handoff:
+unknown failures require investigation of logs, artifacts and annotations.
+Only a verified cause warrants a repair, with at most one actual minimal
+non-forced commit; no artificial commit is required. Human handoff is for a
+concrete human-only blocker. Intentional generated workflow updates retain the
+pinned gh-aw v0.89.17 compiler. Labeler workflows, action-pin bypasses,
+authentication changes, permission broadening, test weakening, merge and
+force-push remain forbidden. No automatic workflow reruns are authorized.
 Inline review path/line metadata is preserved. A fixed diagnostic brief is
 included only on its exact observed head; changed heads do not inherit it.
+
+Worker diagnosis in task logs is not automatically ingested as a machine outcome.
+The task's report is evidence for review; task completion never proves the
+root cause was repaired or current-head CI is green.
 
 Global disable still forbids native admission, task dispatch and publication.
 An authenticated settlement job may record available usage for an already
@@ -296,6 +354,41 @@ python3 -B .github/workflows/ci-shepherd/local.py watch \
 selects due work. Commit reviewed source first: live modes reject dirty source
 and stop before another sweep, repair or notification if the source changes. Billing
 settlement remains independent of that source check.
+
+`resume` is an explicit **no-inference** mode for an existing completed native
+human handoff on the fixed upstream PR. Supply the exact latest operation ID and
+an independently fresh-read current head; stale operation/head, takeover, missing
+child/worker handoffs, unknown billing/sends and exhausted prospective budgets
+are rejected. It uses the same POSIX authority lock, clean reviewed source,
+global enable and hosted-disable controls, but requires no Copilot CLI.
+
+```shell
+python3 -B .github/workflows/ci-shepherd/local.py resume \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE_ID \
+  --operation EXACT_LATEST_COMPLETED_NATIVE_HANDOFF_ID \
+  --expected-head FRESHLY_VERIFIED_CURRENT_SHA \
+  --workdir artifacts/ci-shepherd/local
+```
+
+Resume directly verifies every saved task ID without sweeping/reconciling
+workers. It only opens the chain, removes `needs-human` dispositions from that
+latest exact batch and clears its matching native-handoff reminder (including
+a confirmed reminder receipt). Declined/addressed and older dispositions,
+operations, task/session IDs, rounds, billing and reservations are unchanged.
+Overlap with older completed worker feedback is rejected as ambiguous.
+An existing completed native all-declined PR handoff can also be explicitly
+resumed under the same guards: the exact saved batch must be entirely declined,
+no dispositions are unmasked, and only the chain state and matching reminder
+change. A batch mixing addressed/declined without `needs-human` does not qualify.
+Observation/freshness comparison happens after unmasking, so reopening into
+pending or infrastructure-only CI is allowed without dispatching anything.
+Same-head reruns can replace old CI feedback IDs or recover to green; those IDs
+need not remain live for an explicitly authorized resume. Removed non-CI feedback
+must still match current source feedback, and publication binds a fresh current
+observation rather than replaying the old check inventory.
+A separately executed fresh `run` can spend an eligible remaining round only
+when actionable; `resume` never starts a worker, decision or CI rerun.
 
 **Every admitted decision uses a fresh agent.** A new Copilot1.0.92-3 process,
 UUID, temporary home and working directory outside the checkout receive only
