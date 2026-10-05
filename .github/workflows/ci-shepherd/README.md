@@ -303,6 +303,9 @@ the actual workflow prompt body populated by the current `pilot.prompt(packet)`.
 No resumed conversation, user/repository instructions, memory, plugins or
 follow-up coaching are supplied. The sole tool is `safeoutputs-submit_decision`,
 implemented locally by a stdio server that can only record one proposal.
+CLI approval uses `--allow-tool 'safeoutputs(submit_decision)'`; the exposed
+`safeoutputs-submit_decision` name is an availability filter, not a permission
+pattern. See `copilot help permissions` for this distinction.
 The same host-event validation requires a fresh session, verified version,
 exact tool grants, one successful submission and matching final JSON.
 

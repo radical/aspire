@@ -33,6 +33,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
             self.assertEqual(local.prompt(self.packet()), argv[argv.index("--prompt") + 1])
             self.assertEqual(["safeoutputs-submit_decision"],
                              argv[argv.index("--available-tools") + 1:argv.index("--allow-tool")])
+            self.assertEqual("safeoutputs(submit_decision)", argv[argv.index("--allow-tool") + 1])
             self.assertEqual("30", argv[argv.index("--max-ai-credits") + 1])
             self.assertNotIn("--resume", argv)
             self.assertNotIn("--continue", argv)

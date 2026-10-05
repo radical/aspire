@@ -173,7 +173,8 @@ def execute(directory, packet, token, *, process=subprocess.run, executable="cop
             "--no-remote", "--no-remote-export", "--no-ask-user",
             "--additional-mcp-config", "@" + str(config),
             "--available-tools", "safeoutputs-submit_decision",
-            "--allow-tool", "safeoutputs-submit_decision", "--deny-tool", "shell", "write", "task",
+            # CLI permissions match server(tool), unlike model-visible server-tool names.
+            "--allow-tool", "safeoutputs(submit_decision)", "--deny-tool", "shell", "write", "task",
             "--max-ai-credits", str(state.NATIVE_RESERVE), "--session-id", session_id,
             "--log-level", "all", "--log-dir", str(isolated / "logs"),
             "--usage-output-file", str(isolated / "usage.json"),
