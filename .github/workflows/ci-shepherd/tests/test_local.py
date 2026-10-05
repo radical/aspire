@@ -114,7 +114,8 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
 
     def test_stdio_decision_tool_matches_actions_and_rejects_a_second_submission(self):
         call = {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                "params": {"name": "submit_decision", "arguments": {"decision": '{"action":"cloud"}'}}}
+                "params": {"name": "submit_decision", "arguments": {"decision": '{"action":"cloud"}'},
+                           "_meta": {"progressToken": 0}}}
         output = self.work / "decision.json"
         requests = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
@@ -136,6 +137,8 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         for params in (
             {"name": "shell", "arguments": {"command": "anything"}},
             {"name": "submit_decision", "arguments": {"decision": '{"action":1,"action":2}'}},
+            {"name": "submit_decision", "arguments": {"decision": '{"action":"human"}'}, "_meta": []},
+            {"name": "submit_decision", "arguments": {"decision": '{"action":"human"}'}, "authorization": True},
         ):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 decision_server.handle({"method": "tools/call", "params": params}, self.work / "decision.json")

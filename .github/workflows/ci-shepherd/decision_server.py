@@ -34,7 +34,14 @@ def handle(request, output):
         return {"tools": [TOOL]}
     if method != "tools/call":
         raise ValueError("unsupported MCP method")
-    params = contracts.exact(request["params"], {"name", "arguments"}, "tool call")
+    params = request["params"]
+    if not isinstance(params, dict) or "_meta" in params and not isinstance(params["_meta"], dict):
+        raise ValueError("invalid MCP tool request metadata")
+    # Valid MCP requests can carry {"_meta":{"progressToken":0}} alongside
+    # name/arguments. Transport metadata never becomes decision authorization.
+    # https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/progress
+    params = contracts.exact({key: value for key, value in params.items() if key != "_meta"},
+                             {"name", "arguments"}, "tool call")
     if params["name"] != TOOL["name"]:
         raise ValueError("only submit_decision is supported")
     arguments = contracts.exact(params["arguments"], {"decision"}, "decision arguments")
