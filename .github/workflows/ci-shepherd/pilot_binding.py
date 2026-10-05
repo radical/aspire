@@ -9,10 +9,11 @@ class Binding:
     repository: str
     repository_id: int
     subject: int | None
+    round_limit: int
 
 
-FORK = Binding("fork", "radical/aspire", 746880239, None)
-UPSTREAM = Binding("upstream-20722", "microsoft/aspire", 696529789, 20722)
+FORK = Binding("fork", "radical/aspire", 746880239, None, 10)
+UPSTREAM = Binding("upstream-20722", "microsoft/aspire", 696529789, 20722, 5)
 
 
 def select(name="fork", event="workflow_dispatch"):
