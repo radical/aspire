@@ -190,7 +190,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(30, operation["nativeReserved"])
         self.assertEqual([], [write for write in fixture.transport.writes if write[1].endswith("/tasks")])
 
-    def test_source_drift_rejects_an_effect_without_blocking_billing_authority_guard(self):
+    def test_source_and_disable_guards_cover_notifications_without_blocking_billing(self):
         fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -200,13 +200,18 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         with patch.object(local.github, "PilotTransport", return_value=fixture.transport):
             api = local.LocalGitHub("fixture-token", 99, 500, "TRACKER99", write=True, revision="b" * 40)
         api.read_authority()
-        with patch.object(local, "command", side_effect=["b" * 40, " M local.py"]), \
+        with patch.object(local, "command", side_effect=["b" * 40, " M local.py"] * 2), \
                 patch.object(local, "require_idle_actions"), patch.object(api, "enabled", return_value=True):
-            with self.assertRaisesRegex(ValueError, "source changed"):
-                api.guard({}, {})
+            for effect in (True, False):
+                with self.subTest(effect=effect), self.assertRaisesRegex(ValueError, "source changed"):
+                    api.guard({}, {}, effect=effect)
             api.ledger["cursor"] = 1
             api.persist()
         self.assertEqual(1, state.parse(fixture.transport.comments[0]["body"])["cursor"])
+        with patch.object(local, "require_source"), patch.object(api, "enabled", return_value=False):
+            for effect in (True, False):
+                with self.subTest(effect=effect), self.assertRaisesRegex(ValueError, "globally disabled"):
+                    api.guard({}, {}, effect=effect)
 
 
 if __name__ == "__main__":

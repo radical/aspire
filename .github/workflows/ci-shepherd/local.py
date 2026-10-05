@@ -89,10 +89,11 @@ class LocalGitHub(github.PilotGitHub):
         return value["value"] == "true"
 
     def guard(self, chain, observation, *, effect=True):
-        if effect:
-            require_source(self.revision)
-            if not self.enabled():
-                raise ValueError("Shepherd globally disabled; no new effects")
+        # Notifications use effect=False to skip repair-only checks, but still
+        # need the local stop controls. Billing persistence does not use guard.
+        require_source(self.revision)
+        if not self.enabled():
+            raise ValueError("Shepherd globally disabled; no new effects")
         return super().guard(chain, observation, effect=effect)
 
 

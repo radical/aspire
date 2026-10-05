@@ -294,7 +294,7 @@ python3 -B .github/workflows/ci-shepherd/local.py watch \
 `observe` is read-only and needs no hosted disable. `run` executes one sweep;
 `watch` repeats cheap sweeps and invokes inference only when shared admission
 selects due work. Commit reviewed source first: live modes reject dirty source
-and stop before another sweep or repair effect if the source changes. Billing
+and stop before another sweep, repair or notification if the source changes. Billing
 settlement remains independent of that source check.
 
 **Every admitted decision uses a fresh agent.** A new Copilot1.0.92-3 process,
