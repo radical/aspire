@@ -51,6 +51,14 @@ truncation or a budget reset. Per-chain presentation comments are updated in
 place and are not another authority. Exact owned presentation IDs/markers are
 excluded from feedback; other operator comments remain legitimate input.
 
+GitHub API JSON responses have a separate 8 MiB bound in `live.py`, enforced by
+both the HTTP reader and strict JSON decoder. A 100-check page includes full
+metadata and can exceed the 256 KiB bound used by internal action packets;
+accepting those responses does not expand agent inputs, tracking records or
+credit allowances. Complete pagination and duplicate-key/non-finite JSON
+rejection remain required. Oversized responses report the API bound explicitly;
+uncertain write results remain non-retryable.
+
 ## Delayed human reminders
 
 An enabled cheap sweep records explicit PR blockers: a current-head workflow

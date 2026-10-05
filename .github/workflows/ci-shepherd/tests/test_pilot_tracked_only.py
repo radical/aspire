@@ -523,7 +523,7 @@ class HistoryReadTests(unittest.TestCase):
                             raise HTTPError(request.full_url, 403, "forbidden", {}, io.BytesIO())
                         if error == "network":
                             raise URLError("offline")
-                        raw = b"\xff" if error == "decode" else b"x" * (live.MAX_BYTES + 1)
+                        raw = b"\xff" if error == "decode" else b"x" * (live.MAX_API_JSON_BYTES + 1)
                         return WindowOpener.response(raw, {})
 
                 transport.opener = Opener()

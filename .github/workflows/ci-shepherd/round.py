@@ -23,7 +23,7 @@ def exact(value, keys, label):
     return value
 
 
-def loads(text):
+def loads(text, *, max_bytes=MAX_JSON_BYTES):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -32,7 +32,7 @@ def loads(text):
             result[key] = value
         return result
 
-    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_JSON_BYTES:
+    if not isinstance(text, str) or len(text.encode("utf-8")) > max_bytes:
         raise ValueError("JSON exceeds size limit")
 
     def constant(value):

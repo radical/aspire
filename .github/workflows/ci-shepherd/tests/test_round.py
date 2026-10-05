@@ -73,6 +73,16 @@ class RoundTests(WorkspaceTest, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             shepherd.loads('{"outcome":"wait","outcome":"wait"}')
 
+    def test_default_json_limit_accepts_boundary_and_rejects_one_more_byte(self):
+        bound = 256 * 1024
+        value = {"value": "x" * (bound - len(json.dumps({"value": ""}).encode()))}
+        raw = json.dumps(value)
+        self.assertEqual(bound, len(raw.encode()))
+        self.assertEqual(value, shepherd.loads(raw))
+        value["value"] += "x"
+        with self.assertRaisesRegex(ValueError, "JSON exceeds size limit"):
+            shepherd.loads(json.dumps(value))
+
     def test_safe_output_requires_exactly_one_closed_item(self):
         _, packet, _ = self.prepare()
         item = {"type": "submit_decision", "decision": json.dumps(decision_for(packet))}
