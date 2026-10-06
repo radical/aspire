@@ -98,15 +98,17 @@ or edits. Disabling the pilot or removing adoption stops new notifications.
   Failed inference/validation counts. Fresh runs, new heads and verified child
   PRs never reset counters. Unsupported local scope escalates immediately;
   cloud escalation is sticky.
-- Native admission reserves30 credits. Chain allowance is500 credits; the
-  repository allowance is1,000 in a rolling24-hour window. Cloud admission
+- Native admission reserves30 credits. Fork chain allowance is500 credits;
+  the fixed upstream trial's allowance is1,000. The repository allowance is
+  1,000 in a rolling24-hour window. Cloud admission
   reserves the remaining chain allowance. Actual native `ai_credits` and
   terminal task-session `ai_credits` nano units settle separately, including
   failed native runs. Missing/premium-request billing is unknown, not zero:
   its reservation survives the rolling window.
 - Verified terminal workers complete their operation and result/artifact
   bookkeeping even when usage is absent or partial. Unknown costs still
-  reserve the remaining chain allowance, blocking new paid work; later
+  retain conservative credit reservations, blocking new paid work when the
+  remaining headroom cannot cover admission; later
   reported usage settles the same operation without another round.
 - Fresh direct reads of saved task IDs can resume previously completed work.
   Every saved task is verified again, including completed receipts; unknown sessions
@@ -258,7 +260,7 @@ PYTHONPATH=.github/workflows/ci-shepherd python3 -B -c \
 
 The ledger's target namespace must match the fixed binding while its tracker
 and writer remain in the controller fork. Existing fork/legacy authority is
-never repointed. Native admission is still30 credits, chain allowance500 and
+never repointed. Native admission is still30 credits, upstream chain allowance1,000 and
 rolling authority allowance1,000; these are independent authority namespaces,
 not a promise of a combined cross-authority billing cap.
 
@@ -295,6 +297,10 @@ included only on its exact observed head; changed heads do not inherit it.
 Worker diagnosis in task logs is not automatically ingested as a machine outcome.
 The task's report is evidence for review; task completion never proves the
 root cause was repaired or current-head CI is green.
+Additional credit headroom does not reopen feedback already recorded as
+addressed, declined or needs-human. Only fresh eligible feedback admits another
+decision under this policy; reviewing a completed worker's result and reopening
+its old batch requires an explicit policy or operator action.
 
 Global disable still forbids native admission, task dispatch and publication.
 An authenticated settlement job may record available usage for an already

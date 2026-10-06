@@ -489,7 +489,7 @@ class PilotGitHub:
         self.authority_guard()
         if effect and chain["rounds"] > self.binding.round_limit:
             raise ValueError("lifetime action round limit exceeded")
-        if effect and (chain["state"] != "open" or state.chain_spend(chain) > state.CHAIN_ALLOWANCE or state.repository_spend(
+        if effect and (chain["state"] != "open" or state.chain_spend(chain) > state.chain_allowance(self.ledger) or state.repository_spend(
                 self.ledger, self.clock()) > state.REPOSITORY_ALLOWANCE):
             raise ValueError("chain/repository authority or credit allowance exhausted")
         if effect and self.packet_time is not None:
@@ -579,7 +579,7 @@ class PilotGitHub:
                 except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
                     operation.update(workerState="unknown", state="waiting")
                     operation["workerReserved"] = max(
-                        operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
+                        operation["workerReserved"], max(0, state.chain_allowance(self.ledger) - state.chain_spend(chain)))
                     print(f"CI Shepherd task {operation['taskId']} needs human verification: {error}", file=sys.stderr)
                     continue
                 operation["workerState"] = task["state"]
@@ -592,7 +592,7 @@ class PilotGitHub:
                     # Unknown costs still reserve the remaining allowance even
                     # when all verified task sessions have finished.
                     operation["workerReserved"] = max(
-                        operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
+                        operation["workerReserved"], max(0, state.chain_allowance(self.ledger) - state.chain_spend(chain)))
                 if task["state"] not in state.TERMINAL:
                     operation["state"] = "waiting"
                 else:
@@ -697,6 +697,10 @@ class PilotGitHub:
 
     def next_action(self, chain, observation):
         operation = chain["operations"][-1] if chain["operations"] else None
+        unbilled = state.worker_billing_pending(chain)
+        credit_blocked = (state.chain_spend(chain) + state.NATIVE_RESERVE > state.chain_allowance(self.ledger)
+                          or state.repository_spend(self.ledger, self.clock()) + state.NATIVE_RESERVE
+                          > state.REPOSITORY_ALLOWANCE)
         if chain["state"] != "open":
             blocker = "Human handoff / adoption removed; no new repairs."
         elif observation["workflowAttention"] is not None:
@@ -709,7 +713,7 @@ class PilotGitHub:
             blocker = "Worker needs human input; open the task. No inference."
         elif state.pending(chain):
             blocker = "Tracked work / uncertain send; observe only, never retry."
-        elif state.worker_billing_pending(chain):
+        elif unbilled and credit_blocked:
             blocker = "Tracked worker finished; billing unavailable, reservation retained. No new paid repair."
             if chain["rounds"] >= self.binding.round_limit:
                 blocker += f" Lifetime action round limit ({self.binding.round_limit}) also reached."
@@ -718,7 +722,7 @@ class PilotGitHub:
         elif (chain["kind"] == "issue" and chain["child"] is None and operation is not None
               and operation["state"] == "completed" and operation["taskId"] is not None):
             blocker = "Completed task has no verified child PR; human handoff required."
-        elif state.chain_spend(chain) >= state.CHAIN_ALLOWANCE:
+        elif state.chain_spend(chain) >= state.chain_allowance(self.ledger):
             blocker = "Lifetime allowance exhausted; human attention required."
         elif observation["ready"]:
             blocker = "Current-head checks and approval verified; human merge required."
@@ -732,6 +736,8 @@ class PilotGitHub:
             blocker = "Bounded review-only repair batch due; CI still requires wait/rerun."
         else:
             blocker = "Bounded repair batch due."
+        if unbilled and not credit_blocked:
+            blocker += " Finished worker billing unavailable; reservation retained."
         return blocker
 
     def status(self, chain, observation, now):

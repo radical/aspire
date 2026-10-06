@@ -14,6 +14,7 @@ STATUS_MARKER = "<!-- ci-shepherd:pilot-status:v1 -->"
 MAX_BODY = 60000
 NATIVE_RESERVE = 30
 CHAIN_ALLOWANCE = 500
+UPSTREAM_CHAIN_ALLOWANCE = 1000
 REPOSITORY_ALLOWANCE = 1000
 TERMINAL = {"completed", "failed", "timed_out", "cancelled"}
 OP_STATES = {"reserved", "sent", "waiting", "completed", "failed", "uncertain", "no-send"}
@@ -187,6 +188,11 @@ def chain_spend(chain):
     return sum(operation_spend(operation) for operation in chain["operations"])
 
 
+def chain_allowance(ledger):
+    return {"radical/aspire": CHAIN_ALLOWANCE,
+            "microsoft/aspire": UPSTREAM_CHAIN_ALLOWANCE}[ledger["repository"]]
+
+
 def repository_spend(ledger, now):
     total = 0
     for chain in ledger["chains"]:
@@ -226,7 +232,7 @@ def reserve(ledger, chain, identity, now, *, local, operation_id=None):
         raise ValueError("chain has pending work or is handed off")
     if chain["rounds"] >= 10:
         raise ValueError("ten lifetime action rounds exhausted")
-    if chain_spend(chain) + NATIVE_RESERVE > CHAIN_ALLOWANCE:
+    if chain_spend(chain) + NATIVE_RESERVE > chain_allowance(ledger):
         raise ValueError("chain credit allowance exhausted")
     if repository_spend(ledger, now) + NATIVE_RESERVE > REPOSITORY_ALLOWANCE:
         raise ValueError("repository rolling credit allowance exhausted")
@@ -258,7 +264,7 @@ def settle_native(operation, usage):
 def reserve_worker(ledger, chain, operation, now):
     if operation["lane"] != "cloud" or operation["state"] != "reserved" or worker_slots(ledger) >= 2:
         raise ValueError("worker reservation not admissible")
-    room = CHAIN_ALLOWANCE - chain_spend(chain)
+    room = chain_allowance(ledger) - chain_spend(chain)
     if room <= 0 or repository_spend(ledger, now) + room > REPOSITORY_ALLOWANCE:
         raise ValueError("worker credit allowance exhausted")
     operation["workerReserved"] = room

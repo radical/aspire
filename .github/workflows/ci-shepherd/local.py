@@ -281,7 +281,7 @@ def resume(api, operation_id, expected_head, now):
                 or latest["workerActual"] not in {None, 0}):
             raise ValueError("latest exact completed native handoff required")
         if (state.pending(chain) or chain["rounds"] >= api.binding.round_limit
-                or state.chain_spend(chain) + state.NATIVE_RESERVE > state.CHAIN_ALLOWANCE
+                or state.chain_spend(chain) + state.NATIVE_RESERVE > state.chain_allowance(api.ledger)
                 or state.repository_spend(api.ledger, now) + state.NATIVE_RESERVE > state.REPOSITORY_ALLOWANCE
                 or state.worker_slots(api.ledger) >= 2):
             raise ValueError("resume prospective admission budget/round/pending limit")

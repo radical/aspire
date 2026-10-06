@@ -285,7 +285,8 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
                     self.assertEqual("ACCEPTED" if accepted else None, operation["taskId"])
                     self.assertEqual(1, len(sends))
                     self.assertEqual(1, state.worker_slots(restarted.ledger))
-                    self.assertEqual(500, state.chain_spend(restarted.ledger["chains"][0]))
+                    self.assertEqual(state.chain_allowance(restarted.ledger),
+                                     state.chain_spend(restarted.ledger["chains"][0]))
                     self.assertEqual(1, restarted.ledger["chains"][0]["rounds"])
 
     def test_observed_history_and_new_nullable_events_do_not_change_round_or_repair_basis(self):
@@ -430,7 +431,8 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
                 self.assertIn(f"Tracked task: OWNED{api.binding.subject or 7}; state: in_progress", text)
                 self.assertIn("observe only, never retry", text)
                 self.assertIn("Next action:", text)
-                self.assertIn("Actual credits: 2; outstanding reservation: 498", text)
+                self.assertIn(f"Actual credits: 2; outstanding reservation: {state.chain_allowance(api.ledger) - 2}",
+                              text)
                 self.assertIn("unknown amounts remain reserved", text)
                 self.assertIn("3 starts, 2 finishes", text)
                 self.assertIn("radical started", text)

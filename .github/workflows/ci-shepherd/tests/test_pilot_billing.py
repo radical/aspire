@@ -4,8 +4,9 @@ import json
 import unittest
 from unittest.mock import patch
 
-from helpers import WorkspaceTest
+from helpers import WorkspaceTest, reconciliation_evidence
 import local
+import pilot
 import pilot_binding as bindings
 import pilot_state as state
 import test_pilot_github as github_tests
@@ -153,7 +154,8 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         self.assertFalse((self.work / "completed" / "agent").exists())
         chain = state.find_chain(api.ledger, 20722)
         self.assertEqual(api.binding.round_limit, chain["rounds"])
-        self.assertEqual(498, operation["workerReserved"])
+        self.assertEqual(state.chain_allowance(api.ledger) - operation["nativeActual"],
+                         operation["workerReserved"])
         self.assertIn(f"Lifetime action round limit ({api.binding.round_limit}) also reached",
                       api.next_action(chain, api.observe(chain)))
 
@@ -180,6 +182,55 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
                     }, result)
                 self.assertFalse((directory / "agent").exists())
                 self.assertEqual(1, state.find_chain(api.ledger, 20722)["rounds"])
+
+    def test_upstream_increased_allowance_retains_legacy_hold_and_admits_new_feedback(self):
+        _, api, transport, chain, operation, task = self.worker(binding=bindings.UPSTREAM)
+        operation["workerReserved"] = 498
+        api.persist()
+        transport.values[f"{api.prefix}/pulls/20722/comments"].append({
+            "id": 32, "body": "New review feedback", "updated_at": "2026-10-04T00:01:00Z",
+            "user": {"id": 20}})
+        api.reconcile_workers()
+        self.assertEqual(500, operation["workerReserved"])
+        self.assertIsNone(operation["workerActual"])
+        observed = api.observe(chain)
+        self.assertTrue(observed["actionable"])
+        self.assertEqual("Bounded repair batch due. Finished worker billing unavailable; reservation retained.",
+                         api.next_action(chain, observed))
+        api.persist()
+        packet = pilot.prepare(api, tracked_tests.RUN, api.clock(), present=False)
+        self.assertIsNotNone(packet)
+        self.assertEqual(2, chain["rounds"])
+        self.assertEqual(500, operation["workerReserved"])
+        self.assertEqual(30, chain["operations"][-1]["nativeReserved"])
+        self.assertEqual(1000, state.chain_allowance(api.ledger))
+        decision = tracked_tests.decision(packet)
+        pilot.settle(api, packet, reconciliation_evidence(decision), 2, api.clock())
+        self.assertEqual(1, len([write for write in transport.writes
+                                if write[0] == "POST" and write[1].endswith("/tasks")]))
+        self.assertEqual(500, operation["workerReserved"])
+        self.assertEqual(496, chain["operations"][-1]["workerReserved"])
+        self.assertEqual(1000, state.chain_spend(chain))
+        self.assertIsNone(operation["workerActual"])
+
+    def test_upstream_credit_headroom_does_not_reopen_completed_feedback(self):
+        _, api, transport, chain, operation, task = self.worker(binding=bindings.UPSTREAM)
+        operation["workerReserved"] = 498
+        api.persist()
+        api.enabled = lambda: True
+        api.token = "fixture-token"
+        with patch.object(local.live, "clock", api.clock), redirect_stdout(io.StringIO()):
+            result = local.sweep(api, self.work / "no-new-feedback", "b" * 40,
+                                 executor=lambda *_: self.fail("completed feedback must not be retried"))
+        self.assertEqual("observed; no inference", result["outcome"])
+        self.assertFalse(result["roundLimitReached"])
+        chain = state.find_chain(api.ledger, 20722)
+        self.assertEqual(1, chain["rounds"])
+        self.assertEqual(500, chain["operations"][0]["workerReserved"])
+        self.assertEqual(
+            "Waiting for human review / supported new feedback; no inference. "
+            "Finished worker billing unavailable; reservation retained.",
+            api.next_action(chain, api.observe(chain)))
 
 
 if __name__ == "__main__":

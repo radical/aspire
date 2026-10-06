@@ -735,7 +735,7 @@ class ResumeTests(WorkspaceTest, unittest.TestCase):
                     state.finish(extra, "completed")
                     chain["state"] = "human"
                 elif problem == "budget":
-                    latest["nativeActual"] = 490
+                    latest["nativeActual"] = state.chain_allowance(api.ledger) - 10
                 elif problem == "native":
                     latest.update(nativeActual=None, nativeReserved=30)
                 elif problem == "worker":

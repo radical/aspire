@@ -82,6 +82,30 @@ class PilotStateTests(unittest.TestCase):
             state.reserve(self.ledger, third_chain, "later", self.clock(), local=False)
         self.assertEqual(2, state.worker_slots(self.ledger))
 
+    def test_namespace_allowances_enforce_exact_native_admission_boundaries(self):
+        for repository, limit in (("radical/aspire", 500), ("microsoft/aspire", 1000)):
+            for extra in (0, 1):
+                with self.subTest(repository=repository, extra=extra):
+                    ledger = state.new_ledger(repository)
+                    chain = state.adopt(ledger, 20722, "pr", "NODE20722")
+                    self.assertEqual(limit, state.chain_allowance(ledger))
+                    first = state.reserve(ledger, chain, "prior", self.clock(), local=False)
+                    state.settle_native(first, limit - state.NATIVE_RESERVE + extra)
+                    state.finish(first, "completed")
+                    before = state.render(ledger)
+                    if extra:
+                        with self.assertRaisesRegex(ValueError, "chain credit allowance exhausted"):
+                            state.reserve(ledger, chain, "next", self.clock(), local=False)
+                        self.assertEqual(before, state.render(ledger))
+                    else:
+                        state.reserve(ledger, chain, "next", self.clock(), local=False)
+                        self.assertEqual(limit, state.chain_spend(chain))
+                        self.assertEqual(2, chain["rounds"])
+
+    def test_unknown_namespace_has_no_default_credit_allowance(self):
+        with self.assertRaises(KeyError):
+            state.chain_allowance({"repository": "unapproved/repository"})
+
     def test_no_send_releases_worker_slot_not_round_or_usage(self):
         operation = self.start("rejected", local=False)
         state.settle_native(operation, 4)
