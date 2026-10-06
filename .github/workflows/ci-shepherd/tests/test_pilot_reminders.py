@@ -153,6 +153,45 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
                 self.assertEqual(0, state.worker_slots(self.api.ledger))
                 self.assertEqual(0, state.chain_spend(self.chain))
 
+    def test_uncertain_copilot_review_posts_one_delayed_owner_notice_without_retry_or_inference(self):
+        self.setup_api(bindings.FORK)
+        self.set_runs([])
+        head = self.transport.values[f"{self.api.prefix}/pulls/7"]["head"]["sha"]
+        self.transport.values[f"{self.api.prefix}/pulls/7/comments"] = []
+        self.transport.values[f"{self.api.prefix}/issues/7/comments"] = []
+        self.transport.values[f"{self.api.prefix}/commits/{head}/status"] = {
+            "statuses": [{"id": 20, "context": "test", "state": "success"}], "state": "success"}
+        original = self.api.transport
+        requests = []
+
+        def lose(method, endpoint, body):
+            if method == "POST" and endpoint.endswith("/requested_reviewers"):
+                requests.append(body)
+                raise LostResponse("review outcome unknown")
+            return original(method, endpoint, body)
+
+        self.api.transport = self.api.api.transport = lose
+        with redirect_stdout(io.StringIO()):
+            self.assertIsNone(pilot.prepare(self.api, RUN, self.api.clock(), present=False))
+        history = deepcopy(self.chain["reviews"])
+        self.tick()
+        self.api.clock.advance(seconds=59)
+        self.restart()
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertTrue(reminders.valid_body(self.posts[0], self.api.repository, 7))
+        self.assertIn("Copilot review", self.posts[0])
+        self.assertEqual("confirmed", self.chain["reminder"]["sendState"])
+        self.api.clock.advance(days=1)
+        self.restart()
+        self.tick()
+        self.assertEqual((1, 1, 0, 30), (len(self.posts), len(requests), self.chain["rounds"],
+                                       state.chain_spend(self.chain)))
+        self.assertEqual(history, self.chain["reviews"])
+
     def test_prepare_zero_job_approval_blocks_paid_repair_and_approval_feedback(self):
         for binding in (bindings.FORK, bindings.UPSTREAM):
             with self.subTest(binding=binding.name):
@@ -594,7 +633,7 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual([], self.posts)
         self.assertEqual("sent", self.chain["reminder"]["sendState"])
 
-    def test_owned_reminders_are_not_repair_feedback_but_foreign_and_unmarked_comments_are(self):
+    def test_owned_reminders_and_unapproved_copies_are_excluded_but_approved_comments_remain(self):
         self.setup_api()
         self.tick()
         self.api.clock.advance(seconds=60)
@@ -606,7 +645,7 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
             {"id": 902, "user": ACTOR, "body": "Please fix another concern",
              "updated_at": "2026-10-04T00:00:00Z"}])
         ids = [item["id"] for item in self.api.observe(self.chain)["feedback"]]
-        self.assertEqual(["comment:901:2026-10-04T00:00:00Z", "comment:902:2026-10-04T00:00:00Z",
+        self.assertEqual(["comment:902:2026-10-04T00:00:00Z",
                           "review-comment:31:2026-10-04T00:00:00Z"], ids)
 
     def test_unknown_run_evidence_is_visible_not_approval_or_green_and_retains_previous_timer(self):

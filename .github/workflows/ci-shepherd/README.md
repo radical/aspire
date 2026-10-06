@@ -122,6 +122,18 @@ can affect email delivery; this is not evidence about every notification surface
 ## Fresh review feedback and worker results
 
 Directly adopted PRs and issue-created child PRs use the same feedback loop.
+Ordinary comments, inline comments and nonempty `COMMENTED`/`CHANGES_REQUESTED`
+review bodies enter repairs only through `pilot_authors.py`. Its approved human
+list currently contains `radical` (GitHub user ID 1472). Identified Copilot worker
+and reviewer reports are separate evidence sources, not human authorization.
+
+Both Copilot bot alias endpoints can report the canonical login `Copilot`.
+The worker (ID 198982749) and reviewer (ID 175728472) remain distinct: exact
+identity/type/recognized-login matching is required. Other authors and guessed
+bot names cannot authorize paid repairs. Raw CI and review blockers remain
+independent of this feedback filter; Copilot approvals never replace human
+approval.
+
 For inline comments, `pilot_feedback.py` reads GitHub's current thread-resolution
 state using one sealed, read-only GraphQL query. Exact REST comment node/database
 IDs, repository identity, PR membership and current head must match. Reads are
@@ -134,6 +146,11 @@ and admission limits. Missing, conflicting, stale or incomplete thread evidence
 visibly pauses that chain without paid inference; other adopted chains can
 continue. Fresh effect guards reread resolution state before dispatch.
 
+Published review bodies have a content-bound identity because REST supplies
+`submitted_at`, not an edit timestamp. Edits invalidate prepared decisions and
+previous dispositions for the old body. Historical unversioned dispositions
+remain intact but cannot suppress a newly version-bound review body.
+
 A cloud decision's `addressed` disposition means **repair requested**, not verified
 resolved. A completed worker does not prove its patch succeeded: still-unresolved
 comments and current-head failures remain eligible for another bounded decision.
@@ -142,11 +159,58 @@ artifacts and fresh PR facts. Missing narrative is not success or failure.
 
 The task integration has no final-response or task-log reader; the
 [documented task API](https://docs.github.com/en/rest/agent-tasks/agent-tasks)
-provides the state, errors and artifacts used above. The loop observes published
-inline feedback and requested human reviews, but does not automatically request
-Copilot code review. That requires a separate guarded, per-head request/receipt
-and usage-accounting capability; it must not be simulated as a successful review
-or confused with human approval.
+provides the state, errors and artifacts used above. Published ordinary comments
+and review bodies can supply additional approved reports; no final task narrative
+or log endpoint is invented.
+
+## Copilot review requests
+
+`pilot_reviews.py` is the shared direct/issue-child review policy. On an adopted,
+open, non-draft PR with verified terminal green CI, no outstanding actionable
+feedback and no tracked pending work, the cheap sweep can request Copilot review.
+It starts at most one review intent per repository sweep, separately from the
+existing single native-decision admission.
+
+The only new writer is the
+[documented reviewer request](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request):
+`POST /repos/{repository}/pulls/{number}/requested_reviewers` with the fixed
+`copilot-pull-request-reviewer[bot]` alias. Upstream remains restricted to
+[#20722](https://github.com/microsoft/aspire/pull/20722);
+this does not authorize other upstream subjects or publication.
+
+A saved `sent` boundary precedes the POST. Source/enablement/management, authority,
+head, CI, review activity, saved workers and budgets are guarded again before
+sending. An exact 201 PR-object receipt establishes an accepted request, not a
+completed review. Existing requested, pending or current-head published Copilot
+reviews avoid another request.
+
+Fresh sweeps wait without another native round or duplicate POST. A published
+reviewer result must match the recorded head and follow its request boundary.
+Approved objections then enter the existing repair loop; a later pushed green
+head can receive its own review. Review activity is bound into prepared native
+packets, so a new request or withdrawn result prevents stale repair dispatch.
+An already pending Copilot review pauses the whole repair batch, including
+existing human feedback and red CI; the controller does not repair concurrently
+with that review.
+
+Each chain records at most ten review intents, one per head, including known
+no-sends/rejections. Lost writes, a crash after the send boundary, foreign/
+malformed receipts or an accepted request that vanishes without a result never
+trigger a blind retry. Uncertain, rejected/unverifiable and exhausted review
+states use the existing delayed, guarded, deduplicated owner reminder.
+
+Review completion and billing are separate. The request/review endpoints expose
+no per-review usage receipt, so each admission retains the existing 30-credit
+floor as unknown usage, including after completion and beyond 24 hours. Only a
+verified no-send or documented 403/422 rejection establishes zero incremental
+review use. Holds participate in lifetime and rolling-repository admission
+without consuming native action rounds or pretending to be saved agent tasks.
+
+**The 30-credit reservation is not a review price or a hard spending cap.**
+[Code review](https://docs.github.com/en/copilot/concepts/agents/code-review)
+consumes variable AI credits and GitHub Actions minutes; actual cost can exceed
+this admission floor. GitHub/account-level spending controls remain necessary.
+No live paid review request is part of the deterministic validation.
 
 ## Lifetime policy and accounting
 

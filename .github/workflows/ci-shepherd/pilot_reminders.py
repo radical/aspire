@@ -13,7 +13,8 @@ MARKER = "<!-- ci-shepherd:human-reminder:v1:"
 KINDS = {"workflow-approval": "workflow approval", "worker-input": "worker input",
          "native-handoff": "an explicit human handoff",
          "child-adoption": "ambiguous child-adoption needing confirmation",
-         "worker-result": "an ambiguous worker result needing review"}
+         "worker-result": "an ambiguous worker result needing review",
+         "copilot-review": "Copilot review needing confirmation"}
 
 
 def delay(value):
@@ -76,7 +77,8 @@ def valid_body(body, repository, number):
         r"(?:PR #" + str(number) + r" at head `([0-9a-f]{40})`"
         r"|Issue #" + str(number) + r" at content state `([0-9a-f]{64})`)"
         r" is blocked on (workflow approval|worker input|an explicit human handoff"
-        r"|ambiguous child-adoption needing confirmation|an ambiguous worker result needing review)\.\n"
+        r"|ambiguous child-adoption needing confirmation|an ambiguous worker result needing review"
+        r"|Copilot review needing confirmation)\.\n"
         r"Please review: (" + base + r"/(?:actions/runs/[1-9][0-9]{0,19}|tasks/[A-Za-z0-9_-]{1,256}|pull/"
         + str(number) + r"|issues/" + str(number) + r"))\n\n" + re.escape(MARKER) + r"([0-9a-f-]{36}) -->", body)
     if match is None:
@@ -170,6 +172,9 @@ def blocker(chain, observation):
         if operation["taskId"] is not None and operation["state"] in {"completed", "failed"} and chain["child"] is None:
             # A terminal worker without a mappable child needs owner review.
             return "worker-result", operation["taskId"]
+    if observation.get("copilotReview", {}).get("state") in {"uncertain", "blocked", "limit"}:
+        records = chain.get("reviews", [])
+        return "copilot-review", records[-1]["id"] if records else "review-limit"
     return None
 
 
@@ -178,7 +183,8 @@ def matches(value, observation, current):
 
 
 def evidence_unknown(chain, observation):
-    return observation["workflowAttention"] is not None or any(
+    return (observation["workflowAttention"] is not None
+            or observation.get("copilotReview", {}).get("state") == "unavailable") or any(
         op["taskId"] is not None and op["workerState"] == "unknown" for op in chain["operations"])
 
 

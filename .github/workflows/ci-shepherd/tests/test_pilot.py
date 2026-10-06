@@ -23,7 +23,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.transport.values["repos/radical/aspire/pulls/7"] = pr()
         self.transport.values["repos/radical/aspire/issues/7/comments"] = [{
             "id": 20, "body": "Please fix normalization", "updated_at": "2026-10-04T00:00:00Z",
-            "user": {"id": 20, "login": "reviewer"}}]
+            "user": {"id": 1472, "login": "radical"}}]
         self.api = pilot_github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
 
     def prepared(self):
@@ -154,7 +154,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.transport.values["repos/radical/aspire/pulls/9"] = second
         self.transport.values["repos/radical/aspire/issues/8"] = issue
         self.transport.values["repos/radical/aspire/issues/9/comments"] = [{
-            "id": 29, "body": "Please fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+            "id": 29, "body": "Please fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         first = self.prepared()
         pilot.settle(self.api, first, reconciliation_evidence(self.decision(first)), 2, self.clock())
         second_packet = self.prepared()
@@ -175,7 +175,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.transport.values["repos/radical/aspire/issues"].append(dict(pr(9), pull_request={}))
         self.transport.values["repos/radical/aspire/pulls/9"] = pr(9)
         self.transport.values["repos/radical/aspire/issues/9/comments"] = [{
-            "id": 29, "body": "Fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+            "id": 29, "body": "Fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         self.api.read_authority()
         first = state.adopt(self.api.ledger, 7, "pr", "NODE7")
         first["statusPending"] = True
@@ -263,9 +263,9 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         self.transport.values["repos/radical/aspire/issues"].append(dict(pr(9), pull_request={}))
         self.transport.values["repos/radical/aspire/pulls/9"] = pr(9)
         self.transport.values["repos/radical/aspire/issues/9/comments"] = [{
-            "id": 29, "body": "Fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+            "id": 29, "body": "Fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         self.transport.values["repos/radical/aspire/issues/7/comments"] = [
-            {"id": index, "body": "Feedback", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}
+            {"id": index, "body": "Feedback", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}
             for index in range(1, 32)]
         packet = self.prepared()
         self.assertEqual(9, packet["observation"]["number"])
@@ -284,7 +284,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         packet = self.prepared()
         self.assertEqual([], packet["observation"]["feedback"])
         self.transport.values["repos/radical/aspire/issues/8/comments"] = [
-            {"id": index, "body": "Feedback", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}
+            {"id": index, "body": "Feedback", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}
             for index in range(1, 32)]
         chain = self.api.ledger["chains"][0]
         fresh = self.api.guard(chain, packet["observation"], effect=False)

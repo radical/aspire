@@ -19,6 +19,7 @@ import reasoning
 import round as contracts
 import pilot_binding as bindings
 import pilot_reminders as reminders
+import pilot_reviews as reviews
 
 
 def configuration(environment, *, billing=False):
@@ -43,6 +44,14 @@ def prepare(api, run, now, *, present=True):
     api.admission_reasons = {}
     observations = api.sweep()
     api.persist()
+    review_started = False
+    for chain in api.ledger["chains"]:
+        number = chain["child"] or chain["origin"]
+        before = deepcopy(chain)
+        reviews.process(api, chain, observations[number], now, allow_request=not review_started)
+        review_started |= len(chain.get("reviews", [])) > len(before.get("reviews", []))
+        if chain != before:
+            observations[number] = api.observe(chain)
     for chain in api.ledger["chains"]:
         api.log_status(chain, observations[chain["child"] or chain["origin"]], now)
     if present:

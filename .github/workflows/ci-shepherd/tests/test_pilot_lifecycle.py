@@ -3,6 +3,7 @@
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 import io
+from hashlib import sha256
 import json
 import unittest
 from unittest.mock import patch
@@ -83,7 +84,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         self.transport.values[PREFIX + "/pulls/7"] = pr()
         self.transport.values[PREFIX + "/issues/7/comments"] = [{
             "id": 20, "body": "Please fix normalization", "updated_at": "2026-10-04T00:00:00Z",
-            "user": {"id": 20, "login": "reviewer"}}]
+            "user": {"id": 1472, "login": "radical"}}]
 
     def fresh(self):
         api = github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
@@ -92,6 +93,13 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
 
     def ledger(self):
         return state.parse(self.transport.comments[0]["body"])
+
+    def complete_review(self, head):
+        self.transport.values[PREFIX + "/pulls/7"]["requested_reviewers"] = []
+        self.transport.values.setdefault(PREFIX + "/pulls/7/reviews", []).append({
+            "id": 61, "user": {"id": 175728472, "login": "Copilot", "type": "Bot"},
+            "state": "COMMENTED", "body": "", "commit_id": head,
+            "submitted_at": self.clock().isoformat().replace("+00:00", "Z")})
 
     def prepare(self):
         api = self.fresh()
@@ -202,7 +210,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             self.assertEqual({"number", "kind", "node", "head", "description", "managed", "originManaged",
                               "handsOff", "state", "feedback", "ready", "attention", "pendingCI", "ciWait",
                               "reviewOnly", "diagnostics", "approval", "workflowAttention", "actionable",
-                              "title", "body", "url", "headRef", "workerResults"}, set(packet["observation"]))
+                              "title", "body", "url", "headRef", "workerResults", "copilotReview"}, set(packet["observation"]))
             self.assertEqual([{"id": "comment:20:2026-10-04T00:00:00Z",
                                "body": "Please fix normalization", "url": ""}], packet["observation"]["feedback"])
             self.assertEqual([], packet["observation"]["workerResults"])
@@ -261,14 +269,14 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(1, len(process.launches))
         self.assertEqual(1, len(self.task_writes()))
 
-    def test_completed_task_with_new_green_head_waits_for_current_head_human_approval(self):
+    def test_completed_task_with_new_green_head_waits_for_copilot_then_current_head_human_approval(self):
         first = self.start()
         self.finish()
         self.transport.values[PREFIX + "/pulls/7"]["head"]["sha"] = "b" * 40
         self.check("b" * 40, "success", 46)
         self.assertIsNone(self.prepare())
         chain = self.ledger()["chains"][0]
-        self.assertEqual((1, 1, 0, 3.5),
+        self.assertEqual((1, 1, 0, 33.5),
                          (chain["rounds"], len(chain["operations"]), chain["localAttempts"], state.chain_spend(chain)))
         self.assertEqual((2, 0, 1.5, 0, "completed"),
                          tuple(chain["operations"][0][key] for key in (
@@ -276,8 +284,12 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         observed = self.observed()
         self.assertEqual([self.result_facts(first, head="b" * 40)], observed["workerResults"])
         self.assertFalse(observed["ready"])
+        self.complete_review("b" * 40)
+        self.assertIsNone(self.prepare())
+        chain = self.ledger()["chains"][0]
+        self.assertEqual("completed", chain["reviews"][0]["state"])
         self.transport.values[PREFIX + "/pulls/7/reviews"] = [{
-            "id": 30, "user": {"id": 20, "login": "reviewer"}, "state": "APPROVED", "body": "",
+            "id": 30, "user": {"id": 1472, "login": "radical"}, "state": "APPROVED", "body": "",
             "commit_id": "b" * 40, "submitted_at": "2026-10-04T00:03:00Z"}]
         self.assertIsNone(self.prepare())
         self.assertTrue(self.observed()["ready"])
@@ -350,19 +362,22 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         submitted = "2026-10-04T00:03:00Z"
         if reviewer == "human":
             self.transport.values[PREFIX + "/pulls/7/reviews"] = [{
-                "id": 30, "user": {"id": 20, "login": "reviewer"}, "state": "CHANGES_REQUESTED",
+                "id": 30, "user": {"id": 1472, "login": "radical"}, "state": "CHANGES_REQUESTED",
                 "body": "Handle the empty input", "commit_id": "b" * 40, "submitted_at": submitted}]
-            expected = [{"id": "review:30:" + submitted, "body": "Handle the empty input", "url": ""}]
+            expected = [{"id": "review:30:" + submitted + ":" + sha256(b"Handle the empty input").hexdigest(),
+                         "body": "Handle the empty input", "url": ""}]
         else:
             self.transport.values[PREFIX + "/pulls/7/reviews"] = [{
-                "id": 31, "user": {"id": 40, "login": "copilot-pull-request-reviewer[bot]"}, "state": "COMMENTED",
+                "id": 31, "user": {"id": 175728472, "login": "Copilot", "type": "Bot"}, "state": "COMMENTED",
                 "body": "See inline comments", "commit_id": "b" * 40, "submitted_at": submitted}]
             self.transport.values[PREFIX + "/pulls/7/comments"] = [{
                 "id": 40, "node_id": "RC40", "updated_at": submitted, "body": "Handle the empty input",
-                "user": {"id": 40, "login": "copilot-pull-request-reviewer[bot]"},
+                "user": {"id": 175728472, "login": "Copilot", "type": "Bot"},
                 "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "b" * 40}]
             expected = [{"id": "review-comment:40:" + submitted, "body": "Handle the empty input", "url": "",
-                         "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "b" * 40}]
+                         "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "b" * 40},
+                        {"id": "review:31:" + submitted + ":" + sha256(b"See inline comments").hexdigest(),
+                         "body": "See inline comments", "url": ""}]
         self.assertIsNone(self.prepare())
         self.assertEqual(1, self.ledger()["chains"][0]["rounds"])
         self.finish()
@@ -390,7 +405,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         submitted = "2026-10-04T00:00:00Z"
         comment = {
             "id": 40, "node_id": "RC40", "updated_at": submitted, "body": "Handle the empty input",
-            "user": {"id": 40, "login": "copilot-pull-request-reviewer[bot]"},
+            "user": {"id": 175728472, "login": "Copilot", "type": "Bot"},
             "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "a" * 40}
         self.transport.values[PREFIX + "/issues/7/comments"] = []
         self.transport.values[PREFIX + "/pulls/7/comments"] = [comment]
@@ -405,8 +420,9 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         for _ in range(2):
             self.clock.advance(minutes=2)
             self.assertIsNone(self.prepare())
-            self.assertEqual((1, 3.5), (self.ledger()["chains"][0]["rounds"],
+            self.assertEqual((1, 33.5), (self.ledger()["chains"][0]["rounds"],
                                         state.chain_spend(self.ledger()["chains"][0])))
+        self.complete_review("b" * 40)
         later = {**comment, "id": 41, "node_id": "RC41", "updated_at": "2026-10-04T00:04:00Z",
                  "commit_id": "b" * 40}
         self.transport.values[PREFIX + "/pulls/7/comments"].append(later)
@@ -415,7 +431,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             "id": "review-comment:41:2026-10-04T00:04:00Z", "body": "Handle the empty input", "url": "",
             "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "b" * 40}],
             packet["observation"]["feedback"])
-        self.assertEqual((first["chain"], 2, 33.5),
+        self.assertEqual((first["chain"], 2, 63.5),
                          (packet["chain"], self.ledger()["chains"][0]["rounds"],
                           state.chain_spend(self.ledger()["chains"][0])))
         self.assertEqual({"outcome": "waiting", "taskId": "TASK2"}, self.settle(packet))
@@ -497,7 +513,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             self.transport.reads.clear()
             self.assertIsNone(self.prepare())
             operation = self.ledger()["chains"][0]["operations"][0]
-            self.assertEqual(("waiting", "unknown", 1.5, 496.5, 2, first["operation"]),
+            self.assertEqual(("waiting", "unknown", 1.5, 466.5, 2, first["operation"]),
                              tuple(operation[key] for key in (
                                  "state", "workerState", "workerActual", "workerReserved", "nativeActual", "id")))
             self.assertEqual((1, 500, 1), (self.ledger()["chains"][0]["rounds"],
@@ -528,7 +544,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         self.finish(usage=1.5)
         self.assertIsNone(self.prepare())
         chain = self.ledger()["chains"][0]
-        self.assertEqual((1, 3.5, 1.5, 0), (chain["rounds"], state.chain_spend(chain),
+        self.assertEqual((1, 33.5, 1.5, 0), (chain["rounds"], state.chain_spend(chain),
                                           chain["operations"][0]["workerActual"],
                                           chain["operations"][0]["workerReserved"]))
         self.assertEqual(1, len(self.task_writes()))

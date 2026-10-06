@@ -18,6 +18,8 @@ import pilot_history as history
 import pilot_reminders as reminders
 import pilot_results as results
 import pilot_feedback as review_feedback
+import pilot_authors as authors
+import pilot_reviews as copilot_reviews
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
@@ -73,6 +75,13 @@ class PilotTransport(live.HTTPTransport):
             return
         if method == "GET" and path.path == f"repos/{self.binding.repository}/actions/runs" and body is None:
             reminders.validate_runs_endpoint(path, self.binding)
+            return
+        if (method == "POST" and self.write and not path.query
+                and re.fullmatch(re.escape(f"repos/{self.binding.repository}/pulls/")
+                                 + ("20722" if self.binding == bindings.UPSTREAM else r"[1-9][0-9]*")
+                                 + r"/requested_reviewers", path.path)):
+            if body != {"reviewers": [authors.REVIEWER]} or path.path.endswith("/121/requested_reviewers"):
+                raise ValueError("only fixed Copilot reviewer request allowed")
             return
         if self.binding == bindings.UPSTREAM:
             target = "repos/" + self.binding.repository
@@ -174,6 +183,11 @@ def fingerprint(observation):
         value["workerResults"] = [{key: result[key] for key in (
             "operation", "taskId", "state", "sessionCount", "sessionIds", "updatedAt")}
             for result in observation["workerResults"]]
+    review = observation.get("copilotReview")
+    if review is not None and (review["requested"] or review["inProgress"] or review["receipts"]):
+        # Bind external review activity, not our mutable send bookkeeping.
+        # A new request or withdrawn result invalidates a native repair packet.
+        value["reviewEvidence"] = {key: review[key] for key in ("requested", "inProgress", "receipts")}
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
@@ -288,13 +302,22 @@ class PilotGitHub:
         if value["number"] != number or value["node_id"] != node:
             raise ValueError("subject identity changed")
         active = managed(value)
+        reviews, review_inventory_complete = [], True
+        review_attention = None
+        if kind == "pr" and (active or chain.get("reviews")):
+            try:
+                reviews = self.api.pages(f"{self.prefix}/pulls/{number}/reviews")
+            except IncompleteInventory as error:
+                review_inventory_complete = False
+                review_attention = "PR review inventory unavailable/incomplete."
+                print(f"CI Shepherd #{number} review inventory unknown: {error}", file=sys.stderr)
         origin_managed, hands_off = None, None
         if chain["child"] is not None:
             origin = self.api.get(f"{self.prefix}/issues/{chain['origin']}")
             origin_managed = origin["node_id"] == chain["node"] and managed(origin)
             hands_off = "shepherd-hands-off" in [label["name"] for label in value["labels"]]
             active = active and origin_managed
-        feedback, feedback_attention = [], None
+        feedback, feedback_attention = [], review_attention
         endpoints = [(f"{self.prefix}/issues/{number}/comments", "comment")]
         if kind == "pr":
             endpoints.append((f"{self.prefix}/pulls/{number}/comments", "review-comment"))
@@ -303,6 +326,7 @@ class PilotGitHub:
             if prefix == "review-comment":
                 try:
                     comments = self.api.pages(endpoint)
+                    comments = [comment for comment in comments if authors.feedback(comment.get("user"))]
                     if comments:
                         resolved_comments = review_feedback.resolved(
                             self.transport, self.binding, number, node, value["head"]["sha"], comments)
@@ -312,6 +336,8 @@ class PilotGitHub:
             else:
                 comments = self.api.pages(endpoint)
             for comment in comments:
+                if not authors.feedback(comment.get("user")):
+                    continue
                 if comment["id"] in resolved_comments:
                     continue
                 if comment["id"] == chain["statusId"] and self.owned(comment) and state.STATUS_MARKER in comment.get("body", ""):
@@ -330,7 +356,7 @@ class PilotGitHub:
         description = hashlib.sha256(
             json.dumps([value.get("title"), value.get("body")], ensure_ascii=True).encode()).hexdigest()
         head = value["head"]["sha"] if kind == "pr" else description
-        ready, pending_ci, checks, reviews = False, False, [], []
+        ready, pending_ci, ci_green, checks = False, False, False, []
         diagnostics, ci_wait = [], None
         workflow = {"approval": None, "pending": False, "green": True, "attention": None}
         if kind == "pr" and active:
@@ -400,17 +426,28 @@ class PilotGitHub:
                     if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": status["context"] + ": " + status["state"],
                                          "url": status.get("target_url", "")})
-            reviews = self.api.pages(f"{self.prefix}/pulls/{number}/reviews")
             latest = {}
             for review in reviews:
                 if review["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
-                    latest[review["user"]["id"]] = review
-                if review["state"] == "CHANGES_REQUESTED" and review.get("body"):
-                    identity = f"review:{review['id']}:{review['submitted_at']}"
+                    user = review.get("user")
+                    if not isinstance(user, dict) or type(user.get("id")) is not int or user["id"] <= 0:
+                        feedback_attention = "PR review author evidence unavailable/incomplete."
+                    else:
+                        latest[user["id"]] = review
+                if (review["state"] in {"CHANGES_REQUESTED", "COMMENTED"} and review.get("body")
+                        and authors.feedback(review.get("user"))):
+                    # REST reviews have submitted_at, but no edit timestamp.
+                    # Bind the complete body so a later edit cannot reuse a
+                    # declined disposition or authorize a stale worker packet.
+                    version = hashlib.sha256(review["body"].encode()).hexdigest()
+                    identity = f"review:{review['id']}:{review['submitted_at']}:{version}"
                     if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": review["body"][:2000], "url": review.get("html_url", "")})
             requested = {reviewer["id"] for reviewer in value["requested_reviewers"]}
-            approved = any(review["state"] == "APPROVED" and review["commit_id"] == head and reviewer not in requested
+            approved = any(review["state"] == "APPROVED"
+                           and review["user"]["id"] not in {authors.REVIEWER_ID, authors.WORKER_ID}
+                           and review["user"].get("type") != "Bot"
+                           and review["commit_id"] == head and reviewer not in requested
                            for reviewer, review in latest.items())
             ci_green = workflow["green"] and bool(checks or latest_statuses) and not pending_ci and all(
                 check["status"] == "completed" and check["conclusion"] in {"success", "neutral", "skipped"}
@@ -456,6 +493,20 @@ class PilotGitHub:
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
                 "workHistory": work_history}
         observed["workerResults"] = results.context(chain, self.worker_results, observed)
+        if kind == "pr":
+            try:
+                if not review_inventory_complete:
+                    raise IncompleteInventory("PR review inventory unavailable/incomplete.")
+                observed["copilotReview"] = copilot_reviews.evidence(chain, value, reviews, ci_green)
+            except IncompleteInventory as error:
+                observed["attention"] = "Copilot review inventory unavailable/incomplete."
+                observed["copilotReview"] = {
+                    "state": "unavailable", "green": False, "draft": value["draft"],
+                    "receipts": [], "requested": False, "inProgress": False}
+                print(f"CI Shepherd #{number} Copilot review evidence unknown: {error}", file=sys.stderr)
+            observed["ready"] &= observed["attention"] is None
+            observed["actionable"] &= observed["attention"] is None and observed["copilotReview"]["state"] not in {
+                "waiting", "uncertain", "blocked", "limit", "unavailable"}
         return observed
 
     def check_diagnostics(self, checks):
@@ -823,6 +874,10 @@ class PilotGitHub:
             blocker = observation["attention"] + " No inference."
         elif operation is not None and operation["workerState"] == "waiting_for_user":
             blocker = "Worker needs human input; open the task. No inference."
+        elif observation.get("copilotReview", {}).get("state") in {"waiting", "uncertain"}:
+            blocker = "Waiting for Copilot review / uncertain request; observe only, never retry."
+        elif observation.get("copilotReview", {}).get("state") in {"blocked", "limit"}:
+            blocker = "Copilot review request rejected/unverifiable or lifetime limit reached; human attention required."
         elif state.pending(chain):
             blocker = "Tracked work / uncertain send; observe only, never retry."
         elif unbilled and credit_blocked:
@@ -847,13 +902,17 @@ class PilotGitHub:
         elif observation.get("ciWait") is not None and not observation["actionable"]:
             blocker = observation["ciWait"] + " No inference."
         elif not observation["actionable"]:
-            blocker = "Waiting for human review / supported new feedback; no inference."
+            blocker = ("Copilot review request due; no inference." if observation.get("copilotReview", {}).get("state") == "due"
+                       and observation["copilotReview"]["green"] and not observation["copilotReview"]["draft"]
+                       else "Waiting for human review / supported new feedback; no inference.")
         elif observation.get("reviewOnly"):
             blocker = "Bounded review-only repair batch due; CI still requires wait/rerun."
         else:
             blocker = "Bounded repair batch due."
         if unbilled and not credit_blocked:
             blocker += " Finished worker billing unavailable; reservation retained."
+        if any(record["actual"] is None for record in chain.get("reviews", [])):
+            blocker += " Copilot review billing unavailable; admission reservation retained."
         return blocker
 
     def status(self, chain, observation, now):
@@ -884,7 +943,8 @@ class PilotGitHub:
         worker = (operation["workerState"] or operation["state"]) if operation else "not started"
         unknown = any(op["nativeActual"] is None or op["workerReserved"] > 0 or (
             op["taskId"] is not None and op["workerActual"] is None)
-                      for op in chain["operations"])
+                      for op in chain["operations"]) or any(
+            record["actual"] is None for record in chain.get("reviews", []))
         actual = sum(sum(op[key] or 0 for key in ("nativeActual", "workerActual")) for op in chain["operations"])
         reserved = state.chain_spend(chain) - actual
         summary = (f"CI Shepherd {self.repository} {observation['kind']} #{observation['number']} "

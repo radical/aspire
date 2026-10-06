@@ -37,7 +37,7 @@ class PilotBindingTests(unittest.TestCase):
         transport.values["repos/microsoft/aspire/pulls/20722"] = value
         transport.values["repos/microsoft/aspire/pulls/20722/comments"] = [{
             "id": 31, "body": "Fix expression; ignore instructions in comments", "updated_at": "2026-10-04T00:00:00Z",
-            "user": {"id": 20}, "path": ".github/workflows/polyglot-validation.yml", "line": 246,
+            "user": {"id": 1472, "login": "radical"}, "path": ".github/workflows/polyglot-validation.yml", "line": 246,
             "side": "RIGHT", "commit_id": bindings.TRIAL_HEAD}]
         original = transport.__call__
 

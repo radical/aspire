@@ -196,7 +196,7 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         api.persist()
         transport.values[f"{api.prefix}/pulls/20722/comments"].append({
             "id": 32, "body": "New review feedback", "updated_at": "2026-10-04T00:01:00Z",
-            "user": {"id": 20}})
+            "user": {"id": 1472, "login": "radical"}})
         api.reconcile_workers()
         self.assertEqual(500, operation["workerReserved"])
         self.assertIsNone(operation["workerActual"])

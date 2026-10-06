@@ -69,6 +69,11 @@ class Transport:
             if method == "POST" and endpoint.endswith("/labels"):
                 payload = body["labels"] if self.label_write_confirms else []
                 return Response([{"name": name} for name in payload], {}, 200)
+            if method == "POST" and endpoint.endswith("/requested_reviewers"):
+                value = self.values[endpoint.removesuffix("/requested_reviewers")]
+                value["requested_reviewers"].append(
+                    {"id": 175728472, "login": "Copilot", "type": "Bot"})
+                return Response(deepcopy(value), {}, 201)
             raise LostResponse("unknown write")
         path = endpoint.split("?")[0]
         self.reads.append((method, endpoint, body))

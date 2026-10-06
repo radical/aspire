@@ -50,7 +50,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         transport.values["repos/radical/aspire/issues"] = [dict(pr(), pull_request={})]
         transport.values["repos/radical/aspire/pulls/7"] = pr()
         transport.values["repos/radical/aspire/issues/7/comments"] = [{
-            "id": 20, "body": "Please fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+            "id": 20, "body": "Please fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
         api.clock = FakeClock()
         return api, transport
@@ -107,7 +107,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         api, transport = self.api()
         chain, prior, task = self.seed_worker(api, transport, completed=True)
         transport.values[f"{api.prefix}/issues/7/comments"].append({
-            "id": 21, "body": "New feedback", "updated_at": "2026-10-04T00:01:00Z", "user": {"id": 20}})
+            "id": 21, "body": "New feedback", "updated_at": "2026-10-04T00:01:00Z", "user": {"id": 1472, "login": "radical"}})
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, api.clock(), present=False)
         self.assertIsNotNone(packet)
@@ -187,7 +187,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         chain, operation, task = self.seed_worker(api, transport, completed=True)
         task["sessions"][0]["state"] = "in_progress"
         transport.values[f"{api.prefix}/issues/7/comments"].append({
-            "id": 21, "body": "New feedback", "updated_at": "2026-10-04T00:01:00Z", "user": {"id": 20}})
+            "id": 21, "body": "New feedback", "updated_at": "2026-10-04T00:01:00Z", "user": {"id": 1472, "login": "radical"}})
         fresh = self.fresh(api)
         with redirect_stdout(io.StringIO()):
             self.assertIsNone(pilot.prepare(fresh, RUN, api.clock(), present=False))
@@ -243,7 +243,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         task["sessions"].append({**task["sessions"][0], "id": "NEWSESSION", "usage": None})
         task["session_count"] = 2
         transport.values[f"{api.prefix}/issues/7/comments"].append({
-            "id": 21, "body": "New feedback", "updated_at": "2026-10-04T00:01:00Z", "user": {"id": 20}})
+            "id": 21, "body": "New feedback", "updated_at": "2026-10-04T00:01:00Z", "user": {"id": 1472, "login": "radical"}})
         fresh = self.fresh(api)
         with redirect_stdout(io.StringIO()):
             self.assertIsNone(pilot.prepare(fresh, RUN, api.clock(), present=False))

@@ -61,7 +61,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
     def review(self, count=1, body="Repair the source"):
         self.transport.values[f"{self.api.prefix}/pulls/20722/comments"] = [
             {"id": 31 + index, "body": body, "updated_at": "2026-10-04T00:00:00Z",
-             "user": {"id": 20}, "path": "src/fixture.py", "line": 1, "commit_id": self.head}
+             "user": {"id": 1472, "login": "radical"}, "path": "src/fixture.py", "line": 1, "commit_id": self.head}
             for index in range(count)]
 
     def prepare(self):
@@ -231,7 +231,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
     def test_superseded_same_head_workflow_failure_does_not_hold_recovered_ci(self):
         self.ci([check(self.head, conclusion="success")], [])
         self.transport.values[f"{self.api.prefix}/pulls/20722/reviews"] = [{
-            "id": 22, "user": {"id": 20}, "state": "APPROVED", "commit_id": self.head}]
+            "id": 22, "user": {"id": 1472, "login": "radical"}, "state": "APPROVED", "commit_id": self.head}]
         runs = [{"id": identity, "workflow_id": 90, "head_sha": self.head, "status": "completed",
                  "conclusion": conclusion, "repository": {"id": self.api.repository_id, "full_name": self.api.repository},
                  "html_url": f"https://github.com/{self.api.repository}/actions/runs/{identity}"}
@@ -296,7 +296,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
                 api, transport = fixtures.TrackedOnlyTests().api(bindings.UPSTREAM)
                 transport.values[f"{api.prefix}/pulls/20722/comments"] = [
                     {"id": index + 1, "body": content, "updated_at": "2026-10-04T00:00:00Z",
-                     "user": {"id": 20}, "path": "path", "line": 1} for index in range(30)]
+                     "user": {"id": 1472, "login": "radical"}, "path": "path", "line": 1} for index in range(30)]
                 with redirect_stdout(io.StringIO()):
                     packet = pilot.prepare(api, RUN, api.clock(), present=False)
                 chain = api.ledger["chains"][0]
@@ -340,7 +340,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
                 previous = deepcopy(operation)
                 transport.values[f"{api.prefix}/pulls/20722/comments"].append({
                     "id": 32, "body": "New actionable review", "updated_at": "2026-10-05T00:00:00Z",
-                    "user": {"id": 20}})
+                    "user": {"id": 1472, "login": "radical"}})
                 with redirect_stdout(io.StringIO()):
                     fresh = pilot.prepare(api, RUN, api.clock(), present=False)
                 self.assertEqual(2, chain["rounds"])
@@ -352,7 +352,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
         self.ci([check(self.head), check(self.head, 11, conclusion="success", annotations_count=0)],
                 [annotation("Known baseline test failure")])
         self.transport.values[f"{self.api.prefix}/pulls/20722/reviews"] = [{
-            "id": 22, "user": {"id": 20}, "state": "APPROVED", "commit_id": self.head}]
+            "id": 22, "user": {"id": 1472, "login": "radical"}, "state": "APPROVED", "commit_id": self.head}]
         packet = self.prepare()
         self.assertEqual([f"check:10:{self.head}:failure"],
                          [item["id"] for item in packet["observation"]["feedback"]])
@@ -383,7 +383,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual({"outcome": "human"}, result)
         self.assertEqual("human", self.chain["state"])
         self.transport.values[f"{self.api.prefix}/pulls/20722/comments"].append({
-            "id": 33, "body": "Fresh feedback", "updated_at": "2026-10-05T00:00:00Z", "user": {"id": 20}})
+            "id": 33, "body": "Fresh feedback", "updated_at": "2026-10-05T00:00:00Z", "user": {"id": 1472, "login": "radical"}})
         with redirect_stdout(io.StringIO()):
             observed = self.api.observe(self.chain)
             self.assertTrue(observed["actionable"])
@@ -403,7 +403,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
                 transport.values[f"{api.prefix}/issues"] = [issue]
                 transport.values[f"{api.prefix}/issues/8"] = issue
                 transport.values[f"{api.prefix}/issues/8/comments"] = [{
-                    "id": 90, "body": "Unrelated suggestion", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+                    "id": 90, "body": "Unrelated suggestion", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
                 with redirect_stdout(io.StringIO()):
                     packet = pilot.prepare(api, RUN, api.clock(), present=False)
                 chain = api.ledger["chains"][0]
@@ -570,7 +570,7 @@ class ResumeTests(WorkspaceTest, unittest.TestCase):
         chain["dispositions"].update({f"review:older-{index}": "needs-human" for index in range(5)})
         head = transport.values[f"{api.prefix}/pulls/20722"]["head"]["sha"]
         transport.values[f"{api.prefix}/pulls/20722/comments"] = [
-            {"id": index, "body": "Current review", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}
+            {"id": index, "body": "Current review", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}
             for index in range(40, 43)]
         checks = [check(head, identity) for identity in range(50, 54)]
         transport.values[f"{api.prefix}/commits/{head}/check-runs"] = {"total_count": 4, "check_runs": checks}
@@ -716,7 +716,7 @@ class ResumeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual([], [write for write in transport.writes if write[0] == "POST"])
         self.assertEqual([], api.observe(chain)["feedback"])
         transport.values[f"{api.prefix}/pulls/20722/comments"].append({
-            "id": 99, "body": "New review", "updated_at": "2026-10-05T00:00:00Z", "user": {"id": 20}})
+            "id": 99, "body": "New review", "updated_at": "2026-10-05T00:00:00Z", "user": {"id": 1472, "login": "radical"}})
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, api.clock(), present=False)
         self.assertEqual(5, chain["rounds"])

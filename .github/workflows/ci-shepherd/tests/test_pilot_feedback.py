@@ -22,7 +22,7 @@ class ReviewFeedbackTests(unittest.TestCase):
         transport.values[f"{api.prefix}/issues/{number}/comments"] = []
         transport.values[f"{api.prefix}/pulls/{number}/comments"] = [{
             "id": 31, "node_id": "COMMENT31", "body": "Fix normalization",
-            "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20},
+            "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"},
             "path": "normalization.py", "line": 12}]
         resolved = set()
         original = api.transport
@@ -143,7 +143,7 @@ class ReviewFeedbackTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_SOURCE_SENTINEL", log.getvalue())
         transport.values[f"{api.prefix}/pulls/9"] = fixtures.pr(9)
         transport.values[f"{api.prefix}/issues/9/comments"] = [{
-            "id": 40, "body": "Fix independent work", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+            "id": 40, "body": "Fix independent work", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         transport.values[f"{api.prefix}/issues"].append(dict(fixtures.pr(9), pull_request={}))
         fresh = fixture.fresh(api, unavailable)
         with redirect_stdout(io.StringIO()):
@@ -180,7 +180,7 @@ class ReviewFeedbackTests(unittest.TestCase):
         api.adopt_child(chain)
         transport.values[f"{api.prefix}/issues/9/comments"] = []
         transport.values[f"{api.prefix}/pulls/9/comments"] = [{
-            "id": 31, "body": "Fix normalization", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 20}}]
+            "id": 31, "body": "Fix normalization", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         api.persist()
         transport.resolved_reviews.add(31)
         before = deepcopy(api.ledger)

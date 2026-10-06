@@ -197,6 +197,11 @@ class HTTPTransport:
             diagnostic = self._diagnostic(method, path.path, error.code, error.headers)
             if method == "POST" and path.path.endswith("/tasks") and error.code in {400, 401, 403, 422}:
                 raise RejectedEffect("task rejected; " + diagnostic) from None
+            # The review-request endpoint documents 403/422 as rejections.
+            # Server errors and lost responses still cannot prove no effect.
+            # https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request
+            if method == "POST" and path.path.endswith("/requested_reviewers") and error.code in {403, 422}:
+                raise RejectedEffect("review request rejected; " + diagnostic) from None
             if not read:
                 raise LostResponse("write result uncertain; no retry; " + diagnostic) from None
             raise IncompleteInventory(("GET unavailable; " if method == "GET" else "read unavailable; ") + diagnostic) from None

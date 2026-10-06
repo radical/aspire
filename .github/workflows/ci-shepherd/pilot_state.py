@@ -8,6 +8,7 @@ import uuid
 import issue_pr
 import round as contracts
 import pilot_reminders as reminders
+import pilot_reviews as reviews
 
 MARKER = "<!-- ci-shepherd:pilot:v1 -->"
 STATUS_MARKER = "<!-- ci-shepherd:pilot-status:v1 -->"
@@ -40,9 +41,12 @@ def validate(ledger):
     for chain in ledger["chains"]:
         contracts.exact(chain, {"id", "origin", "kind", "node", "child", "childNode", "state", "localAttempts",
                                 "rounds", "escalated", "operations", "dispositions", "statusId", "statusPending",
-                                "childAdoption"} | ({"reminder"} if "reminder" in chain else set()), "chain")
+                                "childAdoption"} | ({"reminder"} if "reminder" in chain else set())
+                        | ({"reviews"} if "reviews" in chain else set()), "chain")
         if "reminder" in chain:
             reminders.validate(chain["reminder"])
+        if "reviews" in chain:
+            reviews.validate(chain["reviews"])
         issue_pr.text(chain["id"], "chain id")
         if chain["id"] in chains:
             raise ValueError("duplicate chain identity")
@@ -192,7 +196,8 @@ def operation_spend(operation):
 
 
 def chain_spend(chain):
-    return sum(operation_spend(operation) for operation in chain["operations"])
+    return sum(operation_spend(operation) for operation in chain["operations"]) + sum(
+        (record["actual"] or 0) + record["reserved"] for record in chain.get("reviews", []))
 
 
 def chain_allowance(ledger):
@@ -203,6 +208,10 @@ def chain_allowance(ledger):
 def repository_spend(ledger, now):
     total = 0
     for chain in ledger["chains"]:
+        for record in chain.get("reviews", []):
+            total += record["reserved"]
+            if issue_pr.timestamp(record["at"]) > now - timedelta(hours=24):
+                total += record["actual"] or 0
         for operation in chain["operations"]:
             recent = issue_pr.timestamp(operation["at"]) > now - timedelta(hours=24)
             for actual, reserve in (("nativeActual", "nativeReserved"), ("workerActual", "workerReserved")):
@@ -213,8 +222,9 @@ def repository_spend(ledger, now):
     return total
 
 
-def pending(chain):
-    return chain["statusPending"] or any(operation["state"] in {"reserved", "sent", "waiting", "uncertain"}
+def pending(chain, *, review_id=None):
+    return chain["statusPending"] or any(record["state"] in reviews.PENDING and record["id"] != review_id
+               for record in chain.get("reviews", [])) or any(operation["state"] in {"reserved", "sent", "waiting", "uncertain"}
                for operation in chain["operations"])
 
 
