@@ -25,6 +25,31 @@ import round as contracts
 
 
 class LocalTests(WorkspaceTest, unittest.TestCase):
+    def test_report_failure_preserves_primary_controller_error(self):
+        fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        stderr = io.StringIO()
+        with patch.object(local, "run_sweep", side_effect=ValueError("authority publication uncertain")), \
+                patch.object(Path, "write_text", side_effect=PermissionError("report denied")), \
+                redirect_stderr(stderr), self.assertRaisesRegex(ValueError, "authority publication uncertain"):
+            local.sweep(fixture.api, self.work / "report-failure", "b" * 40)
+        self.assertIn("report denied", stderr.getvalue())
+
+    def test_guard_failure_saves_report_and_preserves_exception_without_retry(self):
+        fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.api.enabled = lambda: True
+        with patch.object(local.pilot, "prepare", side_effect=ValueError("source changed")) as prepare, \
+                self.assertRaisesRegex(ValueError, "source changed"):
+            local.sweep(fixture.api, self.work / "guard", "b" * 40,
+                        executor=lambda *_: self.fail("must not infer"))
+        self.assertEqual(1, prepare.call_count)
+        report = (self.work / "guard" / "report.md").read_text()
+        self.assertIn("Outcome: **failed**", report)
+        self.assertIn("source changed", report)
+
     def test_api_contract_check_uses_readonly_controller_without_inference_or_tracking_changes(self):
         fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
         fixture.setUp()
@@ -267,6 +292,11 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         operation = fixture.api.ledger["chains"][0]["operations"][0]
         self.assertEqual((3, 0), (operation["nativeActual"], operation["nativeReserved"]))
         self.assertEqual([], [write for write in fixture.transport.writes if write[1].endswith("/tasks")])
+        self.assertTrue((self.work / "sweep" / "report.md").exists(), "Every sweep must save a human report")
+        report = (self.work / "sweep" / "report.md").read_text()
+        self.assertIn("Outcome: **failed**", report)
+        self.assertIn("Newly recorded credits: 3", report)
+        self.assertIn("No new saved repair task", report)
 
     def test_unchanged_wait_never_constructs_a_decision_agent(self):
         fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
@@ -282,6 +312,11 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual("Waiting for human review / supported new feedback; no inference.",
                          result["reasons"][0]["reason"])
         self.assertEqual(0, fixture.api.ledger["chains"][0]["rounds"])
+        self.assertTrue((self.work / "wait" / "report.md").exists(), "Waiting sweeps must save a human report")
+        report = (self.work / "wait" / "report.md").read_text()
+        self.assertIn("Outcome: **observed; no inference**", report)
+        self.assertIn("Waiting for human review / supported new feedback; no inference.", report)
+        self.assertIn("New action rounds: 0", report)
 
     def test_missing_native_usage_is_retained_not_refunded_after_failure(self):
         fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")

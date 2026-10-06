@@ -600,6 +600,30 @@ selects due work. Commit reviewed source first: live modes reject dirty source
 and stop before another sweep, repair or notification if the source changes. Billing
 settlement remains independent of that source check.
 
+### Local run reports
+
+Each `run` sweep (including each `watch` iteration) saves `report.md` beside its
+`run.json`, `packet.json` when present, and `result.json`. The report summarizes
+the outcome, decision inputs and dispositions, new saved repair tasks, worker
+state, review/reminder receipts, waiting reasons, rounds and accounting.
+Task scheduling, newly observed starts/completions and task/operation/chain
+state transitions have explicit event lines and task links. These are
+observations during the sweep, not invented exact worker-transition timestamps.
+Each report identifies its run ID and UTC start/end; campaign summaries should
+number the invocations separately from lifetime action rounds.
+Stopped sweeps also attempt to save a report before propagating the error.
+Preflight failures before a sweep, `observe`, `check-api` and `resume` are not
+run reports. Hosted execution is unchanged.
+
+Reports are local audit artifacts, never authority or repair input, and are
+not posted as GitHub comments. They distinguish requested repairs from verified
+fixes and cumulative known usage from newly recorded receipts. Newly recorded
+usage may reconcile earlier work; reservations are not charges or hard caps.
+An absent task ID does not prove no send occurred after an uncertain write.
+Use fresh controller receipts and current-head CI/reviews to assess readiness,
+not a worker's completion state alone. Report-write errors are surfaced without
+retrying any controller effect.
+
 ### Read-only live API contract
 
 `observe` can exit successfully while a chain is visibly paused. Use `check-api`

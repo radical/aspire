@@ -23,6 +23,7 @@ import pilot_feedback as review_feedback
 import pilot_state as state
 import reasoning
 import round as contracts
+import run_report
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -228,6 +229,32 @@ def sweep(api, directory, revision, *, executor=execute):
     run = {"repository": github.REPOSITORY, "runId": "local-" + str(uuid.uuid4()),
            "runAttempt": "1", "workflowSha": revision}
     contracts.write_json(directory / "run.json", run)
+    started = issue_pr.stamp(live.clock())
+    before = state.new_ledger(api.repository)
+    result = {"outcome": "failed"}
+    context = {"packet": None}
+    try:
+        api.read_authority()
+        before = deepcopy(api.ledger)
+        result = run_sweep(api, directory, run, context, executor=executor)
+        return result
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        result = {"outcome": "failed", "error": str(error)}
+        raise
+    finally:
+        primary_error = sys.exc_info()[0] is not None
+        after = api.ledger if api.ledger is not None else before
+        try:
+            (directory / "report.md").write_text(
+                run_report.render(run, api.binding.name, before, after, result, context["packet"],
+                                  started, issue_pr.stamp(live.clock())), encoding="utf-8")
+        except OSError as error:
+            print(f"CI Shepherd report could not be saved: {error}; do not replay effects.", file=sys.stderr)
+            if not primary_error:
+                raise
+
+
+def run_sweep(api, directory, run, context, *, executor):
     if not api.enabled():
         api.read_authority()
         api.reconcile_workers(adopt_children=False)
@@ -235,6 +262,7 @@ def sweep(api, directory, revision, *, executor=execute):
         result = {"outcome": "disabled; billing observation only"}
     else:
         packet = pilot.prepare(api, run, live.clock())
+        context["packet"] = packet
         contracts.write_json(directory / "packet.json", packet)
         if packet is None:
             result = {"outcome": "waiting; no inference"}
