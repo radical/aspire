@@ -32,6 +32,8 @@ def policy(binding):
         return "Do not modify workflows or permissions."
     return (
         "Investigate and repair one bounded batch of ordinary current-PR CI or review feedback. "
+        "The shared repair-scope policy limits code changes to the adopted request and regressions "
+        "caused by it; unrelated failures and suspected flakes do not authorize repairs. "
         "Failed job names alone are not a diagnosis or unsupported scope. Unknown failures require "
         "worker diagnosis of logs, artifacts and annotations before changing code. Repair only a "
         "verified cause; report a concrete human-only blocker when one exists. Infrastructure or "

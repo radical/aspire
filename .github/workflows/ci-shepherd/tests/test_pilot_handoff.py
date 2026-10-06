@@ -348,6 +348,30 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
                 self.assertEqual(["review-comment:32:2026-10-05T00:00:00Z"],
                                  [item["id"] for item in fresh["observation"]["feedback"]])
 
+    def test_declined_unrelated_failure_skips_repair_but_stays_red_until_ci_recovers(self):
+        self.ci([check(self.head), check(self.head, 11, conclusion="success", annotations_count=0)],
+                [annotation("Known baseline test failure")])
+        self.transport.values[f"{self.api.prefix}/pulls/20722/reviews"] = [{
+            "id": 22, "user": {"id": 20}, "state": "APPROVED", "commit_id": self.head}]
+        packet = self.prepare()
+        self.assertEqual([f"check:10:{self.head}:failure"],
+                         [item["id"] for item in packet["observation"]["feedback"]])
+        decision = fixtures.decision(packet)
+        decision["dispositions"] = {item["id"]: "declined" for item in packet["observation"]["feedback"]}
+        result = pilot.settle(self.api, packet, reconciliation_evidence(decision), 2, self.api.clock())
+        self.assertEqual({"outcome": "declined"}, result)
+        self.assertEqual([], [write for write in self.transport.writes if write[0] == "POST"])
+        self.assertEqual("open", self.chain["state"])
+        self.assertEqual(decision["dispositions"], self.chain["dispositions"])
+        observed = self.api.observe(self.chain)
+        self.assertEqual([], observed["feedback"])
+        self.assertFalse(observed["ready"])
+        self.assertIsNone(self.prepare())
+        self.assertEqual(1, self.chain["rounds"])
+        self.ci([check(self.head, conclusion="success"), check(self.head, 11, conclusion="success")], [])
+        self.assertTrue(self.api.observe(self.chain)["ready"])
+        self.assertEqual(1, self.chain["rounds"])
+
     def test_genuine_pr_native_blocker_still_pauses_new_feedback_and_starts_handoff_reminder(self):
         self.review(2)
         packet = self.prepare()

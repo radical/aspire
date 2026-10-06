@@ -124,6 +124,21 @@ or edits. Disabling the pilot or removing adoption stops new notifications.
   admission. Definitive no-send rejection releases worker capacity; an uncertain
   POST never retries.
 
+  The native and worker prompts share `policies/repair-scope.md`. Repair only
+  the adopted request, its review feedback and verified regressions caused by
+  its changes. Unknown failures require diagnosis; confirmed unrelated failures
+  are reported, not patched. Declining a repair never removes its red check
+  from readiness.
+
+  For `microsoft/aspire` CI, the existing
+  [automatic rerun workflow](../auto-rerun-transient-ci-failures.yml) allows
+  three reruns (four total attempts). Check fresh current-head attempt/progress
+  evidence and let eligible retries finish; coverage is not universal across
+  workflows or forks. Workers may retry the affected test locally once within
+  their existing task budget and report the exact command, attempt count and
+  result. A local pass is not remote CI success. Shepherd adds no remote retry
+  loop, resets no retry allowance and gains no workflow-rerun capability.
+
   Pending current-head CI pauses native admission and repair dispatch, including
   fresh review feedback. Complete terminal infrastructure/cancellation-only CI
   waits cheaply for recovery or a required rerun, without a sticky human handoff.
@@ -211,8 +226,8 @@ billing and consumed round persist; the chain stays open for fresh feedback.
 A sticky PR native handoff requires at least one `needs-human` disposition.
 Issue-body implementation/handoff and actual inline patches retain their
 semantics independently of comment dispositions.
-Completed cloud tasks conservatively disposition their old feedback as
-needs-human rather than pretending task completion proves resolution.
+Completed cloud tasks supply verified result context without synthesizing
+needs-human dispositions. Completion alone still does not prove resolution.
 
 Issue-to-child adoption requires exact operation correlation in every task
 session, authenticated task creator/repository, actual GitHub PR database ID,

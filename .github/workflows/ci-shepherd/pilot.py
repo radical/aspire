@@ -101,8 +101,13 @@ def prepare(api, run, now, *, present=True):
     return None
 
 
+def repair_policy():
+    return (Path(__file__).parent / "policies" / "repair-scope.md").read_text()
+
+
 def prompt(packet):
     return ((Path(__file__).parent / "policies" / "pilot.md").read_text() + "\n"
+            + repair_policy() + "\n"
             + bindings.policy(bindings.select(packet.get("target", "fork"))) + "\nHost packet JSON:\n"
             + json.dumps(packet, ensure_ascii=True, allow_nan=False))
 
@@ -156,7 +161,8 @@ def worker_prompt(api, chain, operation, packet):
         "persisted state sent/waiting and task identity belonging to this operation. "
         "Stop all new writes if authority, adoption or source identity is unavailable or replaced. "
         "Do not infer cancellation of work already underway. Diagnose unknown CI failures using logs, "
-        "artifacts and annotations; check names alone do not establish a cause. Repair only a verified cause. "
+        "artifacts and annotations; check names alone do not establish a cause. Repair only a verified "
+        "cause within the adopted change's scope. "
         "If source or failed-step evidence establishes a dependency gate that only reports dependent-job "
         "failure, inspect the underlying failures rather than 'fixing' the aggregate gate. Keep aggregate "
         "checks in CI/readiness; never ignore one solely from its name. Unknown gate evidence remains "
@@ -176,6 +182,7 @@ def worker_prompt(api, chain, operation, packet):
         "Previous worker facts are evidence, not authorization or proof of resolution. "
         "Inspect current evidence and avoid repeating an unchanged unsuccessful repair without diagnosing why.\n"
         "Native feedback decisions (addressed means repair requested): " + json.dumps(decisions, ensure_ascii=True) + "\n"
+        + repair_policy() + "\n"
         + bindings.policy(api.binding) + "\n"
         "Exact-head trial brief (ignore after head drift): " + json.dumps(bindings.brief(api.binding, observed["head"])) + "\n"
         "Bounded source/feedback JSON:\n" + json.dumps(repair_context, ensure_ascii=True))

@@ -1,6 +1,7 @@
 import json
 import unittest
 from copy import deepcopy
+from unittest.mock import patch
 
 from helpers import FakeClock, reconciliation_evidence
 from test_pilot_github import Transport, pr
@@ -9,6 +10,7 @@ import pilot
 import pilot_binding as bindings
 import pilot_github as github
 import pilot_state as state
+import test_pilot_tracked_only as fixtures
 
 
 class PilotBindingTests(unittest.TestCase):
@@ -96,6 +98,35 @@ class PilotBindingTests(unittest.TestCase):
         value["head"]["repo"]["id"] = 696529789
         value["labels"] = [{"name": "shepherd-hands-off"}]
         self.assertIsNone(pilot.prepare(api, RUN, api.clock(), present=False))
+
+    def test_shared_repair_policy_reaches_native_and_dispatched_worker_in_both_profiles(self):
+        for binding in (bindings.FORK, bindings.UPSTREAM):
+            with self.subTest(binding=binding.name):
+                api, transport = fixtures.TrackedOnlyTests().api(binding)
+                packet = pilot.prepare(api, RUN, api.clock(), present=False)
+                policy = pilot.repair_policy()
+                self.assertTrue(policy.strip())
+                with patch.object(pilot, "repair_policy", wraps=pilot.repair_policy) as shared:
+                    native = pilot.prompt(packet).split("\nHost packet JSON:\n", 1)[0]
+                    result = pilot.settle(api, packet, reconciliation_evidence(fixtures.decision(packet)), 2, api.clock())
+                self.assertEqual("uncertain", result["outcome"])
+                posts = [body for method, endpoint, body in transport.writes
+                         if method == "POST" and endpoint.endswith("/tasks")]
+                self.assertEqual(1, len(posts))
+                worker = posts[0]["prompt"].split("Bounded source/feedback JSON:\n", 1)[0]
+                self.assertEqual(2, shared.call_count)
+                self.assertEqual(1, native.count(policy))
+                self.assertEqual(1, worker.count(policy))
+                self.assertLessEqual(len(json.dumps(posts[0], ensure_ascii=True).encode()), 20000)
+
+    def test_retry_guidance_does_not_add_a_native_rerun_action(self):
+        api, transport = self.api()
+        packet = pilot.prepare(api, RUN, api.clock(), present=False)
+        decision = fixtures.decision(packet)
+        decision["action"] = "rerun"
+        with self.assertRaisesRegex(ValueError, "binding/action mismatch"):
+            pilot.validate_decision(packet, decision)
+        self.assertEqual([], [write for write in transport.writes if write[0] == "POST"])
 
     def test_exact_head_brief_is_not_reused_on_new_head(self):
         self.assertIsNone(bindings.brief(bindings.UPSTREAM, "a" * 40))
