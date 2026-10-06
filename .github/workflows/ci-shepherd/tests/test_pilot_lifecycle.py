@@ -355,7 +355,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             expected = [{"id": "review:30:" + submitted, "body": "Handle the empty input", "url": ""}]
         else:
             self.transport.values[PREFIX + "/pulls/7/reviews"] = [{
-                "id": 31, "user": {"id": 40, "login": "copilot-pull-request-reviewer[bot]"}, "state": "COMMENT",
+                "id": 31, "user": {"id": 40, "login": "copilot-pull-request-reviewer[bot]"}, "state": "COMMENTED",
                 "body": "See inline comments", "commit_id": "b" * 40, "submitted_at": submitted}]
             self.transport.values[PREFIX + "/pulls/7/comments"] = [{
                 "id": 40, "node_id": "RC40", "updated_at": submitted, "body": "Handle the empty input",
@@ -385,6 +385,43 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
 
     def test_late_copilot_comment_review_uses_new_inline_id_without_claiming_approval(self):
         self.late_review("copilot")
+
+    def test_resolved_old_inline_id_waits_then_new_rereview_id_enters_same_pr_loop(self):
+        submitted = "2026-10-04T00:00:00Z"
+        comment = {
+            "id": 40, "node_id": "RC40", "updated_at": submitted, "body": "Handle the empty input",
+            "user": {"id": 40, "login": "copilot-pull-request-reviewer[bot]"},
+            "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "a" * 40}
+        self.transport.values[PREFIX + "/issues/7/comments"] = []
+        self.transport.values[PREFIX + "/pulls/7/comments"] = [comment]
+        first = self.prepare()
+        self.assertEqual({"outcome": "waiting", "taskId": "TASK1"}, self.settle(first))
+        self.finish()
+        self.transport.values[PREFIX + "/pulls/7"]["head"]["sha"] = "b" * 40
+        self.check("b" * 40, "success")
+        self.transport.resolved_reviews = {40}
+        self.assertIsNone(self.prepare(), "a resolved old comment is not another paid repair")
+        history = deepcopy(self.ledger()["chains"][0]["operations"][0])
+        for _ in range(2):
+            self.clock.advance(minutes=2)
+            self.assertIsNone(self.prepare())
+            self.assertEqual((1, 3.5), (self.ledger()["chains"][0]["rounds"],
+                                        state.chain_spend(self.ledger()["chains"][0])))
+        later = {**comment, "id": 41, "node_id": "RC41", "updated_at": "2026-10-04T00:04:00Z",
+                 "commit_id": "b" * 40}
+        self.transport.values[PREFIX + "/pulls/7/comments"].append(later)
+        packet = self.prepare()
+        self.assertEqual([{
+            "id": "review-comment:41:2026-10-04T00:04:00Z", "body": "Handle the empty input", "url": "",
+            "path": "src/parser.py", "line": 12, "side": "RIGHT", "commit_id": "b" * 40}],
+            packet["observation"]["feedback"])
+        self.assertEqual((first["chain"], 2, 33.5),
+                         (packet["chain"], self.ledger()["chains"][0]["rounds"],
+                          state.chain_spend(self.ledger()["chains"][0])))
+        self.assertEqual({"outcome": "waiting", "taskId": "TASK2"}, self.settle(packet))
+        self.assertIsNone(self.prepare())
+        self.assertEqual(history, self.ledger()["chains"][0]["operations"][0])
+        self.assertEqual(2, len(self.task_writes()))
 
     def takeover(self, control):
         first = self.start()
