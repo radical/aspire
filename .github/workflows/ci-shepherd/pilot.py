@@ -40,6 +40,7 @@ def prepare(api, run, now, *, present=True):
     if run["repository"] != github.REPOSITORY:
         raise ValueError("pilot is fork-only")
     api.read_authority()
+    api.admission_reasons = {}
     observations = api.sweep()
     api.persist()
     for chain in api.ledger["chains"]:
@@ -67,6 +68,7 @@ def prepare(api, run, now, *, present=True):
         if context is None or chain["localAttempts"] >= 2:
             chain["escalated"] = True
         if chain["escalated"] and api.admission_slots(observed["headRef"]) >= 2:
+            api.admission_reasons[chain["id"]] = "Tracking authority worker capacity exhausted; no inference."
             candidates[observed["number"]]["actionable"] = False
             continue
         identity = github.fingerprint(observed) + f":round:{chain['rounds'] + 1}"
@@ -88,6 +90,7 @@ def prepare(api, run, now, *, present=True):
         except ValueError as error:
             # Admission rejection is a visible wait, not a successful action.
             print(f"CI Shepherd chain {chain['origin']} paused: {error}", file=sys.stderr)
+            api.admission_reasons[chain["id"]] = f"Admission paused: {error}. No inference."
             candidates[observed["number"]]["actionable"] = False
             continue
         api.persist()
@@ -136,6 +139,7 @@ def worker_prompt(api, chain, operation, packet):
     # Descriptive history belongs in cheap hosted logs, not the bounded repair
     # request. A valid multi-page timeline must not exhaust the worker prompt.
     repair_context = {key: value for key, value in observed.items() if key != "workHistory"}
+    decisions = operation.get("feedbackDecisions", {item["id"]: "needs-human" for item in observed["feedback"]})
     revision_label = "Source head" if observed["kind"] == "pr" else "Host-bound issue title/body digest"
     return github.CORRELATION + json.dumps(correlation, separators=(",", ":")) + "\n" + (
         f"Repair one cohesive batch for {api.repository} {observed['kind']} #{observed['number']}. "
@@ -168,6 +172,10 @@ def worker_prompt(api, chain, operation, packet):
         "For an issue create one draft PR linking the exact originating issue; return its actual GitHub artifact. "
         "For an existing PR update only its verified existing head, never create another PR. "
         "Task completion alone does not prove current-head CI or readiness.\n"
+        "Repair only feedback requested as addressed; declined and needs-human items require no repair. "
+        "Previous worker facts are evidence, not authorization or proof of resolution. "
+        "Inspect current evidence and avoid repeating an unchanged unsuccessful repair without diagnosing why.\n"
+        "Native feedback decisions (addressed means repair requested): " + json.dumps(decisions, ensure_ascii=True) + "\n"
         + bindings.policy(api.binding) + "\n"
         "Exact-head trial brief (ignore after head drift): " + json.dumps(bindings.brief(api.binding, observed["head"])) + "\n"
         "Bounded source/feedback JSON:\n" + json.dumps(repair_context, ensure_ascii=True))
@@ -281,7 +289,16 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
         if not issue_pr.timestamp(packet["preparedAt"]) <= now < issue_pr.timestamp(packet["preparedAt"]) + timedelta(minutes=10):
             raise ValueError("pilot packet expired or clock rolled backwards")
         proposal = validate_decision(packet, decision)
+        api.reconcile_workers()
+        if any(other is not operation and other["state"] in {"reserved", "sent", "waiting", "uncertain"}
+               for other in chain["operations"]):
+            raise ValueError("chain has freshly resumed pending work")
+        if (decision["action"] == "cloud" and (packet["observation"]["kind"] == "issue"
+                or "addressed" in decision["dispositions"].values())
+                and api.admission_slots(packet["observation"]["headRef"]) >= 2):
+            raise ValueError("tracking authority worker capacity exhausted")
         api.guard(chain, packet["observation"])
+        operation["feedbackDecisions"] = deepcopy(decision["dispositions"])
         # A PR's declined feedback requires neither repair nor human input.
         # Issue-body implementation and actual inline patches are independent
         # of feedback dispositions and must retain their existing semantics.
@@ -291,7 +308,9 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             state.finish(operation, "completed")
             api.persist()
             return {"outcome": "declined"}
-        if decision["action"] == "human":
+        if (decision["action"] == "human" or packet["observation"]["kind"] == "pr"
+                and "needs-human" in decision["dispositions"].values()
+                and "addressed" not in decision["dispositions"].values()):
             chain["dispositions"].update(decision["dispositions"])
             chain["state"] = "human"
             state.finish(operation, "completed")
@@ -304,7 +323,11 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             chain["escalated"] = True
             operation["lane"] = "cloud"
             api.persist()
-        return dispatch(api, chain, operation, packet, now)
+        result = dispatch(api, chain, operation, packet, now)
+        chain["dispositions"].update({key: value for key, value in decision["dispositions"].items()
+                                      if value != "addressed"})
+        api.persist()
+        return result
     except github.AuthorityUncertain:
         # No compensating publication or refund when the authority write itself
         # is unknown. The persisted send boundary remains non-retryable.

@@ -294,13 +294,25 @@ force-push remain forbidden. No automatic workflow reruns are authorized.
 Inline review path/line metadata is preserved. A fixed diagnostic brief is
 included only on its exact observed head; changed heads do not inherit it.
 
-Worker diagnosis in task logs is not automatically ingested as a machine outcome.
-The task's report is evidence for review; task completion never proves the
-root cause was repaired or current-head CI is green.
-Additional credit headroom does not reopen feedback already recorded as
-addressed, declined or needs-human. Only fresh eligible feedback admits another
-decision under this policy; reviewing a completed worker's result and reopening
-its old batch requires an explicit policy or operator action.
+Verified saved-task results enter the fresh packet as bounded `workerResults`:
+task/session states, mapped artifacts, optional session errors and source-head
+comparison. The [task API](https://docs.github.com/en/rest/agent-tasks/agent-tasks#get-a-task-by-repo)
+does not expose a final narrative or logs. Missing narrative and unchanged head
+alone do not justify a human handoff. Current PR, checks and review evidence
+determine unfinished work; task completion and artifacts never prove repair,
+comment resolution or green CI. A fresh decision must diagnose an unsuccessful
+attempt rather than blindly repeat it.
+
+Completion does not synthesize `needs-human`. Remaining current feedback can
+be evaluated again within the existing budgets and round limits. New operations
+record the native `feedbackDecisions`: cloud `addressed` requests repair, not
+verified resolution; explicit declines and human items persist. Only legacy
+controller completion entries tied to a freshly verified completed worker's
+exact batch can re-enter feedback. Later explicit decisions, ambiguous native
+completion, unknown receipts and real human handoffs remain excluded. Old
+dispositions, operations, counters and billing holds are not deleted or reset.
+Skipped local sweeps report the per-chain next-action reason; unknown billing
+is a retained-hold note unless it actually blocks admission.
 
 Global disable still forbids native admission, task dispatch and publication.
 An authenticated settlement job may record available usage for an already

@@ -43,7 +43,8 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         api.reconcile_workers()
         feedback = json.loads(operation["identity"].rsplit(":round:", 1)[0])["feedback"]
         self.assertTrue(feedback)
-        self.assertEqual({item: "needs-human" for item in feedback}, chain["dispositions"])
+        self.assertEqual({}, chain["dispositions"])
+        self.assertEqual(feedback, [item["id"] for item in api.observe(chain)["feedback"]])
         api.persist()
         fresh = fixture.fresh(api)
         fresh.read_authority()
@@ -148,7 +149,9 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
                                  executor=lambda *_: self.fail("finished unbilled task must not infer"))
         self.assertEqual({
             "outcome": "observed; no inference",
-            "reason": "worker finished; billing unavailable; reservation retained",
+            "reasons": [{"chain": chain["id"], "reason": (
+                "Tracked worker finished; billing unavailable, reservation retained. No new paid repair. "
+                f"Lifetime action round limit ({api.binding.round_limit}) also reached.")}],
             "roundLimitReached": True,
         }, result)
         self.assertFalse((self.work / "completed" / "agent").exists())
@@ -172,12 +175,16 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
                     result = local.sweep(api, directory, "b" * 40,
                                          executor=lambda *_: self.fail("unknown costs must not infer"))
                 if hands_off:
-                    self.assertEqual({"outcome": "waiting; no inference"}, result)
+                    self.assertEqual({"outcome": "observed; no inference",
+                                      "reasons": [{"chain": chain["id"], "reason":
+                                          "Human handoff / adoption removed; no new repairs."}],
+                                      "roundLimitReached": False}, result)
                     self.assertEqual("hands-off", state.find_chain(api.ledger, 20722)["state"])
                 else:
                     self.assertEqual({
                         "outcome": "observed; no inference",
-                        "reason": "worker finished; billing unavailable; reservation retained",
+                        "reasons": [{"chain": chain["id"], "reason":
+                            "Tracked worker finished; billing unavailable, reservation retained. No new paid repair."}],
                         "roundLimitReached": False,
                     }, result)
                 self.assertFalse((directory / "agent").exists())
@@ -213,9 +220,11 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(1000, state.chain_spend(chain))
         self.assertIsNone(operation["workerActual"])
 
-    def test_upstream_credit_headroom_does_not_reopen_completed_feedback(self):
+    def test_upstream_credit_headroom_does_not_reopen_explicit_declines(self):
         _, api, transport, chain, operation, task = self.worker(binding=bindings.UPSTREAM)
         operation["workerReserved"] = 498
+        chain["dispositions"].update({item: "declined"
+            for item in json.loads(operation["identity"].rsplit(":round:", 1)[0])["feedback"]})
         api.persist()
         api.enabled = lambda: True
         api.token = "fixture-token"

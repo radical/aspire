@@ -95,11 +95,18 @@ def validate(ledger):
         for operation in chain["operations"]:
             contracts.exact(operation, {"id", "identity", "lane", "state", "at", "nativeActual",
                                        "nativeReserved", "workerActual", "workerReserved", "taskId",
-                                       "workerState", "sessionId", "workerAt", "attemptedLocal", "workerVersion"}, "pilot operation")
+                                       "workerState", "sessionId", "workerAt", "attemptedLocal", "workerVersion"}
+                            | ({"feedbackDecisions"} if "feedbackDecisions" in operation else set()), "pilot operation")
             issue_pr.text(operation["id"], "id")
             # Identity is a serialized head/description plus a bounded feedback
             # batch, not a single opaque ID. Real node/check IDs exceed 256 bytes.
             issue_pr.text(operation["identity"], "identity", 16384)
+            if "feedbackDecisions" in operation:
+                decisions = operation["feedbackDecisions"]
+                basis = contracts.loads(operation["identity"].rsplit(":round:", 1)[0])
+                if (not isinstance(decisions, dict) or set(decisions) != set(basis["feedback"])
+                        or any(value not in {"addressed", "declined", "needs-human"} for value in decisions.values())):
+                    raise ValueError("invalid operation feedback decisions")
             if operation["id"] in operations:
                 raise ValueError("duplicate operation")
             operations.add(operation["id"])

@@ -16,6 +16,7 @@ import round as contracts
 import pilot_binding as bindings
 import pilot_history as history
 import pilot_reminders as reminders
+import pilot_results as results
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
@@ -148,9 +149,16 @@ def managed(item):
 
 
 def fingerprint(observation):
-    return json.dumps({"number": observation["number"], "node": observation["node"], "head": observation["head"],
-                       "description": observation["description"],
-                       "feedback": [item["id"] for item in observation["feedback"]]}, sort_keys=True, separators=(",", ":"))
+    value = {"number": observation["number"], "node": observation["node"], "head": observation["head"],
+             "description": observation["description"],
+             "feedback": [item["id"] for item in observation["feedback"]]}
+    if observation.get("workerResults"):
+        # Descriptive snippets can be bounded in both prompts. Bind the receipt's
+        # identities/version instead, so fresh settlement rejects changed results.
+        value["workerResults"] = [{key: result[key] for key in (
+            "operation", "taskId", "state", "sessionCount", "sessionIds", "updatedAt")}
+            for result in observation["workerResults"]]
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 class PilotGitHub:
@@ -190,6 +198,8 @@ class PilotGitHub:
         self.high_water = None
         self.clock = live.clock
         self.reminder_delay = 60
+        self.worker_results = {}
+        self.admission_reasons = {}
 
     def owned(self, comment):
         return comment.get("user", {}).get("id") == self.actor["id"] and comment["user"].get("login") == self.actor["login"]
@@ -270,7 +280,7 @@ class PilotGitHub:
                 if self.owned(comment) and reminders.valid_body(comment.get("body"), self.repository, number):
                     continue
                 identity = f"{prefix}:{comment['id']}:{comment['updated_at']}"
-                if identity not in chain["dispositions"]:
+                if results.eligible(chain, identity, self.worker_results):
                     feedback.append({"id": identity, "body": comment["body"][:2000], "url": comment.get("html_url", "")})
                     for key in ("path", "line", "start_line", "original_line", "side", "commit_id"):
                         if key in comment:
@@ -328,7 +338,7 @@ class PilotGitHub:
                     if check["conclusion"] == "action_required" and workflow["approval"] is not None:
                         continue
                     identity = f"check:{check['id']}:{head}:{check['conclusion']}"
-                    if identity not in chain["dispositions"]:
+                    if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": check["name"] + ": " + check["conclusion"],
                                          "url": check["html_url"]})
             if ci_wait is None:
@@ -341,14 +351,14 @@ class PilotGitHub:
                     # A terminal workflow can fail before exposing any jobs.
                     # Its verified run is investigation evidence, not a cause.
                     identity = f"workflow:{run['id']}:{head}:{run['conclusion']}"
-                    if identity not in chain["dispositions"]:
+                    if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": "Workflow: " + run["conclusion"] + "; cause unknown",
                                          "url": run["url"]})
             for status in latest_statuses.values():
                 pending_ci |= status["state"] == "pending"
                 if status["state"] in {"failure", "error"}:
                     identity = f"status:{status['id']}:{head}:{status['state']}"
-                    if identity not in chain["dispositions"]:
+                    if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": status["context"] + ": " + status["state"],
                                          "url": status.get("target_url", "")})
             reviews = self.api.pages(f"{self.prefix}/pulls/{number}/reviews")
@@ -358,7 +368,7 @@ class PilotGitHub:
                     latest[review["user"]["id"]] = review
                 if review["state"] == "CHANGES_REQUESTED" and review.get("body"):
                     identity = f"review:{review['id']}:{review['submitted_at']}"
-                    if identity not in chain["dispositions"]:
+                    if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": review["body"][:2000], "url": review.get("html_url", "")})
             requested = {reviewer["id"] for reviewer in value["requested_reviewers"]}
             approved = any(review["state"] == "APPROVED" and review["commit_id"] == head and reviewer not in requested
@@ -382,7 +392,7 @@ class PilotGitHub:
                 work_history = history.read(self.transport, self.binding, number, node)
             except IncompleteInventory:
                 work_history = {"complete": False, "events": []}
-        return {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
+        observed = {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
                 "attention": attention, "pendingCI": pending_ci,
                 "ciWait": ci_wait, "reviewOnly": ci_wait is not None, "diagnostics": diagnostics,
@@ -392,6 +402,8 @@ class PilotGitHub:
                 "title": value.get("title", "")[:300], "body": (value.get("body") or "")[:2000],
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
                 "workHistory": work_history}
+        observed["workerResults"] = results.context(chain, self.worker_results, observed)
+        return observed
 
     def check_diagnostics(self, checks):
         remaining_pages, remaining_bytes = 10, 32000
@@ -517,7 +529,8 @@ class PilotGitHub:
         if task.get("updated_at") is not None:
             issue_pr.timestamp(task["updated_at"])
         number = chain["child"] or chain["origin"]
-        branch = self.mapping(number)["head"]["ref"] if chain["child"] is not None or chain["kind"] == "pr" else None
+        pr = self.mapping(number) if chain["child"] is not None or chain["kind"] == "pr" else None
+        branch = pr["head"]["ref"] if pr is not None else None
         correlations = []
         nano, billed = 0, True
         expected = {"chain": chain["id"], "operation": operation["id"], "origin": chain["origin"]}
@@ -549,6 +562,9 @@ class PilotGitHub:
                 nano += state.amount(usage["amount"])
         if len(correlations) != len(set(correlations)):
             raise ValueError("duplicate task sessions")
+        receipt = results.summarize(task, operation, pr)
+        if task["state"] in state.TERMINAL:
+            self.worker_results[operation["id"]] = receipt
         return task, state.amount(nano / 1e9) if billed else None
 
     def admission_slots(self, head_ref):
@@ -556,6 +572,7 @@ class PilotGitHub:
 
     def reconcile_workers(self):
         details = {}
+        self.worker_results = {}
         for chain in self.ledger["chains"]:
             for operation in chain["operations"]:
                 task_id = operation["taskId"]
@@ -577,6 +594,7 @@ class PilotGitHub:
                     if usage is not None and operation["workerActual"] is not None and usage < operation["workerActual"]:
                         raise ValueError("task billing moved backwards")
                 except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
+                    self.worker_results.pop(operation["id"], None)
                     operation.update(workerState="unknown", state="waiting")
                     operation["workerReserved"] = max(
                         operation["workerReserved"], max(0, state.chain_allowance(self.ledger) - state.chain_spend(chain)))
@@ -597,13 +615,6 @@ class PilotGitHub:
                     operation["state"] = "waiting"
                 else:
                     state.finish(operation, "completed" if task["state"] == "completed" else "failed")
-                    if task["state"] == "completed":
-                        basis = contracts.loads(operation["identity"].split(":round:", 1)[0])
-                        # A completed worker is not proof of comment resolution.
-                        # Preserve explicit human disposition rather than blindly
-                        # starting another worker for the same feedback IDs.
-                        for identity in basis["feedback"]:
-                            chain["dispositions"].setdefault(identity, "needs-human")
                     if chain["kind"] == "issue" and chain["child"] is None and task["state"] == "completed":
                         self.adopt_artifact(task, chain, operation)
 
@@ -719,11 +730,15 @@ class PilotGitHub:
                 blocker += f" Lifetime action round limit ({self.binding.round_limit}) also reached."
         elif chain["rounds"] >= self.binding.round_limit:
             blocker = f"Lifetime action round limit ({self.binding.round_limit}) reached; human attention required."
+        elif chain["id"] in self.admission_reasons:
+            blocker = self.admission_reasons[chain["id"]]
+        elif credit_blocked:
+            blocker = ("Lifetime allowance exhausted; human attention required."
+                       if state.chain_spend(chain) >= state.chain_allowance(self.ledger)
+                       else "Credit headroom cannot cover native admission; no inference.")
         elif (chain["kind"] == "issue" and chain["child"] is None and operation is not None
               and operation["state"] == "completed" and operation["taskId"] is not None):
             blocker = "Completed task has no verified child PR; human handoff required."
-        elif state.chain_spend(chain) >= state.chain_allowance(self.ledger):
-            blocker = "Lifetime allowance exhausted; human attention required."
         elif observation["ready"]:
             blocker = "Current-head checks and approval verified; human merge required."
         elif observation["pendingCI"]:
@@ -752,11 +767,14 @@ class PilotGitHub:
         task = "" if not operation or not operation["taskId"] else (
             f"\nTask: https://github.com/{self.repository}/tasks/{operation['taskId']}")
         last = "" if operation is None else f" Last action: {operation['state']}."
+        rechecking = sum(chain["dispositions"].get(item["id"]) == "needs-human" for item in observation["feedback"])
+        reevaluation = (f"\nRe-evaluating {rechecking} legacy completion entries; no verified resolution or human blocker."
+                        if rechecking else "")
         return (f"[automated] CI Shepherd - {lane}\n\nLocal attempts: {chain['localAttempts']}/2; "
                 f"action rounds: {chain['rounds']}/{self.binding.round_limit}.\nActual credits: {actual:g}; outstanding reservation: {reserved:g}. "
                 "Unknown billing retains its reservation; these are not hard billing caps.\n\n"
-                f"Feedback dispositions: {dispositions['addressed']} addressed, {dispositions['declined']} declined, "
-                f"{dispositions['needs-human']} needs-human.\n{blocker}{last}\nEvidence: {observation['url']}{task}\n"
+                f"Recorded feedback dispositions: {dispositions['addressed']} addressed, {dispositions['declined']} declined, "
+                f"{dispositions['needs-human']} needs-human.{reevaluation}\n{blocker}{last}\nEvidence: {observation['url']}{task}\n"
                 f"{state.STATUS_MARKER}\nChain: {chain['id']}")
 
     def log_status(self, chain, observation, now):

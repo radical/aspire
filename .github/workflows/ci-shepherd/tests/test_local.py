@@ -171,7 +171,9 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         with patch.object(local.live, "clock", fixture.clock), patch.object(fixture.api, "publish_status"):
             result = local.sweep(fixture.api, self.work / "wait", "b" * 40,
                                  executor=lambda *_: self.fail("waiting sweep must not infer"))
-        self.assertEqual("waiting; no inference", result["outcome"])
+        self.assertEqual("observed; no inference", result["outcome"])
+        self.assertEqual("Waiting for human review / supported new feedback; no inference.",
+                         result["reasons"][0]["reason"])
         self.assertEqual(0, fixture.api.ledger["chains"][0]["rounds"])
 
     def test_missing_native_usage_is_retained_not_refunded_after_failure(self):

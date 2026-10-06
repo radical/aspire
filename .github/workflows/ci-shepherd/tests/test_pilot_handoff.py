@@ -586,7 +586,7 @@ class ResumeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(5, len(api.observe(chain)["feedback"]))
         self.assertEqual(4, chain["rounds"])
         self.assertAlmostEqual(29.3734555, state.chain_spend(chain))
-        self.assertEqual(8, sum(value == "needs-human" for value in chain["dispositions"].values()))
+        self.assertEqual(7, sum(value == "needs-human" for value in chain["dispositions"].values()))
 
     def test_local_resume_entrypoint_uses_authority_lock_and_stop_controls_without_copilot(self):
         api, transport, chain, latest, head, _, _ = self.fixture()
