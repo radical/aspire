@@ -1,4 +1,6 @@
 import base64
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -23,6 +25,85 @@ import round as contracts
 
 
 class LocalTests(WorkspaceTest, unittest.TestCase):
+    def test_api_contract_check_uses_readonly_controller_without_inference_or_tracking_changes(self):
+        fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.transport.values["repos/radical/aspire/pulls/7/comments"] = [{
+            "id": 31, "node_id": "COMMENT31", "body": "Fix normalization",
+            "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
+        fixture.transport.resolved_reviews.add(31)
+        before = fixture.transport.comments[0]["body"]
+        output = io.StringIO()
+        with patch.object(local, "command", side_effect=self.command), \
+                patch.object(local.github, "PilotTransport", return_value=fixture.transport), \
+                redirect_stdout(output):
+            result = local.main(["check-api", "--target", "fork", "--pr", "7",
+                                 "--tracker", "99", "--authority", "500", "--tracker-node", "TRACKER99",
+                                 "--workdir", str(self.work / "contract")])
+        self.assertEqual(0, result)
+        self.assertEqual({"outcome": "api contract verified; read-only", "repository": "radical/aspire",
+                          "number": 7, "head": "a" * 40, "reviewComments": 1, "resolved": [31]},
+                         json.loads(output.getvalue()))
+        self.assertEqual(before, fixture.transport.comments[0]["body"])
+        self.assertEqual([], fixture.transport.writes)
+
+    def test_api_contract_failure_cannot_pass_as_a_paused_observation(self):
+        for change in ("schema unavailable", "empty inventory", "incomplete inventory", "stale head", "head moved"):
+            with self.subTest(change=change):
+                fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                fixture.transport.values["repos/radical/aspire/pulls/7/comments"] = [{
+                    "id": 31, "node_id": "COMMENT31", "body": "Fix normalization",
+                    "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
+                if change == "empty inventory":
+                    fixture.transport.values["repos/radical/aspire/pulls/7/comments"] = []
+                before = fixture.transport.comments[0]["body"]
+
+                def reader(method, endpoint, body):
+                    response = fixture.transport(method, endpoint, body)
+                    if endpoint == "graphql":
+                        if change == "schema unavailable":
+                            return local.github.Response(
+                                {"errors": [{"type": "undefinedField", "fieldName": "thread"}]}, {})
+                        if change == "incomplete inventory":
+                            response.payload["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = []
+                        if change == "stale head":
+                            response.payload["data"]["repository"]["pullRequest"]["headRefOid"] = "b" * 40
+                        if change == "head moved":
+                            fixture.transport.values["repos/radical/aspire/pulls/7"]["head"]["sha"] = "b" * 40
+                    return response
+
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch.object(local, "command", side_effect=self.command) as commands, \
+                        patch.object(local.github, "PilotTransport", return_value=reader) as transport, \
+                        patch.object(local, "execute", side_effect=AssertionError("must not infer")), \
+                        redirect_stdout(stdout), redirect_stderr(stderr):
+                    result = local.main(["check-api", "--target", "fork", "--pr", "7",
+                                         "--tracker", "99", "--authority", "500", "--tracker-node", "TRACKER99",
+                                         "--workdir", str(self.work / "contract")])
+                self.assertEqual(1, result)
+                self.assertEqual("", stdout.getvalue())
+                self.assertTrue(stderr.getvalue().startswith("CI Shepherd local stopped: "))
+                self.assertFalse(transport.call_args.kwargs["write"])
+                self.assertEqual(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"],
+                                 commands.call_args_list[0].args[0])
+                self.assertEqual(["gh", "git"], [call.args[0][0] for call in commands.call_args_list])
+                self.assertEqual(before, fixture.transport.comments[0]["body"])
+                self.assertEqual([], fixture.transport.writes)
+
+    def test_api_contract_requires_explicit_closed_subject_before_credentials(self):
+        common = ["--tracker", "99", "--authority", "500", "--tracker-node", "TRACKER99",
+                  "--workdir", str(self.work)]
+        for arguments in (["check-api"], ["check-api", "--pr", "0"], ["check-api", "--pr", "121"],
+                          ["check-api", "--pr", "7"], ["observe", "--pr", "20722"]):
+            with self.subTest(arguments=arguments), \
+                    patch.object(local, "command", side_effect=AssertionError("must not authenticate")):
+                with self.assertRaises(SystemExit) as stopped:
+                    local.main(arguments + common)
+                self.assertEqual(2, stopped.exception.code)
+
     def packet(self):
         return {"schemaVersion": 1, "kind": "pilot", "packetId": "packet-1", "operation": "operation-1",
                 "target": "upstream-20722", "lane": "cloud", "context": None,

@@ -19,6 +19,7 @@ import issue_pr
 import pilot
 import pilot_binding as bindings
 import pilot_github as github
+import pilot_feedback as review_feedback
 import pilot_state as state
 import reasoning
 import round as contracts
@@ -366,9 +367,26 @@ def resume(api, operation_id, expected_head, now):
         raise
 
 
+def check_api(api, number):
+    value = api.mapping(number)
+    comments = api.api.pages(f"{api.prefix}/pulls/{number}/comments")
+    if not comments:
+        raise ValueError("API contract check requires existing review comments; empty inventory is not proof")
+    resolved = review_feedback.resolved(
+        api.transport, api.binding, number, value["node_id"], value["head"]["sha"], comments)
+    fresh = api.mapping(number)
+    if (fresh["node_id"] != value["node_id"] or fresh["head"]["sha"] != value["head"]["sha"]
+            or fresh["head"]["ref"] != value["head"]["ref"]
+            or api.read_authority() != api.expected):
+        raise ValueError("API contract subject/authority changed during verification")
+    return {"outcome": "api contract verified; read-only", "repository": api.repository,
+            "number": number, "head": value["head"]["sha"],
+            "reviewComments": len(comments), "resolved": sorted(resolved)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["observe", "run", "watch", "resume"])
+    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume"])
     parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name],
                         default=bindings.UPSTREAM.name)
     parser.add_argument("--tracker", type=int, required=True)
@@ -378,6 +396,7 @@ def main(argv=None):
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--operation")
     parser.add_argument("--expected-head")
+    parser.add_argument("--pr", type=int)
     args = parser.parse_args(argv)
     if args.interval < 30:
         parser.error("interval must be at least 30 seconds")
@@ -386,15 +405,25 @@ def main(argv=None):
     if args.mode == "resume" and args.target == bindings.FORK.name:
         parser.error("resume requires an upstream target")
     binding = bindings.select(args.target)
+    if args.mode == "check-api":
+        if (args.pr is None or args.pr <= 0 or args.pr == 121
+                or binding.subject is not None and args.pr != binding.subject):
+            parser.error("check-api requires an explicit supported --pr")
+    elif args.pr is not None:
+        parser.error("--pr is only supported by check-api")
     try:
         token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
         revision = command(["git", "--no-pager", "-C", str(ROOT), "rev-parse", "HEAD"])
-        if args.mode != "observe" and command(["git", "--no-pager", "-C", str(ROOT), "status", "--porcelain"]):
+        if args.mode not in {"observe", "check-api"} and command(
+                ["git", "--no-pager", "-C", str(ROOT), "status", "--porcelain"]):
             raise ValueError("commit the reviewed controller source before local effects")
-        if args.mode == "observe":
+        if args.mode in {"observe", "check-api"}:
             api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=False,
                               revision=revision, binding=binding)
             api.read_authority()
+            if args.mode == "check-api":
+                print(json.dumps(check_api(api, args.pr)), flush=True)
+                return 0
             observations = api.sweep()
             for chain in api.ledger["chains"]:
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())

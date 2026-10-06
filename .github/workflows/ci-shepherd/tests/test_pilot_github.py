@@ -44,18 +44,22 @@ class Transport:
             repository = variables["owner"] + "/" + variables["name"]
             value = self.values[f"repos/{repository}/pulls/{variables['number']}"]
             if body["query"] == feedback.QUERY:
-                comments = {comment.get("node_id", "COMMENT" + str(comment["id"])): comment
-                            for comment in self.values.get(
-                                f"repos/{repository}/pulls/{variables['number']}/comments", [])}
+                comments = self.values.get(f"repos/{repository}/pulls/{variables['number']}/comments", [])
+                start = 0 if variables["after"] is None else int(variables["after"].removeprefix("threads:"))
+                page = comments[start:start + 100]
                 return Response({"data": {
                     "repository": {"databaseId": value["base"]["repo"]["id"], "nameWithOwner": repository,
                                    "pullRequest": {"id": value["node_id"], "number": value["number"],
-                                                   "headRefOid": value["head"]["sha"]}},
-                    "nodes": [{"id": identity, "fullDatabaseId": str(comments[identity]["id"]),
-                               "thread": {"id": "THREAD" + identity,
-                                          "isResolved": comments[identity]["id"] in self.resolved_reviews,
-                                          "pullRequest": {"id": value["node_id"]}}}
-                              for identity in variables["ids"]]}}, {})
+                                                   "headRefOid": value["head"]["sha"], "reviewThreads": {
+                        "nodes": [{"id": "THREAD" + str(comment["id"]),
+                                   "isResolved": comment["id"] in self.resolved_reviews,
+                                   "pullRequest": {"id": value["node_id"]}, "comments": {
+                                       "nodes": [{"id": comment.get("node_id") or "COMMENT" + str(comment["id"]),
+                                                  "fullDatabaseId": str(comment["id"])}],
+                                       "pageInfo": {"hasNextPage": False, "endCursor": "comment-end"}}}
+                                  for comment in page],
+                        "pageInfo": {"hasNextPage": start + 100 < len(comments),
+                                     "endCursor": "threads:" + str(start + len(page)) if page else None}}}}}}, {})
             return Response({"data": {"repository": {
                 "databaseId": value["base"]["repo"]["id"], "nameWithOwner": repository,
                 "pullRequest": {"id": value["node_id"], "number": value["number"], "timelineItems": {

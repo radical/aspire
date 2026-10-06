@@ -15,6 +15,43 @@ import test_pilot_tracked_only as fixtures
 
 
 class ReviewFeedbackTests(unittest.TestCase):
+    def test_portable_schema_resolves_legacy_feedback_without_another_paid_round(self):
+        fixture, api, transport, _ = self.api(bindings.UPSTREAM)
+        chain, _, _ = fixture.seed_worker(api, transport, completed=True)
+        before = deepcopy(api.ledger)
+        writes_before = deepcopy(transport.writes)
+        original = api.transport
+        value = transport.values[f"{api.prefix}/pulls/20722"]
+
+        def portable_schema(method, endpoint, body):
+            if method != "POST" or endpoint != "graphql":
+                return original(method, endpoint, body)
+            if "ids" in body["variables"]:
+                return Response({"errors": [{
+                    "extensions": {"code": "undefinedField"},
+                    "message": "Field 'thread' doesn't exist on type 'PullRequestReviewComment'"}]}, {})
+            if "after" in body["variables"]:
+                return Response({"data": {"repository": {
+                    "databaseId": api.repository_id, "nameWithOwner": api.repository,
+                    "pullRequest": {
+                        "id": value["node_id"], "number": 20722, "headRefOid": value["head"]["sha"],
+                        "reviewThreads": {"nodes": [{
+                            "id": "THREAD31", "isResolved": True,
+                            "pullRequest": {"id": value["node_id"]},
+                            "comments": {"nodes": [{"id": "COMMENT31", "fullDatabaseId": "31"}],
+                                         "pageInfo": {"hasNextPage": False, "endCursor": "COMMENT-END"}}}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": "THREAD-END"}}}}}}, {})
+            return original(method, endpoint, body)
+
+        fresh = fixture.fresh(api, portable_schema)
+        observed = fresh.observe(chain)
+        self.assertIsNone(observed["attention"])
+        self.assertEqual([], observed["feedback"])
+        with redirect_stdout(io.StringIO()):
+            self.assertIsNone(pilot.prepare(fresh, fixtures.RUN, api.clock(), present=False))
+        self.assertEqual(before, fresh.ledger)
+        self.assertEqual(writes_before, transport.writes)
+
     def api(self, binding=bindings.FORK):
         fixture = fixtures.TrackedOnlyTests()
         api, transport = fixture.api(binding)
@@ -24,28 +61,125 @@ class ReviewFeedbackTests(unittest.TestCase):
             "id": 31, "node_id": "COMMENT31", "body": "Fix normalization",
             "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"},
             "path": "normalization.py", "line": 12}]
-        resolved = set()
-        original = api.transport
+        return fixture, api, transport, transport.resolved_reviews
 
-        def read(method, endpoint, body):
-            if method == "POST" and endpoint == "graphql" and "ids" in body["variables"]:
-                transport.reads.append((method, endpoint, deepcopy(body)))
-                value = transport.values[f"{api.prefix}/pulls/{number}"]
-                comments = {comment["node_id"]: comment
-                            for comment in transport.values[f"{api.prefix}/pulls/{number}/comments"]}
-                return Response({"data": {
-                    "repository": {"databaseId": api.repository_id, "nameWithOwner": api.repository,
-                                   "pullRequest": {"id": value["node_id"], "number": number,
-                                                   "headRefOid": value["head"]["sha"]}},
-                    "nodes": [{"id": identity, "fullDatabaseId": str(comments[identity]["id"]),
-                               "thread": {"id": "THREAD" + identity,
-                                          "isResolved": comments[identity]["id"] in resolved,
-                                          "pullRequest": {"id": value["node_id"]}}}
-                              for identity in body["variables"]["ids"]]}}, {})
-            return original(method, endpoint, body)
+    def test_nested_pages_match_rest_comments_and_reject_incomplete_or_changed_evidence(self):
+        for change in ("complete", "head", "thread", "membership", "resolution", "missing", "duplicate",
+                       "repeated comment cursor", "repeated thread cursor"):
+            with self.subTest(change=change):
+                fixture, api, transport, _ = self.api()
+                fixture.seed_worker(api, transport, completed=True)
+                writes_before = deepcopy(transport.writes)
+                comments = transport.values[f"{api.prefix}/pulls/7/comments"]
+                comments += [{**comments[0], "id": number, "node_id": f"COMMENT{number}"} for number in (32, 33)]
+                value = transport.values[f"{api.prefix}/pulls/7"]
+                original, requests = api.transport, []
 
-        api.transport = api.api.transport = read
-        return fixture, api, transport, resolved
+                def read(method, endpoint, body):
+                    if endpoint != "graphql" or body["query"] not in (feedback.QUERY, feedback.COMMENTS_QUERY):
+                        return original(method, endpoint, body)
+                    requests.append(deepcopy(body["variables"]))
+                    root = {"databaseId": api.repository_id, "nameWithOwner": api.repository,
+                            "pullRequest": {"id": value["node_id"], "number": 7, "headRefOid": value["head"]["sha"]}}
+                    continuation = body["query"] == feedback.COMMENTS_QUERY
+                    second_thread = not continuation and body["variables"]["after"] is not None
+                    number = 32 if continuation else 33 if second_thread else 31
+                    thread = {"id": "THREAD33" if second_thread else "THREAD31", "isResolved": not second_thread,
+                              "pullRequest": {"id": value["node_id"]}, "comments": {
+                                  "nodes": [{"id": f"COMMENT{number}", "fullDatabaseId": str(number)}],
+                                  "pageInfo": {"hasNextPage": not continuation and not second_thread,
+                                               "endCursor": "comment-next" if not continuation and not second_thread
+                                               else "comment-end"}}}
+                    if continuation:
+                        if change == "head":
+                            root["pullRequest"]["headRefOid"] = "b" * 40
+                        if change == "thread":
+                            thread["id"] = "FOREIGN"
+                        if change == "membership":
+                            thread["pullRequest"]["id"] = "FOREIGN"
+                        if change == "resolution":
+                            thread["isResolved"] = False
+                        if change == "missing":
+                            thread["comments"] = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+                        if change == "duplicate":
+                            thread["comments"]["nodes"][0] = {"id": "COMMENT31", "fullDatabaseId": "31"}
+                        if change == "repeated comment cursor":
+                            thread["comments"]["pageInfo"] = {"hasNextPage": True, "endCursor": "comment-next"}
+                        return Response({"data": {"repository": root, "node": thread}}, {})
+                    cursor = "thread-next" if not second_thread or change == "repeated thread cursor" else "thread-end"
+                    root["pullRequest"]["reviewThreads"] = {
+                        "nodes": [thread], "pageInfo": {"hasNextPage": not second_thread, "endCursor": cursor}}
+                    return Response({"data": {"repository": root}}, {})
+
+                api.transport = api.api.transport = read
+                fresh = fixture.fresh(api)
+                fresh.read_authority()
+                chain = fresh.ledger["chains"][0]
+                before = deepcopy(fresh.ledger)
+                observed = fresh.observe(chain)
+                if change == "complete":
+                    self.assertIsNone(observed["attention"])
+                    self.assertEqual(["review-comment:33:2026-10-04T00:00:00Z"],
+                                     [item["id"] for item in observed["feedback"]])
+                    self.assertEqual([{"owner": "radical", "name": "aspire", "number": 7, "after": None},
+                                      {"owner": "radical", "name": "aspire", "number": 7,
+                                       "after": "comment-next", "thread": "THREAD31"},
+                                      {"owner": "radical", "name": "aspire", "number": 7, "after": "thread-next"}],
+                                     requests)
+                else:
+                    self.assertEqual("Review-thread resolution unavailable/incomplete.", observed["attention"])
+                    with redirect_stdout(io.StringIO()):
+                        self.assertIsNone(pilot.prepare(fresh, fixtures.RUN, api.clock(), present=False))
+                    self.assertEqual(before, fresh.ledger)
+                self.assertEqual(writes_before, transport.writes)
+
+    def test_page_and_total_request_bounds_stop_before_reading_unused_pages(self):
+        for bound, expected_requests in (("thread", 10), ("comment", 10), ("total", 20)):
+            with self.subTest(bound=bound):
+                _, api, transport, _ = self.api()
+                value = transport.values[f"{api.prefix}/pulls/7"]
+                requests = []
+
+                def thread(identity, number, more):
+                    return {"id": identity, "isResolved": True, "pullRequest": {"id": value["node_id"]},
+                            "comments": {"nodes": [{"id": f"COMMENT{number}", "fullDatabaseId": str(number)}],
+                                         "pageInfo": {"hasNextPage": more, "endCursor": f"comment-{number}"}}}
+
+                def read(method, endpoint, body):
+                    self.assertEqual(("POST", "graphql"), (method, endpoint))
+                    requests.append(deepcopy(body))
+                    count = len(requests)
+                    root = {"databaseId": api.repository_id, "nameWithOwner": api.repository,
+                            "pullRequest": {"id": value["node_id"], "number": 7, "headRefOid": value["head"]["sha"]}}
+                    data = {"repository": root}
+                    if body["query"] == feedback.COMMENTS_QUERY:
+                        data["node"] = thread(body["variables"]["thread"], 1000 + count, bound == "comment")
+                    else:
+                        nodes = ([thread(f"THREAD{index}", 31 + index, True) for index in range(21)]
+                                 if bound == "total" else [thread("THREAD" + str(count), 30 + count, bound == "comment")])
+                        root["pullRequest"]["reviewThreads"] = {
+                            "nodes": nodes, "pageInfo": {"hasNextPage": bound == "thread", "endCursor": f"thread-{count}"}}
+                    return Response({"data": data}, {})
+
+                with self.assertRaises(feedback.IncompleteInventory):
+                    feedback.resolved(read, api.binding, 7, value["node_id"], value["head"]["sha"],
+                                      transport.values[f"{api.prefix}/pulls/7/comments"])
+                self.assertEqual(expected_requests, len(requests))
+                self.assertEqual([], transport.writes)
+
+    def test_comment_continuation_query_is_readonly_and_requires_closed_variables(self):
+        for binding in (bindings.FORK, bindings.UPSTREAM, bindings.UPSTREAM_ALL):
+            with self.subTest(binding=binding.name):
+                transport = github.PilotTransport("fixture-token", binding=binding)
+                request = feedback.body(binding.repository, binding.subject or 7, "opaque-next", thread="THREAD31")
+                self.assertTrue(transport.is_read("POST", "graphql", request))
+                transport.validate_endpoint("POST", "graphql", request)
+                for key, invalid in (("after", None), ("after", ""), ("thread", ""), ("thread", []),
+                                     ("owner", "other"), ("number", 121), ("number", True)):
+                    with self.subTest(variable=key, invalid=invalid), self.assertRaises(ValueError):
+                        changed = deepcopy(request)
+                        changed["variables"][key] = invalid
+                        github.validate_graphql(changed, binding)
 
     def test_resolved_feedback_after_worker_completion_does_not_reserve_another_round(self):
         fixture, api, transport, resolved = self.api()
@@ -129,7 +263,7 @@ class ReviewFeedbackTests(unittest.TestCase):
         original = api.transport
 
         def unavailable(method, endpoint, body):
-            if method == "POST" and endpoint == "graphql" and "ids" in body["variables"]:
+            if method == "POST" and endpoint == "graphql" and body["query"] == feedback.QUERY:
                 return Response({"errors": [{"message": "PRIVATE_SOURCE_SENTINEL"}]}, {})
             return original(method, endpoint, body)
 
@@ -209,11 +343,11 @@ class ReviewFeedbackTests(unittest.TestCase):
 
                 def malformed(method, endpoint, body):
                     response = original(method, endpoint, body)
-                    if method != "POST" or endpoint != "graphql" or "ids" not in body["variables"]:
+                    if method != "POST" or endpoint != "graphql" or body["query"] != feedback.QUERY:
                         return response
                     payload = deepcopy(response.payload)
                     root = payload["data"]["repository"]
-                    nodes = payload["data"]["nodes"]
+                    nodes = root["pullRequest"]["reviewThreads"]["nodes"]
                     if change == "http":
                         return Response(payload, {}, 403)
                     if change == "graphql":
@@ -229,25 +363,25 @@ class ReviewFeedbackTests(unittest.TestCase):
                     elif change == "head":
                         root["pullRequest"]["headRefOid"] = "b" * 40
                     elif change == "null-node":
-                        nodes[0] = None
+                        nodes[0]["comments"]["nodes"][0] = None
                     elif change == "missing-node":
                         nodes.clear()
                     elif change == "duplicate-node":
                         nodes.append(deepcopy(nodes[0]))
                     elif change == "foreign-node":
-                        nodes[0]["id"] = "FOREIGN"
+                        nodes[0]["comments"]["nodes"][0]["id"] = "FOREIGN"
                     elif change == "database-id":
-                        nodes[0]["fullDatabaseId"] = "32"
+                        nodes[0]["comments"]["nodes"][0]["fullDatabaseId"] = "32"
                     elif change == "database-id-type":
-                        nodes[0]["fullDatabaseId"] = True
+                        nodes[0]["comments"]["nodes"][0]["fullDatabaseId"] = True
                     elif change == "null-thread":
-                        nodes[0]["thread"] = None
+                        nodes[0] = None
                     elif change == "thread-id":
-                        nodes[0]["thread"]["id"] = ""
+                        nodes[0]["id"] = ""
                     elif change == "thread-pr":
-                        nodes[0]["thread"]["pullRequest"]["id"] = "FOREIGN"
+                        nodes[0]["pullRequest"]["id"] = "FOREIGN"
                     elif change == "unknown-state":
-                        nodes[0]["thread"]["isResolved"] = None
+                        nodes[0]["isResolved"] = None
                     return Response(payload, {})
 
                 comments = transport.values[f"{api.prefix}/pulls/7/comments"]
@@ -285,29 +419,29 @@ class ReviewFeedbackTests(unittest.TestCase):
             packet = pilot.prepare(fresh, fixtures.RUN, api.clock(), present=False)
         self.assertEqual(["review-comment:101:2026-10-04T00:00:00Z"],
                          [item["id"] for item in packet["observation"]["feedback"]])
-        batches = [body["variables"]["ids"] for method, endpoint, body in transport.reads
-                   if method == "POST" and endpoint == "graphql" and "ids" in body["variables"]]
-        self.assertEqual({100, 1}, {len(batch) for batch in batches})
-        self.assertEqual({comment["node_id"] for comment in comments}, {identity for batch in batches for identity in batch})
+        pages = [body["variables"]["after"] for method, endpoint, body in transport.reads
+                 if method == "POST" and endpoint == "graphql" and body["query"] == feedback.QUERY]
+        self.assertEqual({None, "threads:100"}, set(pages))
         self.assertEqual(1, fresh.ledger["chains"][0]["rounds"])
 
     def test_sealed_resolution_query_is_read_only_and_keeps_closed_subject_bindings(self):
         for binding in (bindings.FORK, bindings.UPSTREAM):
             with self.subTest(binding=binding.name):
                 transport = github.PilotTransport("fixture-token", binding=binding)
-                request = feedback.body(binding.repository, binding.subject or 7, ["COMMENT31"])
+                request = feedback.body(binding.repository, binding.subject or 7)
                 transport.validate_endpoint("POST", "graphql", request)
                 self.assertTrue(transport.is_read("POST", "graphql", request))
                 changes = []
                 for field, value in (("owner", "other"), ("name", "other"), ("number", 121),
-                                     ("number", True), ("ids", []), ("ids", ["COMMENT31"] * 2),
-                                     ("ids", [f"COMMENT{index}" for index in range(101)])):
+                                     ("number", True), ("after", []), ("after", ""),
+                                     ("after", "x" * 1025)):
                     changed = deepcopy(request)
                     changed["variables"][field] = value
                     changes.append(changed)
-                changed = deepcopy(request)
-                changed["query"] = "mutation { addComment }"
-                changes.append(changed)
+                for query in ("mutation { addComment }", [], {}, None, 1):
+                    changed = deepcopy(request)
+                    changed["query"] = query
+                    changes.append(changed)
                 changed = deepcopy(request)
                 changed["variables"]["extra"] = "foreign input"
                 changes.append(changed)

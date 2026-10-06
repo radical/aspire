@@ -28,7 +28,7 @@ WORKER_STATES = state.TERMINAL | {"queued", "in_progress", "idle", "waiting_for_
 
 
 def validate_graphql(value, binding):
-    if isinstance(value, dict) and value.get("query") == review_feedback.QUERY:
+    if isinstance(value, dict) and value.get("query") in (review_feedback.QUERY, review_feedback.COMMENTS_QUERY):
         review_feedback.validate_request(value, binding)
     else:
         history.validate_request(value, binding)

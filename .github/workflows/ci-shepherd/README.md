@@ -135,9 +135,15 @@ independent of this feedback filter; Copilot approvals never replace human
 approval.
 
 For inline comments, `pilot_feedback.py` reads GitHub's current thread-resolution
-state using one sealed, read-only GraphQL query. Exact REST comment node/database
-IDs, repository identity, PR membership and current head must match. Reads are
-bounded to 1,000 comments in batches of at most 100 IDs.
+state through the public PR `reviewThreads` connection and a second sealed,
+read-only query for independently paginated thread comments.
+`PullRequestReviewComment.thread` is not available for every authorized
+credential; the controller does not depend on that field or broaden credentials.
+Exact REST comment node/database IDs, repository identity, PR membership and
+current head must match on every page. Reads are bounded to 1,000 threads and
+1,000 comments, 100 entries per page, ten pages per connection and twenty
+GraphQL requests overall. Unapproved authors' comments can appear in the connections
+without entering the repair batch.
 
 Resolved comments are omitted from the current repair batch, not permanently
 marked addressed in the authority. Reopening a thread or receiving a new comment
@@ -593,6 +599,53 @@ python3 -B .github/workflows/ci-shepherd/local.py watch \
 selects due work. Commit reviewed source first: live modes reject dirty source
 and stop before another sweep, repair or notification if the source changes. Billing
 settlement remains independent of that source check.
+
+### Read-only live API contract
+
+`observe` can exit successfully while a chain is visibly paused. Use `check-api`
+for a falsifiable API compatibility check: missing or incomplete resolution,
+schema errors and changed identities produce a nonzero exit. An explicit PR
+with at least one existing review comment is required; an empty inventory is
+not proof that the query works.
+
+```shell
+python3 -B .github/workflows/ci-shepherd/local.py check-api \
+  --target upstream --pr PR_NUMBER \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE_ID \
+  --workdir artifacts/ci-shepherd/local
+```
+
+The check uses the local controller's actual `gh auth token --user radical`
+credential selection and sealed `PilotTransport`, not `gh api`'s potentially
+different ambient credential. It verifies actor, repository, tracker, authority,
+REST comment identities and fresh GraphQL resolution, then rechecks head and
+authority. Output contains only PR/head identifiers, counts and resolved IDs.
+It accepts dirty source and needs no Copilot CLI or hosted disable; it never
+dispatches work, requests reviews, writes GitHub state or consumes AI credits.
+It does not require the optional descriptive Copilot history to be available.
+
+The opt-in end-to-end test exercises this command as a separate process against
+real GitHub. Substitute the same explicit PR/tracker configuration:
+
+```shell
+PYTHONPATH=.github/workflows/ci-shepherd:.github/workflows/ci-shepherd/tests \
+CI_SHEPHERD_LIVE_CONTRACT=1 \
+CI_SHEPHERD_LIVE_TARGET=upstream \
+CI_SHEPHERD_LIVE_PR=PR_NUMBER \
+CI_SHEPHERD_LIVE_TRACKER=TRACKER_NUMBER \
+CI_SHEPHERD_LIVE_AUTHORITY=AUTHORITY_COMMENT_ID \
+CI_SHEPHERD_LIVE_TRACKER_NODE=TRACKER_NODE_ID \
+python3 -B -m unittest test_live_contract -v
+```
+
+Ordinary offline discovery skips this test. Deterministic coverage rejects
+the unavailable-field response, stale/foreign identities, incomplete or repeated
+pages, changed thread resolution and excess reads. It also proves the contract
+command fails rather than returning an observation-style success, and cannot
+launch inference or mutate the tracker.
+
+### Resuming a human handoff
 
 `resume` is an explicit **no-inference** mode for an existing completed native
 human handoff on the fixed upstream PR. Supply the exact latest operation ID and
