@@ -1,13 +1,15 @@
 from contextlib import redirect_stdout
 from copy import deepcopy
 import io
+import json
 import unittest
+import uuid
 from unittest.mock import patch
 
 from helpers import WorkspaceTest, compiled_step, reconciliation_evidence
 from github import IncompleteInventory, LostResponse, Response
 from test_pilot import RUN
-from test_pilot_github import ACTOR
+from test_pilot_github import ACTOR, pr
 import test_pilot_tracked_only as fixtures
 import hosted
 import pilot
@@ -71,6 +73,55 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
         self.api.clock = prior.clock
         self.api.read_authority()
         self.chain = self.api.ledger["chains"][0]
+
+    def setup_issue_api(self, number=8):
+        # A childless issue-phase chain: origin only, no child PR bound yet.
+        api, transport = fixtures.TrackedOnlyTests().api(bindings.FORK)
+        transport.values[f"{api.prefix}/issues/{number}"] = {
+            "number": number, "node_id": "NODE" + str(number), "state": "open",
+            "labels": [{"name": "shepherd-adopted"}], "title": "Fix normalization", "body": "Steps to repro"}
+        transport.values[f"{api.prefix}/issues/{number}/comments"] = []
+        api.read_authority()
+        chain = state.adopt(api.ledger, number, "issue", "NODE" + str(number))
+        api.persist()
+        self.api, self.transport, self.chain = api, transport, chain
+        self.posts = []
+        original = api.transport
+
+        def send(method, endpoint, body):
+            if method == "POST" and endpoint.endswith("/comments") and body["body"].startswith("[automated] @radical"):
+                self.posts.append(body["body"])
+                comment = {"id": 900 + len(self.posts), "user": ACTOR, "body": body["body"],
+                           "updated_at": "2026-10-04T00:00:00Z"}
+                transport.values.setdefault(endpoint, []).append(comment)
+                return Response(deepcopy(comment), {}, 201)
+            return original(method, endpoint, body)
+
+        api.transport = api.api.transport = send
+        return api, transport, chain
+
+    def setup_issue_worker_api(self, task_id):
+        api, transport, chain = self.setup_issue_api(8)
+        issue = transport.values[f"{api.prefix}/issues/8"]
+        issue["id"] = 1008
+        transport.values[f"{api.prefix}/issues"] = [issue]
+        observed = api.observe(chain)
+        operation = state.reserve(api.ledger, chain, github.fingerprint(observed) + ":round:1", api.clock(), local=False)
+        state.settle_native(operation, 2)
+        state.reserve_worker(api.ledger, chain, operation, api.clock())
+        state.sent(operation)
+        operation["taskId"] = task_id
+        task = {"id": task_id, "state": "completed", "repository": {"id": api.repository_id}, "creator": {"id": 1472},
+                "session_count": 1, "updated_at": "2026-10-04T00:00:00Z", "artifacts": [],
+                "sessions": [{"id": "SESSION8", "task_id": task_id, "state": "completed",
+                    "repository": {"id": api.repository_id}, "user": {"id": 1472},
+                    "base_ref": "main", "head_ref": "work",
+                    "prompt": github.CORRELATION + json.dumps(
+                        {"chain": chain["id"], "operation": operation["id"], "origin": 8}),
+                    "usage": {"type": "ai_credits", "amount": 1500000000}}]}
+        transport.values[f"agents/repos/{api.repository}/tasks/{task_id}"] = task
+        api.persist()
+        return api, transport, chain, operation, task
 
     def test_threshold_59_60_restart_dedup_and_no_action_accounting(self):
         for binding in (bindings.FORK, bindings.UPSTREAM):
@@ -668,3 +719,362 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
                           f"?head_sha={'a' * 40}&per_page=100&page=1&status=action_required"):
                 with self.subTest(query=query), self.assertRaises(ValueError):
                     reader.validate_endpoint("GET", route + query, None)
+
+    def test_issue_phase_native_handoff_posts_to_origin_issue_with_content_state_digest(self):
+        api, transport, chain = self.setup_issue_api(8)
+        clock = api.clock
+        identity = json.dumps([None, None], separators=(",", ":")) + ":round:1"
+        operation = state.reserve(api.ledger, chain, identity, clock(), local=True)
+        operation["sessionId"] = "SESSION-HANDOFF"
+        state.finish(operation, "completed")
+        chain["state"] = "human"
+        api.persist()
+        observed, log = self.tick()
+        self.assertEqual("issue", observed["kind"])
+        self.assertEqual(64, len(observed["head"]))
+        self.assertIn("delay 60s", log)
+        clock.advance(seconds=60)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn(f"Issue #8 at content state `{observed['head']}`", self.posts[0])
+        self.assertIn("is blocked on an explicit human handoff", self.posts[0])
+        self.assertIn(f"https://github.com/{api.repository}/issues/8", self.posts[0])
+        self.assertNotIn("/pull/8", self.posts[0])
+        self.assertTrue(reminders.valid_body(self.posts[0], api.repository, 8))
+        # The reminder comment itself must never be mistaken for repair feedback.
+        follow_up = api.observe(chain)
+        self.assertEqual([], follow_up["feedback"])
+
+    def test_child_adoption_reminder_guard_cancels_on_fresh_label_confirmation(self):
+        api, transport = fixtures.TrackedOnlyTests().api(bindings.FORK)
+        api.read_authority()
+        chain = state.adopt(api.ledger, 8, "issue", "NODE8")
+        transport.values[f"{api.prefix}/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []  # unconfirmed when the reminder episode was observed
+        transport.values[f"{api.prefix}/pulls/9"] = child
+        state.bind_child(api.ledger, chain, 9, child["node_id"])
+        chain.update(childAdoption="uncertain", state="human")
+        api.persist()
+        observation = api.observe(chain)
+        value = {"id": str(uuid.uuid4()), "head": observation["head"], "kind": "child-adoption",
+                 "reason": "uncertain", "firstObservedAt": "2026-10-04T00:00:00Z",
+                 "sendState": "observed", "commentId": None}
+        # The label actually confirms between observation and the send attempt.
+        transport.values[f"{api.prefix}/pulls/9"]["labels"] = [{"name": "shepherd-adopted"}]
+        with self.assertRaises(ValueError):
+            reminders.notification_guard(api, chain, observation, value)
+        self.assertEqual("confirmed", chain["childAdoption"],
+                          "the fresh recheck must actually resolve adoption, not just block the stale send")
+
+    def test_legacy_pr_phase_reminder_body_still_recognized_after_kind_addition(self):
+        legacy = ("[automated] @radical CI Shepherd needs human help.\n\n"
+                  "PR #20722 at head `" + "a" * 40 + "` is blocked on an explicit human handoff.\n"
+                  "Please review: https://github.com/microsoft/aspire/pull/20722\n\n"
+                  + reminders.MARKER + str(uuid.uuid4()) + " -->")
+        self.assertTrue(reminders.valid_body(legacy, "microsoft/aspire", 20722))
+
+    def test_issue_phase_worker_input_reminder_survives_restart_and_dedupes(self):
+        api, transport, chain = self.setup_issue_api(8)
+        observed = api.observe(chain)
+        operation = state.reserve(api.ledger, chain, github.fingerprint(observed) + ":round:1", api.clock(), local=False)
+        state.settle_native(operation, 2)
+        state.reserve_worker(api.ledger, chain, operation, api.clock())
+        state.sent(operation)
+        task_id = "OWNEDISSUE8"
+        operation["taskId"] = task_id
+        task = {"id": task_id, "state": "waiting_for_user", "repository": {"id": api.repository_id},
+                "creator": {"id": 1472}, "session_count": 1, "updated_at": "2026-10-04T00:00:00Z", "artifacts": [],
+                "sessions": [{"id": "SESSION8", "task_id": task_id, "state": "waiting_for_user",
+                              "repository": {"id": api.repository_id}, "user": {"id": 1472},
+                              "base_ref": "main", "head_ref": "fix-8",
+                              "prompt": github.CORRELATION + json.dumps(
+                                  {"chain": chain["id"], "operation": operation["id"], "origin": 8})}]}
+        transport.values[f"agents/repos/{api.repository}/tasks/{task_id}"] = task
+        api.persist()
+        api.reconcile_workers()
+        api.persist()
+        observed, log = self.tick()
+        self.assertIn("delay 60s", log)
+        timestamp = chain["reminder"]["firstObservedAt"]
+        api.clock.advance(seconds=59)
+        self.restart()
+        _, log = self.tick()
+        self.assertEqual([], self.posts)
+        self.assertIn("remaining 1s", log)
+        self.assertEqual(timestamp, self.chain["reminder"]["firstObservedAt"])
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn(f"https://github.com/{api.repository}/tasks/{task_id}", self.posts[0])
+        self.assertEqual("confirmed", self.chain["reminder"]["sendState"])
+        self.api.clock.advance(minutes=2)
+        self.restart()
+        self.tick()
+        self.assertEqual(1, len(self.posts), "an already-confirmed receipt must dedupe, never resend")
+
+    def setup_child_adoption_api(self, origin=8, child_number=9):
+        # An issue-phase chain with a child PR bound, but the controller's
+        # own adoption label write could not be confirmed on the child: the
+        # exact state in which observation["managed"] is False while the
+        # chain must still surface an owner-facing reminder.
+        api, transport = fixtures.TrackedOnlyTests().api(bindings.FORK)
+        api.read_authority()
+        chain = state.adopt(api.ledger, origin, "issue", "NODE" + str(origin))
+        transport.values[f"{api.prefix}/issues/{origin}"] = {
+            "number": origin, "node_id": "NODE" + str(origin), "state": "open",
+            "labels": [{"name": "shepherd-adopted"}]}
+        transport.values[f"{api.prefix}/issues/{origin}/comments"] = []
+        child = pr(child_number)
+        child["labels"] = []  # unconfirmed when the reminder episode was observed
+        transport.values[f"{api.prefix}/pulls/{child_number}"] = child
+        state.bind_child(api.ledger, chain, child_number, child["node_id"])
+        chain.update(childAdoption="uncertain", state="human")
+        api.persist()
+        self.api, self.transport, self.chain = api, transport, chain
+        self.posts = []
+        original = api.transport
+
+        def send(method, endpoint, body):
+            if method == "POST" and endpoint.endswith("/comments") and body["body"].startswith("[automated] @radical"):
+                self.posts.append((endpoint, body["body"]))
+                comment = {"id": 900 + len(self.posts), "user": ACTOR, "body": body["body"],
+                           "updated_at": "2026-10-04T00:00:00Z"}
+                transport.values.setdefault(endpoint, []).append(comment)
+                return Response(deepcopy(comment), {}, 201)
+            return original(method, endpoint, body)
+
+        api.transport = api.api.transport = send
+        return api, transport, chain
+
+    def test_child_adoption_reminder_reaches_process_posts_to_origin_and_dedupes_across_restart(self):
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        observed, log = self.tick()
+        self.assertFalse(observed["managed"], "the pending-adoption subject must still read unmanaged")
+        self.assertIn("delay 60s", log)
+        self.assertEqual("observed", chain["reminder"]["sendState"])
+        clock.advance(seconds=59)
+        self.restart()
+        _, log = self.tick()
+        self.assertEqual([], self.posts)
+        self.assertIn("remaining 1s", log)
+        clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual(1, len(self.posts), "exactly one origin-issue post, never the child PR")
+        endpoint, body = self.posts[0]
+        self.assertEqual(f"{api.prefix}/issues/8/comments", endpoint,
+                          "an unresolved child adoption must notify on the origin issue, not the unconfirmed child PR")
+        self.assertIn("PR #9", body)
+        self.assertIn(f"https://github.com/{api.repository}/pull/9", body)
+        self.assertEqual("confirmed", self.chain["reminder"]["sendState"])
+        clock.advance(minutes=2)
+        self.restart()
+        self.tick()
+        self.assertEqual(1, len(self.posts), "an already-confirmed receipt must dedupe, never resend")
+
+    def test_child_adoption_reminder_through_real_sweep_and_prepare(self):
+        # Not just process() called directly: the real sweep()/prepare() path
+        # must independently reach the same pending-adoption notification.
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        with redirect_stdout(io.StringIO()):
+            pilot.prepare(api, RUN, clock())
+        self.assertEqual("observed", chain["reminder"]["sendState"])
+        clock.advance(seconds=60)
+        with redirect_stdout(io.StringIO()):
+            pilot.prepare(api, RUN, clock())
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(f"{api.prefix}/issues/8/comments", self.posts[0][0])
+        self.assertEqual("confirmed", chain["reminder"]["sendState"])
+        clock.advance(minutes=2)
+        with redirect_stdout(io.StringIO()):
+            pilot.prepare(api, RUN, clock())
+        self.assertEqual(1, len(self.posts), "a real sweep/prepare dedupe must never resend")
+
+    def test_pending_child_adoption_takes_precedence_over_a_concurrent_native_handoff(self):
+        # A genuine, unrelated native handoff (the chain's own latest
+        # operation) coexists with a still-unconfirmed child adoption. Before
+        # this fix, blocker() picked native-handoff first, and that kind can
+        # never pass guard()'s managed-subject check while the label is
+        # unconfirmed, so the allowed origin-only pending-adoption notice was
+        # silently suppressed forever. The pending adoption must take
+        # precedence instead, without disturbing the human chain state or the
+        # native handoff operation itself.
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        # reserve() requires an "open" chain; the fixture already set "human"
+        # for its own unconfirmed-adoption reason, so briefly reopen it just
+        # to append this operation, matching how a native handoff would in
+        # fact have been reserved before that later human stop occurred.
+        chain["state"] = "open"
+        identity = json.dumps([None, None], separators=(",", ":")) + ":round:1"
+        operation = state.reserve(api.ledger, chain, identity, clock(), local=True)
+        operation["sessionId"] = "SESSION-CONCURRENT-HANDOFF"
+        state.finish(operation, "completed")
+        chain["state"] = "human"
+        api.persist()
+        self.assertTrue(github.native_handoff(chain), "fixture must actually be a genuine native handoff")
+        observed, log = self.tick()
+        self.assertEqual("child-adoption", chain["reminder"]["kind"],
+                          "pending child-adoption must win the reminder, not the concurrent native handoff")
+        self.assertIn("ambiguous child-adoption needing confirmation", log)
+        clock.advance(seconds=60)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        endpoint, body = self.posts[0]
+        self.assertEqual(f"{api.prefix}/issues/8/comments", endpoint)
+        self.assertIn("ambiguous child-adoption needing confirmation", body)
+        self.assertEqual("human", chain["state"], "the genuine human chain state must not be disturbed")
+        self.assertTrue(github.native_handoff(chain), "the separate native handoff operation itself must remain")
+
+        # The child's own label write is now confirmed; because the chain's
+        # latest operation is still this same genuine native handoff,
+        # confirming the adoption must not silently reopen the chain to
+        # "open" — only the pending-adoption reminder clears, and the
+        # now-exposed native handoff must get its own, separate reminder.
+        transport.values[f"{api.prefix}/pulls/9"]["labels"] = [{"name": "shepherd-adopted"}]
+        api.adopt_child(chain)
+        self.assertEqual("confirmed", chain["childAdoption"])
+        self.assertEqual("human", chain["state"], "confirming adoption alongside a genuine handoff must not reopen it")
+        observed, log = self.tick()
+        self.assertEqual("native-handoff", chain["reminder"]["kind"],
+                          "once confirmed, the separate native handoff must surface its own reminder")
+        self.assertIn("an explicit human handoff", log)
+
+    def test_child_adoption_reminder_lost_send_reconciles_without_reposting(self):
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        self.tick()
+        clock.advance(seconds=60)
+        original = api.transport
+
+        def lost(method, endpoint, body):
+            if method == "POST" and endpoint.endswith("/comments") and body["body"].startswith("[automated] @radical"):
+                comment = {"id": 777, "user": ACTOR, "body": body["body"], "updated_at": "2026-10-04T00:00:00Z"}
+                transport.values.setdefault(endpoint, []).append(comment)
+                raise LostResponse("reminder outcome unknown")
+            return original(method, endpoint, body)
+
+        api.transport = api.api.transport = lost
+        _, log = self.tick()
+        self.assertEqual("confirmed", chain["reminder"]["sendState"])
+        self.assertIn("confirmed by owned comment receipt", log)
+        self.assertEqual(0, len(self.posts), "the lost-send fixture echoes through transport.values, not self.posts")
+        before = transport.values[f"{api.prefix}/issues/8/comments"]
+        api.transport = api.api.transport = original
+        self.tick()
+        self.assertIs(before, transport.values[f"{api.prefix}/issues/8/comments"],
+                       "a confirmed receipt must never attempt another send")
+
+    def test_child_adoption_reminder_cancels_when_confirmed_before_send_deadline(self):
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        self.tick()
+        # The label actually confirms before the delayed send fires.
+        transport.values[f"{api.prefix}/pulls/9"]["labels"] = [{"name": "shepherd-adopted"}]
+        clock.advance(seconds=60)
+        self.tick()
+        self.assertEqual([], self.posts, "a confirmed adoption must cancel the pending reminder, not post")
+        self.assertEqual("confirmed", chain["childAdoption"])
+        self.assertNotEqual("confirmed", chain["reminder"]["sendState"], "a cancelled reminder must never be marked sent")
+
+    def test_child_adoption_reminder_guard_catches_a_hands_off_race_after_adopt_child_but_before_its_own_fresh_read(self):
+        # adopt_child()'s own fetch-based recheck (inside notification_guard())
+        # and guard()'s subsequent fresh observe() are two separately-timed
+        # reads of the same child PR. A hands-off label applied strictly
+        # between them (still unseen by adopt_child's read, so childAdoption
+        # stays "uncertain" and does not set chain["state"] to "hands-off")
+        # must still be caught by guard()'s OWN fresh read, not waved through
+        # because adopt_child's earlier read looked fine.
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        self.tick()
+        clock.advance(seconds=60)
+        original = api.transport
+        calls = {"pulls": 0}
+
+        def racing(method, endpoint, body):
+            if method == "GET" and endpoint == f"{api.prefix}/pulls/9":
+                calls["pulls"] += 1
+                # Call 1 is this tick's own top-level observe() (before
+                # notification_guard runs at all); call 2 is adopt_child()'s
+                # fetch-based recheck inside notification_guard. Only from
+                # call 3 (guard()'s own fresh observe()) does the race labe
+                # actually appear, so adopt_child's read is still clean.
+                if calls["pulls"] >= 3:
+                    transport.values[endpoint]["labels"] = [{"name": "shepherd-hands-off"}]
+            return original(method, endpoint, body)
+
+        api.transport = api.api.transport = racing
+        _, log = self.tick()
+        self.assertEqual([], self.posts, "guard's own fresh read must cancel a mid-flight hands-off, "
+                                          "even though adopt_child's earlier read in the same attempt saw none")
+        self.assertGreaterEqual(calls["pulls"], 3, "the race requires tick's observe, adopt_child, and guard to "
+                                                    "each read independently")
+        self.assertIn("not sent; fresh guard unavailable", log)
+
+    def test_child_adoption_reminder_cancels_on_hands_off_before_send_deadline(self):
+        # Driven through the real sweep()/prepare() path (not process() called
+        # in isolation): a genuine hands-off takeover is settled by sweep()'s
+        # own observed-based adopt_child() call before process() ever runs,
+        # the same ordering production uses. Once settled, process()'s own
+        # fresh-field pending_adoption check (a backstop, not the primary
+        # settlement path) must also agree the reminder is no longer pending.
+        api, transport, chain = self.setup_child_adoption_api(8, 9)
+        clock = api.clock
+        with redirect_stdout(io.StringIO()):
+            pilot.prepare(api, RUN, clock())
+        # A human explicitly takes the child over before the delayed send fires.
+        transport.values[f"{api.prefix}/pulls/9"]["labels"] = [{"name": "shepherd-hands-off"}]
+        clock.advance(seconds=60)
+        with redirect_stdout(io.StringIO()):
+            pilot.prepare(api, RUN, clock())
+        self.assertEqual([], self.posts, "a genuine hands-off takeover must cancel the pending reminder, not post")
+        self.assertEqual("hands-off", chain["state"])
+
+    def test_resolved_issue_worker_result_in_human_state_also_gets_a_reminder(self):
+        api, _, chain, operation, _ = self.setup_issue_worker_api("AMBIGUOUSARTIFACT8")
+        clock = api.clock
+        with redirect_stdout(io.StringIO()):
+            self.assertIsNone(pilot.prepare(api, RUN, clock()))
+        self.assertEqual(("human", None, "worker-result", "observed"),
+                          (chain["state"], chain["child"], chain["reminder"]["kind"], chain["reminder"]["sendState"]))
+        self.assertEqual(("completed", "completed", 1.5, 0),
+                          (operation["state"], operation["workerState"], operation["workerActual"], operation["workerReserved"]))
+        history = deepcopy({key: chain[key] for key in ("rounds", "operations", "dispositions")})
+        self.assertEqual([], self.posts)
+        clock.advance(seconds=59)
+        self.restart()
+        with redirect_stdout(io.StringIO()):
+            self.assertIsNone(pilot.prepare(self.api, RUN, clock()))
+        self.assertEqual([], self.posts)
+        clock.advance(seconds=1)
+        with redirect_stdout(io.StringIO()):
+            self.assertIsNone(pilot.prepare(self.api, RUN, clock()))
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("Issue #8 at content state", self.posts[0])
+        self.assertIn(f"https://github.com/{api.repository}/tasks/AMBIGUOUSARTIFACT8", self.posts[0])
+        self.assertEqual("confirmed", self.chain["reminder"]["sendState"])
+        clock.advance(minutes=2)
+        self.restart()
+        with redirect_stdout(io.StringIO()):
+            self.assertIsNone(pilot.prepare(self.api, RUN, clock()))
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(history, {key: self.chain[key] for key in history})
+
+    def test_worker_result_resumed_task_during_fresh_check_suppresses_stale_ping(self):
+        api, _, chain, _, task = self.setup_issue_worker_api("AMBIGUOUSARTIFACT8R")
+        api.reconcile_workers()
+        api.persist()
+        self.tick()
+        self.assertIsNotNone(chain.get("reminder"))
+        self.api.clock.advance(seconds=60)
+        # Resume after observation: the fresh receipt must cancel a stale terminal notice.
+        task["state"] = task["sessions"][0]["state"] = "in_progress"
+        _, log = self.tick()
+        self.assertEqual([], self.posts, "a resumed task must cancel the stale worker-result reminder, not post it")
+        self.assertIn("not sent; fresh guard unavailable", log)
+        self.assertIn("subject basis changed", log)
+        self.assertEqual("observed", chain["reminder"]["sendState"])

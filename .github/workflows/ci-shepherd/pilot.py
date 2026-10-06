@@ -64,7 +64,8 @@ def prepare(api, run, now, *, present=True):
         if chain["rounds"] >= api.binding.round_limit:
             candidates[observed["number"]]["actionable"] = False
             continue
-        context = None if chain["escalated"] or api.binding != bindings.FORK else patch.source_context(api, observed)
+        context = (None if chain["escalated"] or api.binding != bindings.FORK or not api.inline_repairs
+                   else patch.source_context(api, observed))
         if context is None or chain["localAttempts"] >= 2:
             chain["escalated"] = True
         if chain["escalated"] and api.admission_slots(observed["headRef"]) >= 2:

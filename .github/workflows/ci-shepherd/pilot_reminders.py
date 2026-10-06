@@ -11,7 +11,9 @@ import round as contracts
 
 MARKER = "<!-- ci-shepherd:human-reminder:v1:"
 KINDS = {"workflow-approval": "workflow approval", "worker-input": "worker input",
-         "native-handoff": "an explicit human handoff"}
+         "native-handoff": "an explicit human handoff",
+         "child-adoption": "ambiguous child-adoption needing confirmation",
+         "worker-result": "an ambiguous worker result needing review"}
 
 
 def delay(value):
@@ -26,7 +28,7 @@ def validate(value):
     issue_pr.text(value["head"], "reminder head")
     issue_pr.text(value["kind"], "reminder kind")
     issue_pr.text(value["sendState"], "reminder send state")
-    if str(uuid.UUID(value["id"])) != value["id"] or not re.fullmatch(r"[0-9a-f]{40}", value["head"]):
+    if str(uuid.UUID(value["id"])) != value["id"] or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value["head"]):
         raise ValueError("invalid reminder identity/head")
     if value["kind"] not in KINDS:
         raise ValueError("invalid reminder kind")
@@ -50,13 +52,18 @@ def link(value, repository, number):
         return base + "/actions/runs/" + value["reason"]
     if value["kind"] == "worker-input":
         return base + "/tasks/" + value["reason"]
-    return base + f"/pull/{number}"
+    if value["kind"] == "worker-result":
+        return base + "/tasks/" + value["reason"]
+    # A still-childless issue-phase blocker (64-char content-state digest,
+    # not a git head) must link the origin issue, never a nonexistent PR.
+    return base + (f"/pull/{number}" if len(value["head"]) == 40 else f"/issues/{number}")
 
 
 def render(value, repository, number):
     validate(value)
+    subject, descriptor = ("PR", "head") if len(value["head"]) == 40 else ("Issue", "content state")
     return (f"[automated] @radical CI Shepherd needs human help.\n\n"
-            f"PR #{number} at head `{value['head']}` is blocked on {KINDS[value['kind']]}.\n"
+            f"{subject} #{number} at {descriptor} `{value['head']}` is blocked on {KINDS[value['kind']]}.\n"
             f"Please review: {link(value, repository, number)}\n\n{MARKER}{value['id']} -->")
 
 
@@ -66,17 +73,22 @@ def valid_body(body, repository, number):
     base = re.escape(f"https://github.com/{repository}")
     match = re.fullmatch(
         r"\[automated\] @radical CI Shepherd needs human help\.\n\n"
-        + re.escape(f"PR #{number} at head `") + r"([0-9a-f]{40})` is blocked on "
-        r"(workflow approval|worker input|an explicit human handoff)\.\nPlease review: ("
-        + base + r"/(?:actions/runs/[1-9][0-9]{0,19}|tasks/[A-Za-z0-9_-]{1,256}|pull/"
-        + str(number) + r"))\n\n" + re.escape(MARKER) + r"([0-9a-f-]{36}) -->", body)
+        r"(?:PR #" + str(number) + r" at head `([0-9a-f]{40})`"
+        r"|Issue #" + str(number) + r" at content state `([0-9a-f]{64})`)"
+        r" is blocked on (workflow approval|worker input|an explicit human handoff"
+        r"|ambiguous child-adoption needing confirmation|an ambiguous worker result needing review)\.\n"
+        r"Please review: (" + base + r"/(?:actions/runs/[1-9][0-9]{0,19}|tasks/[A-Za-z0-9_-]{1,256}|pull/"
+        + str(number) + r"|issues/" + str(number) + r"))\n\n" + re.escape(MARKER) + r"([0-9a-f-]{36}) -->", body)
     if match is None:
         return False
-    _head, description, url, identity = match.groups()
+    pr_head, issue_head, description, url, identity = match.groups()
+    head = pr_head or issue_head
     kind = next(key for key, text in KINDS.items() if text == description)
-    reason = "handoff" if kind == "native-handoff" else url.rsplit("/", 1)[1]
+    reason = ("handoff" if kind in {"native-handoff", "child-adoption"}
+              else url.rsplit("/", 1)[1])
     try:
-        return str(uuid.UUID(identity)) == identity and url == link({"kind": kind, "reason": reason}, repository, number)
+        return (str(uuid.UUID(identity)) == identity
+                and url == link({"kind": kind, "reason": reason, "head": head}, repository, number))
     except ValueError:
         return False
 
@@ -144,6 +156,10 @@ def workflow_evidence(api, head):
 def blocker(chain, observation):
     if observation["approval"] is not None:
         return "workflow-approval", observation["approval"]["id"]
+    if chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}:
+        # Other notifications require managed subjects. Notify the origin about
+        # adoption first; preserve any separate human stop until confirmation.
+        return "child-adoption", chain["childAdoption"]
     for operation in reversed(chain["operations"]):
         if operation["taskId"] is not None and operation["workerState"] == "waiting_for_user":
             return "worker-input", operation["taskId"]
@@ -151,6 +167,9 @@ def blocker(chain, observation):
         operation = chain["operations"][-1]
         if operation["state"] == "completed" and operation["taskId"] is None and operation["sessionId"] is not None:
             return "native-handoff", operation["id"]
+        if operation["taskId"] is not None and operation["state"] in {"completed", "failed"} and chain["child"] is None:
+            # A terminal worker without a mappable child needs owner review.
+            return "worker-result", operation["taskId"]
     return None
 
 
@@ -166,11 +185,17 @@ def evidence_unknown(chain, observation):
 def notification_guard(api, chain, observation, value):
     if not api.write or chain["state"] not in {"open", "human"}:
         raise ValueError("notification authority disabled or closed")
-    if value["kind"] == "worker-input":
-        api.reconcile_workers()
+    if value["kind"] in {"worker-input", "worker-result"}:
+        # A saved task may have resumed since observation. Refresh its receipt
+        # without adoption effects before deciding whether the notice is still due.
+        api.reconcile_workers(adopt_children=False)
         api.persist()
-    # Human handoff permits a notification, never the ordinary repair effect.
-    observed = api.guard(chain, observation, effect=False)
+    if value["kind"] == "child-adoption":
+        # Confirmation or takeover cancels a stale adoption notice.
+        api.adopt_child(chain)
+        api.persist()
+    # Only adoption notices may inspect an unmanaged child; the origin stays managed.
+    observed = api.guard(chain, observation, effect=False, require_managed=value["kind"] != "child-adoption")
     current = blocker(chain, observed)
     if evidence_unknown(chain, observed) or not matches(value, observed, current):
         raise ValueError("human blocker changed or unknown before notification")
@@ -178,11 +203,12 @@ def notification_guard(api, chain, observation, value):
         raise ValueError("human blocker link changed before notification")
 
 
-def reconcile(api, chain, number):
+def reconcile(api, chain, number, target=None):
     value = chain["reminder"]
+    target = number if target is None else target
     expected = render(value, api.repository, number)
     try:
-        comments = api.api.pages(f"{api.prefix}/issues/{number}/comments")
+        comments = api.api.pages(f"{api.prefix}/issues/{target}/comments")
         candidates = [comment for comment in comments if api.owned(comment) and comment.get("body") == expected]
         if len(candidates) == 1:
             issue_pr.positive(candidates[0]["id"], "reminder receipt")
@@ -198,7 +224,12 @@ def process(api, chain, observation, now):
     def log(message):
         print(f"CI Shepherd reminder #{observation['number']}: {message}")
 
-    if not api.write or observation["kind"] != "pr" or not observation["managed"] or chain["state"] in {"closed", "hands-off"}:
+    # Match guard()'s fresh-management exception, never cached chain state alone.
+    pending_adoption = (chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}
+                         and observation["originManaged"] is True and observation["handsOff"] is False
+                         and observation["state"] == "open" and not observation["managed"])
+    if not api.write or chain["state"] in {"closed", "hands-off"} or (
+            not observation["managed"] and not pending_adoption):
         return
     current = blocker(chain, observation)
     value = chain.get("reminder")
@@ -221,7 +252,9 @@ def process(api, chain, observation, now):
         value["reason"] = current[1]
         api.persist()
     if value["sendState"] in {"sent", "uncertain"}:
-        log(reconcile(api, chain, observation["number"]))
+        # Reconcile on the managed origin, while the body identifies the pending child.
+        target = chain["origin"] if value["kind"] == "child-adoption" else observation["number"]
+        log(reconcile(api, chain, observation["number"], target))
         return
     if value["sendState"] == "confirmed":
         log(f"{KINDS[value['kind']]}; already notified, comment {value['commentId']}")
@@ -234,6 +267,7 @@ def process(api, chain, observation, now):
         log(f"{KINDS[value['kind']]}; delay {api.reminder_delay}s, remaining {max(0, api.reminder_delay - elapsed):g}s")
         return
 
+    target = chain["origin"] if value["kind"] == "child-adoption" else observation["number"]
     attempted = False
     try:
         notification_guard(api, chain, observation, value)
@@ -242,7 +276,7 @@ def process(api, chain, observation, now):
         notification_guard(api, chain, observation, value)
         body = render(value, api.repository, observation["number"])
         attempted = True
-        response = api.transport("POST", f"{api.prefix}/issues/{observation['number']}/comments", {"body": body})
+        response = api.transport("POST", f"{api.prefix}/issues/{target}/comments", {"body": body})
         if (not isinstance(response, Response) or response.status != 201 or not isinstance(response.payload, dict)
                 or not isinstance(response.payload.get("user"), dict)
                 or not api.owned(response.payload) or response.payload.get("body") != body):
@@ -258,7 +292,7 @@ def process(api, chain, observation, now):
         if attempted:
             value["sendState"] = "uncertain"
             api.persist()
-            log(reconcile(api, chain, observation["number"]))
+            log(reconcile(api, chain, observation["number"], target))
         else:
             if value["sendState"] == "sent":
                 value["sendState"] = "observed"

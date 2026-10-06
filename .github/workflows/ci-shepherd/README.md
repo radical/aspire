@@ -92,6 +92,27 @@ Both profiles support reminders. The upstream PR20722 comment capability accepts
 only this fixed body and a host-generated episode marker, not general comments
 or edits. Disabling the pilot or removing adoption stops new notifications.
 
+Issue-phase reminders cover saved workers waiting for input, explicit native
+human handoffs, and terminal outcomes classified as a human-review stop without
+a child PR. They post to the origin issue and render its title/body digest as
+"Issue #N at content state `<digest>`", not as a git commit. Worker blockers
+are freshly reverified before sending; a resumed task cancels a stale notice.
+
+Failed, cancelled or timed-out issue workers can receive another bounded
+decision only after a fresh saved-task receipt reports no artifacts. The saved
+task, operation and lifetime budget remain intact; unknown costs stay reserved.
+An unverifiable artifact mapping still fails closed rather than promising
+recovery or a reminder, but verified billing is persisted before mapping.
+
+If a child PR is bound but its adoption-label write is unconfirmed, the chain
+waits for a human rather than claiming human takeover or retrying the write.
+Its delayed reminder posts on the **origin issue** and links the child PR/head.
+Fresh label confirmation or actual takeover cancels that notice. Confirmation
+may reopen an adoption-only stop, but preserves a separate native human handoff.
+Immediate status publication on the unmanaged child remains suppressed.
+Legacy PR reminder bodies remain recognized; a confirmed comment receipt
+does not prove inbox or email delivery.
+
 ## Lifetime policy and accounting
 
 - Up to two local attempts and ten total action rounds per issue-to-PR chain.
@@ -366,6 +387,18 @@ missing, malformed or unsuccessful; such evidence cannot authorize code.
 for the fixed PR20722 trial on a POSIX machine. GitHub Copilot repair workers
 remain remote. The Actions workflow stays available for later hosted execution;
 its GitHub-hosted identity checks are unchanged, not emulated locally.
+
+`local.py --target` selects the closed repository binding:
+`upstream-20722` (the default, the fixed PR20722 trial) or the existing closed
+`fork` binding for adopted issues and PRs in radical/aspire. The operator must
+provide the matching saved tracker/authority; selecting `fork` does not create
+or reset one. `resume` still requires `upstream-20722`.
+
+Local execution uses tracked cloud workers for both targets. Inline
+`python-labels-v1` repair remains hosted-only. Disabled or read-only observation
+reconciles saved task receipts without sending child-adoption labels. Local
+label writes also recheck clean source, global enablement and hosted-idle
+exclusion without preventing verified billing from being saved.
 
 The operator explicitly selects the existing tracker/comment and authenticates
 as radical through `gh`. The adapter verifies the same actor/repository/tracker

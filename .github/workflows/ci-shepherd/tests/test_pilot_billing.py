@@ -177,7 +177,7 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
                 if hands_off:
                     self.assertEqual({"outcome": "observed; no inference",
                                       "reasons": [{"chain": chain["id"], "reason":
-                                          "Human handoff / adoption removed; no new repairs."}],
+                                          "Adoption removed or hands-off label applied; no new repairs."}],
                                       "roundLimitReached": False}, result)
                     self.assertEqual("hands-off", state.find_chain(api.ledger, 20722)["state"])
                 else:

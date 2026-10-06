@@ -1,4 +1,4 @@
-"""Explicit operator-authenticated local execution of the shared upstream pilot."""
+"""Explicit operator-authenticated local execution of the shared closed pilot."""
 
 import argparse
 from contextlib import contextmanager
@@ -71,13 +71,16 @@ def require_idle_actions(token, *, reader=metadata):
 
 
 class LocalGitHub(github.PilotGitHub):
-    def __init__(self, token, tracker, authority, node, *, write, revision):
+    # Inline patch validation/publication is implemented only by the hosted runner.
+    inline_repairs = False
+
+    def __init__(self, token, tracker, authority, node, *, write, revision, binding=bindings.UPSTREAM):
         self.token = token
         self.revision = revision
         super().__init__(
-            github.PilotTransport(token, write=write, binding=bindings.UPSTREAM,
+            github.PilotTransport(token, write=write, binding=binding,
                                   tracker=tracker, authority=authority),
-            tracker, authority, node, write=write, binding=bindings.UPSTREAM)
+            tracker, authority, node, write=write, binding=binding)
 
     def authority_guard(self):
         require_idle_actions(self.token)
@@ -89,13 +92,19 @@ class LocalGitHub(github.PilotGitHub):
             raise ValueError("Shepherd enable configuration is unavailable or malformed")
         return value["value"] == "true"
 
-    def guard(self, chain, observation, *, effect=True):
+    def guard(self, chain, observation, *, effect=True, require_managed=True):
         # Notifications use effect=False to skip repair-only checks, but still
         # need the local stop controls. Billing persistence does not use guard.
         require_source(self.revision)
         if not self.enabled():
             raise ValueError("Shepherd globally disabled; no new effects")
-        return super().guard(chain, observation, effect=effect)
+        return super().guard(chain, observation, effect=effect, require_managed=require_managed)
+
+    def adoption_effect_guard(self):
+        self.authority_guard()
+        require_source(self.revision)
+        if not self.enabled():
+            raise ValueError("Shepherd globally disabled; no new effects")
 
 
 @contextmanager
@@ -220,7 +229,7 @@ def sweep(api, directory, revision, *, executor=execute):
     contracts.write_json(directory / "run.json", run)
     if not api.enabled():
         api.read_authority()
-        api.reconcile_workers()
+        api.reconcile_workers(adopt_children=False)
         api.persist()
         result = {"outcome": "disabled; billing observation only"}
     else:
@@ -253,7 +262,7 @@ def sweep(api, directory, revision, *, executor=execute):
             # Packet validity and fresh session evidence are still checked by the core.
             result = pilot.settle(api, packet, evidence, usage, live.clock(), billing_only=not api.enabled())
             if result["outcome"] == "validate":
-                raise ValueError("inline fork repair is outside this fixed upstream local runner")
+                raise ValueError("inline repair is outside this cloud-only local runner")
     contracts.write_json(directory / "result.json", result)
     print(json.dumps({"run": run["runId"], **result}, allow_nan=False), flush=True)
     return result
@@ -356,6 +365,8 @@ def resume(api, operation_id, expected_head, now):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["observe", "run", "watch", "resume"])
+    parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name],
+                        default=bindings.UPSTREAM.name)
     parser.add_argument("--tracker", type=int, required=True)
     parser.add_argument("--authority", type=int, required=True)
     parser.add_argument("--tracker-node", required=True)
@@ -368,13 +379,17 @@ def main(argv=None):
         parser.error("interval must be at least 30 seconds")
     if args.mode == "resume" and (not args.operation or not args.expected_head):
         parser.error("resume requires --operation and --expected-head")
+    if args.mode == "resume" and args.target != bindings.UPSTREAM.name:
+        parser.error("resume requires the fixed upstream target")
+    binding = bindings.select(args.target)
     try:
         token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
         revision = command(["git", "--no-pager", "-C", str(ROOT), "rev-parse", "HEAD"])
         if args.mode != "observe" and command(["git", "--no-pager", "-C", str(ROOT), "status", "--porcelain"]):
             raise ValueError("commit the reviewed controller source before local effects")
         if args.mode == "observe":
-            api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=False, revision=revision)
+            api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=False,
+                              revision=revision, binding=binding)
             api.read_authority()
             observations = api.sweep()
             for chain in api.ledger["chains"]:
@@ -387,7 +402,8 @@ def main(argv=None):
             while True:
                 require_source(revision)
                 require_idle_actions(token)
-                api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=True, revision=revision)
+                api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=True,
+                                  revision=revision, binding=binding)
                 if args.mode == "resume":
                     print(json.dumps(resume(api, args.operation, args.expected_head, live.clock())), flush=True)
                     return 0

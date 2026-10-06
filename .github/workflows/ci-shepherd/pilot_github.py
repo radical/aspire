@@ -148,6 +148,14 @@ def managed(item):
     return item["state"] == "open" and "shepherd-adopted" in names and "shepherd-hands-off" not in names
 
 
+def native_handoff(chain):
+    """Identify a native human stop independently of child adoption."""
+    if not chain["operations"]:
+        return False
+    operation = chain["operations"][-1]
+    return operation["state"] == "completed" and operation["taskId"] is None and operation["sessionId"] is not None
+
+
 def fingerprint(observation):
     value = {"number": observation["number"], "node": observation["node"], "head": observation["head"],
              "description": observation["description"],
@@ -162,6 +170,8 @@ def fingerprint(observation):
 
 
 class PilotGitHub:
+    inline_repairs = True
+
     def __init__(self, transport, tracker, authority_id, tracker_node, *, write=False, binding=bindings.FORK):
         if binding not in {bindings.FORK, bindings.UPSTREAM}:
             raise ValueError("closed pilot binding required")
@@ -225,6 +235,10 @@ class PilotGitHub:
         if self.read_authority() != self.expected:
             raise ValueError("repository authority changed")
 
+    def adoption_effect_guard(self):
+        """Guard label writes without blocking billing reconciliation."""
+        self.authority_guard()
+
     def persist(self):
         if not self.write or self.ledger is None:
             raise ValueError("authenticated hosted writer required")
@@ -266,9 +280,12 @@ class PilotGitHub:
         if value["number"] != number or value["node_id"] != node:
             raise ValueError("subject identity changed")
         active = managed(value)
+        origin_managed, hands_off = None, None
         if chain["child"] is not None:
             origin = self.api.get(f"{self.prefix}/issues/{chain['origin']}")
-            active = active and origin["node_id"] == chain["node"] and managed(origin)
+            origin_managed = origin["node_id"] == chain["node"] and managed(origin)
+            hands_off = "shepherd-hands-off" in [label["name"] for label in value["labels"]]
+            active = active and origin_managed
         feedback = []
         endpoints = [(f"{self.prefix}/issues/{number}/comments", "comment")]
         if kind == "pr":
@@ -384,8 +401,20 @@ class PilotGitHub:
             # Do not send a truncated repair batch or persist its bodies. This
             # item's visible wait must not stop other chains in the cheap sweep.
             feedback = []
+        last_operation = chain["operations"][-1] if chain["operations"] else None
+        # Retry only from this sweep's verified saved-task receipt, never a
+        # persisted status alone. No reported artifacts is not proof that no
+        # PR exists elsewhere; existing human stops still block selection.
+        last_receipt = self.worker_results.get(last_operation["id"]) if last_operation is not None else None
+        worker_failed_without_artifact = (
+            kind == "issue" and chain["child"] is None and last_operation is not None
+            and last_operation["taskId"] is not None and last_operation["state"] == "failed"
+            and last_operation["workerState"] in {"failed", "timed_out", "cancelled"}
+            and last_receipt is not None and last_receipt["taskId"] == last_operation["taskId"]
+            and last_receipt["artifactState"] == "not-reported")
         initial_due = not chain["operations"] or (
-            chain["operations"][-1]["state"] in {"failed", "no-send"} and chain["operations"][-1]["taskId"] is None)
+            last_operation["state"] in {"failed", "no-send"} and last_operation["taskId"] is None
+        ) or worker_failed_without_artifact
         work_history = None
         if kind == "pr":
             try:
@@ -393,6 +422,7 @@ class PilotGitHub:
             except IncompleteInventory:
                 work_history = {"complete": False, "events": []}
         observed = {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
+                "originManaged": origin_managed, "handsOff": hands_off,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
                 "attention": attention, "pendingCI": pending_ci,
                 "ciWait": ci_wait, "reviewOnly": ci_wait is not None, "diagnostics": diagnostics,
@@ -480,14 +510,27 @@ class PilotGitHub:
             result.append(item)
         return result
 
-    def guard(self, chain, observation, *, effect=True):
+    def guard(self, chain, observation, *, effect=True, require_managed=True):
+        if not require_managed and effect:
+            # Only pending-adoption notifications may inspect an unmanaged child.
+            raise ValueError("require_managed=False is only valid for a non-effect notification read")
         if effect:
             repository = self.api.get(self.prefix)
             if repository.get("id") != self.repository_id or repository.get("full_name") != self.repository:
                 raise ValueError("target repository changed")
         fresh = self.observe(chain)
-        if not fresh["managed"]:
-            raise ValueError("subject management removed or hands-off")
+        if require_managed:
+            if not fresh["managed"]:
+                raise ValueError("subject management removed or hands-off")
+        else:
+            # The fingerprint excludes management/closure. Derive the narrow
+            # notification exception from this read to catch intervening takeover.
+            pending_adoption = (chain["child"] is not None and fresh["number"] == chain["child"]
+                                 and fresh["state"] == "open" and fresh["originManaged"] is True
+                                 and fresh["handsOff"] is False
+                                 and chain["childAdoption"] in {"sent", "uncertain"})
+            if not pending_adoption:
+                raise ValueError("subject management removed or hands-off")
         if effect and fresh["attention"] is not None:
             raise ValueError(fresh["attention"])
         if effect and fresh["workflowAttention"] is not None:
@@ -570,7 +613,7 @@ class PilotGitHub:
     def admission_slots(self, head_ref):
         return state.worker_slots(self.ledger)
 
-    def reconcile_workers(self):
+    def reconcile_workers(self, *, adopt_children=True):
         details = {}
         self.worker_results = {}
         for chain in self.ledger["chains"]:
@@ -615,7 +658,10 @@ class PilotGitHub:
                     operation["state"] = "waiting"
                 else:
                     state.finish(operation, "completed" if task["state"] == "completed" else "failed")
-                    if chain["kind"] == "issue" and chain["child"] is None and task["state"] == "completed":
+                    # Failed workers can still report a child PR.
+                    if chain["kind"] == "issue" and chain["child"] is None and adopt_children and self.write:
+                        # Artifact verification can fail independently of a verified billing receipt.
+                        self.persist()
                         self.adopt_artifact(task, chain, operation)
 
     def adopt_artifact(self, task, chain, operation):
@@ -623,6 +669,10 @@ class PilotGitHub:
                  if artifact.get("provider") == "github" and artifact.get("type") == "pull"]
         branches = [artifact["data"] for artifact in task["artifacts"]
                     if artifact.get("provider") == "github" and artifact.get("type") == "branch"]
+        if not pulls and not branches and task["state"] != "completed":
+            # Failures with no reported artifacts can continue within the existing
+            # budget. Completion without a mappable child still needs a human.
+            return
         if len(pulls) != 1 or len(branches) != 1:
             chain["state"] = "human"
             return
@@ -646,22 +696,39 @@ class PilotGitHub:
         self.persist()
         self.adopt_child(chain)
 
-    def adopt_child(self, chain):
+    def _settle_child_adoption(self, chain, hands_off, managed_child):
+        """Settle one origin/child observation; False permits a first label send."""
+        if hands_off:
+            chain["state"] = "hands-off"
+            return True
+        if managed_child:
+            # Confirmation may clear adoption uncertainty, not a newer native stop.
+            if (chain["state"] == "human" and chain["childAdoption"] in {"sent", "uncertain"}
+                    and not native_handoff(chain)):
+                chain["state"] = "open"
+            chain["childAdoption"] = "confirmed"
+            self.persist()
+            return True
+        if chain["childAdoption"] in {"sent", "uncertain"}:
+            # An unconfirmed controller write is not evidence of human takeover.
+            chain["state"] = "human"
+            return True
+        return False
+
+    def adopt_child(self, chain, observed=None):
         if chain["childAdoption"] == "confirmed":
+            return
+        if observed is not None:
+            # Settle from the same observation used to classify this sweep.
+            hands_off = not observed["originManaged"] or observed["state"] != "open" or observed["handsOff"]
+            self._settle_child_adoption(chain, hands_off, observed["managed"])
             return
         pr = self.mapping(chain["child"])
         origin = self.api.get(f"{self.prefix}/issues/{chain['origin']}")
         if origin["node_id"] != chain["node"] or pr["node_id"] != chain["childNode"]:
             raise ValueError("origin/child adoption authority changed")
-        if not managed(origin) or pr["state"] != "open" or "shepherd-hands-off" in [label["name"] for label in pr["labels"]]:
-            chain["state"] = "hands-off"
-            return
-        if managed(pr):
-            chain["childAdoption"] = "confirmed"
-            self.persist()
-            return
-        if chain["childAdoption"] in {"sent", "uncertain"}:
-            chain["state"] = "hands-off"
+        hands_off = not managed(origin) or pr["state"] != "open" or "shepherd-hands-off" in [label["name"] for label in pr["labels"]]
+        if self._settle_child_adoption(chain, hands_off, managed(pr)):
             return
         chain["childAdoption"] = "sent"
         self.persist()
@@ -670,7 +737,7 @@ class PilotGitHub:
         if (not managed(origin) or origin["node_id"] != chain["node"] or pr["node_id"] != chain["childNode"]
                 or pr["state"] != "open" or "shepherd-hands-off" in [label["name"] for label in pr["labels"]]):
             raise ValueError("child adoption management changed before send")
-        self.authority_guard()
+        self.adoption_effect_guard()
         # Only independently mapped task artifacts can enter this fixed label
         # writer; a model cannot supply labels, subjects or an arbitrary body.
         response = self.transport("POST", f"{self.prefix}/issues/{chain['child']}/labels", {"labels": ["shepherd-adopted"]})
@@ -687,7 +754,8 @@ class PilotGitHub:
             raise ValueError("authenticated authority must be read before discovery")
         self.reconcile_workers()
         for chain in self.ledger["chains"]:
-            if chain["child"] is not None and chain["childAdoption"] in {"reserved", "sent", "uncertain"}:
+            # Never retry an uncertain send; settle it from observe() below.
+            if self.write and chain["child"] is not None and chain["childAdoption"] == "reserved":
                 self.adopt_child(chain)
         intake = ([self.mapping(self.binding.subject)] if self.binding.subject is not None else
                   self.api.pages(f"{self.prefix}/issues", query={"state": "open", "labels": "shepherd-adopted"}))
@@ -700,7 +768,13 @@ class PilotGitHub:
         for chain in self.ledger["chains"]:
             observed = self.observe(chain)
             observations[observed["number"]] = observed
-            if not observed["managed"]:
+            if self.write and chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}:
+                # Adoption settlement and chain classification must share one read.
+                self.adopt_child(chain, observed)
+            resolving_ambiguous_adoption = (
+                chain["state"] == "human" and chain["child"] is not None
+                and chain["childAdoption"] in {"sent", "uncertain"})
+            if not observed["managed"] and not resolving_ambiguous_adoption:
                 chain["state"] = "closed" if observed["state"] == "closed" else "hands-off"
             elif chain["state"] in {"closed", "hands-off"}:
                 chain["state"] = "open"
@@ -712,8 +786,12 @@ class PilotGitHub:
         credit_blocked = (state.chain_spend(chain) + state.NATIVE_RESERVE > state.chain_allowance(self.ledger)
                           or state.repository_spend(self.ledger, self.clock()) + state.NATIVE_RESERVE
                           > state.REPOSITORY_ALLOWANCE)
-        if chain["state"] != "open":
-            blocker = "Human handoff / adoption removed; no new repairs."
+        if chain["state"] == "hands-off":
+            blocker = "Adoption removed or hands-off label applied; no new repairs."
+        elif chain["state"] == "closed":
+            blocker = "Origin or child closed; no new repairs."
+        elif chain["state"] == "human":
+            blocker = "Human handoff; no new repairs."
         elif observation["workflowAttention"] is not None:
             blocker = observation["workflowAttention"] + " No inference."
         elif observation["approval"] is not None:

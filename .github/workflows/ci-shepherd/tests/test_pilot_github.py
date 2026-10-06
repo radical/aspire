@@ -33,6 +33,7 @@ class Transport:
         self.writes = []
         self.reads = []
         self.history = []
+        self.label_write_confirms = True  # controls whether a /labels POST echoes the label back
 
     def __call__(self, method, endpoint, body):
         if method == "POST" and endpoint == "graphql":
@@ -50,6 +51,9 @@ class Transport:
             if endpoint.endswith("/comments/500"):
                 self.comments[0]["body"] = body["body"]
                 return Response(deepcopy(self.comments[0]), {}, 200)
+            if method == "POST" and endpoint.endswith("/labels"):
+                payload = body["labels"] if self.label_write_confirms else []
+                return Response([{"name": name} for name in payload], {}, 200)
             raise LostResponse("unknown write")
         path = endpoint.split("?")[0]
         self.reads.append((method, endpoint, body))
@@ -199,6 +203,211 @@ class PilotGitHubTests(unittest.TestCase):
         self.assertEqual(1, len(self.api.ledger["chains"]))
         self.assertEqual("confirmed", chain["childAdoption"])
 
+    def test_ambiguous_child_adoption_write_is_honest_handoff_not_hands_off(self):
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []  # our own adoption label write could not be confirmed
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "uncertain"
+        self.api.persist()
+        self.api.adopt_child(chain)
+        # Distinct from genuine human/hands-off removal: the child/history
+        # stay bound, the chain is not silently relabeled as removed, and a
+        # later confirmation that the label did land can still recover to
+        # "confirmed" instead of being stuck.
+        self.assertEqual("human", chain["state"])
+        self.assertEqual(9, chain["child"])
+        self.assertEqual(child["node_id"], chain["childNode"])
+        observed = self.api.observe(chain)
+        self.assertEqual("Human handoff; no new repairs.", self.api.next_action(chain, observed))
+        # Immediate child status requires confirmed management; reminders use the origin.
+        self.assertFalse(observed["managed"])
+        self.transport.writes.clear()
+        self.api.publish_status(chain, observed, FakeClock()())
+        self.assertEqual([], self.transport.writes)
+
+    def test_late_artifact_adoption_does_not_clear_an_unrelated_native_handoff(self):
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        clock = FakeClock()
+        operation = state.reserve(self.api.ledger, chain, json.dumps({
+            "number": 8, "node": "NODE8", "head": "NODE8", "feedback": []}) + ":round:1", clock(), local=True)
+        operation["sessionId"] = "SESSION-HANDOFF"
+        state.finish(operation, "completed")
+        chain["state"] = "human"  # a genuine, unrelated native handoff
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)  # an older saved task's artifact catches up late, already labeled
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        self.api.persist()
+        self.api.adopt_child(chain)
+        self.assertEqual("confirmed", chain["childAdoption"])
+        self.assertEqual("human", chain["state"],
+                          "a genuine native handoff must survive an unrelated late child-adoption confirmation")
+
+    def test_recheck_confirms_child_once_the_adoption_label_is_actually_present(self):
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []  # first read: write could not be confirmed yet
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "uncertain"
+        self.api.persist()
+        self.api.adopt_child(chain)
+        # Must actually reach the controller-generated honest-handoff stop
+        # first, or a later "open" assertion would prove nothing about reopening.
+        self.assertEqual("human", chain["state"])
+        self.transport.values["repos/radical/aspire/pulls/9"]["labels"] = [{"name": "shepherd-adopted"}]
+        self.api.adopt_child(chain)
+        self.assertEqual("confirmed", chain["childAdoption"])
+        self.assertEqual("open", chain["state"])
+
+    def test_first_ambiguous_send_persists_uncertain_before_raising_and_restart_recovers_honest_handoff(self):
+        # The first attempt at the real label POST is where a genuinely lost
+        # response can occur; the write must be durably marked uncertain
+        # before that failure surfaces, so a restarted sweep never re-sends
+        # and still reaches the same honest "human" stop, not a silent retry.
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "reserved"
+        self.api.persist()
+        self.transport.label_write_confirms = False
+        self.transport.writes.clear()
+        with self.assertRaisesRegex(LostResponse, "child adoption result unknown"):
+            self.api.adopt_child(chain)
+        self.assertEqual("uncertain", chain["childAdoption"])
+        label_writes = [write for write in self.transport.writes if write[1].endswith("/labels")]
+        self.assertEqual([("POST", "repos/radical/aspire/issues/9/labels", {"labels": ["shepherd-adopted"]})],
+                          label_writes)
+        self.transport.writes.clear()
+        self.api.sweep()
+        self.assertEqual("human", chain["state"])
+        self.assertEqual("uncertain", chain["childAdoption"])
+        self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/labels")],
+                          "a restarted sweep must not re-send an ambiguous label write")
+
+    def test_ambiguous_adoption_human_state_survives_a_real_sweep_without_being_clobbered(self):
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []  # a prior run's adoption write could not be confirmed
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "uncertain"
+        self.api.persist()
+        self.api.sweep()
+        self.assertEqual("human", chain["state"])
+        self.assertEqual("uncertain", chain["childAdoption"])
+        # The same generic unmanaged-child reclassification that real restarts
+        # run on every sweep must not immediately stomp this back to
+        # "hands-off" just because the child still reads unmanaged.
+        self.api.sweep()
+        self.assertEqual("human", chain["state"])
+        self.assertEqual(9, chain["child"])
+
+    def test_ambiguous_adoption_reopens_via_a_real_sweep_once_label_is_confirmed(self):
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "uncertain"
+        self.api.persist()
+        self.api.sweep()
+        self.assertEqual("human", chain["state"])
+        self.transport.values["repos/radical/aspire/pulls/9"]["labels"] = [{"name": "shepherd-adopted"}]
+        self.api.sweep()
+        self.assertEqual("open", chain["state"])
+        self.assertEqual("confirmed", chain["childAdoption"])
+
+    def test_pending_adoption_recheck_during_sweep_fetches_child_and_origin_exactly_once(self):
+        # The recheck and the reclassification it feeds must share a single
+        # fresh read of the child PR and origin issue; a second independent
+        # fetch could read a different, later state than the first (a human
+        # editing labels mid-sweep) and the two reads could then disagree
+        # with each other about whether the adoption is still ambiguous.
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = []
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "uncertain"
+        self.api.persist()
+        self.transport.reads.clear()
+        self.api.sweep()
+        self.assertEqual("human", chain["state"])
+        child_pulls_reads = [read for read in self.transport.reads if read[1] == "repos/radical/aspire/pulls/9"]
+        origin_issue_reads = [read for read in self.transport.reads
+                               if read[1].split("?")[0] in {"repos/radical/aspire/issues/8"}]
+        self.assertEqual(1, len(child_pulls_reads),
+                          "recheck must reuse observe()'s read instead of an independent second fetch")
+        self.assertEqual(1, len(origin_issue_reads),
+                          "recheck must reuse observe()'s read instead of an independent second fetch")
+
+    def test_pending_adoption_recheck_reflects_hands_off_from_the_same_fresh_read_not_a_stale_decision(self):
+        # A stale decision (computed before the recheck's own fresh read) is
+        # exactly the shape of bug the single-read fix prevents: this proves
+        # the reclassification actually uses the SAME observation the
+        # recheck consulted, not an earlier cached one.
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = [{"name": "shepherd-hands-off"}]  # genuinely hands-off by the time of this sweep
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "uncertain"
+        chain["state"] = "human"
+        self.api.persist()
+        self.api.sweep()
+        # A stale resolving_ambiguous_adoption computed before this fresh read
+        # would have preserved "human"; the fresh read shows genuine hands-off
+        # and must win.
+        self.assertEqual("hands-off", chain["state"])
+
+    def test_genuine_hands_off_label_still_suppresses_status_and_child_binding_unchanged(self):
+        self.api.read_authority()
+        chain = state.adopt(self.api.ledger, 8, "issue", "NODE8")
+        self.transport.values["repos/radical/aspire/issues/8"] = {
+            "number": 8, "node_id": "NODE8", "state": "open", "labels": [{"name": "shepherd-adopted"}]}
+        child = pr(9)
+        child["labels"] = [{"name": "shepherd-hands-off"}]
+        self.transport.values["repos/radical/aspire/pulls/9"] = child
+        state.bind_child(self.api.ledger, chain, 9, child["node_id"])
+        chain["childAdoption"] = "sent"
+        self.api.persist()
+        self.api.adopt_child(chain)
+        self.assertEqual("hands-off", chain["state"])
+        observed = self.api.observe(chain)
+        self.transport.writes.clear()
+        self.api.publish_status(chain, observed, FakeClock()())
+        self.assertEqual([], self.transport.writes, "real hands-off must still suppress status writes")
+        self.assertEqual("Adoption removed or hands-off label applied; no new repairs.",
+                          self.api.next_action(chain, observed))
+
     def test_missing_pr_artifact_is_honest_human_handoff(self):
         chain, operation, task = self.issue_worker()
         task["artifacts"] = []
@@ -206,6 +415,33 @@ class PilotGitHubTests(unittest.TestCase):
         self.assertIsNone(chain["child"])
         self.assertEqual("human", chain["state"])
         self.assertEqual(1, chain["rounds"])
+
+    def test_cancelled_worker_with_no_artifact_becomes_due_again_preserving_history(self):
+        chain, operation, task = self.issue_worker()
+        task["state"] = "cancelled"
+        task["sessions"][0]["state"] = "cancelled"
+        task["artifacts"] = []
+        self.api.reconcile_workers()
+        self.assertIsNone(chain["child"])
+        self.assertEqual("open", chain["state"])
+        self.assertEqual(1, len(chain["operations"]))
+        self.assertEqual("TASK1", operation["taskId"])
+        self.assertEqual("failed", operation["state"])
+        self.assertEqual("cancelled", operation["workerState"])
+        observation = self.api.observe(chain)
+        self.assertTrue(observation["actionable"])
+        self.assertEqual("Bounded repair batch due.", self.api.next_action(chain, observation))
+
+    def test_failed_worker_with_an_artifact_still_requires_human_not_retry(self):
+        chain, operation, task = self.issue_worker()
+        task["state"] = "failed"
+        task["sessions"][0]["state"] = "failed"
+        task["artifacts"] = [task["artifacts"][0]]  # pull artifact only, no matching branch
+        self.api.reconcile_workers()
+        self.assertIsNone(chain["child"])
+        self.assertEqual("human", chain["state"])
+        observation = self.api.observe(chain)
+        self.assertEqual("Human handoff; no new repairs.", self.api.next_action(chain, observation))
 
     def test_wrong_session_or_branch_artifact_never_adopts_child(self):
         for change in ("session", "branch"):
