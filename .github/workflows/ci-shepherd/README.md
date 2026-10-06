@@ -113,6 +113,41 @@ Immediate status publication on the unmanaged child remains suppressed.
 Legacy PR reminder bodies remain recognized; a confirmed comment receipt
 does not prove inbox or email delivery.
 
+GitHub owns notification delivery and recipient preferences. Shepherd's contract
+is one verified posted reminder per episode, not a separate inbox/email delivery
+service. When the sender and recipient are the same account, GitHub's
+[own-activity email setting](https://github.blog/news-insights/email-updates-about-your-own-activity/)
+can affect email delivery; this is not evidence about every notification surface.
+
+## Fresh review feedback and worker results
+
+Directly adopted PRs and issue-created child PRs use the same feedback loop.
+For inline comments, `pilot_feedback.py` reads GitHub's current thread-resolution
+state using one sealed, read-only GraphQL query. Exact REST comment node/database
+IDs, repository identity, PR membership and current head must match. Reads are
+bounded to 1,000 comments in batches of at most 100 IDs.
+
+Resolved comments are omitted from the current repair batch, not permanently
+marked addressed in the authority. Reopening a thread or receiving a new comment
+ID makes that feedback eligible again, subject to existing explicit dispositions
+and admission limits. Missing, conflicting, stale or incomplete thread evidence
+visibly pauses that chain without paid inference; other adopted chains can
+continue. Fresh effect guards reread resolution state before dispatch.
+
+A cloud decision's `addressed` disposition means **repair requested**, not verified
+resolved. A completed worker does not prove its patch succeeded: still-unresolved
+comments and current-head failures remain eligible for another bounded decision.
+The controller uses verified saved-task states, session errors, PR/branch
+artifacts and fresh PR facts. Missing narrative is not success or failure.
+
+The task integration has no final-response or task-log reader; the
+[documented task API](https://docs.github.com/en/rest/agent-tasks/agent-tasks)
+provides the state, errors and artifacts used above. The loop observes published
+inline feedback and requested human reviews, but does not automatically request
+Copilot code review. That requires a separate guarded, per-head request/receipt
+and usage-accounting capability; it must not be simulated as a successful review
+or confused with human approval.
+
 ## Lifetime policy and accounting
 
 - Up to two local attempts and ten total action rounds per issue-to-PR chain.

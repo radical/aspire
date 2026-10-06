@@ -317,7 +317,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
                    "sessionId": f"historical-session-{index:04d}"} for index in range(150)]
 
         def send(method, endpoint, body):
-            if endpoint == "graphql":
+            if endpoint == "graphql" and body["query"] == history.QUERY:
                 history_pages.append(body["variables"]["after"])
                 first = body["variables"]["after"] is None
                 return Response({"data": {"repository": {
@@ -365,7 +365,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         self.assertGreater(len(json.dumps(events).encode()), contracts.MAX_JSON_BYTES)
 
         def send(method, endpoint, body):
-            if endpoint == "graphql":
+            if endpoint == "graphql" and body["query"] == history.QUERY:
                 after = body["variables"]["after"]
                 page = 0 if after is None else int(after.removeprefix("PAGE")) + 1
                 return Response({"data": {"repository": {
@@ -447,7 +447,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         original = api.transport
 
         def read(method, endpoint, body):
-            if endpoint == "graphql":
+            if endpoint == "graphql" and body["query"] == history.QUERY:
                 return Response({"errors": [{"message": "PRIVATE_SOURCE_SENTINEL"}]}, {})
             return original(method, endpoint, body)
 

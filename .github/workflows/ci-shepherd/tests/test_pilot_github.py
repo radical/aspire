@@ -5,6 +5,7 @@ from helpers import FakeClock
 from github import Response, LostResponse, IncompleteInventory
 import pilot_github as pilot
 import pilot_state as state
+import pilot_feedback as feedback
 import json
 
 
@@ -33,6 +34,7 @@ class Transport:
         self.writes = []
         self.reads = []
         self.history = []
+        self.resolved_reviews = set()
         self.label_write_confirms = True  # controls whether a /labels POST echoes the label back
 
     def __call__(self, method, endpoint, body):
@@ -41,6 +43,19 @@ class Transport:
             variables = body["variables"]
             repository = variables["owner"] + "/" + variables["name"]
             value = self.values[f"repos/{repository}/pulls/{variables['number']}"]
+            if body["query"] == feedback.QUERY:
+                comments = {comment.get("node_id", "COMMENT" + str(comment["id"])): comment
+                            for comment in self.values.get(
+                                f"repos/{repository}/pulls/{variables['number']}/comments", [])}
+                return Response({"data": {
+                    "repository": {"databaseId": value["base"]["repo"]["id"], "nameWithOwner": repository,
+                                   "pullRequest": {"id": value["node_id"], "number": value["number"],
+                                                   "headRefOid": value["head"]["sha"]}},
+                    "nodes": [{"id": identity, "fullDatabaseId": str(comments[identity]["id"]),
+                               "thread": {"id": "THREAD" + identity,
+                                          "isResolved": comments[identity]["id"] in self.resolved_reviews,
+                                          "pullRequest": {"id": value["node_id"]}}}
+                              for identity in variables["ids"]]}}, {})
             return Response({"data": {"repository": {
                 "databaseId": value["base"]["repo"]["id"], "nameWithOwner": repository,
                 "pullRequest": {"id": value["node_id"], "number": value["number"], "timelineItems": {
@@ -59,6 +74,9 @@ class Transport:
         self.reads.append((method, endpoint, body))
         if path in self.values:
             value = deepcopy(self.values[path])
+            if "/pulls/" in path and path.endswith("/comments"):
+                for comment in value:
+                    comment.setdefault("node_id", "COMMENT" + str(comment["id"]))
             if isinstance(value, dict) and "/issues/" in path and "number" in value:
                 value.setdefault("updated_at", "2026-10-04T00:00:00Z")
             return Response(value, {})

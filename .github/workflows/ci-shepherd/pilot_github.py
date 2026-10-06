@@ -17,11 +17,19 @@ import pilot_binding as bindings
 import pilot_history as history
 import pilot_reminders as reminders
 import pilot_results as results
+import pilot_feedback as review_feedback
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
 CORRELATION = "ci-shepherd-pilot: "
 WORKER_STATES = state.TERMINAL | {"queued", "in_progress", "idle", "waiting_for_user"}
+
+
+def validate_graphql(value, binding):
+    if isinstance(value, dict) and value.get("query") == review_feedback.QUERY:
+        review_feedback.validate_request(value, binding)
+    else:
+        history.validate_request(value, binding)
 
 
 class PresentationUncertain(ValueError):
@@ -43,7 +51,7 @@ class PilotTransport(live.HTTPTransport):
 
     def is_read(self, method, endpoint, body):
         if method == "POST" and endpoint == "graphql":
-            history.validate_request(body, self.binding)
+            validate_graphql(body, self.binding)
             return True
         return super().is_read(method, endpoint, body)
 
@@ -52,7 +60,7 @@ class PilotTransport(live.HTTPTransport):
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
         if method == "POST" and endpoint == "graphql":
-            history.validate_request(body, self.binding)
+            validate_graphql(body, self.binding)
             return
         if method == "GET" and re.fullmatch(
                 re.escape(f"repos/{self.binding.repository}") + r"/check-runs/[1-9][0-9]*/annotations", path.path):
@@ -286,12 +294,26 @@ class PilotGitHub:
             origin_managed = origin["node_id"] == chain["node"] and managed(origin)
             hands_off = "shepherd-hands-off" in [label["name"] for label in value["labels"]]
             active = active and origin_managed
-        feedback = []
+        feedback, feedback_attention = [], None
         endpoints = [(f"{self.prefix}/issues/{number}/comments", "comment")]
         if kind == "pr":
             endpoints.append((f"{self.prefix}/pulls/{number}/comments", "review-comment"))
         for endpoint, prefix in endpoints if active else []:
-            for comment in self.api.pages(endpoint):
+            resolved_comments = set()
+            if prefix == "review-comment":
+                try:
+                    comments = self.api.pages(endpoint)
+                    if comments:
+                        resolved_comments = review_feedback.resolved(
+                            self.transport, self.binding, number, node, value["head"]["sha"], comments)
+                except IncompleteInventory:
+                    feedback_attention = "Review-thread resolution unavailable/incomplete."
+                    comments = []
+            else:
+                comments = self.api.pages(endpoint)
+            for comment in comments:
+                if comment["id"] in resolved_comments:
+                    continue
                 if comment["id"] == chain["statusId"] and self.owned(comment) and state.STATUS_MARKER in comment.get("body", ""):
                     continue
                 if self.owned(comment) and reminders.valid_body(comment.get("body"), self.repository, number):
@@ -396,7 +418,8 @@ class PilotGitHub:
             ) and all(status["state"] == "success" for status in latest_statuses.values())
             ready = ci_green and approved and not requested and not value.get("requested_teams") and not value["draft"] and value["mergeable"] is True and not any(
                 review["state"] == "CHANGES_REQUESTED" for review in latest.values())
-        attention = "Feedback batch exceeds 30 items; human attention required." if len(feedback) > 30 else None
+        attention = feedback_attention or (
+            "Feedback batch exceeds 30 items; human attention required." if len(feedback) > 30 else None)
         if attention is not None:
             # Do not send a truncated repair batch or persist its bodies. This
             # item's visible wait must not stop other chains in the cheap sweep.
