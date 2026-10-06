@@ -270,14 +270,15 @@ def sweep(api, directory, revision, *, executor=execute):
 
 def resume(api, operation_id, expected_head, now):
     """Explicitly unmask one completed upstream native handoff, without work."""
-    if api.binding != bindings.UPSTREAM or not api.write:
+    if api.binding == bindings.FORK or not api.write:
         raise ValueError("resume requires the fixed upstream local writer")
     if not isinstance(expected_head, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_head):
         raise ValueError("resume requires an exact expected current head")
     api.read_authority()
     original = deepcopy(api.ledger)
     try:
-        chain = state.find_chain(api.ledger, bindings.UPSTREAM.subject)
+        chain = next((current for current in api.ledger["chains"] if current["operations"]
+                      and current["operations"][-1]["id"] == operation_id), None)
         if (chain is None or chain["kind"] != "pr" or chain["child"] is not None
                 or chain["state"] != "human" or not chain["operations"]):
             raise ValueError("not an upstream native handoff")
@@ -285,7 +286,7 @@ def resume(api, operation_id, expected_head, now):
         if (latest["id"] != operation_id or latest["state"] != "completed"
                 or latest["taskId"] is not None or latest["sessionId"] is None
                 or latest["workerState"] is not None or latest["workerAt"] is not None
-                or latest["workerActual"] not in {None, 0}):
+                or latest["workerActual"] not in {None, 0} or "wait" in latest):
             raise ValueError("latest exact completed native handoff required")
         if (state.pending(chain) or chain["rounds"] >= api.binding.round_limit
                 or state.chain_spend(chain) + state.NATIVE_RESERVE > state.chain_allowance(api.ledger)
@@ -333,7 +334,8 @@ def resume(api, operation_id, expected_head, now):
         # Compare freshness only AFTER unmasking. Resume is an admission change,
         # not repair: a pending/infra wait may legitimately be reopened.
         observed = api.observe(chain)
-        if observed["head"] != expected_head or not observed["managed"]:
+        if (observed["head"] != expected_head or not observed["managed"]
+                or "headRef" in basis and basis["headRef"] != observed["headRef"]):
             raise ValueError("resume source head/management changed")
         visible = {item["id"] for item in observed["feedback"]}
         missing = set(removed) - visible
@@ -357,6 +359,8 @@ def resume(api, operation_id, expected_head, now):
             raise ValueError("resume authority history/budget changed")
         api.persist()
         return {"outcome": "resumed; no inference", "operation": operation_id, "head": expected_head}
+    except github.AuthorityUncertain:
+        raise
     except (ValueError, KeyError, TypeError):
         api.ledger = original
         raise
@@ -365,7 +369,7 @@ def resume(api, operation_id, expected_head, now):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["observe", "run", "watch", "resume"])
-    parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name],
+    parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name],
                         default=bindings.UPSTREAM.name)
     parser.add_argument("--tracker", type=int, required=True)
     parser.add_argument("--authority", type=int, required=True)
@@ -379,8 +383,8 @@ def main(argv=None):
         parser.error("interval must be at least 30 seconds")
     if args.mode == "resume" and (not args.operation or not args.expected_head):
         parser.error("resume requires --operation and --expected-head")
-    if args.mode == "resume" and args.target != bindings.UPSTREAM.name:
-        parser.error("resume requires the fixed upstream target")
+    if args.mode == "resume" and args.target == bindings.FORK.name:
+        parser.error("resume requires an upstream target")
     binding = bindings.select(args.target)
     try:
         token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])

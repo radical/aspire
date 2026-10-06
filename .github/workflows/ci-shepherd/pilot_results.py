@@ -51,6 +51,11 @@ def eligible(chain, identity, receipts):
     if disposition != "needs-human" or chain["state"] != "open":
         return False
     for operation in reversed(chain["operations"]):
+        # Authority validation permits wait provenance only on completed,
+        # taskless native operations. Deferral does not supersede the earlier
+        # verified worker's eligibility evidence or resolve legacy feedback.
+        if "wait" in operation:
+            continue
         # The admitted decision must not change its own pre-send fingerprint.
         if operation["state"] in {"reserved", "sent"} or identity not in basis(operation)["feedback"]:
             continue

@@ -21,6 +21,17 @@ TERMINAL = {"completed", "failed", "timed_out", "cancelled"}
 OP_STATES = {"reserved", "sent", "waiting", "completed", "failed", "uncertain", "no-send"}
 
 
+def validate_wait(value):
+    contracts.exact(value, {"until", "reason"}, "native wait")
+    deadline = issue_pr.timestamp(value["until"])
+    if issue_pr.stamp(deadline) != value["until"]:
+        raise ValueError("wait deadline must be canonical UTC")
+    issue_pr.text(value["reason"], "wait reason", 500)
+    if not value["reason"].strip() or any(ord(char) < 32 or ord(char) == 127 for char in value["reason"]):
+        raise ValueError("wait reason must be bounded plain text")
+    return deadline
+
+
 def amount(value):
     if type(value) not in {int, float} or not math.isfinite(value) or value < 0:
         raise ValueError("invalid credit amount")
@@ -54,8 +65,8 @@ def validate(ledger):
         issue_pr.text(chain["node"], "origin node")
         issue_pr.positive(chain["origin"], "origin")
         if ledger["repository"] == "microsoft/aspire" and (
-                chain["origin"] != 20722 or chain["kind"] != "pr" or chain["child"] is not None):
-            raise ValueError("upstream trial subject mismatch")
+                chain["kind"] != "pr" or chain["child"] is not None):
+            raise ValueError("upstream requires direct PR chains")
         if chain["origin"] == 121 or chain["child"] == 121:
             raise ValueError("legacy authority is observation-only")
         if chain["kind"] not in {"pr", "issue"} or chain["state"] not in {"open", "closed", "hands-off", "human"}:
@@ -100,7 +111,12 @@ def validate(ledger):
             contracts.exact(operation, {"id", "identity", "lane", "state", "at", "nativeActual",
                                        "nativeReserved", "workerActual", "workerReserved", "taskId",
                                        "workerState", "sessionId", "workerAt", "attemptedLocal", "workerVersion"}
-                            | ({"feedbackDecisions"} if "feedbackDecisions" in operation else set()), "pilot operation")
+                            | ({"feedbackDecisions"} if "feedbackDecisions" in operation else set())
+                            | ({"wait"} if "wait" in operation else set()), "pilot operation")
+            if "wait" in operation:
+                validate_wait(operation["wait"])
+                if operation["state"] != "completed" or operation["taskId"] is not None or operation["workerReserved"]:
+                    raise ValueError("wait must be a completed taskless native operation")
             issue_pr.text(operation["id"], "id")
             # Identity is a serialized head/description plus a bounded feedback
             # batch, not a single opaque ID. Real node/check IDs exceed 256 bytes.
@@ -109,7 +125,8 @@ def validate(ledger):
                 decisions = operation["feedbackDecisions"]
                 basis = contracts.loads(operation["identity"].rsplit(":round:", 1)[0])
                 if (not isinstance(decisions, dict) or set(decisions) != set(basis["feedback"])
-                        or any(value not in {"addressed", "declined", "needs-human"} for value in decisions.values())):
+                        or any(value not in ({"deferred"} if "wait" in operation else
+                                            {"addressed", "declined", "needs-human"}) for value in decisions.values())):
                     raise ValueError("invalid operation feedback decisions")
             if operation["id"] in operations:
                 raise ValueError("duplicate operation")
@@ -222,6 +239,12 @@ def repository_spend(ledger, now):
     return total
 
 
+def new_worker_reservation(ledger, chain, now, *, prospective_native=0):
+    """Bound new cloud work by both unchanged lifetime and rolling allowances."""
+    return max(0, min(chain_allowance(ledger) - chain_spend(chain),
+                      REPOSITORY_ALLOWANCE - repository_spend(ledger, now)) - prospective_native)
+
+
 def pending(chain, *, review_id=None):
     return chain["statusPending"] or any(record["state"] in reviews.PENDING and record["id"] != review_id
                for record in chain.get("reviews", [])) or any(operation["state"] in {"reserved", "sent", "waiting", "uncertain"}
@@ -258,6 +281,9 @@ def reserve(ledger, chain, identity, now, *, local, operation_id=None):
     lane = "cloud" if chain["escalated"] else "local"
     if lane == "cloud" and worker_slots(ledger) >= 2:
         raise ValueError("cloud worker capacity exhausted")
+    if lane == "cloud" and new_worker_reservation(
+            ledger, chain, now, prospective_native=NATIVE_RESERVE) <= 0:
+        raise ValueError("prospective worker credit allowance exhausted; no inference")
     operation = {"id": operation_id or str(uuid.uuid4()), "identity": identity, "lane": lane, "state": "reserved",
                  "at": issue_pr.stamp(now), "nativeActual": None, "nativeReserved": NATIVE_RESERVE,
                  "workerActual": None, "workerReserved": 0, "taskId": None, "workerState": None,
@@ -281,8 +307,8 @@ def settle_native(operation, usage):
 def reserve_worker(ledger, chain, operation, now):
     if operation["lane"] != "cloud" or operation["state"] != "reserved" or worker_slots(ledger) >= 2:
         raise ValueError("worker reservation not admissible")
-    room = chain_allowance(ledger) - chain_spend(chain)
-    if room <= 0 or repository_spend(ledger, now) + room > REPOSITORY_ALLOWANCE:
+    room = new_worker_reservation(ledger, chain, now)
+    if room <= 0:
         raise ValueError("worker credit allowance exhausted")
     operation["workerReserved"] = room
 

@@ -98,9 +98,9 @@ class PilotStateTests(unittest.TestCase):
                             state.reserve(ledger, chain, "next", self.clock(), local=False)
                         self.assertEqual(before, state.render(ledger))
                     else:
-                        state.reserve(ledger, chain, "next", self.clock(), local=False)
-                        self.assertEqual(limit, state.chain_spend(chain))
-                        self.assertEqual(2, chain["rounds"])
+                        with self.assertRaisesRegex(ValueError, "prospective worker"):
+                            state.reserve(ledger, chain, "next", self.clock(), local=False)
+                        self.assertEqual(before, state.render(ledger))
 
     def test_unknown_namespace_has_no_default_credit_allowance(self):
         with self.assertRaises(KeyError):

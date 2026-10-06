@@ -159,6 +159,38 @@ When reviewing pull requests:
   - Use existing internal feeds that already mirror public packages (like dotnet-public, dotnet-eng)
 * The wildcard pattern mappings (`<package pattern="*" />`) in dotnet-public and dotnet-eng feeds typically provide access to commonly-used public packages
 
+### Internal Package Feed Holding Period
+
+New package versions have a seven-day holding period before they become
+available on the internal feeds. A dependency update can therefore fail to
+restore or download an otherwise valid new version.
+
+When diagnosing a package-download failure:
+
+1. Verify the exact package, version and failing internal feed. A `401` alone
+   does not establish a holding-period failure.
+   Treat `401` as non-transient by default: do not retry an unchanged request,
+   infer a timed feed wait solely from that status, or rerun workflows solely
+   because they returned `401`. Diagnose the evidence without changing
+   authentication or feed configuration.
+2. Check the upstream publication timestamp and the feed's holding-period
+   deadline. Record the evidence, UTC eligibility time and timer's starting
+   point; if that starting point is unknown, clarify it rather than inventing
+   a deadline. For multiple held versions, use the latest deadline.
+3. For a confirmed hold, report the package versions and eligibility time,
+   preserve red CI, and wait instead of changing credentials, adding public
+   feeds, reverting a valid dependency update or repeatedly requesting repairs.
+   Copilot's automated reports use the `[automated] ` prefix.
+4. After the deadline, recheck availability and fresh CI. Eligibility does not
+   prove a successful restore or green checks. An older package, unavailable
+   publication evidence or a continuing failure requires diagnosis rather than
+   another assumed seven-day wait. Remote reruns remain subject to the existing
+   repository automation and the controller's capabilities.
+
+Repository-specific diagnosis and policy belong in Copilot instructions, not
+Shepherd controller logic. Copilot reports the evidence-backed reason and
+reassessment time; Shepherd's coordination mechanics remain generic.
+
 ### Pinned GitHub Actions and the Actions Allow-List
 
 Third-party actions in `.github/workflows/**` are pinned to immutable commit SHAs

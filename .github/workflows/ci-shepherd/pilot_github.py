@@ -44,7 +44,7 @@ class AuthorityUncertain(ValueError):
 
 class PilotTransport(live.HTTPTransport):
     def __init__(self, token, *, write=False, binding=bindings.FORK, tracker=None, authority=None):
-        if binding not in {bindings.FORK, bindings.UPSTREAM}:
+        if binding not in {bindings.FORK, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
             raise ValueError("closed pilot transport binding required")
         super().__init__(token, write=write)
         self.binding = binding
@@ -83,27 +83,39 @@ class PilotTransport(live.HTTPTransport):
             if body != {"reviewers": [authors.REVIEWER]} or path.path.endswith("/121/requested_reviewers"):
                 raise ValueError("only fixed Copilot reviewer request allowed")
             return
-        if self.binding == bindings.UPSTREAM:
+        if self.binding != bindings.FORK:
             target = "repos/" + self.binding.repository
+            subject = str(self.binding.subject) if self.binding.subject is not None else r"[1-9][0-9]*"
             if method == "GET" and (path.path == target or re.fullmatch(
-                    re.escape(target) + r"/(?:issues/20722(?:/comments)?|issues/comments/[1-9][0-9]*"
-                    r"|pulls/20722(?:/(?:comments|reviews|files))?|commits/[0-9a-f]{40}/(?:check-runs|status))",
+                    re.escape(target) + r"/(?:issues/" + subject + r"(?:/comments)?|issues/comments/[1-9][0-9]*"
+                    r"|pulls/" + subject + r"(?:/(?:comments|reviews|files))?|commits/[0-9a-f]{40}/(?:check-runs|status))",
                     path.path) or re.fullmatch(
-                        r"agents/repos/microsoft/aspire/tasks/[A-Za-z0-9_-]+", path.path)):
+                        r"agents/repos/microsoft/aspire/tasks/[A-Za-z0-9_-]+", path.path)
+                    or self.binding == bindings.UPSTREAM_ALL and path.path == target + "/issues"):
                 if body is not None:
                     raise ValueError("GET body forbidden")
+                if path.path == target + "/issues":
+                    parameters = parse_qs(path.query, strict_parsing=True)
+                    if (set(parameters) != {"state", "labels", "page", "per_page"}
+                            or parameters["state"] != ["open"] or parameters["labels"] != ["shepherd-adopted"]
+                            or parameters["per_page"] != ["100"] or len(parameters["page"]) != 1
+                            or not re.fullmatch(r"[1-9][0-9]*", parameters["page"][0])
+                            or int(parameters["page"][0]) > 10):
+                        raise ValueError("only bounded adopted upstream intake allowed")
                 return
             if method == "POST" and path.path == "agents/repos/microsoft/aspire/tasks" and self.write:
                 if (not isinstance(body, dict) or set(body) != {"prompt", "base_ref", "head_ref", "create_pull_request"}
                         or not isinstance(body["prompt"], str) or not body["prompt"] or len(body["prompt"].encode()) > 20000
                         or body["base_ref"] != "main"
-                        or body["head_ref"] != "copilot/restrict-workflows-to-microsoft-aspire"
+                        or not isinstance(body["head_ref"], str) or not re.fullmatch(r"[A-Za-z0-9_./-]+", body["head_ref"])
+                        or self.binding == bindings.UPSTREAM and body["head_ref"] != "copilot/restrict-workflows-to-microsoft-aspire"
                         or body["create_pull_request"] is not False):
                     raise ValueError("upstream trial task body mismatch")
                 return
-            if (method == "POST" and self.write and endpoint == target + "/issues/20722/comments"
+            if (method == "POST" and self.write and not path.query
+                    and re.fullmatch(re.escape(target) + "/issues/" + subject + "/comments", path.path)
                     and isinstance(body, dict) and set(body) == {"body"}
-                    and reminders.valid_body(body["body"], self.binding.repository, 20722)):
+                    and reminders.valid_body(body["body"], self.binding.repository, int(path.path.split("/")[-2]))):
                 return
             if method in {"POST", "PATCH"} and path.path.startswith(target + "/"):
                 raise ValueError("upstream host publication is not authorized")
@@ -166,17 +178,34 @@ def managed(item):
 
 
 def native_handoff(chain):
-    """Identify a native human stop independently of child adoption."""
+    """Identify a native human stop, never a completed taskless timed wait."""
     if not chain["operations"]:
         return False
     operation = chain["operations"][-1]
-    return operation["state"] == "completed" and operation["taskId"] is None and operation["sessionId"] is not None
+    return (operation["state"] == "completed" and operation["taskId"] is None
+            and operation["sessionId"] is not None and "wait" not in operation)
 
 
-def fingerprint(observation):
+def wait_state(chain, observation, now):
+    if not chain["operations"]:
+        return None
+    operation = chain["operations"][-1]
+    if "wait" not in operation:
+        return None
+    basis = operation["identity"].rsplit(":round:", 1)[0]
+    if basis != fingerprint(observation):
+        return "superseded"
+    return "waiting" if now < state.validate_wait(operation["wait"]) else "due"
+
+
+def fingerprint(observation, *, worker_evidence=True):
     value = {"number": observation["number"], "node": observation["node"], "head": observation["head"],
+             "headRef": observation["headRef"],
+             "ciEvidence": observation["ciEvidence"], "feedbackEvidence": observation["feedbackEvidence"],
              "description": observation["description"],
              "feedback": [item["id"] for item in observation["feedback"]]}
+    if worker_evidence:
+        value["workerEvidence"] = observation["workerEvidence"]
     if observation.get("workerResults"):
         # Descriptive snippets can be bounded in both prompts. Bind the receipt's
         # identities/version instead, so fresh settlement rejects changed results.
@@ -195,7 +224,7 @@ class PilotGitHub:
     inline_repairs = True
 
     def __init__(self, transport, tracker, authority_id, tracker_node, *, write=False, binding=bindings.FORK):
-        if binding not in {bindings.FORK, bindings.UPSTREAM}:
+        if binding not in {bindings.FORK, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
             raise ValueError("closed pilot binding required")
         self.binding = binding
         self.repository, self.repository_id = binding.repository, binding.repository_id
@@ -218,7 +247,7 @@ class PilotGitHub:
         if (repository["id"] != self.repository_id or repository["full_name"] != self.repository
                 or repository["default_branch"] != "main"):
             raise ValueError("pilot target identity/default branch mismatch")
-        if binding == bindings.UPSTREAM:
+        if binding != bindings.FORK:
             controller = self.api.get(PREFIX)
             if controller.get("id") != live.REPOSITORY_ID or controller.get("full_name") != REPOSITORY:
                 raise ValueError("controller repository mismatch")
@@ -231,6 +260,7 @@ class PilotGitHub:
         self.clock = live.clock
         self.reminder_delay = 60
         self.worker_results = {}
+        self.worker_revisions = {}
         self.admission_reasons = {}
 
     def owned(self, comment):
@@ -248,6 +278,9 @@ class PilotGitHub:
         observed = state.parse(candidates[0]["body"])
         if observed["repository"] != self.repository:
             raise ValueError("authority target namespace mismatch")
+        if self.binding == bindings.UPSTREAM and any(
+                chain["origin"] != self.binding.subject for chain in observed["chains"]):
+            raise ValueError("upstream trial subject mismatch")
         if self.expected is None:
             self.expected = deepcopy(observed)
             self.ledger = deepcopy(observed)
@@ -317,7 +350,7 @@ class PilotGitHub:
             origin_managed = origin["node_id"] == chain["node"] and managed(origin)
             hands_off = "shepherd-hands-off" in [label["name"] for label in value["labels"]]
             active = active and origin_managed
-        feedback, feedback_attention = [], review_attention
+        feedback, feedback_attention, feedback_evidence = [], review_attention, []
         endpoints = [(f"{self.prefix}/issues/{number}/comments", "comment")]
         if kind == "pr":
             endpoints.append((f"{self.prefix}/pulls/{number}/comments", "review-comment"))
@@ -344,6 +377,7 @@ class PilotGitHub:
                     continue
                 if self.owned(comment) and reminders.valid_body(comment.get("body"), self.repository, number):
                     continue
+                feedback_evidence.append(comment)
                 identity = f"{prefix}:{comment['id']}:{comment['updated_at']}"
                 if results.eligible(chain, identity, self.worker_results):
                     feedback.append({"id": identity, "body": comment["body"][:2000], "url": comment.get("html_url", "")})
@@ -358,6 +392,7 @@ class PilotGitHub:
         head = value["head"]["sha"] if kind == "pr" else description
         ready, pending_ci, ci_green, checks = False, False, False, []
         diagnostics, ci_wait = [], None
+        statuses = None
         workflow = {"approval": None, "pending": False, "green": True, "attention": None}
         if kind == "pr" and active:
             workflow = reminders.workflow_evidence(self, head)
@@ -481,7 +516,16 @@ class PilotGitHub:
                 work_history = history.read(self.transport, self.binding, number, node)
             except IncompleteInventory:
                 work_history = {"complete": False, "events": []}
+        # Security bindings cover untrusted raw inventories before any prompt
+        # truncation. Same-ID output edits must invalidate prepared decisions.
+        ci_revision = hashlib.sha256(json.dumps(
+            [checks, statuses, workflow, diagnostics], sort_keys=True, ensure_ascii=True,
+            allow_nan=False).encode()).hexdigest()
+        feedback_revision = hashlib.sha256(json.dumps(
+            [feedback_evidence, reviews], sort_keys=True, ensure_ascii=True,
+            allow_nan=False).encode()).hexdigest()
         observed = {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
+                "ciEvidence": ci_revision, "feedbackEvidence": feedback_revision,
                 "originManaged": origin_managed, "handsOff": hands_off,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
                 "attention": attention, "pendingCI": pending_ci,
@@ -493,6 +537,8 @@ class PilotGitHub:
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
                 "workHistory": work_history}
         observed["workerResults"] = results.context(chain, self.worker_results, observed)
+        observed["workerEvidence"] = [{"operation": operation["id"], "revision": self.worker_revisions[operation["id"]]}
+                                      for operation in chain["operations"] if operation["id"] in self.worker_revisions]
         if kind == "pr":
             try:
                 if not review_inventory_complete:
@@ -507,6 +553,12 @@ class PilotGitHub:
             observed["ready"] &= observed["attention"] is None
             observed["actionable"] &= observed["attention"] is None and observed["copilotReview"]["state"] not in {
                 "waiting", "uncertain", "blocked", "limit", "unavailable"}
+        timed = wait_state(chain, observed, self.clock())
+        if timed == "waiting":
+            observed["actionable"] = False
+        elif timed in {"due", "superseded"} and kind == "issue":
+            observed["actionable"] = (active and not pending_ci and attention is None
+                                     and workflow["attention"] is None and workflow["approval"] is None)
         return observed
 
     def check_diagnostics(self, checks):
@@ -542,6 +594,8 @@ class PilotGitHub:
                 if len(annotations) != output["annotations_count"]:
                     raise IncompleteInventory("annotation count contradicts complete pages")
                 remaining_bytes -= len(json.dumps(annotations, ensure_ascii=True).encode())
+                item["revision"] = hashlib.sha256(json.dumps(
+                    annotations, sort_keys=True, ensure_ascii=True, allow_nan=False).encode()).hexdigest()
                 failures = []
                 snippets = []
                 for annotation in annotations:
@@ -613,7 +667,10 @@ class PilotGitHub:
             raise ValueError("current-head workflows require human approval; no repair")
         if effect and (fresh["pendingCI"] or fresh.get("ciWait") is not None and not fresh["actionable"]):
             raise ValueError("current-head CI wait; no repair")
-        if fingerprint(fresh) != fingerprint(observation):
+        # Notifications independently refresh and match the concrete blocker;
+        # they may start with no cached worker receipt after a process restart.
+        # Paid decisions always bind the complete raw worker evidence.
+        if fingerprint(fresh, worker_evidence=effect) != fingerprint(observation, worker_evidence=effect):
             raise ValueError("subject basis changed")
         self.authority_guard()
         if effect and chain["rounds"] > self.binding.round_limit:
@@ -680,6 +737,8 @@ class PilotGitHub:
         if len(correlations) != len(set(correlations)):
             raise ValueError("duplicate task sessions")
         receipt = results.summarize(task, operation, pr)
+        self.worker_revisions[operation["id"]] = hashlib.sha256(json.dumps(
+            task, sort_keys=True, ensure_ascii=True, allow_nan=False).encode()).hexdigest()
         if task["state"] in state.TERMINAL:
             self.worker_results[operation["id"]] = receipt
         return task, state.amount(nano / 1e9) if billed else None
@@ -690,6 +749,7 @@ class PilotGitHub:
     def reconcile_workers(self, *, adopt_children=True):
         details = {}
         self.worker_results = {}
+        self.worker_revisions = {}
         for chain in self.ledger["chains"]:
             for operation in chain["operations"]:
                 task_id = operation["taskId"]
@@ -712,9 +772,10 @@ class PilotGitHub:
                         raise ValueError("task billing moved backwards")
                 except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
                     self.worker_results.pop(operation["id"], None)
+                    self.worker_revisions.pop(operation["id"], None)
                     operation.update(workerState="unknown", state="waiting")
-                    operation["workerReserved"] = max(
-                        operation["workerReserved"], max(0, state.chain_allowance(self.ledger) - state.chain_spend(chain)))
+                    if not operation["workerReserved"]:
+                        operation["workerReserved"] = state.new_worker_reservation(self.ledger, chain, self.clock())
                     print(f"CI Shepherd task {operation['taskId']} needs human verification: {error}", file=sys.stderr)
                     continue
                 operation["workerState"] = task["state"]
@@ -724,10 +785,11 @@ class PilotGitHub:
                         operation.update(workerActual=usage, workerAt=issue_pr.stamp(self.clock()))
                     operation["workerReserved"] = 0
                 if task["state"] not in state.TERMINAL or usage is None:
-                    # Unknown costs still reserve the remaining allowance even
-                    # when all verified task sessions have finished.
-                    operation["workerReserved"] = max(
-                        operation["workerReserved"], max(0, state.chain_allowance(self.ledger) - state.chain_spend(chain)))
+                    # Retain an existing unknown hold exactly: aging other
+                    # spending is neither billing evidence nor a new admission.
+                    # A resumed previously billed task needs a fresh hold.
+                    if not operation["workerReserved"]:
+                        operation["workerReserved"] = state.new_worker_reservation(self.ledger, chain, self.clock())
                 if task["state"] not in state.TERMINAL:
                     operation["state"] = "waiting"
                 else:
@@ -837,6 +899,13 @@ class PilotGitHub:
             number = candidate["number"]
             if number in {121, self.tracker} or not managed(candidate) or state.find_chain(self.ledger, number) is not None:
                 continue
+            if self.binding == bindings.UPSTREAM_ALL:
+                if "pull_request" not in candidate:
+                    print(f"CI Shepherd upstream issue #{number} skipped; PR-only intake.", file=sys.stderr)
+                    continue
+                verified = self.mapping(number)
+                if verified["node_id"] != candidate["node_id"] or not managed(verified):
+                    raise ValueError("upstream intake identity/management changed")
             state.adopt(self.ledger, number, "pr" if self.binding.subject is not None or "pull_request" in candidate else "issue", candidate["node_id"])
         observations = {}
         for chain in self.ledger["chains"]:
@@ -880,6 +949,9 @@ class PilotGitHub:
             blocker = "Copilot review request rejected/unverifiable or lifetime limit reached; human attention required."
         elif state.pending(chain):
             blocker = "Tracked work / uncertain send; observe only, never retry."
+        elif wait_state(chain, observation, self.clock()) == "waiting":
+            timed = operation["wait"]
+            blocker = f"Deferred until {timed['until']}: {timed['reason']} No inference."
         elif unbilled and credit_blocked:
             blocker = "Tracked worker finished; billing unavailable, reservation retained. No new paid repair."
             if chain["rounds"] >= self.binding.round_limit:
@@ -918,7 +990,7 @@ class PilotGitHub:
     def status(self, chain, observation, now):
         operation = chain["operations"][-1] if chain["operations"] else None
         lane = operation["lane"] if operation else (
-            "cloud" if chain["escalated"] or self.binding == bindings.UPSTREAM else "local")
+            "cloud" if chain["escalated"] or self.binding != bindings.FORK else "local")
         actual = sum(sum(op[key] or 0 for key in ("nativeActual", "workerActual")) for op in chain["operations"])
         reserved = state.chain_spend(chain) - actual
         dispositions = {value: list(chain["dispositions"].values()).count(value)
@@ -959,7 +1031,7 @@ class PilotGitHub:
         print(summary)
 
     def publish_status(self, chain, observation, now):
-        if self.binding == bindings.UPSTREAM:
+        if self.binding != bindings.FORK:
             # Upstream comments are limited to fixed delayed human reminders.
             # Plain hosted logs remain available when the native job skips.
             return

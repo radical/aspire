@@ -287,7 +287,9 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
             {"id": index, "body": "Feedback", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}
             for index in range(1, 32)]
         chain = self.api.ledger["chains"][0]
-        fresh = self.api.guard(chain, packet["observation"], effect=False)
+        with self.assertRaisesRegex(ValueError, "basis changed"):
+            self.api.guard(chain, packet["observation"], effect=False)
+        fresh = self.api.observe(chain)
         self.assertIn("exceeds 30", fresh["attention"])
         self.assertIn("exceeds 30", self.api.status(chain, fresh, self.clock()))
         result = pilot.settle(self.api, packet, reconciliation_evidence(self.decision(packet)), 2, self.clock())

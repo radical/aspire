@@ -19,12 +19,13 @@ on:
         type: boolean
         default: false
       target:
-        description: Fixed manual-only upstream trial or default fork pilot.
+        description: Manual adopted upstream PRs, fixed legacy trial, or default fork pilot.
         type: choice
         default: fork
         options:
           - fork
           - upstream-20722
+          - upstream
 
 concurrency:
   group: ci-shepherd-transport-proof

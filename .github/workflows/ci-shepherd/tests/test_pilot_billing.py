@@ -198,7 +198,7 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
             "id": 32, "body": "New review feedback", "updated_at": "2026-10-04T00:01:00Z",
             "user": {"id": 1472, "login": "radical"}})
         api.reconcile_workers()
-        self.assertEqual(500, operation["workerReserved"])
+        self.assertEqual(498, operation["workerReserved"])
         self.assertIsNone(operation["workerActual"])
         observed = api.observe(chain)
         self.assertTrue(observed["actionable"])
@@ -208,15 +208,15 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         packet = pilot.prepare(api, tracked_tests.RUN, api.clock(), present=False)
         self.assertIsNotNone(packet)
         self.assertEqual(2, chain["rounds"])
-        self.assertEqual(500, operation["workerReserved"])
+        self.assertEqual(498, operation["workerReserved"])
         self.assertEqual(30, chain["operations"][-1]["nativeReserved"])
         self.assertEqual(1000, state.chain_allowance(api.ledger))
         decision = tracked_tests.decision(packet)
         pilot.settle(api, packet, reconciliation_evidence(decision), 2, api.clock())
         self.assertEqual(1, len([write for write in transport.writes
                                 if write[0] == "POST" and write[1].endswith("/tasks")]))
-        self.assertEqual(500, operation["workerReserved"])
-        self.assertEqual(496, chain["operations"][-1]["workerReserved"])
+        self.assertEqual(498, operation["workerReserved"])
+        self.assertEqual(498, chain["operations"][-1]["workerReserved"])
         self.assertEqual(1000, state.chain_spend(chain))
         self.assertIsNone(operation["workerActual"])
 
@@ -235,7 +235,7 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         self.assertFalse(result["roundLimitReached"])
         chain = state.find_chain(api.ledger, 20722)
         self.assertEqual(1, chain["rounds"])
-        self.assertEqual(500, chain["operations"][0]["workerReserved"])
+        self.assertEqual(498, chain["operations"][0]["workerReserved"])
         self.assertEqual(
             "Waiting for human review / supported new feedback; no inference. "
             "Finished worker billing unavailable; reservation retained.",

@@ -210,7 +210,8 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             self.assertEqual({"number", "kind", "node", "head", "description", "managed", "originManaged",
                               "handsOff", "state", "feedback", "ready", "attention", "pendingCI", "ciWait",
                               "reviewOnly", "diagnostics", "approval", "workflowAttention", "actionable",
-                              "title", "body", "url", "headRef", "workerResults", "copilotReview"}, set(packet["observation"]))
+                              "title", "body", "url", "headRef", "workerResults", "copilotReview",
+                              "ciEvidence", "feedbackEvidence", "workerEvidence"}, set(packet["observation"]))
             self.assertEqual([{"id": "comment:20:2026-10-04T00:00:00Z",
                                "body": "Please fix normalization", "url": ""}], packet["observation"]["feedback"])
             self.assertEqual([], packet["observation"]["workerResults"])

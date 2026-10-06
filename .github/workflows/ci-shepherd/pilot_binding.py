@@ -14,13 +14,16 @@ class Binding:
 
 FORK = Binding("fork", "radical/aspire", 746880239, None, 10)
 UPSTREAM = Binding("upstream-20722", "microsoft/aspire", 696529789, 20722, 10)
+UPSTREAM_ALL = Binding("upstream", "microsoft/aspire", 696529789, None, 10)
 
 
 def select(name="fork", event="workflow_dispatch"):
     if name == "fork" or event == "schedule":
         return FORK
-    if name == UPSTREAM.name and event == "workflow_dispatch":
-        return UPSTREAM
+    if event == "workflow_dispatch":
+        for binding in (UPSTREAM, UPSTREAM_ALL):
+            if name == binding.name:
+                return binding
     raise ValueError("unsupported/manual-only pilot binding")
 
 

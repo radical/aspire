@@ -487,7 +487,7 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
         self.api.persist = persist
         _, log = self.tick()
         self.assertEqual([], self.posts)
-        self.assertIn("changed or unknown", log)
+        self.assertIn("basis changed", log)
         self.assertEqual(before, self.chain["reminder"])
         self.api.persist = original
         self.runs_response = None

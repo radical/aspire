@@ -349,6 +349,56 @@ semantics independently of comment dispositions.
 Completed cloud tasks supply verified result context without synthesizing
 needs-human dispositions. Completion alone still does not prove resolution.
 
+### Evidence-backed timed waits
+
+The native decision may choose `action: "wait"`, `replacement: null`, and
+`wait: {until, reason}`. Every current feedback ID must be `deferred`; an
+initial issue can have empty feedback. Other actions retain their existing
+exact schemas and dispositions.
+
+The canonical UTC deadline must appear verbatim in visible issue title/body
+or an approved ordinary comment, inline comment or review body. Synthetic
+check/status/workflow text, task facts and metadata are not deadline witnesses.
+
+The deadline must still be future after the final fresh guard.
+Reasons are nonempty plain text, at most 500 characters.
+
+Coding workers read normal repository instructions. When verified external
+evidence establishes a wait, they publish an approved-author `[automated]`
+report with the concrete UTC deadline, evidence and timer starting point.
+
+The native process remains isolated with no custom instructions. It consumes
+visible reports, not repository-specific feed rules or invented status delays.
+
+Billing persists first. A valid wait is an optional record on a completed
+native operation, with no task, worker reservation or permanent feedback
+decline.
+
+Deferred native operations do not displace earlier verified worker evidence.
+Legacy completion feedback remains eligible with its original dispositions,
+including when that feedback contains the deadline report itself.
+
+Unchanged restarted sweeps before the deadline spend no inference,
+round, task or review request. Existing logs/status show the deadline and
+reason without adding an upstream general-comment writer.
+
+Explicit wait provenance prevents native-handoff reminders and manual
+handoff resume. Child-adoption confirmation may clear its own uncertainty,
+but never converts a timed wait into a human handoff or reopens an ordinary
+native human stop.
+
+Exact expiry or changed head, branch, source body, feedback, saved task,
+review or CI evidence permits fresh evaluation under existing stop, capacity,
+approval and spending gates. Taskless issue waits explicitly become initially
+due again; ordinary handoffs and declines do not. New operation identities
+bind verified branch and opaque integrity revisions of raw CI, approved
+feedback and saved-task evidence before prompt truncation. Historical
+identities, receipts, counters and unknown holds remain unchanged.
+
+Expiry never replays a repair, declares red/unknown CI green, automatically
+reruns a workflow or overrides closure, hands-off, disablement or pending
+work. Other independently due chains can continue while one is deferred.
+
 Issue-to-child adoption requires exact operation correlation in every task
 session, authenticated task creator/repository, actual GitHub PR database ID,
 branch artifact and independently fetched REST PR and Git ref mapping. Only
@@ -371,7 +421,7 @@ returning its parameter or a chain of zero-argument `strip`, `lower`, `casefold`
 commands, arbitrary paths or executable API bodies can be proposed.
 Other PRs and all initial issues use the generic cloud lane.
 
-### Manual upstream trial
+### Manual upstream PR coordination
 
 The controller remains installed/executed in `radical/aspire`; its checkout,
 OIDC identity and existing daily fork schedule do not change. Manual dispatch
@@ -382,22 +432,32 @@ always select `target=fork`. There is no upstream workflow installation,
 schedule, general repository selector, host Git Data writer or general
 comment writer. Only fixed delayed human reminder comments are permitted.
 
-Use a **separate fork-hosted authority**, not tracker122 or its comment:
+`target=upstream` uses the same fixed repository identity, operator and base
+`main`, but discovers all open `shepherd-adopted` PRs through bounded label
+intake. Each verified same-repository PR has its own lifetime chain and
+current head branch. Upstream issues are visibly skipped; issue workers and
+child adoption remain fork-only. Source branch changes, even at the same SHA,
+invalidate prepared decisions. The fixed trial branch and exact-head brief
+apply only to `upstream-20722`; its adapter rejects other chains.
+
+Use the **existing matching fork-hosted upstream authority**, not tracker122 or
+its comment. Neither target selection nor timed-wait expiry initializes,
+repoints or resets an authority:
 `CI_SHEPHERD_UPSTREAM_TRACKER=127`,
 `CI_SHEPHERD_UPSTREAM_TRACKER_NODE=I_kwDOLIR8788AAAABU-aGuQ`, and
 `CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT=<verified new radical-owned comment ID>`.
-Render the empty target namespace locally before publishing it:
-
-```shell
-PYTHONPATH=.github/workflows/ci-shepherd python3 -B -c \
-  'import pilot_state; print(pilot_state.render(pilot_state.new_ledger("microsoft/aspire")))'
-```
-
 The ledger's target namespace must match the fixed binding while its tracker
 and writer remain in the controller fork. Existing fork/legacy authority is
 never repointed. Native admission is still30 credits, upstream chain allowance1,000 and
 rolling authority allowance1,000; these are independent authority namespaces,
 not a promise of a combined cross-authority billing cap.
+
+New cloud reservations fit both remaining chain allowance and rolling
+authority headroom. Infeasible cloud admission spends no native round.
+Known earlier spending does not prevent another PR from using remaining
+headroom. Existing unknown holds remain exact: they are neither shrunk to
+admit work nor grown when unrelated spending ages out. Verified billing or
+a resumed previously billed task remains separate reconciliation evidence.
 
 Both profiles count only Shepherd-started in-flight/unknown operations saved
 in their own authority toward max2, not a combined fork/upstream limit.
@@ -488,10 +548,14 @@ remain remote. The Actions workflow stays available for later hosted execution;
 its GitHub-hosted identity checks are unchanged, not emulated locally.
 
 `local.py --target` selects the closed repository binding:
-`upstream-20722` (the default, the fixed PR20722 trial) or the existing closed
-`fork` binding for adopted issues and PRs in radical/aspire. The operator must
+`upstream-20722` (the default, the fixed PR20722 trial), `upstream` for adopted
+PRs in microsoft/aspire, or the existing closed `fork` binding for adopted
+issues and PRs in radical/aspire. The operator must
 provide the matching saved tracker/authority; selecting `fork` does not create
-or reset one. `resume` still requires `upstream-20722`.
+or reset one. `resume` accepts either upstream target and identifies the exact
+latest completed native handoff operation in its chain. It is an explicit
+no-inference admission change, not timed-wait expiry or permission to replay
+old work. Timed waits are not resumable handoffs.
 
 Local execution uses tracked cloud workers for both targets. Inline
 `python-labels-v1` repair remains hosted-only. Disabled or read-only observation

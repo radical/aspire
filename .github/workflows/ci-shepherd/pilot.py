@@ -27,7 +27,7 @@ def configuration(environment, *, billing=False):
         return None
     event = environment.get("GITHUB_EVENT_NAME", "workflow_dispatch")
     binding = bindings.select(environment.get("SHEPHERD_TARGET", "fork"), event)
-    prefix = "CI_SHEPHERD_UPSTREAM_" if binding == bindings.UPSTREAM else "CI_SHEPHERD_"
+    prefix = "CI_SHEPHERD_" if binding == bindings.FORK else "CI_SHEPHERD_UPSTREAM_"
     required = tuple(prefix + name for name in ("TRACKER", "AUTHORITY_COMMENT", "TRACKER_NODE"))
     if any(not environment.get(key) for key in required):
         return None
@@ -48,7 +48,8 @@ def prepare(api, run, now, *, present=True):
     for chain in api.ledger["chains"]:
         number = chain["child"] or chain["origin"]
         before = deepcopy(chain)
-        reviews.process(api, chain, observations[number], now, allow_request=not review_started)
+        reviews.process(api, chain, observations[number], now, allow_request=(
+            not review_started and github.wait_state(chain, observations[number], now) != "waiting"))
         review_started |= len(chain.get("reviews", [])) > len(before.get("reviews", []))
         if chain != before:
             observations[number] = api.observe(chain)
@@ -97,7 +98,9 @@ def prepare(api, run, now, *, present=True):
             api.guard(chain, observed)
             operation = state.reserve(api.ledger, chain, identity, now, local=context is not None,
                                       operation_id=operation_id)
-        except ValueError as error:
+        except github.AuthorityUncertain:
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
             # Admission rejection is a visible wait, not a successful action.
             print(f"CI Shepherd chain {chain['origin']} paused: {error}", file=sys.stderr)
             api.admission_reasons[chain["id"]] = f"Admission paused: {error}. No inference."
@@ -123,15 +126,19 @@ def prompt(packet):
 
 
 def validate_decision(packet, decision):
-    contracts.exact(decision, {"schemaVersion", "packetId", "operation", "action", "replacement", "dispositions"},
-                    "pilot decision")
+    keys = {"schemaVersion", "packetId", "operation", "action", "replacement", "dispositions"}
+    if isinstance(decision, dict) and decision.get("action") == "wait":
+        keys.add("wait")
+    contracts.exact(decision, keys, "pilot decision")
     if (decision["schemaVersion"] != 1 or decision["packetId"] != packet["packetId"]
-            or decision["operation"] != packet["operation"] or decision["action"] not in {"patch", "cloud", "human"}):
+            or decision["operation"] != packet["operation"] or not isinstance(decision["action"], str)
+            or decision["action"] not in {"patch", "cloud", "human", "wait"}):
         raise ValueError("decision binding/action mismatch")
     feedback = {item["id"] for item in packet["observation"]["feedback"]}
     if not isinstance(decision["dispositions"], dict) or set(decision["dispositions"]) != feedback:
         raise ValueError("decision must disposition the complete same-PR batch")
-    if any(value not in {"addressed", "declined", "needs-human"} for value in decision["dispositions"].values()):
+    allowed = {"deferred"} if decision["action"] == "wait" else {"addressed", "declined", "needs-human"}
+    if any(not isinstance(value, str) or value not in allowed for value in decision["dispositions"].values()):
         raise ValueError("unsupported feedback disposition")
     if decision["action"] == "patch":
         if packet["lane"] != "local" or packet["context"] is None:
@@ -143,9 +150,24 @@ def validate_decision(packet, decision):
         return proposal
     if decision["replacement"] is not None:
         raise ValueError("only patch decisions carry replacement source")
+    if decision["action"] == "wait":
+        state.validate_wait(decision["wait"])
+        if not wait_evidence(packet["observation"], decision["wait"]["until"]):
+            raise ValueError("wait deadline absent from visible source/approved feedback")
     if decision["action"] == "human" and any(value == "addressed" for value in decision["dispositions"].values()):
         raise ValueError("human handoff cannot claim unperformed repairs addressed")
     return None
+
+
+def wait_evidence(observation, deadline):
+    # These host-issued ID prefixes identify approved-author REST bodies.
+    # Synthetic CI feedback can quote arbitrary check/status/workflow names;
+    # a date in that text is not an approved reassessment report.
+    bodies = [item["body"] for item in observation["feedback"]
+              if item["id"].split(":", 1)[0] in {"comment", "review-comment", "review"}]
+    if observation["kind"] == "issue":
+        bodies.extend((observation["title"], observation["body"]))
+    return any(deadline in body for body in bodies)
 
 
 def worker_prompt(api, chain, operation, packet):
@@ -156,6 +178,9 @@ def worker_prompt(api, chain, operation, packet):
     repair_context = {key: value for key, value in observed.items() if key != "workHistory"}
     decisions = operation.get("feedbackDecisions", {item["id"]: "needs-human" for item in observed["feedback"]})
     revision_label = "Source head" if observed["kind"] == "pr" else "Host-bound issue title/body digest"
+    trial = ("Exact-head trial brief (ignore after head drift): "
+             + json.dumps(bindings.brief(api.binding, observed["head"])) + "\n"
+             if api.binding == bindings.UPSTREAM else "")
     return github.CORRELATION + json.dumps(correlation, separators=(",", ":")) + "\n" + (
         f"Repair one cohesive batch for {api.repository} {observed['kind']} #{observed['number']}. "
         f"{revision_label}: {observed['head']}. Base: main. "
@@ -179,6 +204,12 @@ def worker_prompt(api, chain, operation, packet):
         "investigatable. Do not weaken the gate or branch protection. "
         "When reviewOnly is true, repair review feedback only; CI requires wait/rerun, not code changes. "
         "Do not rerun workflows; report the rerun requirement without a mutation. "
+        "When verified external evidence warrants waiting, publish an approved-author [automated] report "
+        "on the source issue/PR with the exact canonical UTC reassessment deadline (YYYY-MM-DDTHH:MM:SSZ), "
+        "the evidence and timer starting point. Do not infer a deadline from an HTTP status or job name. "
+        "If the deadline is unknown, report the diagnosis or concrete human input needed. "
+        "Read the repository's normal Copilot instructions for repository-specific diagnosis; "
+        "keep red/unknown CI explicit. A deadline is reassessment, never proof of recovery. "
         "Report a concrete human-only blocker if necessary, not unsupported scope guessed from job names. "
         "Make at most one actual minimal non-forced repair commit when warranted; never an artificial commit. "
         "Report exact changed files, test command/result, resulting head and "
@@ -194,8 +225,7 @@ def worker_prompt(api, chain, operation, packet):
         "Native feedback decisions (addressed means repair requested): " + json.dumps(decisions, ensure_ascii=True) + "\n"
         + repair_policy() + "\n"
         + bindings.policy(api.binding) + "\n"
-        "Exact-head trial brief (ignore after head drift): " + json.dumps(bindings.brief(api.binding, observed["head"])) + "\n"
-        "Bounded source/feedback JSON:\n" + json.dumps(repair_context, ensure_ascii=True))
+        + trial + "Bounded source/feedback JSON:\n" + json.dumps(repair_context, ensure_ascii=True))
 
 
 def worker_request(api, chain, operation, packet):
@@ -314,7 +344,16 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
                 or "addressed" in decision["dispositions"].values())
                 and api.admission_slots(packet["observation"]["headRef"]) >= 2):
             raise ValueError("tracking authority worker capacity exhausted")
-        api.guard(chain, packet["observation"])
+        fresh = api.guard(chain, packet["observation"])
+        if decision["action"] == "wait":
+            deadline = state.validate_wait(decision["wait"])
+            if deadline <= max(now, api.clock()) or not wait_evidence(fresh, decision["wait"]["until"]):
+                raise ValueError("wait deadline expired or evidence changed")
+            operation["feedbackDecisions"] = deepcopy(decision["dispositions"])
+            operation["wait"] = deepcopy(decision["wait"])
+            state.finish(operation, "completed")
+            api.persist()
+            return {"outcome": "deferred", "until": decision["wait"]["until"]}
         operation["feedbackDecisions"] = deepcopy(decision["dispositions"])
         # A PR's declined feedback requires neither repair nor human input.
         # Issue-body implementation and actual inline patches are independent
@@ -349,9 +388,16 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
         # No compensating publication or refund when the authority write itself
         # is unknown. The persisted send boundary remains non-retryable.
         raise
-    except (ValueError, KeyError) as error:
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
         # Explicitly fail an unsent action; once sent, a failed verification must
         # hold capacity rather than masquerade as a no-send/refund.
+        if "wait" in operation:
+            # A known rejection of this provisional taskless wait is not an
+            # uncertain worker send. Keep the already-persisted native bill.
+            # AuthorityUncertain bypasses this compensation above.
+            operation.pop("wait")
+            operation.pop("feedbackDecisions", None)
+            operation["state"] = "reserved"
         outcome = ("no-send" if operation["workerReserved"] > 0 else "failed") if operation["state"] == "reserved" else "uncertain"
         state.finish(operation, outcome)
         api.persist()

@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 import re
+import hashlib
+import json
 import uuid
 from urllib.parse import parse_qs
 
@@ -148,6 +150,8 @@ def workflow_evidence(api, head):
                 if approval is None or run["id"] < int(approval["id"]):
                     approval = {"id": str(run["id"]), "url": run["html_url"]}
         return {"approval": approval, "pending": pending, "green": green, "attention": None,
+                "revision": hashlib.sha256(json.dumps(
+                    runs, sort_keys=True, ensure_ascii=True, allow_nan=False).encode()).hexdigest(),
                 "failures": failures, "failedRuns": failed_runs}
     except (ValueError, KeyError, TypeError, AttributeError) as error:
         print(f"CI Shepherd #{api.binding.subject or 'PR'} workflow approval evidence unknown: {error}")
@@ -156,6 +160,8 @@ def workflow_evidence(api, head):
 
 
 def blocker(chain, observation):
+    from pilot_github import native_handoff
+
     if observation["approval"] is not None:
         return "workflow-approval", observation["approval"]["id"]
     if chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}:
@@ -167,7 +173,7 @@ def blocker(chain, observation):
             return "worker-input", operation["taskId"]
     if chain["state"] == "human" and chain["operations"]:
         operation = chain["operations"][-1]
-        if operation["state"] == "completed" and operation["taskId"] is None and operation["sessionId"] is not None:
+        if native_handoff(chain):
             return "native-handoff", operation["id"]
         if operation["taskId"] is not None and operation["state"] in {"completed", "failed"} and chain["child"] is None:
             # A terminal worker without a mappable child needs owner review.
@@ -210,6 +216,7 @@ def notification_guard(api, chain, observation, value):
 
 
 def reconcile(api, chain, number, target=None):
+    from pilot_github import AuthorityUncertain
     value = chain["reminder"]
     target = number if target is None else target
     expected = render(value, api.repository, number)
@@ -222,11 +229,14 @@ def reconcile(api, chain, number, target=None):
             api.persist()
             return "confirmed by owned comment receipt"
         return "uncertain; no unique owned receipt, never retry"
+    except AuthorityUncertain:
+        raise
     except (ValueError, KeyError, TypeError, AttributeError) as error:
         return f"receipt unavailable; never retry: {error}"
 
 
 def process(api, chain, observation, now):
+    from pilot_github import AuthorityUncertain
     def log(message):
         print(f"CI Shepherd reminder #{observation['number']}: {message}")
 
@@ -291,6 +301,8 @@ def process(api, chain, observation, now):
         value.update(sendState="confirmed", commentId=response.payload["id"])
         api.persist()
         log(f"{KINDS[value['kind']]}; notified @radical, comment {value['commentId']}")
+    except AuthorityUncertain:
+        raise
     except (ValueError, KeyError, TypeError, AttributeError) as error:
         if value["sendState"] == "confirmed":
             log(f"comment {value['commentId']} confirmed; receipt publication failed: {error}")

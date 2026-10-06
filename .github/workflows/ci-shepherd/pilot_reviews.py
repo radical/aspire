@@ -112,6 +112,7 @@ def evidence(chain, value, reviews, green):
 
 def process(api, chain, observation, now, *, allow_request=True):
     import pilot_state as state
+    from pilot_github import AuthorityUncertain
 
     summary = observation.get("copilotReview")
     if api.write and summary is not None:
@@ -138,6 +139,8 @@ def process(api, chain, observation, now, *, allow_request=True):
         if (fresh["copilotReview"]["state"] != "due" or not fresh["copilotReview"]["green"]
                 or fresh["copilotReview"]["draft"]):
             raise ValueError("Copilot review CI/draft basis changed")
+    except AuthorityUncertain:
+        raise
     except (ValueError, IncompleteInventory) as error:
         api.admission_reasons[chain["id"]] = f"Copilot review admission paused: {error}."
         print(api.admission_reasons[chain["id"]], file=sys.stderr)
@@ -157,6 +160,8 @@ def process(api, chain, observation, now, *, allow_request=True):
                 or fresh["copilotReview"]["inProgress"]
                 or any(item["head"] == record["head"] for item in fresh["copilotReview"]["receipts"])):
             raise ValueError("Copilot review work/CI/draft basis changed")
+    except AuthorityUncertain:
+        raise
     except (ValueError, IncompleteInventory) as error:
         record.update(state="no-send", actual=0, reserved=0)
         api.persist()
