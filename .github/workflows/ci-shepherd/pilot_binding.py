@@ -13,7 +13,7 @@ class Binding:
 
 
 FORK = Binding("fork", "radical/aspire", 746880239, None, 10)
-UPSTREAM = Binding("upstream-20722", "microsoft/aspire", 696529789, 20722, 5)
+UPSTREAM = Binding("upstream-20722", "microsoft/aspire", 696529789, 20722, 10)
 
 
 def select(name="fork", event="workflow_dispatch"):

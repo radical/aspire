@@ -152,9 +152,10 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         }, result)
         self.assertFalse((self.work / "completed" / "agent").exists())
         chain = state.find_chain(api.ledger, 20722)
-        self.assertEqual(5, chain["rounds"])
+        self.assertEqual(api.binding.round_limit, chain["rounds"])
         self.assertEqual(498, operation["workerReserved"])
-        self.assertIn("Lifetime action round limit (5) also reached", api.next_action(chain, api.observe(chain)))
+        self.assertIn(f"Lifetime action round limit ({api.binding.round_limit}) also reached",
+                      api.next_action(chain, api.observe(chain)))
 
     def test_local_finished_worker_hold_is_distinct_from_round_limit_and_hands_off(self):
         for hands_off in (False, True):

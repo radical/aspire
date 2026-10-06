@@ -111,10 +111,10 @@ class PilotBindingTests(unittest.TestCase):
         self.assertEqual(0, api.admission_slots("copilot/restrict-workflows-to-microsoft-aspire"))
         self.assertEqual([], transport.reads)
 
-    def test_trial_five_rounds_preserve_history_across_restarts_and_reject_sixth(self):
+    def test_trial_ten_rounds_preserve_history_across_restarts_and_reject_eleventh(self):
         api, transport = self.api()
         previous = []
-        for number in range(1, 6):
+        for number in range(1, 11):
             fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
             fresh.clock = api.clock
             packet = pilot.prepare(fresh, RUN, api.clock(), present=False)
@@ -138,30 +138,31 @@ class PilotBindingTests(unittest.TestCase):
         self.assertEqual(before, fresh.ledger)
         self.assertEqual(writes, transport.writes)
         chain = fresh.ledger["chains"][0]
-        self.assertEqual(10, state.chain_spend(chain))
+        self.assertEqual(20, state.chain_spend(chain))
         observed = fresh.observe(chain)
-        self.assertIn("action rounds: 5/5.", fresh.status(chain, observed, api.clock()))
-        self.assertEqual("Lifetime action round limit (5) reached; human attention required.",
+        self.assertIn("action rounds: 10/10.", fresh.status(chain, observed, api.clock()))
+        self.assertEqual("Lifetime action round limit (10) reached; human attention required.",
                          fresh.next_action(chain, observed))
 
-    def test_trial_fresh_effect_guard_allows_fifth_but_rejects_over_limit(self):
+    def test_trial_fresh_effect_guard_allows_tenth_but_rejects_over_limit(self):
         api, transport = self.api()
         api.read_authority()
         value = transport.values["repos/microsoft/aspire/pulls/20722"]
         chain = state.adopt(api.ledger, 20722, "pr", value["node_id"])
         observed = api.observe(chain)
-        for number in range(1, 7):
+        for number in range(1, 11):
             operation = state.reserve(api.ledger, chain, github.fingerprint(observed) + f":round:{number}",
                                       api.clock(), local=False)
             api.persist()
-            if number == 5:
+            if number == 10:
                 self.assertEqual(observed, api.guard(chain, observed))
-            elif number == 6:
-                with self.assertRaisesRegex(ValueError, "round limit"):
-                    api.guard(chain, observed)
             state.settle_native(operation, 2)
             state.finish(operation, "completed")
             api.persist()
+        over_limit = deepcopy(chain)
+        over_limit["rounds"] = 11
+        with self.assertRaisesRegex(ValueError, "round limit"):
+            api.guard(over_limit, observed)
 
     def test_trial_unknown_managed_tasks_keep_owned_slots(self):
         api, transport = self.api()

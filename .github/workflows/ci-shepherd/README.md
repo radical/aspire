@@ -270,13 +270,15 @@ inspects foreign tasks. Other agents can still edit the PR: there is no claim
 of exclusive ownership, and fresh head/adoption/takeover guards remain required.
 Failed own-task reads retain pending state, capacity and unknown credits.
 
-The trial has **five total lifetime native action rounds**: at most five worker
-requests, then observation/billing only. The fork profile remains at ten rounds.
+The trial has **ten total lifetime native action rounds**: at most ten worker
+requests, then observation/billing only. The fork profile also has ten rounds.
 The binding's `round_limit` in `pilot_binding.py` governs admission, fresh repair
 effects and status; it is policy, not a field in the persisted JSON. Existing
 rounds, operations and credits survive failure, restart, head change and
 stop/re-adoption without resets. Unknown sends remain reserved and block a
 new round until reconciled.
+Raising the round limit does not change credit allowances or refund unknown
+worker billing. A completed but unbilled worker can still block a new paid round.
 The worker must refresh the full fork authority URL before writes, and may
 investigate and repair one bounded batch of ordinary current-PR CI/review
 feedback. Failed job names alone do not diagnose a cause or justify a handoff:
