@@ -589,10 +589,13 @@ class PilotGitHub:
                         operation.update(workerActual=usage, workerAt=issue_pr.stamp(self.clock()))
                     operation["workerReserved"] = 0
                 if task["state"] not in state.TERMINAL or usage is None:
-                    operation["state"] = "waiting"
+                    # Unknown costs still reserve the remaining allowance even
+                    # when all verified task sessions have finished.
                     operation["workerReserved"] = max(
                         operation["workerReserved"], max(0, state.CHAIN_ALLOWANCE - state.chain_spend(chain)))
-                if task["state"] in state.TERMINAL and usage is not None:
+                if task["state"] not in state.TERMINAL:
+                    operation["state"] = "waiting"
+                else:
                     state.finish(operation, "completed" if task["state"] == "completed" else "failed")
                     if task["state"] == "completed":
                         basis = contracts.loads(operation["identity"].split(":round:", 1)[0])
@@ -706,6 +709,10 @@ class PilotGitHub:
             blocker = "Worker needs human input; open the task. No inference."
         elif state.pending(chain):
             blocker = "Tracked work / uncertain send; observe only, never retry."
+        elif state.worker_billing_pending(chain):
+            blocker = "Tracked worker finished; billing unavailable, reservation retained. No new paid repair."
+            if chain["rounds"] >= self.binding.round_limit:
+                blocker += f" Lifetime action round limit ({self.binding.round_limit}) also reached."
         elif chain["rounds"] >= self.binding.round_limit:
             blocker = f"Lifetime action round limit ({self.binding.round_limit}) reached; human attention required."
         elif (chain["kind"] == "issue" and chain["child"] is None and operation is not None
@@ -750,8 +757,8 @@ class PilotGitHub:
         operation = chain["operations"][-1] if chain["operations"] else None
         task = operation["taskId"] if operation else None
         worker = (operation["workerState"] or operation["state"]) if operation else "not started"
-        unknown = any(op["nativeActual"] is None or (
-            (op["taskId"] is not None or op["workerReserved"] > 0) and op["workerActual"] is None)
+        unknown = any(op["nativeActual"] is None or op["workerReserved"] > 0 or (
+            op["taskId"] is not None and op["workerActual"] is None)
                       for op in chain["operations"])
         actual = sum(sum(op[key] or 0 for key in ("nativeActual", "workerActual")) for op in chain["operations"])
         reserved = state.chain_spend(chain) - actual

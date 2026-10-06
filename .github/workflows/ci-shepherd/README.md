@@ -104,6 +104,10 @@ or edits. Disabling the pilot or removing adoption stops new notifications.
   terminal task-session `ai_credits` nano units settle separately, including
   failed native runs. Missing/premium-request billing is unknown, not zero:
   its reservation survives the rolling window.
+- Verified terminal workers complete their operation and result/artifact
+  bookkeeping even when usage is absent or partial. Unknown costs still
+  reserve the remaining chain allowance, blocking new paid work; later
+  reported usage settles the same operation without another round.
 - Fresh direct reads of saved task IDs can resume previously completed work.
   Every saved task is verified again, including completed receipts; unknown sessions
   hold a worker slot and remaining credit reservation. Additional reported
@@ -189,6 +193,10 @@ next action, actual credits/reservations and PR history in its hosted prepare
 log, including waiting sweeps with no native packet. This needs no model call
 or a status comment writer. Unknown billing retains reservations; task
 completion alone is not a real current-head CI or approval result.
+Finished workers with unsettled billing are reported separately from active
+work or uncertain sends. The local runner returns `observed; no inference`
+with a billing reason and an explicit round-limit indicator for this case.
+It does not infer a zero cost, release the hold or increase spending limits.
 
 Current-head checks/statuses and explicit review records determine readiness.
 Approval requires a current-head `APPROVED` review whose reviewer has not been

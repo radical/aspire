@@ -205,6 +205,11 @@ def pending(chain):
                for operation in chain["operations"])
 
 
+def worker_billing_pending(chain):
+    return any(operation["taskId"] is not None and operation["workerState"] in TERMINAL
+               and operation["workerReserved"] > 0 for operation in chain["operations"])
+
+
 def worker_slots(ledger):
     return sum(operation["lane"] == "cloud" and (
         operation["workerReserved"] > 0 or operation["taskId"] is not None

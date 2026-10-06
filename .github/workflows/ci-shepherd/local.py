@@ -228,6 +228,15 @@ def sweep(api, directory, revision, *, executor=execute):
         contracts.write_json(directory / "packet.json", packet)
         if packet is None:
             result = {"outcome": "waiting; no inference"}
+            finished_unbilled = [chain for chain in api.ledger["chains"]
+                                if chain["state"] == "open" and not state.pending(chain)
+                                and state.worker_billing_pending(chain)]
+            if finished_unbilled:
+                result = {
+                    "outcome": "observed; no inference",
+                    "reason": "worker finished; billing unavailable; reservation retained",
+                    "roundLimitReached": any(chain["rounds"] >= api.binding.round_limit for chain in finished_unbilled),
+                }
         else:
             evidence = None
             try:

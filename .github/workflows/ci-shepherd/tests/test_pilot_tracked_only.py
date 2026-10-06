@@ -248,9 +248,13 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             self.assertIsNone(pilot.prepare(fresh, RUN, api.clock(), present=False))
         chain = fresh.ledger["chains"][0]
-        self.assertTrue(state.pending(chain))
+        self.assertFalse(state.pending(chain))
+        self.assertEqual("completed", chain["operations"][0]["state"])
+        self.assertTrue(state.worker_billing_pending(chain))
         self.assertEqual(1.5, chain["operations"][0]["workerActual"])
         self.assertEqual(500, state.chain_spend(chain))
+        with self.assertRaisesRegex(ValueError, "chain credit allowance exhausted"):
+            state.reserve(fresh.ledger, chain, "new round", api.clock(), local=False)
         self.assertEqual(1, chain["rounds"])
 
     def test_unknown_post_without_id_and_unverifiable_accepted_post_survive_restart_without_repeat(self):

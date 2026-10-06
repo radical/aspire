@@ -1,0 +1,185 @@
+from contextlib import redirect_stdout
+import io
+import json
+import unittest
+from unittest.mock import patch
+
+from helpers import WorkspaceTest
+import local
+import pilot_binding as bindings
+import pilot_state as state
+import test_pilot_github as github_tests
+import test_pilot_tracked_only as tracked_tests
+
+
+class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
+    def worker(self, outcome="completed", *, binding=bindings.FORK):
+        fixture = tracked_tests.TrackedOnlyTests()
+        api, transport = fixture.api(binding)
+        chain, operation, task = fixture.seed_worker(api, transport)
+        task["state"] = task["sessions"][0]["state"] = outcome
+        return fixture, api, transport, chain, operation, task
+
+    def test_verified_terminal_outcomes_finish_lifecycle_without_refunding_unknown_costs(self):
+        for outcome in sorted(state.TERMINAL):
+            with self.subTest(outcome=outcome):
+                _, api, transport, chain, operation, task = self.worker(outcome)
+                api.reconcile_workers()
+                self.assertEqual("completed" if outcome == "completed" else "failed", operation["state"])
+                self.assertEqual(outcome, operation["workerState"])
+                self.assertIsNone(operation["workerActual"])
+                self.assertEqual((2, 498), (operation["nativeActual"], operation["workerReserved"]))
+                self.assertFalse(state.pending(chain))
+                self.assertTrue(state.worker_billing_pending(chain))
+                self.assertEqual(500, state.chain_spend(chain))
+                with self.assertRaisesRegex(ValueError, "chain credit allowance exhausted"):
+                    state.reserve(api.ledger, chain, "new round", api.clock(), local=False)
+                self.assertEqual(1, chain["rounds"])
+                self.assertEqual([], [write for write in transport.writes if write[1].endswith("/tasks")])
+
+    def test_completed_result_bookkeeping_and_repeated_sweeps_do_not_wait_for_usage(self):
+        fixture, api, transport, chain, operation, task = self.worker()
+        api.reconcile_workers()
+        feedback = json.loads(operation["identity"].rsplit(":round:", 1)[0])["feedback"]
+        self.assertTrue(feedback)
+        self.assertEqual({item: "needs-human" for item in feedback}, chain["dispositions"])
+        api.persist()
+        fresh = fixture.fresh(api)
+        fresh.read_authority()
+        fresh.reconcile_workers()
+        observed = fresh.ledger["chains"][0]
+        self.assertEqual(chain["operations"], observed["operations"])
+        self.assertEqual(chain["dispositions"], observed["dispositions"])
+        self.assertEqual(1, observed["rounds"])
+        self.assertEqual([], [write for write in transport.writes if write[1].endswith("/tasks")])
+
+    def test_historical_waiting_operation_recovers_from_verified_terminal_receipt(self):
+        fixture, api, transport, chain, operation, task = self.worker()
+        operation["workerState"] = "completed"
+        operation["state"] = "waiting"
+        api.persist()
+        fresh = fixture.fresh(api)
+        fresh.read_authority()
+        fresh.reconcile_workers()
+        recovered = fresh.ledger["chains"][0]["operations"][0]
+        self.assertEqual(("completed", 498, None),
+                         (recovered["state"], recovered["workerReserved"], recovered["workerActual"]))
+        self.assertEqual(operation["id"], recovered["id"])
+
+    def test_later_usage_settles_the_same_completed_operation(self):
+        _, api, transport, chain, operation, task = self.worker()
+        api.reconcile_workers()
+        identity = operation["id"]
+        task["sessions"][0]["usage"] = {"type": "ai_credits", "amount": 1500000000}
+        api.reconcile_workers()
+        self.assertEqual(("completed", 1.5, 0),
+                         (operation["state"], operation["workerActual"], operation["workerReserved"]))
+        self.assertFalse(state.worker_billing_pending(chain))
+        self.assertEqual(3.5, state.chain_spend(chain))
+        self.assertEqual(identity, operation["id"])
+        self.assertEqual(1, chain["rounds"])
+
+    def test_partial_usage_is_still_reported_as_unknown_after_lifecycle_completion(self):
+        fixture = tracked_tests.TrackedOnlyTests()
+        api, transport = fixture.api()
+        chain, operation, task = fixture.seed_worker(api, transport, completed=True)
+        task["sessions"].append({**task["sessions"][0], "id": "UNBILLED", "usage": None})
+        task["session_count"] = 2
+        api.reconcile_workers()
+        self.assertEqual(("completed", 1.5, 496.5),
+                         (operation["state"], operation["workerActual"], operation["workerReserved"]))
+        self.assertTrue(state.worker_billing_pending(chain))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            api.log_status(chain, api.observe(chain), api.clock())
+        self.assertIn("billing: unknown amounts remain reserved", output.getvalue())
+        self.assertIn("Tracked worker finished; billing unavailable", output.getvalue())
+
+    def test_resumed_or_unverifiable_task_returns_to_pending_without_refunding_hold(self):
+        for failure in ("resumed", "conflicting-session", "missing", "malformed-usage"):
+            with self.subTest(failure=failure):
+                _, api, transport, chain, operation, task = self.worker()
+                api.reconcile_workers()
+                if failure == "resumed":
+                    task["state"] = task["sessions"][0]["state"] = "in_progress"
+                elif failure == "conflicting-session":
+                    task["sessions"][0]["state"] = "in_progress"
+                elif failure == "malformed-usage":
+                    task["sessions"][0]["usage"] = "invalid"
+                else:
+                    del transport.values[f"agents/repos/{api.repository}/tasks/{task['id']}"]
+                api.reconcile_workers()
+                self.assertTrue(state.pending(chain))
+                self.assertEqual("waiting", operation["state"])
+                self.assertEqual(498, operation["workerReserved"])
+                self.assertEqual(1, state.worker_slots(api.ledger))
+
+    def test_verified_issue_child_adoption_is_independent_of_billing_and_idempotent(self):
+        fixture = github_tests.PilotGitHubTests()
+        fixture.setUp()
+        chain, operation, task = fixture.issue_worker()
+        task["sessions"][0]["usage"] = None
+        fixture.api.reconcile_workers()
+        self.assertEqual((9, "confirmed", "completed"),
+                         (chain["child"], chain["childAdoption"], operation["state"]))
+        self.assertEqual(498, operation["workerReserved"])
+        writes = len(fixture.transport.writes)
+        fixture.api.reconcile_workers()
+        self.assertEqual(writes, len(fixture.transport.writes))
+        self.assertEqual(1, chain["rounds"])
+
+    def test_local_completed_unbilled_result_names_billing_and_round_cap_without_executor(self):
+        fixture, api, transport, chain, operation, task = self.worker(binding=bindings.UPSTREAM)
+        for index in range(2, api.binding.round_limit + 1):
+            chain["operations"].append({
+                **operation, "id": f"settled-native-{index}",
+                "identity": operation["identity"].rsplit(":round:", 1)[0] + f":round:{index}",
+                "state": "completed", "taskId": None, "sessionId": None,
+                "nativeActual": 0, "nativeReserved": 0, "workerActual": None,
+                "workerState": None, "workerReserved": 0, "workerVersion": None,
+            })
+        chain["rounds"] = api.binding.round_limit
+        api.persist()
+        api.enabled = lambda: True
+        api.token = "fixture-token"
+        with patch.object(local.live, "clock", api.clock), redirect_stdout(io.StringIO()):
+            result = local.sweep(api, self.work / "completed", "b" * 40,
+                                 executor=lambda *_: self.fail("finished unbilled task must not infer"))
+        self.assertEqual({
+            "outcome": "observed; no inference",
+            "reason": "worker finished; billing unavailable; reservation retained",
+            "roundLimitReached": True,
+        }, result)
+        self.assertFalse((self.work / "completed" / "agent").exists())
+        chain = state.find_chain(api.ledger, 20722)
+        self.assertEqual(5, chain["rounds"])
+        self.assertEqual(498, operation["workerReserved"])
+        self.assertIn("Lifetime action round limit (5) also reached", api.next_action(chain, api.observe(chain)))
+
+    def test_local_finished_worker_hold_is_distinct_from_round_limit_and_hands_off(self):
+        for hands_off in (False, True):
+            with self.subTest(hands_off=hands_off):
+                fixture, api, transport, chain, operation, task = self.worker(binding=bindings.UPSTREAM)
+                api.enabled = lambda: True
+                api.token = "fixture-token"
+                if hands_off:
+                    transport.values[f"{api.prefix}/pulls/20722"]["labels"] = [{"name": "shepherd-hands-off"}]
+                directory = self.work / str(hands_off)
+                with patch.object(local.live, "clock", api.clock), redirect_stdout(io.StringIO()):
+                    result = local.sweep(api, directory, "b" * 40,
+                                         executor=lambda *_: self.fail("unknown costs must not infer"))
+                if hands_off:
+                    self.assertEqual({"outcome": "waiting; no inference"}, result)
+                    self.assertEqual("hands-off", state.find_chain(api.ledger, 20722)["state"])
+                else:
+                    self.assertEqual({
+                        "outcome": "observed; no inference",
+                        "reason": "worker finished; billing unavailable; reservation retained",
+                        "roundLimitReached": False,
+                    }, result)
+                self.assertFalse((directory / "agent").exists())
+                self.assertEqual(1, state.find_chain(api.ledger, 20722)["rounds"])
+
+
+if __name__ == "__main__":
+    unittest.main()
