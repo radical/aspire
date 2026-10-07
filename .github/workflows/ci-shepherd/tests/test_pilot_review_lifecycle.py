@@ -44,6 +44,8 @@ class ReviewLifecycleTests(unittest.TestCase):
 
     def fresh(self):
         api = github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         api.clock = self.clock
         return api
 

@@ -22,6 +22,7 @@ import pilot_reminders as reminders
 import pilot_state as state
 import reasoning
 import round as contracts
+from helpers import result_capable
 
 
 class LocalTests(WorkspaceTest, unittest.TestCase):
@@ -376,6 +377,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         api.clock = fixture.clock
 
         with patch.object(local, "command", side_effect=self.command):
+            result_capable(api)
             packet = pilot.prepare(api, test_pilot.RUN, fixture.clock(), present=False)
         self.assertEqual("fork", packet["target"])
         self.assertEqual("cloud", packet["lane"])
@@ -524,7 +526,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
                 self.assertEqual([], [endpoint for method, endpoint, _ in fixture.transport.writes
                                       if method == "POST"])
 
-    def test_fresh_failed_issue_receipt_allows_next_fork_decision_without_replacing_saved_task(self):
+    def test_fresh_failed_issue_receipt_holds_unchanged_attempt_without_replacing_saved_task(self):
         fixture = test_pilot_github.PilotGitHubTests()
         fixture.setUp()
         chain, operation, task = fixture.issue_worker()
@@ -537,15 +539,13 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
                                     revision="b" * 40, binding=bindings.FORK)
             packet = pilot.prepare(api, test_pilot.RUN, api.clock(), present=False)
 
-        self.assertIsNotNone(packet)
-        self.assertEqual(("fork", "cloud", "issue"), (packet["target"], packet["lane"], packet["observation"]["kind"]))
+        self.assertIsNone(packet)
         saved = state.parse(fixture.transport.comments[0]["body"])["chains"][0]
-        self.assertEqual((chain["id"], 2, 2), (saved["id"], saved["rounds"], len(saved["operations"])))
+        self.assertEqual((chain["id"], 1, 1), (saved["id"], saved["rounds"], len(saved["operations"])))
         self.assertIsNone(saved["child"])
         self.assertEqual((operation["id"], "TASK1", "failed", 2, 1.5, 0),
                          tuple(saved["operations"][0][key]
                                for key in ("id", "taskId", "workerState", "nativeActual", "workerActual", "workerReserved")))
-        self.assertEqual((None, 30), (saved["operations"][1]["taskId"], saved["operations"][1]["nativeReserved"]))
         self.assertEqual([], [endpoint for method, endpoint, _ in fixture.transport.writes if method == "POST"])
 
     def test_failed_issue_with_unknown_worker_cost_does_not_reserve_another_decision(self):
@@ -756,6 +756,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
             api = local.LocalGitHub("fixture-token", 99, 500, "TRACKER99", write=True,
                                     revision="b" * 40, binding=bindings.FORK)
             api.clock = fixture.clock
+            result_capable(api)
             result = local.sweep(
                 api, self.work / "first", "b" * 40,
                 executor=lambda directory, packet, token: local.execute(directory, packet, token, process=process))
@@ -764,6 +765,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
             fresh = local.LocalGitHub("fixture-token", 99, 500, "TRACKER99", write=True,
                                       revision="b" * 40, binding=bindings.FORK)
             fresh.clock = fixture.clock
+            result_capable(fresh)
             second = local.sweep(fresh, self.work / "second", "b" * 40,
                                  executor=lambda *_: self.fail("active saved worker must not infer"))
         self.assertEqual("observed; no inference", second["outcome"])

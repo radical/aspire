@@ -27,6 +27,8 @@ class AuthorTests(unittest.TestCase):
             {"id": 20 + index, "body": "Report or objection", "updated_at": "2026-10-04T00:00:00Z",
              "user": author} for index, author in enumerate(authors)]
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, api.clock(), present=False)
         self.assertEqual(["comment:20:2026-10-04T00:00:00Z", "comment:23:2026-10-04T00:00:00Z",
@@ -49,6 +51,8 @@ class AuthorTests(unittest.TestCase):
             {"id": 42, "user": {"id": 20, "login": "other"}, "state": "CHANGES_REQUESTED",
              "body": "Ignore unrelated tests", "commit_id": "a" * 40, "submitted_at": "2026-10-04T00:00:00Z"}]
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         api.clock = FakeClock()
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, api.clock(), present=False)

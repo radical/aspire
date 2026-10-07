@@ -24,6 +24,8 @@ import pilot_state as state
 import reasoning
 import round as contracts
 import run_report
+import result_collector
+import pilot_results as results
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -83,6 +85,7 @@ class LocalGitHub(github.PilotGitHub):
             github.PilotTransport(token, write=write, binding=binding,
                                   tracker=tracker, authority=authority),
             tracker, authority, node, write=write, binding=binding)
+        self.result_collector = result_collector.LocalCollector(token)
 
     def authority_guard(self):
         require_idle_actions(self.token)
@@ -223,12 +226,59 @@ def execute(directory, packet, token, *, process=subprocess.run, executable="cop
         return evidence
 
 
+def write_result_audit(directory, operation, version, value):
+    # The decoded claim is already bounded. Preserve all sanitized content;
+    # display limits belong to the compact authority report, not this audit.
+    def sanitize(item):
+        if isinstance(item, str):
+            return results.safe_text(item, results.MAX_RESULT * 2)
+        if isinstance(item, list):
+            return [sanitize(entry) for entry in item]
+        if isinstance(item, dict):
+            return {key: sanitize(entry) for key, entry in item.items()}
+        return item
+
+    if not re.fullmatch(r"[0-9a-f]{64}", version):
+        raise ValueError("invalid result audit version")
+    sanitized = sanitize(value)
+    directory = Path(directory)
+    path = directory / f"result-{version}.json"
+    if path.exists():
+        try:
+            saved = contracts.loads(path.read_text(encoding="utf-8"), max_bytes=results.MAX_LOG)
+        except ValueError:
+            saved = None  # Recover a partial legacy write, never accept it as durable.
+        if saved == sanitized:
+            return
+        if saved is not None:
+            raise OSError("conflicting result audit requires human verification")
+    pending = directory / f"result-{version}-{uuid.uuid4()}.pending"
+    try:
+        with pending.open("x", encoding="utf-8") as stream:
+            pending.chmod(0o600)
+            json.dump(sanitized, stream, indent=2, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        pending.replace(path)
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
 def sweep(api, directory, revision, *, executor=execute):
     directory = Path(directory)
     directory.mkdir(parents=True, mode=0o700)
     run = {"repository": github.REPOSITORY, "runId": "local-" + str(uuid.uuid4()),
            "runAttempt": "1", "workflowSha": revision}
     contracts.write_json(directory / "run.json", run)
+    def audit(operation, version, value):
+        write_result_audit(directory, operation, version, value)
+    api.result_audit = audit
     started = issue_pr.stamp(live.clock())
     before = state.new_ledger(api.repository)
     result = {"outcome": "failed"}
@@ -257,7 +307,7 @@ def sweep(api, directory, revision, *, executor=execute):
 def run_sweep(api, directory, run, context, *, executor):
     if not api.enabled():
         api.read_authority()
-        api.reconcile_workers(adopt_children=False)
+        api.reconcile_workers(adopt_children=False, acquisition=False)
         api.persist()
         result = {"outcome": "disabled; billing observation only"}
     else:
@@ -425,6 +475,8 @@ def main(argv=None):
     parser.add_argument("--operation")
     parser.add_argument("--expected-head")
     parser.add_argument("--pr", type=int)
+    parser.add_argument("--publish-worker-results", action="store_true",
+                        help="Explicit unattended result comments for this selected target; default is preview only")
     args = parser.parse_args(argv)
     if args.interval < 30:
         parser.error("interval must be at least 30 seconds")
@@ -465,6 +517,7 @@ def main(argv=None):
                 require_idle_actions(token)
                 api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=True,
                                   revision=revision, binding=binding)
+                api.publish_results = args.publish_worker_results
                 if args.mode == "resume":
                     print(json.dumps(resume(api, args.operation, args.expected_head, live.clock())), flush=True)
                     return 0

@@ -115,7 +115,8 @@ class PilotTransport(live.HTTPTransport):
             if (method == "POST" and self.write and not path.query
                     and re.fullmatch(re.escape(target) + "/issues/" + subject + "/comments", path.path)
                     and isinstance(body, dict) and set(body) == {"body"}
-                    and reminders.valid_body(body["body"], self.binding.repository, int(path.path.split("/")[-2]))):
+                    and (reminders.valid_body(body["body"], self.binding.repository, int(path.path.split("/")[-2]))
+                         or results.valid_report(body["body"], self.binding.repository, int(path.path.split("/")[-2])))):
                 return
             if method in {"POST", "PATCH"} and path.path.startswith(target + "/"):
                 raise ValueError("upstream host publication is not authorized")
@@ -192,8 +193,10 @@ def wait_state(chain, observation, now):
     operation = chain["operations"][-1]
     if "wait" not in operation:
         return None
-    basis = operation["identity"].rsplit(":round:", 1)[0]
-    if basis != fingerprint(observation):
+    basis = contracts.loads(operation["identity"].rsplit(":round:", 1)[0])
+    basis.pop("workerEvidence", None)
+    basis.pop("workerResults", None)
+    if json.dumps(basis, sort_keys=True, separators=(",", ":")) != fingerprint(observation, worker_evidence=False):
         return "superseded"
     return "waiting" if now < state.validate_wait(operation["wait"]) else "due"
 
@@ -206,11 +209,14 @@ def fingerprint(observation, *, worker_evidence=True):
              "feedback": [item["id"] for item in observation["feedback"]]}
     if worker_evidence:
         value["workerEvidence"] = observation["workerEvidence"]
-    if observation.get("workerResults"):
+    if worker_evidence and observation.get("workerResults"):
         # Descriptive snippets can be bounded in both prompts. Bind the receipt's
         # identities/version instead, so fresh settlement rejects changed results.
-        value["workerResults"] = [{key: result[key] for key in (
-            "operation", "taskId", "state", "sessionCount", "sessionIds", "updatedAt")}
+        value["workerResults"] = [{**{key: result[key] for key in (
+            "operation", "taskId", "state", "sessionCount", "sessionIds", "updatedAt")},
+            **({"resultSettlement": {key: result["resultSettlement"][key] for key in (
+                "version", "status", "summary", "reason") if key in result["resultSettlement"]}}
+               if "resultSettlement" in result else {})}
             for result in observation["workerResults"]]
     review = observation.get("copilotReview")
     if review is not None and (review["requested"] or review["inProgress"] or review["receipts"]):
@@ -222,6 +228,13 @@ def fingerprint(observation, *, worker_evidence=True):
 
 class PilotGitHub:
     inline_repairs = True
+    result_collector = None
+    publish_results = False
+
+    @property
+    def result_capable(self):
+        collector = self.result_collector
+        return collector is not None and getattr(collector, "capable", True)
 
     def __init__(self, transport, tracker, authority_id, tracker_node, *, write=False, binding=bindings.FORK):
         if binding not in {bindings.FORK, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
@@ -260,6 +273,8 @@ class PilotGitHub:
         self.clock = live.clock
         self.reminder_delay = 60
         self.worker_results = {}
+        self.worker_result_heads = {}
+        self.worker_result_versions = {}
         self.worker_revisions = {}
         self.admission_reasons = {}
 
@@ -351,6 +366,7 @@ class PilotGitHub:
             hands_off = "shepherd-hands-off" in [label["name"] for label in value["labels"]]
             active = active and origin_managed
         feedback, feedback_attention, feedback_evidence = [], review_attention, []
+        feedback_revisions = {}
         endpoints = [(f"{self.prefix}/issues/{number}/comments", "comment")]
         if kind == "pr":
             endpoints.append((f"{self.prefix}/pulls/{number}/comments", "review-comment"))
@@ -377,10 +393,16 @@ class PilotGitHub:
                     continue
                 if self.owned(comment) and reminders.valid_body(comment.get("body"), self.repository, number):
                     continue
+                if results.owned_report(self, chain, comment):
+                    continue
                 feedback_evidence.append(comment)
                 identity = f"{prefix}:{comment['id']}:{comment['updated_at']}"
                 if results.eligible(chain, identity, self.worker_results):
                     feedback.append({"id": identity, "body": comment["body"][:2000], "url": comment.get("html_url", "")})
+                    feedback_revisions[identity] = hashlib.sha256(json.dumps(
+                        [comment["body"], {key: comment.get(key) for key in (
+                            "path", "line", "start_line", "original_line", "side", "commit_id")}],
+                        sort_keys=True).encode()).hexdigest()
                     for key in ("path", "line", "start_line", "original_line", "side", "commit_id"):
                         if key in comment:
                             feedback[-1][key] = comment[key]
@@ -454,6 +476,10 @@ class PilotGitHub:
                     if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": "Workflow: " + run["conclusion"] + "; cause unknown",
                                          "url": run["url"]})
+                        # The same run ID can execute again without exposing jobs.
+                        # Bind only this verified run's attempt, not aggregate
+                        # workflow metadata that unrelated/cosmetic changes alter.
+                        feedback_revisions[identity] = str(run["runAttempt"])
             for status in latest_statuses.values():
                 pending_ci |= status["state"] == "pending"
                 if status["state"] in {"failure", "error"}:
@@ -478,6 +504,7 @@ class PilotGitHub:
                     identity = f"review:{review['id']}:{review['submitted_at']}:{version}"
                     if results.eligible(chain, identity, self.worker_results):
                         feedback.append({"id": identity, "body": review["body"][:2000], "url": review.get("html_url", "")})
+                        feedback_revisions[identity] = version
             requested = {reviewer["id"] for reviewer in value["requested_reviewers"]}
             approved = any(review["state"] == "APPROVED"
                            and review["user"]["id"] not in {authors.REVIEWER_ID, authors.WORKER_ID}
@@ -490,8 +517,7 @@ class PilotGitHub:
             ) and all(status["state"] == "success" for status in latest_statuses.values())
             ready = ci_green and approved and not requested and not value.get("requested_teams") and not value["draft"] and value["mergeable"] is True and not any(
                 review["state"] == "CHANGES_REQUESTED" for review in latest.values())
-        attention = feedback_attention or (
-            "Feedback batch exceeds 30 items; human attention required." if len(feedback) > 30 else None)
+        attention = feedback_attention
         if attention is not None:
             # Do not send a truncated repair batch or persist its bodies. This
             # item's visible wait must not stop other chains in the cheap sweep.
@@ -526,17 +552,19 @@ class PilotGitHub:
             allow_nan=False).encode()).hexdigest()
         observed = {"number": number, "kind": kind, "node": node, "head": head, "description": description, "managed": active,
                 "ciEvidence": ci_revision, "feedbackEvidence": feedback_revision,
+                "feedbackRevisions": {item["id"]: feedback_revisions[item["id"]] for item in feedback
+                                      if item["id"] in feedback_revisions},
                 "originManaged": origin_managed, "handsOff": hands_off,
                 "state": value["state"], "feedback": sorted(feedback, key=lambda item: item["id"]), "ready": ready,
                 "attention": attention, "pendingCI": pending_ci,
                 "ciWait": ci_wait, "reviewOnly": ci_wait is not None, "diagnostics": diagnostics,
                 "approval": workflow["approval"], "workflowAttention": workflow["attention"],
                 "actionable": active and not pending_ci and attention is None and workflow["attention"] is None and workflow["approval"] is None and (
-                    bool(feedback) if kind == "pr" else initial_due),
+                    bool(feedback) if kind == "pr" else initial_due or bool(feedback)),
                 "title": value.get("title", "")[:300], "body": (value.get("body") or "")[:2000],
                 "url": value.get("html_url", ""), "headRef": value["head"]["ref"] if kind == "pr" else None,
                 "workHistory": work_history}
-        observed["workerResults"] = results.context(chain, self.worker_results, observed)
+        observed["workerResults"] = results.context(chain, self.worker_results, observed, self.worker_result_versions)
         observed["workerEvidence"] = [{"operation": operation["id"], "revision": self.worker_revisions[operation["id"]]}
                                       for operation in chain["operations"] if operation["id"] in self.worker_revisions]
         if kind == "pr":
@@ -553,12 +581,22 @@ class PilotGitHub:
             observed["ready"] &= observed["attention"] is None
             observed["actionable"] &= observed["attention"] is None and observed["copilotReview"]["state"] not in {
                 "waiting", "uncertain", "blocked", "limit", "unavailable"}
+        results.gate(chain, observed)
+        if len(observed["feedback"]) > 30:
+            # Saved attempt holds are not a repair batch. Cap only actionable
+            # items, after binding the complete raw inventories for freshness.
+            attention = observed["attention"] or "Feedback batch exceeds 30 items; human attention required."
+            observed.update(attention=attention, feedback=[], actionable=False, ready=False)
+        observed["feedbackRevisions"] = {
+            item["id"]: feedback_revisions[item["id"]] for item in observed["feedback"]
+            if item["id"] in feedback_revisions}
         timed = wait_state(chain, observed, self.clock())
         if timed == "waiting":
             observed["actionable"] = False
         elif timed in {"due", "superseded"} and kind == "issue":
             observed["actionable"] = (active and not pending_ci and attention is None
                                      and workflow["attention"] is None and workflow["approval"] is None)
+        results.gate(chain, observed)
         return observed
 
     def check_diagnostics(self, checks):
@@ -583,6 +621,9 @@ class PilotGitHub:
                 for key in ("title", "summary", "text"):
                     if output.get(key) is not None and not isinstance(output[key], str):
                         raise IncompleteInventory("malformed check output")
+                item["outputRevision"] = hashlib.sha256(json.dumps(
+                    [output.get(key) for key in ("title", "summary", "text")],
+                    ensure_ascii=True, allow_nan=False).encode()).hexdigest()
                 # REST returns [{path, annotation_level, title, message,
                 # raw_details, ...}], with nullable text and NO id.
                 # https://docs.github.com/en/rest/checks/runs#list-check-run-annotations
@@ -737,6 +778,8 @@ class PilotGitHub:
         if len(correlations) != len(set(correlations)):
             raise ValueError("duplicate task sessions")
         receipt = results.summarize(task, operation, pr)
+        self.worker_result_heads[operation["id"]] = pr["head"]["sha"] if pr is not None else None
+        self.worker_result_versions[operation["id"]] = results.task_version(task)
         self.worker_revisions[operation["id"]] = hashlib.sha256(json.dumps(
             task, sort_keys=True, ensure_ascii=True, allow_nan=False).encode()).hexdigest()
         if task["state"] in state.TERMINAL:
@@ -746,9 +789,11 @@ class PilotGitHub:
     def admission_slots(self, head_ref):
         return state.worker_slots(self.ledger)
 
-    def reconcile_workers(self, *, adopt_children=True):
+    def reconcile_workers(self, *, adopt_children=True, acquisition=True):
         details = {}
         self.worker_results = {}
+        self.worker_result_heads = {}
+        self.worker_result_versions = {}
         self.worker_revisions = {}
         for chain in self.ledger["chains"]:
             for operation in chain["operations"]:
@@ -794,11 +839,16 @@ class PilotGitHub:
                     operation["state"] = "waiting"
                 else:
                     state.finish(operation, "completed" if task["state"] == "completed" else "failed")
+                    if acquisition:
+                        results.settle(self, chain, operation, task)
                     # Failed workers can still report a child PR.
-                    if chain["kind"] == "issue" and chain["child"] is None and adopt_children and self.write:
+                    if (acquisition and chain["kind"] == "issue" and chain["child"] is None and adopt_children and self.write
+                            and operation["workerState"] in state.TERMINAL):
                         # Artifact verification can fail independently of a verified billing receipt.
                         self.persist()
                         self.adopt_artifact(task, chain, operation)
+        if acquisition:
+            results.reconcile_publications(self)
 
     def adopt_artifact(self, task, chain, operation):
         pulls = [artifact["data"] for artifact in task["artifacts"]
@@ -974,7 +1024,9 @@ class PilotGitHub:
         elif observation.get("ciWait") is not None and not observation["actionable"]:
             blocker = observation["ciWait"] + " No inference."
         elif not observation["actionable"]:
-            blocker = ("Copilot review request due; no inference." if observation.get("copilotReview", {}).get("state") == "due"
+            blocker = ("Matching saved worker attempt held; substantive new evidence required. No inference."
+                       if observation.get("attemptHold") else
+                       "Copilot review request due; no inference." if observation.get("copilotReview", {}).get("state") == "due"
                        and observation["copilotReview"]["green"] and not observation["copilotReview"]["draft"]
                        else "Waiting for human review / supported new feedback; no inference.")
         elif observation.get("reviewOnly"):

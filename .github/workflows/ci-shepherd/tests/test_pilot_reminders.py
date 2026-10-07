@@ -50,7 +50,8 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
         chain = state.adopt(api.ledger, number, "pr", value["node_id"])
         api.persist()
         self.api, self.transport, self.chain = api, transport, chain
-        self.run = {"id": 42, "head_sha": value["head"]["sha"], "status": "completed", "conclusion": "action_required",
+        self.run = {"id": 42, "run_attempt": 1, "head_sha": value["head"]["sha"],
+                    "status": "completed", "conclusion": "action_required",
                     "repository": {"id": api.repository_id, "full_name": api.repository},
                     "html_url": f"https://github.com/{api.repository}/actions/runs/42"}
         self.set_runs([self.run])
@@ -1115,5 +1116,5 @@ class ReminderTests(WorkspaceTest, unittest.TestCase):
         _, log = self.tick()
         self.assertEqual([], self.posts, "a resumed task must cancel the stale worker-result reminder, not post it")
         self.assertIn("not sent; fresh guard unavailable", log)
-        self.assertIn("subject basis changed", log)
+        self.assertIn("human blocker changed or unknown before notification", log)
         self.assertEqual("observed", chain["reminder"]["sendState"])

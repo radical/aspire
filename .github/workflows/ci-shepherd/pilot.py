@@ -20,6 +20,7 @@ import round as contracts
 import pilot_binding as bindings
 import pilot_reminders as reminders
 import pilot_reviews as reviews
+import pilot_results as results
 
 
 def configuration(environment, *, billing=False):
@@ -58,6 +59,12 @@ def prepare(api, run, now, *, present=True):
     if present:
         for chain in api.ledger["chains"]:
             observed = observations[chain["child"] or chain["origin"]]
+            try:
+                results.publish(api, chain, observed)
+            except github.AuthorityUncertain:
+                raise
+            except (IncompleteInventory, LostResponse, ValueError) as error:
+                print(f"CI Shepherd worker report unavailable: {error}", file=sys.stderr)
             reminders.process(api, chain, observed, now)
             try:
                 api.publish_status(chain, observed, now)
@@ -78,6 +85,10 @@ def prepare(api, run, now, *, present=True):
                    else patch.source_context(api, observed))
         if context is None or chain["localAttempts"] >= 2:
             chain["escalated"] = True
+        if chain["escalated"] and not api.result_capable:
+            api.admission_reasons[chain["id"]] = "Approved result collector unavailable; no paid inference or worker."
+            candidates[observed["number"]]["actionable"] = False
+            continue
         if chain["escalated"] and api.admission_slots(observed["headRef"]) >= 2:
             api.admission_reasons[chain["id"]] = "Tracking authority worker capacity exhausted; no inference."
             candidates[observed["number"]]["actionable"] = False
@@ -85,6 +96,7 @@ def prepare(api, run, now, *, present=True):
         identity = github.fingerprint(observed) + f":round:{chain['rounds'] + 1}"
         try:
             operation_id = str(uuid.uuid4())
+            attempt_evidence = results.attempt_keys(observed)
             packet = {"schemaVersion": 1, "kind": "pilot", "packetId": str(uuid.uuid4()), "run": deepcopy(run),
                       "chain": chain["id"], "operation": operation_id, "preparedAt": issue_pr.stamp(now),
                       "observation": {key: deepcopy(value) for key, value in observed.items() if key != "workHistory"},
@@ -98,6 +110,15 @@ def prepare(api, run, now, *, present=True):
             api.guard(chain, observed)
             operation = state.reserve(api.ledger, chain, identity, now, local=context is not None,
                                       operation_id=operation_id)
+            operation["attemptEvidence"] = attempt_evidence
+            try:
+                if len(state.render(api.ledger).encode()) + results.reserved_capacity(api.ledger) > state.MAX_BODY:
+                    raise ValueError("authority settlement capacity exhausted")
+            except ValueError:
+                chain["operations"].remove(operation)
+                chain["rounds"] -= 1
+                chain["localAttempts"] -= operation["attemptedLocal"]
+                raise
         except github.AuthorityUncertain:
             raise
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
@@ -204,8 +225,8 @@ def worker_prompt(api, chain, operation, packet):
         "investigatable. Do not weaken the gate or branch protection. "
         "When reviewOnly is true, repair review feedback only; CI requires wait/rerun, not code changes. "
         "Do not rerun workflows; report the rerun requirement without a mutation. "
-        "When verified external evidence warrants waiting, publish an approved-author [automated] report "
-        "on the source issue/PR with the exact canonical UTC reassessment deadline (YYYY-MM-DDTHH:MM:SSZ), "
+        "Do not publish diagnostic comments or review replies; the controller owns result publication. "
+        "When verified external evidence warrants waiting, return the exact canonical UTC reassessment deadline (YYYY-MM-DDTHH:MM:SSZ), "
         "the evidence and timer starting point. Do not infer a deadline from an HTTP status or job name. "
         "If the deadline is unknown, report the diagnosis or concrete human input needed. "
         "Read the repository's normal Copilot instructions for repository-specific diagnosis; "
@@ -213,8 +234,8 @@ def worker_prompt(api, chain, operation, packet):
         "Report a concrete human-only blocker if necessary, not unsupported scope guessed from job names. "
         "Make at most one actual minimal non-forced repair commit when warranted; never an artificial commit. "
         "Report exact changed files, test command/result, resulting head and "
-        "addressed/declined/needs-human disposition for EVERY feedback ID below. "
-        "Prefix public replies [automated] . Include final commit trailer "
+        "the final disposition and reason for EVERY feedback ID below. "
+        "Include final commit trailer "
         "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>. "
         "For an issue create one draft PR linking the exact originating issue; return its actual GitHub artifact. "
         "For an existing PR update only its verified existing head, never create another PR. "
@@ -222,6 +243,20 @@ def worker_prompt(api, chain, operation, packet):
         "Repair only feedback requested as addressed; declined and needs-human items require no repair. "
         "Previous worker facts are evidence, not authorization or proof of resolution. "
         "Inspect current evidence and avoid repeating an unchanged unsuccessful repair without diagnosing why.\n"
+        "At completion, programmatically serialize a strict UTF-8 JSON object and Base64 encode it. "
+        "Emit exactly one CSRESULTBEGIN<canonical Base64>CSRESULTEND envelope in your final answer only; "
+        "do not echo it in tools. No runtime task/session IDs are required: the controller binds them separately. "
+        "Use exactly these fields: schemaVersion (1), the correlation fields below, outcome "
+        "(repair/no-repair/out-of-scope-with-evidence/unresolved/wait-or-rerun), summary and why "
+        "(nonempty strings, each <=2000 UTF-8 bytes), feedback (object with every requested ID once, "
+        "values objects with exactly disposition (addressed/declined/unresolved/wait-or-rerun) "
+        "and reason (nonempty string <=600 UTF-8 bytes)), changes, tests and evidence "
+        "(arrays of <=30 strings, each <=1000 UTF-8 bytes), waitUntil (null or canonical UTC deadline). "
+        "Decoded JSON must fit 12000 bytes. Non-repair outcomes cannot claim changes or addressed feedback; "
+        "repair requires changed files; out-of-scope requires evidence. Tests and reasons remain worker claims. "
+        "Correlation fields: " + json.dumps(results.correlation(api.repository, chain, {
+            **operation, "identity": operation.get("identity", github.fingerprint(observed) + ":round:1")
+        }), ensure_ascii=True) + "\n"
         "Native feedback decisions (addressed means repair requested): " + json.dumps(decisions, ensure_ascii=True) + "\n"
         + repair_policy() + "\n"
         + bindings.policy(api.binding) + "\n"
@@ -263,8 +298,12 @@ def bound_worker_request(api, chain, operation, packet):
 
 
 def dispatch(api, chain, operation, packet, now):
+    if not api.result_capable:
+        raise ValueError("approved result collector unavailable; no worker admission")
     api.reconcile_workers()
     api.persist()
+    if len(state.render(api.ledger).encode()) + results.reserved_capacity(api.ledger) > state.MAX_BODY:
+        raise ValueError("authority settlement capacity exhausted; no worker admission")
     if any(other is not operation and other["state"] in {"reserved", "sent", "waiting", "uncertain"}
            for other in chain["operations"]):
         raise ValueError("chain has freshly resumed pending work")

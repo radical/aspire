@@ -7,7 +7,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from github import IncompleteInventory, LostResponse, Response
-from helpers import FakeClock, WorkspaceTest, reconciliation_evidence
+from helpers import FakeClock, WorkspaceTest, reconciliation_evidence, result_capable
 from test_pilot import RUN
 from test_pilot_github import Transport, pr
 from test_rate_limit import WindowOpener
@@ -52,6 +52,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         transport.values["repos/radical/aspire/issues/7/comments"] = [{
             "id": 20, "body": "Please fix", "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}}]
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        result_capable(api)
         api.clock = FakeClock()
         return api, transport
 
@@ -59,6 +60,7 @@ class TrackedOnlyTests(WorkspaceTest, unittest.TestCase):
         fresh = github.PilotGitHub(transport or api.transport, api.tracker, api.authority_id, api.tracker_node,
                                    write=True, binding=api.binding)
         fresh.clock = api.clock
+        fresh.result_collector = api.result_collector
         return fresh
 
     def seed_worker(self, api, transport, *, number=None, completed=False):

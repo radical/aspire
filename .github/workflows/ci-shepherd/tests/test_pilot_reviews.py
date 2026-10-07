@@ -54,6 +54,8 @@ class ReviewTests(unittest.TestCase):
 
     def prepare(self, transport, clock):
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         api.clock = clock
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, clock(), present=False)
@@ -202,6 +204,8 @@ class ReviewTests(unittest.TestCase):
             {"id": 20, "body": "Repair empty input", "user": {"id": 1472, "login": "radical"},
              "updated_at": "2026-10-04T00:00:00Z"}]
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         api.clock = clock
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, clock(), present=False)
@@ -267,6 +271,8 @@ class ReviewTests(unittest.TestCase):
             {"id": 20, "body": "Repair empty input", "user": {"id": 1472, "login": "radical"},
              "updated_at": "2026-10-04T00:00:00Z"}]
         api = github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         api.clock = clock
         with redirect_stdout(io.StringIO()):
             packet = pilot.prepare(api, RUN, clock(), present=False)

@@ -64,14 +64,16 @@ When the packet says reviewOnly, address review feedback only, not red CI.
 Do not generate commands, arbitrary API bodies or claim worker billing/caps.
 Cloud addressed dispositions are requests, not proof that work has happened.
 Verified workerResults describe saved tasks, artifacts, optional session errors
-and whether the source head changed. They do not contain a final worker narrative:
-the task API does not expose one. Missing narrative or unchanged head alone is
-not a human-only blocker. Evaluate current checks/review evidence and these
-results before continuing a repair, declining irrelevant feedback, or handing
-off for a concrete human-only blocker. Diagnose why a prior attempt left work
-unfinished; do not blindly request the same repair again. Legacy completion
-entries may appear in feedback for re-evaluation; they were controller bookkeeping,
-not a worker or human finding. Explicit handoffs and declines remain binding.
+and whether the source head changed. Result settlements can contain untrusted
+rendered-log explanations; these are worker claims, not authenticated final
+messages, verified tests, scope decisions or proof of readiness. Missing narrative
+or unchanged head alone is not a human-only blocker.
+The controller holds matching saved attempts until substantive new source or
+feedback/check evidence appears. Do not request repeated unchanged investigation,
+or treat collection retries, result versions, billing or controller report comments
+as new repair evidence. Unrelated new feedback remains eligible. Evaluate current
+checks/review evidence before a repair or a concrete human-only handoff.
+Explicit handoffs and declines remain binding.
 For a PR, an all-declined batch with human or cloud completes as a no-op:
 the host records declined feedback without a worker, sticky handoff or reminder.
 Choose human with at least one needs-human disposition for a genuine PR blocker.

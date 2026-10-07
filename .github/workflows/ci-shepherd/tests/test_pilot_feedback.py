@@ -216,6 +216,10 @@ class ReviewFeedbackTests(unittest.TestCase):
                 fresh = fixture.fresh(api)
                 with redirect_stdout(io.StringIO()):
                     packet = pilot.prepare(fresh, fixtures.RUN, api.clock(), present=False)
+                if change == "reopened":
+                    self.assertIsNone(packet, "Reopening alone does not justify repeating the same saved attempt")
+                    self.assertEqual(1, fresh.ledger["chains"][0]["rounds"])
+                    continue
                 self.assertEqual([f"review-comment:{expected}:2026-10-04T00:00:00Z"],
                                  [item["id"] for item in packet["observation"]["feedback"]])
                 self.assertEqual({}, fresh.ledger["chains"][0]["dispositions"])
@@ -234,9 +238,11 @@ class ReviewFeedbackTests(unittest.TestCase):
                     fresh = fixture.fresh(api)
                     with redirect_stdout(io.StringIO()):
                         packet = pilot.prepare(fresh, fixtures.RUN, api.clock(), present=False)
-                    self.assertEqual(["review-comment:31:2026-10-04T00:00:00Z"],
-                                     [item["id"] for item in packet["observation"]["feedback"]])
-                    receipt = packet["observation"]["workerResults"][0]
+                    self.assertIsNone(packet)
+                    observed = fresh.observe(fresh.ledger["chains"][0])
+                    self.assertFalse(observed["ready"])
+                    self.assertEqual([], observed["feedback"])
+                    receipt = observed["workerResults"][0]
                     self.assertEqual(outcome, receipt["state"])
                     self.assertFalse(receipt["narrativeAvailable"])
                     if outcome != "completed":
@@ -308,6 +314,8 @@ class ReviewFeedbackTests(unittest.TestCase):
         fixture = PilotGitHubTests()
         fixture.setUp()
         api, transport = fixture.api, fixture.transport
+        from helpers import result_capable
+        result_capable(api)
         chain, _, _ = fixture.issue_worker()
         api.clock = fixtures.FakeClock()
         api.reconcile_workers()

@@ -45,7 +45,8 @@ below; a policy update alone never reopens a handoff. The existing observed
 stop-to-adopt transition also retains the same chain, never a new allowance.
 
 The repository authority tracks chain mappings, operation identities, billing,
-reservations and disposition IDs, not log/feedback bodies. Its body is limited
+reservations, disposition IDs and compact result settlements, not raw logs or
+feedback bodies. Its body is limited
 to60,000 UTF-8 bytes; exhaustion requires human attention, never history
 truncation or a budget reset. Per-chain presentation comments are updated in
 place and are not another authority. Exact owned presentation IDs/markers are
@@ -146,9 +147,10 @@ GraphQL requests overall. Unapproved authors' comments can appear in the connect
 without entering the repair batch.
 
 Resolved comments are omitted from the current repair batch, not permanently
-marked addressed in the authority. Reopening a thread or receiving a new comment
-ID makes that feedback eligible again, subject to existing explicit dispositions
-and admission limits. Missing, conflicting, stale or incomplete thread evidence
+marked addressed in the authority. A new comment ID can become eligible.
+Reopening an already attempted thread without substantive new evidence does not
+authorize repeating that worker's investigation. Existing dispositions and
+admission limits still apply. Missing, conflicting, stale or incomplete thread evidence
 visibly pauses that chain without paid inference; other adopted chains can
 continue. Fresh effect guards reread resolution state before dispatch.
 
@@ -158,16 +160,160 @@ previous dispositions for the old body. Historical unversioned dispositions
 remain intact but cannot suppress a newly version-bound review body.
 
 A cloud decision's `addressed` disposition means **repair requested**, not verified
-resolved. A completed worker does not prove its patch succeeded: still-unresolved
-comments and current-head failures remain eligible for another bounded decision.
-The controller uses verified saved-task states, session errors, PR/branch
-artifacts and fresh PR facts. Missing narrative is not success or failure.
+resolved. Terminal worker lifecycle, result acquisition, publication and billing
+are separate. Completion cannot prove a fix, tests or green CI. A failed collector
+cannot prove that the worker failed or performed no work.
 
-The task integration has no final-response or task-log reader; the
-[documented task API](https://docs.github.com/en/rest/agent-tasks/agent-tasks)
-provides the state, errors and artifacts used above. Published ordinary comments
-and review bodies can supply additional approved reports; no final task narrative
-or log endpoint is invented.
+### Worker result handoff
+
+`pilot_results.py` settles verified saved tasks before admitting another native
+decision. Workers return a single `CSRESULTBEGIN` / `CSRESULTEND` envelope containing
+canonical Base64 of strict UTF-8 JSON. The decoded contract is limited to 12,000
+bytes. JSON duplicate keys, unknown fields, contradictory outcomes, incomplete
+feedback, incorrect correlation, malformed encoding and multiple envelopes are
+rejected, never repaired by guessing.
+
+The versioned contract binds repository, subject number/node, source head (or
+issue-content digest), chain, operation and origin. The controller independently
+verifies the runtime task and session; workers do not supply those identities.
+Every dispatched feedback ID has exactly one disposition and nonempty reason.
+Outcomes are `repair`, `no-repair`, `out-of-scope-with-evidence`, `unresolved` and
+`wait-or-rerun`. Files, tests, evidence and explanations remain worker-reported.
+PR heads, platform errors and artifact mapping are independently observed;
+changed heads are not attributed to the worker without additional evidence.
+
+The local `result_collector.py` adapter uses the documented
+[`gh agent-task view SESSION -R REPOSITORY --log`](https://cli.github.com/manual/gh_agent-task_view).
+Only gh 2.101.0 is supported. Before each collection, it checks that both the
+explicit `radical` keyring credential and the ambient keyring credential equal the
+controller's selected token in memory. Only then are process-scoped `GH_TOKEN` /
+`GITHUB_TOKEN` overrides omitted for the CLI. No authentication configuration is
+changed, and credentials are neither printed nor stored. Commands have a 60-second
+timeout and a combined stdout/stderr bound of 1,000,000 bytes; credential/version
+probes have tighter bounds.
+After collection, a second exact task GET must confirm the same task/session
+version is still terminal. Changed or unavailable freshness retains an unknown
+worker hold and cannot authorize a decision or stale child adoption.
+
+**Rendered task logs are not authenticated final-message provenance.** A perfectly
+bound envelope appearing in tool output is still `untrusted-task-log` evidence.
+It cannot resolve feedback, establish scope, authorize reruns, supply a trusted
+wait deadline or prove readiness. Missing-envelope legacy text is narrative-only
+evidence and acquisition remains incomplete.
+
+Acquisition intent and attempt count are persisted before reading. Only positively
+identified transient transport errors retry the same session, at most three
+attempts across restart. Authentication, identity, unsupported versions, malformed
+content and size violations do not automatically retry. Metadata timestamp churn
+does not reset a failed same-session acquisition. Multi-session tasks are
+incomplete in v1: no arbitrary first/last session is selected.
+
+Fallback is deterministic and read-only: verified task/session metadata, reported
+errors and independently checked artifacts remain available. On collection failure,
+the local adapter independently uses public `gh api` Actions reads and
+`gh run view RUN -R REPOSITORY --attempt ATTEMPT --log`, with the already selected
+credential. No keyring or authentication configuration changes are made.
+
+The fallback has a shared 60-second / 1,000,000-byte budget and a complete inventory
+limit of ten branch/source-head candidates. Candidate runs must independently match
+repository ID/name, source SHA, session branch, the platform `dynamic` event and
+`dynamic/copilot-swe-agent/copilot` workflow. Runner-generated environment fields in
+the pre-processing `Start MCP Servers` step must identify exactly the verified
+session and repository. A copied session ID in worker output is insufficient.
+Only one matching run is accepted; run attempt/lifecycle and task/session freshness
+are checked again after log retrieval.
+
+Reports retain bounded host tool-completion labels and host-reported errors, with a
+controller-constructed run/attempt link. Tool labels are evidence, not a complete
+explanation, proof of a fix or PR readiness. Signed URLs, credentials, arbitrary
+links and raw host logs are not retained. Wrong identity, unavailable/oversized
+inventories, ambiguous runs, changed attempts and unsupported host log formats
+remain unknown. No run is guessed from a title, branch or head alone, and no fallback
+inference, new worker or private API endpoint is used. Issue-content digests cannot
+establish an Actions source SHA, so their fallback remains unavailable.
+
+Matching saved cloud attempts hold the same subject/node/head-or-issue-digest and
+feedback until substantive new evidence appears. Check execution IDs and raw
+output/annotation revisions, independently observed workflow run attempts for
+failures without check diagnostics, or changed approved feedback content, allow
+reassessment. Timestamps, result versions, billing, task churn and controller
+reports do not. Cosmetic check/workflow names and unrelated workflow changes do
+not reopen work. Missing or malformed failed-run attempts remain unknown rather
+than reopening work. The 30-item repair-batch cap applies after saved attempt
+holds; complete raw inventories still bind freshness and readiness.
+Per-item approved comment/review digests bind complete content and inline locations before display
+truncation, so a substantive suffix edit is not lost. Incomplete diagnostic
+retrieval cannot reopen an attempted check.
+Unrelated new feedback remains eligible, and all raw checks/reviews remain in
+readiness. Legacy holds apply only to matched saved worker attempts, not taskless
+native operations, inline repairs or another source subject/head.
+Legacy comment/review attempts without per-item evidence conservatively match
+stable IDs despite timestamp churn; they cannot distinguish same-ID edits and
+require a new ID or source head to reopen.
+
+`pilot_state.py` keeps compact acquisition/publication receipts within the existing
+60,000-byte authority. New cloud-capable operations reserve 4,000 bytes of settlement
+headroom each, including outstanding operations, before admission and again before
+dispatch. Legacy overflow records a minimal incomplete hold when space permits;
+if even that cannot fit, the saved attempt itself still holds matching work.
+Legacy authorities must have room for a full settlement before acquisition; fitting
+only a pending receipt is insufficient.
+Billing is not refunded or blocked by result acquisition. Local sweep audit files
+contain sanitized claim JSON, never raw transcripts, credentials or worker URLs.
+Each full result settlement is capped at 3,000 serialized JSON bytes, including
+Unicode escaping; longer report details are compacted, with the sanitized full
+claim retained only in the local audit. Compact human-facing reports also retain
+the claimed deadline, up to two evidence entries and feedback ID/disposition/reason
+mappings, with retained/total counts and explicit clipping notices. Budget pressure
+can reduce those retained entries; claims never authorize dispositions or timers.
+Report validation requires disclaimers in their fixed structural positions, even
+when a worker claim quotes the same phrases. Feedback exclusion still requires
+the verified controller author and a persisted operation/version/comment receipt;
+a copied report or marker is not sufficient.
+`run_report.py` includes these bounded claims, acquisition attempts and publication
+receipts.
+
+Full-claim audit durability is separate from result acquisition. Audit intent and
+a claim revision are saved before the local atomic, flushed write. Partial files
+are not accepted as durable, and conflicting complete audits require human review.
+An audit write failure permits at most three independent same-session recovery
+reads across restart, without consuming another worker/native round or changing
+the acquisition count. A changed claim or task version cannot substitute new
+content during recovery. Publication waits while audit durability is pending;
+exhausted recovery requires human attention. No raw/full claim is copied into the
+authority to recover a failed disk write. Disabled billing-only sweeps explicitly
+disable acquisition and publication reconciliation, consuming no collection or
+audit-recovery attempts.
+
+### Controller-owned result comments
+
+Result comments are **preview-only by default**. For a selected local target and
+its explicit existing authority, `--publish-worker-results` enables unattended
+publication without prompts. Workers must not publish diagnostic comments or
+review replies; ordinary repair commits and issue-created draft PRs retain their
+existing authorization.
+
+Reports lead with a summary, carry `[automated]`, separate worker claims from
+platform facts and link only the verified task and independently mapped host run.
+Adoption, current source identity,
+origin management and authority are freshly guarded. Publication intent is
+persisted before POST; uncertain responses reconcile against exact owned bodies,
+never resend just because a comment is absent. Publication failure does not
+redispatch a worker or unsettle its result.
+
+The upstream transport permits only this bounded report structure in addition to
+existing fixed reminders, not arbitrary comments or comment edits. Feedback
+exclusion requires the approved controller author, a persisted comment ID and valid
+report structure/correlation; a marker alone cannot hide human feedback. Up to three
+prior published result versions per operation are retained. An unresolved
+publication or exhausted history prevents replacement acquisition rather than
+discarding its receipt. A terminal result report suppresses a duplicate
+worker-result reminder, not unrelated approval, adoption, input or wait episodes.
+
+The hosted lane has no approved credential-compatible collector adapter and fails
+closed **before new cloud-worker native inference or dispatch**. Existing tracked
+workers still reconcile lifecycle and billing. Hosted inline repair remains
+separate. Enabling the feature does not resume a human-stopped campaign.
 
 ## Copilot review requests
 
@@ -369,9 +515,10 @@ check/status/workflow text, task facts and metadata are not deadline witnesses.
 The deadline must still be future after the final fresh guard.
 Reasons are nonempty plain text, at most 500 characters.
 
-Coding workers read normal repository instructions. When verified external
-evidence establishes a wait, they publish an approved-author `[automated]`
-report with the concrete UTC deadline, evidence and timer starting point.
+Coding workers read normal repository instructions and return any claimed wait,
+evidence and timer starting point in their result. An untrusted task-log claim is
+not an approved deadline witness. Controller result comments are excluded from
+repair feedback and cannot independently authorize a timed wait.
 
 The native process remains isolated with no custom instructions. It consumes
 visible reports, not repository-specific feed rules or invented status delays.
@@ -380,13 +527,14 @@ Billing persists first. A valid wait is an optional record on a completed
 native operation, with no task, worker reservation or permanent feedback
 decline.
 
-Deferred native operations do not displace earlier verified worker evidence.
-Legacy completion feedback remains eligible with its original dispositions,
-including when that feedback contains the deadline report itself.
+Deferred native operations do not displace earlier verified worker evidence or
+remove matching attempt holds. Unrelated approved deadline feedback retains its
+original dispositions and can wake at expiry.
 
 Unchanged restarted sweeps before the deadline spend no inference,
 round, task or review request. Existing logs/status show the deadline and
-reason without adding an upstream general-comment writer.
+reason independently of result publication. Changes to worker result/lifecycle
+metadata alone do not causally supersede the deadline.
 
 Explicit wait provenance prevents native-handoff reminders and manual
 handoff resume. Child-adoption confirmation may clear its own uncertainty,
@@ -565,7 +713,7 @@ old work. Timed waits are not resumable handoffs.
 
 Local execution uses tracked cloud workers for both targets. Inline
 `python-labels-v1` repair remains hosted-only. Disabled or read-only observation
-reconciles saved task receipts without sending child-adoption labels. Local
+reconciles saved task metadata without collecting logs or sending child-adoption labels. Local
 label writes also recheck clean source, global enablement and hosted-idle
 exclusion without preventing verified billing from being saved.
 

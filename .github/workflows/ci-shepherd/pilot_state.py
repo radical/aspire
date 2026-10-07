@@ -3,6 +3,7 @@
 from datetime import timedelta
 import json
 import math
+import re
 import uuid
 
 import issue_pr
@@ -112,7 +113,31 @@ def validate(ledger):
                                        "nativeReserved", "workerActual", "workerReserved", "taskId",
                                        "workerState", "sessionId", "workerAt", "attemptedLocal", "workerVersion"}
                             | ({"feedbackDecisions"} if "feedbackDecisions" in operation else set())
+                            | ({"attemptEvidence"} if "attemptEvidence" in operation else set())
+                            | ({"result"} if "result" in operation else set())
+                            | ({"resultReports"} if "resultReports" in operation else set())
                             | ({"wait"} if "wait" in operation else set()), "pilot operation")
+            if "result" in operation:
+                import pilot_results
+                pilot_results.validate_record(operation["result"])
+                if operation["taskId"] is None:
+                    raise ValueError("result requires saved task")
+            if "resultReports" in operation:
+                reports = operation["resultReports"]
+                if not isinstance(reports, list) or len(reports) > 3 or "result" not in operation:
+                    raise ValueError("result publication history bound")
+                for report in reports:
+                    contracts.exact(report, {"version", "commentId"}, "result publication history")
+                    if not isinstance(report["version"], str) or not re.fullmatch(r"[0-9a-f]{64}", report["version"]):
+                        raise ValueError("invalid historical result version")
+                    issue_pr.positive(report["commentId"], "historical result comment")
+            if "attemptEvidence" in operation:
+                basis = contracts.loads(operation["identity"].rsplit(":round:", 1)[0])
+                evidence = operation["attemptEvidence"]
+                if (not isinstance(evidence, dict) or set(evidence) != set(basis["feedback"])
+                        or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                               for value in evidence.values())):
+                    raise ValueError("invalid attempt evidence")
             if "wait" in operation:
                 validate_wait(operation["wait"])
                 if operation["state"] != "completed" or operation["taskId"] is not None or operation["workerReserved"]:

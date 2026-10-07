@@ -144,8 +144,10 @@ def workflow_evidence(api, head):
             green &= run["conclusion"] in {"success", "neutral", "skipped"}
             if run["status"] == "completed" and run["conclusion"] not in {"success", "neutral", "skipped"}:
                 failures.append((run.get("check_suite_id"), run["conclusion"]))
+                issue_pr.positive(run["run_attempt"], "workflow run attempt")
                 failed_runs.append({"id": run["id"], "suite": run.get("check_suite_id"),
-                                    "conclusion": run["conclusion"], "url": run["html_url"]})
+                                    "conclusion": run["conclusion"], "url": run["html_url"],
+                                    "runAttempt": run["run_attempt"]})
             if run["status"] == "completed" and run["conclusion"] == "action_required":
                 if approval is None or run["id"] < int(approval["id"]):
                     approval = {"id": str(run["id"]), "url": run["html_url"]}
@@ -249,6 +251,15 @@ def process(api, chain, observation, now):
         return
     current = blocker(chain, observation)
     value = chain.get("reminder")
+    if current is not None and current[0] == "worker-result" and any(
+            operation["taskId"] == current[1]
+            and operation.get("result", {}).get("publication") == "sent"
+            and operation["workerState"] == operation["result"]["platformState"]
+            for operation in chain["operations"]):
+        # A controller-owned result report already covers this task's terminal
+        # blocker. Keep unrelated input, adoption, approval and wait episodes.
+        log("worker result already reported; no duplicate terminal reminder")
+        return
     if evidence_unknown(chain, observation):
         log("blocker evidence unknown; timer/receipt retained, no ping")
         return

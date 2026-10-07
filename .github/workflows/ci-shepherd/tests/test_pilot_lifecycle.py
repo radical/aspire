@@ -88,6 +88,8 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
 
     def fresh(self):
         api = github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        from helpers import result_capable
+        result_capable(api)
         api.clock = self.clock
         return api
 
@@ -150,6 +152,8 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             "sessionStates": [outcome], "sourceHead": "a" * 40, "artifactState": "not-reported",
             "errors": [] if error is None else [{"sessionId": "SESSION1", "message": error}],
             "errorsTruncated": False, "narrativeAvailable": False, "currentHead": head,
+            "resultSettlement": deepcopy(self.ledger()["chains"][0]["operations"][0]["result"]),
+            "resultFresh": True,
             "headChanged": head != "a" * 40}
 
     def observed(self):
@@ -199,6 +203,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
                 patch.object(contracts, "host_run", return_value=RUN), \
                 patch.object(hosted, "require_host") as authenticated, \
                 patch.object(github, "PilotTransport", return_value=self.transport), \
+                patch.object(github.PilotGitHub, "result_collector", staticmethod(lambda *_: "")), \
                 patch.object(live, "clock", self.clock), \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(0, hosted.main(["prepare", "--workdir", str(directory)]))
@@ -211,7 +216,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
                               "handsOff", "state", "feedback", "ready", "attention", "pendingCI", "ciWait",
                               "reviewOnly", "diagnostics", "approval", "workflowAttention", "actionable",
                               "title", "body", "url", "headRef", "workerResults", "copilotReview",
-                              "ciEvidence", "feedbackEvidence", "workerEvidence"}, set(packet["observation"]))
+                              "ciEvidence", "feedbackEvidence", "feedbackRevisions", "workerEvidence"}, set(packet["observation"]))
             self.assertEqual([{"id": "comment:20:2026-10-04T00:00:00Z",
                                "body": "Please fix normalization", "url": ""}], packet["observation"]["feedback"])
             self.assertEqual([], packet["observation"]["workerResults"])
@@ -297,24 +302,23 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(chain, self.ledger()["chains"][0])
         self.assertEqual(1, len(self.task_writes()))
 
-    def test_completed_task_without_push_and_still_red_ci_reserves_one_new_decision(self):
+    def test_completed_task_without_push_and_still_red_ci_holds_unchanged_attempt(self):
         first = self.start()
         self.finish()
         next_packet = self.prepare()
-        self.assertEqual([self.result_facts(first)], next_packet["observation"]["workerResults"])
-        self.assertEqual(["check:45:" + "a" * 40 + ":failure"],
-                         [item["id"] for item in next_packet["observation"]["feedback"]])
-        self.assertFalse(next_packet["observation"]["ready"])
+        self.assertIsNone(next_packet)
+        observed = self.observed()
+        self.assertEqual([self.result_facts(first)], observed["workerResults"])
+        self.assertFalse(observed["ready"])
         chain = self.ledger()["chains"][0]
-        self.assertEqual((2, 33.5, 1), (chain["rounds"], state.chain_spend(chain), len(self.task_writes())))
+        self.assertEqual((1, 3.5, 1), (chain["rounds"], state.chain_spend(chain), len(self.task_writes())))
         prior = deepcopy(chain["operations"][0])
-        self.assertEqual({"outcome": "waiting", "taskId": "TASK2"}, self.settle(next_packet))
         self.assertIsNone(self.prepare())
         chain = self.ledger()["chains"][0]
         self.assertEqual(prior, chain["operations"][0])
-        self.assertEqual((2, 2, 500), (chain["rounds"], len(chain["operations"]), state.chain_spend(chain)))
-        self.assertEqual(["TASK1", "TASK2"], [operation["taskId"] for operation in chain["operations"]])
-        self.assertEqual(2, len(self.task_writes()))
+        self.assertEqual((1, 1, 3.5), (chain["rounds"], len(chain["operations"]), state.chain_spend(chain)))
+        self.assertEqual(["TASK1"], [operation["taskId"] for operation in chain["operations"]])
+        self.assertEqual(1, len(self.task_writes()))
 
     def test_changed_head_with_still_red_ci_is_not_repair_success(self):
         first = self.start()
@@ -334,12 +338,14 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         first = self.start()
         self.finish(outcome, error="Repository tests failed")
         packet = self.prepare()
+        self.assertIsNone(packet)
+        observed = self.observed()
         self.assertEqual([self.result_facts(first, outcome=outcome, error="Repository tests failed")],
-                         packet["observation"]["workerResults"])
-        self.assertEqual(first["observation"]["feedback"], packet["observation"]["feedback"])
-        self.assertFalse(packet["observation"]["ready"])
+                         observed["workerResults"])
+        self.assertEqual([], observed["feedback"])
+        self.assertFalse(observed["ready"])
         chain = self.ledger()["chains"][0]
-        self.assertEqual((2, 2, 33.5, 0),
+        self.assertEqual((1, 1, 3.5, 0),
                          (chain["rounds"], len(chain["operations"]), state.chain_spend(chain),
                           state.worker_slots(self.ledger())))
         self.assertEqual("completed" if outcome == "completed" else "failed", chain["operations"][0]["state"])
@@ -466,10 +472,10 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         value["labels"] = [{"name": "shepherd-adopted"}]
         packet = self.prepare()
         chain = self.ledger()["chains"][0]
-        self.assertEqual((first["chain"], "open", 2, 0, 33.5),
+        self.assertEqual((first["chain"], "open", 1, 0, 3.5),
                          (chain["id"], chain["state"], chain["rounds"], chain["localAttempts"],
                           state.chain_spend(chain)))
-        self.assertEqual(first["chain"], packet["chain"])
+        self.assertIsNone(packet)
         self.assertEqual(history, chain["operations"][0])
         self.assertEqual(1, len(self.task_writes()))
         self.assertTrue(all(method == "PATCH" and endpoint == PREFIX + "/issues/comments/500"
@@ -611,6 +617,8 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             "sessionIds": ["SESSION1"], "updatedAt": "2026-10-04T00:02:00Z", "sessionStates": ["completed"],
             "sourceHead": first["observation"]["head"], "artifactState": "reported", "errors": [],
             "errorsTruncated": False, "narrativeAvailable": False, "currentHead": "a" * 40,
+            "resultSettlement": deepcopy(chain["operations"][0]["result"]),
+            "resultFresh": True,
             "headChanged": None}], packet["observation"]["workerResults"])
         reads = [endpoint.split("?")[0] for _, endpoint, _ in self.transport.reads]
         self.assertIn(PREFIX + "/pulls", reads)

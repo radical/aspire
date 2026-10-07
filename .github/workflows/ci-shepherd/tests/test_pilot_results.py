@@ -24,7 +24,7 @@ class WorkerResultTests(unittest.TestCase):
             api.persist()
         return fixture, api, transport, chain, operation, task
 
-    def test_legacy_completion_reenters_exact_batch_without_rewriting_history_or_billing(self):
+    def test_legacy_completion_holds_exact_attempt_without_rewriting_history_or_billing(self):
         fixture, api, transport, chain, operation, task = self.worker(legacy=True)
         before = deepcopy(api.ledger)
         fresh = fixture.fresh(api)
@@ -32,10 +32,11 @@ class WorkerResultTests(unittest.TestCase):
         fresh.reconcile_workers()
         current = fresh.ledger["chains"][0]
         observed = fresh.observe(current)
-        self.assertTrue(observed["actionable"])
-        self.assertEqual(results.basis(operation)["feedback"], [item["id"] for item in observed["feedback"]])
+        self.assertFalse(observed["actionable"])
+        self.assertEqual(results.basis(operation)["feedback"], observed["attemptHold"])
+        self.assertEqual([], observed["feedback"])
         self.assertEqual(before, fresh.ledger)
-        self.assertIn("Re-evaluating 1 legacy completion entries", fresh.status(current, observed, fresh.clock()))
+        self.assertIn("Matching saved worker attempt held", fresh.status(current, observed, fresh.clock()))
         fresh.reconcile_workers()
         self.assertEqual(observed, fresh.observe(current))
         self.assertEqual(before, fresh.ledger)
@@ -75,6 +76,8 @@ class WorkerResultTests(unittest.TestCase):
             "sessionStates": ["completed"], "sourceHead": "a" * 40,
             "artifactState": "matched", "errors": [{"sessionId": "SESSION7", "message": "Unable to validate changes"}],
             "errorsTruncated": False, "narrativeAvailable": False, "currentHead": "a" * 40, "headChanged": False,
+            "resultSettlement": deepcopy(operation["result"]),
+            "resultFresh": True,
         }], observed["workerResults"])
         pr["head"]["sha"] = "b" * 40
         self.assertTrue(api.observe(chain)["workerResults"][0]["headChanged"])
@@ -88,7 +91,7 @@ class WorkerResultTests(unittest.TestCase):
                 task["sessions"][0]["error"] = {"message": "Validation failed"}
                 api.reconcile_workers()
                 observed = api.observe(chain)
-                self.assertTrue(observed["actionable"])
+                self.assertFalse(observed["actionable"])
                 self.assertEqual(outcome, observed["workerResults"][0]["state"])
                 self.assertEqual("Validation failed", observed["workerResults"][0]["errors"][0]["message"])
                 self.assertEqual({}, chain["dispositions"])
@@ -106,7 +109,7 @@ class WorkerResultTests(unittest.TestCase):
                 elif blocker == "explicit-worker-human":
                     operation["feedbackDecisions"] = {identity: "needs-human"}
                 elif blocker in {"later-native-human", "ambiguous-native"}:
-                    later = state.reserve(api.ledger, chain, github.fingerprint(api.observe(chain)) + ":round:2",
+                    later = state.reserve(api.ledger, chain, operation["identity"].rsplit(":round:", 1)[0] + ":round:2",
                                           api.clock(), local=False)
                     if blocker == "later-native-human":
                         later["feedbackDecisions"] = {identity: "needs-human"}
@@ -175,7 +178,8 @@ class WorkerResultTests(unittest.TestCase):
         fresh.read_authority()
         fresh.reconcile_workers()
         current = fresh.ledger["chains"][0]
-        self.assertEqual([identities[0]], [item["id"] for item in fresh.observe(current)["feedback"]])
+        self.assertEqual([], fresh.observe(current)["feedback"])
+        self.assertEqual([identities[0]], fresh.observe(current)["attemptHold"])
         self.assertEqual("open", current["state"])
         self.assertEqual(1, len([write for write in transport.writes if write[1].endswith("/tasks")]))
 
@@ -205,6 +209,9 @@ class WorkerResultTests(unittest.TestCase):
         for change in ("session", "version", "outcome"):
             with self.subTest(change=change):
                 fixture, api, transport, chain, operation, task = self.worker(legacy=True)
+                transport.values[f"{api.prefix}/issues/7/comments"].append({
+                    "id": 999, "body": "New unrelated feedback", "updated_at": "2026-10-04T00:00:00Z",
+                    "user": {"id": 1472, "login": "radical"}})
                 with redirect_stdout(io.StringIO()):
                     packet = pilot.prepare(api, fixtures.RUN, api.clock(), present=False)
                 if change == "session":
@@ -251,6 +258,9 @@ class WorkerResultTests(unittest.TestCase):
         for failure in ("credits", "request-size"):
             with self.subTest(failure=failure):
                 fixture, api, transport, chain, operation, task = self.worker()
+                transport.values[f"{api.prefix}/issues/7/comments"].append({
+                    "id": 999, "body": "New unrelated feedback", "updated_at": "2026-10-04T00:00:00Z",
+                    "user": {"id": 1472, "login": "radical"}})
                 if failure == "credits":
                     operation["nativeActual"] = state.chain_allowance(api.ledger) - 20
                     operation["workerActual"] = 0

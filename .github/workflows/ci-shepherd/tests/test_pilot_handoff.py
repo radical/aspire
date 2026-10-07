@@ -262,7 +262,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
         self.assertTrue(observed["actionable"])
 
     def test_newer_nonterminal_run_does_not_hide_terminal_workflow_approval_evidence(self):
-        runs = [{"id": identity, "workflow_id": 90, "head_sha": self.head, "status": status,
+        runs = [{"id": identity, "run_attempt": 1, "workflow_id": 90, "head_sha": self.head, "status": status,
                  "conclusion": conclusion, "repository": {"id": self.api.repository_id, "full_name": self.api.repository},
                  "html_url": f"https://github.com/{self.api.repository}/actions/runs/{identity}"}
                 for identity, status, conclusion in (
@@ -277,7 +277,7 @@ class HandoffTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(0, self.chain["rounds"])
 
     def test_terminal_workflow_failure_without_jobs_is_investigatable_but_cancelled_waits(self):
-        run = {"id": 12, "workflow_id": 90, "head_sha": self.head, "status": "completed",
+        run = {"id": 12, "run_attempt": 1, "workflow_id": 90, "head_sha": self.head, "status": "completed",
                "conclusion": "failure", "repository": {"id": self.api.repository_id, "full_name": self.api.repository},
                "html_url": f"https://github.com/{self.api.repository}/actions/runs/12"}
         self.transport.values[f"{self.api.prefix}/actions/runs"] = {"total_count": 1, "workflow_runs": [run]}

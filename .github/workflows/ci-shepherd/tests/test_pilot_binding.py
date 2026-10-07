@@ -3,7 +3,7 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
-from helpers import FakeClock, reconciliation_evidence
+from helpers import FakeClock, reconciliation_evidence, result_capable
 from test_pilot_github import Transport, pr
 from test_pilot import RUN
 import pilot
@@ -49,6 +49,7 @@ class PilotBindingTests(unittest.TestCase):
             return original(method, endpoint, body)
 
         api = github.PilotGitHub(send, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+        result_capable(api)
         api.clock = FakeClock()
         return api, transport
 
@@ -147,6 +148,7 @@ class PilotBindingTests(unittest.TestCase):
         previous = []
         for number in range(1, 11):
             fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+            result_capable(fresh)
             fresh.clock = api.clock
             packet = pilot.prepare(fresh, RUN, api.clock(), present=False)
             self.assertIsNotNone(packet, f"Round {number} must remain admissible after restart")
@@ -164,6 +166,7 @@ class PilotBindingTests(unittest.TestCase):
         before = deepcopy(fresh.ledger)
         writes = deepcopy(transport.writes)
         fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+        result_capable(fresh)
         fresh.clock = api.clock
         self.assertIsNone(pilot.prepare(fresh, RUN, api.clock(), present=False))
         self.assertEqual(before, fresh.ledger)
@@ -271,6 +274,7 @@ class PilotBindingTests(unittest.TestCase):
         decision = {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
                     "action": "cloud", "replacement": None, "dispositions": {feedback["id"]: "addressed"}}
         fresh = github.PilotGitHub(api.transport, 127, 700, "TRACKER127", write=True, binding=bindings.UPSTREAM)
+        result_capable(fresh)
         pilot.settle(fresh, packet, reconciliation_evidence(decision), 2, api.clock())
         self.assertEqual([], [endpoint for _, endpoint, _ in transport.reads if "/tasks" in endpoint])
         self.assertEqual(1, len([write for write in transport.writes if write[1].endswith("/tasks")]))

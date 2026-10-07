@@ -10,6 +10,12 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def result_capable(api):
+    """An explicitly supported offline collector at the production API boundary."""
+    api.result_collector = lambda repository, session: ""
+    return api
+
+
 class WorkspaceTest:
     def setUp(self):
         self.work = Path("artifacts/ci-shepherd/tests") / str(uuid.uuid4())

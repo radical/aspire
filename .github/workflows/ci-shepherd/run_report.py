@@ -1,6 +1,7 @@
 """Human-readable local receipts, never authority or repair input."""
 
 import html
+from pilot_results import reported_claim
 
 
 def text(value):
@@ -112,6 +113,18 @@ def render(run, target, before, after, result, packet, started, ended):
                 lines.append(f"- Native operation: {text(operation['state'])}; no saved task ID.")
             if operation.get("wait") and operation != previous:
                 lines.append(f"- Wait: {text(operation['wait']['until'])}; {text(operation['wait']['reason'])}")
+            if task and operation.get("result"):
+                receipt = operation["result"]
+                if "version" not in receipt:
+                    lines.append("- Result: incomplete; authority capacity exhausted. "
+                                 "Matching saved attempt held; billing remains independent.")
+                    continue
+                lines.append(f"- Result: {text(receipt['status'])}; {text(receipt['summary'])}.")
+                lines.append(f"- Result collection: {receipt['attempts']}/3 attempts; "
+                             f"{text(receipt['reason'])}. Publication: {text(receipt['publication'])}; "
+                             f"comment: {text(receipt['commentId'] or 'none (preview or unknown)')}.")
+                if receipt.get("workerReport"):
+                    lines.append("- Untrusted claim: " + reported_claim(receipt).strip())
         old_reviews = {record["id"]: record for record in old.get("reviews", [])}
         for review in chain.get("reviews", []):
             if review != old_reviews.get(review["id"]):

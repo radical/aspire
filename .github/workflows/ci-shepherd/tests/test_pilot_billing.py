@@ -44,7 +44,8 @@ class WorkerBillingTests(WorkspaceTest, unittest.TestCase):
         feedback = json.loads(operation["identity"].rsplit(":round:", 1)[0])["feedback"]
         self.assertTrue(feedback)
         self.assertEqual({}, chain["dispositions"])
-        self.assertEqual(feedback, [item["id"] for item in api.observe(chain)["feedback"]])
+        self.assertEqual(feedback, api.observe(chain)["attemptHold"])
+        self.assertEqual([], api.observe(chain)["feedback"])
         api.persist()
         fresh = fixture.fresh(api)
         fresh.read_authority()

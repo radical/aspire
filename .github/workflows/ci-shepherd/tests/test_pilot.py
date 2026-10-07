@@ -2,7 +2,7 @@ import unittest
 import base64
 from unittest.mock import patch
 
-from helpers import FakeClock, WorkspaceTest, reconciliation_evidence
+from helpers import FakeClock, WorkspaceTest, reconciliation_evidence, result_capable
 from test_pilot_github import Transport, pr
 import pilot
 import pilot_github
@@ -25,6 +25,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
             "id": 20, "body": "Please fix normalization", "updated_at": "2026-10-04T00:00:00Z",
             "user": {"id": 1472, "login": "radical"}}]
         self.api = pilot_github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        result_capable(self.api)
 
     def prepared(self):
         return pilot.prepare(self.api, RUN, self.clock(), present=False)
@@ -73,6 +74,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
             return original(method, endpoint, body)
 
         fresh = pilot_github.PilotGitHub(transport, 99, 500, "TRACKER99", write=True)
+        result_capable(fresh)
         result = pilot.settle(fresh, packet, reconciliation_evidence(self.decision(packet)), 2, self.clock())
         self.assertEqual("uncertain", result["outcome"])
         self.assertEqual(2, fresh.ledger["chains"][0]["operations"][0]["nativeActual"])
@@ -90,6 +92,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
                   "CI_SHEPHERD_AUTHORITY_COMMENT": "500", "CI_SHEPHERD_TRACKER_NODE": "TRACKER99",
                   "GITHUB_OUTPUT": str(self.work / "output")}
         fresh = pilot_github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        result_capable(fresh)
         self.transport.writes.clear()
         with patch.dict(pilot.os.environ, config, clear=True), patch.object(contracts, "host_run", return_value=RUN), \
                 patch("hosted.require_host") as authenticated, \
@@ -111,6 +114,7 @@ class PilotTests(WorkspaceTest, unittest.TestCase):
         state.sent(operation)
         self.api.persist()
         fresh = pilot_github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True)
+        result_capable(fresh)
         pilot.settle(fresh, packet, None, None, self.clock(), billing_only=True)
         operation = fresh.ledger["chains"][0]["operations"][0]
         self.assertEqual(30, operation["nativeReserved"])

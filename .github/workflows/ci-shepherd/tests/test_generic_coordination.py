@@ -11,7 +11,7 @@ from helpers import reconciliation_evidence, WorkspaceTest
 import test_pilot_lifecycle as lifecycle
 from test_pilot_lifecycle import RUN, PREFIX, decision
 from test_pilot_github import Transport, pr
-from helpers import FakeClock
+from helpers import FakeClock, result_capable
 from github import Response
 import pilot
 import pilot_binding as bindings
@@ -98,9 +98,12 @@ class WaitTests(WorkspaceTest, unittest.TestCase):
             with self.subTest(report_is_legacy=report_is_legacy):
                 self.setUp()
                 worker, dispositions = self.legacy_completed_worker(report_is_legacy=report_is_legacy)
+                self.transport.values[PREFIX + "/issues/7/comments"].append({
+                    "id": 999, "body": "New human reassessment request at " + self.until,
+                    "updated_at": "2026-10-04T00:00:00Z", "user": {"id": 1472, "login": "radical"}})
                 packet = self.prepare()
                 identities = [item["id"] for item in packet["observation"]["feedback"]]
-                self.assertTrue(set(dispositions) <= set(identities))
+                self.assertFalse(set(dispositions) & set(identities))
                 self.assertEqual("deferred", self.wait(packet)["outcome"])
                 before = deepcopy(self.ledger())
                 self.assertIsNone(self.prepare(), "an unchanged wait must not admit another paid packet")
@@ -111,7 +114,7 @@ class WaitTests(WorkspaceTest, unittest.TestCase):
                 self.assertIsNotNone(due, "legacy deadline feedback must still wake at exact expiry")
                 self.assertEqual(identities, [item["id"] for item in due["observation"]["feedback"]])
                 chain = self.ledger()["chains"][0]
-                self.assertEqual(worker, chain["operations"][0])
+                self.assertEqual(worker["id"], chain["operations"][0]["id"])
                 self.assertEqual(dispositions, chain["dispositions"])
                 self.assertEqual(3, chain["rounds"])
                 self.assertEqual(1, len(self.task_writes()))
@@ -138,7 +141,7 @@ class WaitTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(2, self.ledger()["chains"][0]["rounds"])
         self.assertFalse(next_packet["observation"]["ready"])
 
-    def test_changed_saved_worker_error_supersedes_wait(self):
+    def test_changed_saved_worker_error_does_not_causally_supersede_wait(self):
         self.start()
         self.finish("failed", error="Original failure")
         self.transport.values[PREFIX + "/issues/7/comments"] = [{
@@ -148,7 +151,7 @@ class WaitTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual("deferred", self.wait(packet)["outcome"])
         self.assertIsNone(self.prepare())
         self.transport.values["agents/repos/radical/aspire/tasks/TASK1"]["sessions"][0]["error"]["message"] = "Revised failure"
-        self.assertIsNotNone(self.prepare())
+        self.assertIsNone(self.prepare())
 
     def test_fresh_source_and_approved_feedback_changes_wake_wait_before_deadline(self):
         for change in ("head", "branch", "body", "same-comment-body", "new-comment", "resolved-review"):
@@ -372,7 +375,7 @@ class WaitTests(WorkspaceTest, unittest.TestCase):
                     # never a report from an approved comment/review author.
                     self.transport.values[PREFIX + "/actions/runs"] = {
                         "total_count": 1, "workflow_runs": [{
-                            "id": 10, "head_sha": "a" * 40, "status": "completed",
+                            "id": 10, "run_attempt": 1, "head_sha": "a" * 40, "status": "completed",
                             "conclusion": "failure; reassess at " + self.until, "name": name,
                             "repository": {"id": 746880239, "full_name": "radical/aspire"},
                             "html_url": "https://github.com/radical/aspire/actions/runs/10"}]}
@@ -641,6 +644,7 @@ class UpstreamTests(WorkspaceTest, unittest.TestCase):
     def fresh(self):
         api = github.PilotGitHub(self.transport, 99, 500, "TRACKER99", write=True,
                                  binding=bindings.select("upstream"))
+        result_capable(api)
         api.clock = self.clock
         return api
 
@@ -844,6 +848,7 @@ class UpstreamTests(WorkspaceTest, unittest.TestCase):
         environment["GITHUB_OUTPUT"] = str(self.work / "output")
         directory = self.work / "hosted"
         with patch.dict(pilot.os.environ, environment, clear=True), \
+                patch.object(github.PilotGitHub, "result_collector", staticmethod(lambda *_: "")), \
                 patch.object(contracts, "host_run", return_value=RUN), \
                 patch.object(hosted, "require_host"), patch.object(live, "clock", self.clock), \
                 patch.object(github, "PilotTransport", return_value=self.transport), \
