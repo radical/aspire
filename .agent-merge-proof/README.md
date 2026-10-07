@@ -33,6 +33,9 @@ preserved and why non-obvious choices were needed. Start automatic comments with
 `[automated] `. The experiment observer must not write this explanation for the
 worker.
 
+This app-only CI lane enables only CI repair. Review handling and conflict
+repair remain disabled until separately authorized; merging stays disabled.
+
 Keep the PR draft and labeled `NO-MERGE`. Never merge, enable auto-merge, enqueue,
 or weaken the tests, workflow, required context, or protection. At each phase
 boundary or timeout, disable Agent Merge and verify it is off before restoring
