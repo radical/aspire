@@ -9,7 +9,7 @@ def canonical_service(value):
 
 
 def normalize_label(value):
-    return value.strip().casefold()
+    return value.strip().casefold().replace("\t", " ")
 
 
 def parse_retry_count(value):
