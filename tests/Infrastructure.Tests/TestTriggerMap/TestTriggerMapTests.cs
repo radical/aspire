@@ -121,10 +121,11 @@ public sealed class TestTriggerMapTests
         Assert.Contains("job:deployment-e2e", targets);
     }
 
-    [Fact]
-    public void ExtensionUnitWorkflowChangesSelectUnitAndE2eJobs()
+    [Theory]
+    [InlineData(".github/workflows/extension-unit-tests.yml")]
+    [InlineData(".github/workflows/extension-e2e-tests.yml")]
+    public void ExtensionWorkflowChangesSelectUnitAndE2eJobs(string workflow)
     {
-        const string workflow = ".github/workflows/extension-unit-tests.yml";
         var targets = s_map.PathRules
             .Where(rule => rule.Paths.Any(path => TestTriggerMap.GlobMatches(path, workflow)))
             .SelectMany(rule => rule.Targets)
@@ -1010,6 +1011,22 @@ public sealed class TestTriggerMapTests
         Assert.False(result.SelectsAll);
         Assert.Equal(
             ["Aspire.Cli.EndToEnd.Tests", "Aspire.Templates.Tests"],
+            result.TestProjects.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["job:deployment-e2e", "job:homebrew-installer", "job:winget-installer"],
+            result.Jobs.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package.json")]
+    [InlineData("src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package-lock.json")]
+    public void ProjectTemplateFrontendDependencyInputsRunCliSecurityGuards(string path)
+    {
+        var result = SelectWithRealMap(path);
+
+        Assert.False(result.SelectsAll);
+        Assert.Equal(
+            ["Aspire.Cli.EndToEnd.Tests", "Aspire.Cli.Tests", "Aspire.Templates.Tests"],
             result.TestProjects.Order(StringComparer.Ordinal));
         Assert.Equal(
             ["job:deployment-e2e", "job:homebrew-installer", "job:winget-installer"],
