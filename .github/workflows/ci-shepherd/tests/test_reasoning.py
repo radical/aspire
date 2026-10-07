@@ -73,6 +73,27 @@ class ReasoningTests(WorkspaceTest, unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 reasoning.validate(events, envelope["sessionId"], debug=wire_report())
 
+    def test_newer_copilot_version_is_supported_when_host_evidence_is_valid(self):
+        packet, envelope = shepherd.prepare(self.work / "run", RUN)
+        events = host_events(envelope["sessionId"], decision_for(packet))
+        events[0]["data"]["copilotVersion"] = "1.0.93-3"
+        decision, evidence = reasoning.validate(events, envelope["sessionId"], debug=wire_report())
+
+        self.assertEqual(decision_for(packet), decision)
+        self.assertEqual("1.0.93-3", evidence["copilotVersion"])
+
+    def test_copilot_version_gate_requires_the_minimum_supported_cli_contract(self):
+        for version, supported in [
+            ("GitHub Copilot CLI 1.0.93-3.", True),
+            ("1.0.92-3", True),
+            ("1.0.92", True),
+            ("1.0.92-2", False),
+            ("1.0.88", False),
+            ("future", False),
+        ]:
+            with self.subTest(version=version):
+                self.assertEqual(supported, reasoning.copilot_version_supported(version))
+
     def test_unauthorized_requests_are_rejected_even_without_execution(self):
         packet, envelope = shepherd.prepare(self.work / "run", RUN)
         events = host_events(envelope["sessionId"], decision_for(packet))

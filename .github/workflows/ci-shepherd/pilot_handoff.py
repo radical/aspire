@@ -57,10 +57,17 @@ def unresolved_credit(ledger):
 
 
 def enroll(api, chain, now):
-    if converted(chain) or api.pr_handoff != "manual":
+    if converted(chain) or api.pr_handoff != "manual" or chain["state"] != "open":
         return
-    if api.repository != "radical/aspire":
-        raise ValueError("manual PR handoff is fork-only")
+    if api.repository not in {"radical/aspire", "microsoft/aspire"}:
+        raise ValueError("manual PR handoff target is unsupported")
+    if api.repository == "microsoft/aspire":
+        if chain["kind"] != "pr":
+            return
+        pr = api.mapping(chain["origin"])
+        from pilot_github import managed
+        if pr["node_id"] != chain["node"] or not managed(pr):
+            return
     initial = chain["kind"] == "issue" and chain["child"] is None and not chain["operations"]
     chain["handoff"] = {"id": str(uuid.uuid4()), "phase": "initial" if initial else "handoff_pending",
                         "responsible": api.actor["login"], "head": None, "progressAt": issue_pr.stamp(now),

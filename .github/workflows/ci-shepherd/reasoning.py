@@ -18,6 +18,27 @@ PROVIDER_KEYS = frozenset({
     "COPILOT_PROVIDER_WIRE_MODEL", "COPILOT_MODEL",
 })
 PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
+COPILOT_VERSION = re.compile(
+    r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:-(?P<prerelease>\d+(?:\.[A-Za-z0-9-]+)*))?$"
+)
+MINIMUM_COPILOT_VERSION = (1, 0, 92, 3)
+
+
+def copilot_version_supported(value):
+    if not isinstance(value, str):
+        return False
+    value = value.removeprefix("GitHub Copilot CLI ").rstrip(".")
+    match = COPILOT_VERSION.fullmatch(value)
+    if match is None:
+        return False
+
+    version = tuple(int(match.group(name)) for name in ("major", "minor", "patch"))
+    minimum = MINIMUM_COPILOT_VERSION[:3]
+    if version != minimum:
+        return version > minimum
+
+    prerelease = match.group("prerelease")
+    return prerelease is None or int(prerelease.split(".", 1)[0]) >= MINIMUM_COPILOT_VERSION[3]
 
 
 def render(template, **values):
@@ -49,7 +70,7 @@ def jsonl(text):
 
 def wire_reports(debug):
     reports = []
-    # Copilot 1.0.92-3 logs a multiline host-side request:
+    # The CLI logs a multiline host-side request:
     # [DEBUG] [rust:model_wire] Wire request: {"copilotToolsFingerprint":
     #   {"count": 1, "deferred": 0, "tools": ["safeoutputs-submit_decision:ce1231c6"]}, ...}
     # The suffix is a schema fingerprint, not part of the tool name.
@@ -96,8 +117,8 @@ def validate(events, session_id, *, debug="", hosted=False):
         raise ValueError("missing or mismatched fresh host session")
     if starts[0].get("alreadyInUse") is not False:
         raise ValueError("host session is not proven fresh")
-    if starts[0].get("copilotVersion") != "1.0.92-3":
-        raise ValueError("unverified Copilot host report version")
+    if not copilot_version_supported(starts[0].get("copilotVersion")):
+        raise ValueError("unsupported Copilot host report version")
     results = [event for event in events if event["type"] == "result"]
     if (len(results) != 1 or results[0].get("sessionId") != session_id
             or type(results[0].get("exitCode")) is not int or results[0]["exitCode"] != 0):

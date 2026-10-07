@@ -59,8 +59,8 @@ def validate(ledger):
                         | ({"handoff"} if "handoff" in chain else set()), "chain")
         if "handoff" in chain:
             handoff.validate(chain["handoff"])
-            if ledger["repository"] != "radical/aspire":
-                raise ValueError("manual handoff authority is fork-only")
+            if ledger["repository"] == "microsoft/aspire" and chain["kind"] != "pr":
+                raise ValueError("upstream manual handoff supports direct PRs only")
         if "reminder" in chain:
             reminders.validate(chain["reminder"])
         if "reviews" in chain:

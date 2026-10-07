@@ -502,12 +502,12 @@ def main(argv=None):
     if args.mode == "resume" and args.target == bindings.FORK.name:
         parser.error("resume requires an upstream target")
     binding = bindings.select(args.target)
-    if args.pr_handoff not in {None, "manual"} or args.pr_handoff and binding != bindings.FORK:
-        parser.error("manual PR handoff is fork-only")
+    if args.pr_handoff not in {None, "manual"}:
+        parser.error("unsupported manual PR handoff mode")
     if args.mode == "confirm-handoff" and (
-            binding != bindings.FORK or args.pr is None or not args.expected_head
+            args.pr is None or not args.expected_head
             or not args.app_enabled or not args.merge_disabled):
-        parser.error("confirm-handoff requires fork, exact --pr/--expected-head, --app-enabled and --merge-disabled")
+        parser.error("confirm-handoff requires exact --pr/--expected-head, --app-enabled and --merge-disabled")
     if args.mode in {"check-api", "confirm-handoff"}:
         if (args.pr is None or args.pr <= 0 or args.pr == 121
                 or binding.subject is not None and args.pr != binding.subject):
@@ -534,8 +534,9 @@ def main(argv=None):
             for chain in api.ledger["chains"]:
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())
             return 0
-        if args.mode not in {"resume", "confirm-handoff"} and not command(["copilot", "--no-auto-update", "--version"]).startswith("GitHub Copilot CLI 1.0.92-3."):
-            raise ValueError("local decision engine must match the pinned Copilot1.0.92-3")
+        if args.mode not in {"resume", "confirm-handoff"} and not reasoning.copilot_version_supported(
+                command(["copilot", "--no-auto-update", "--version"])):
+            raise ValueError("local decision engine requires Copilot CLI 1.0.92-3 or newer")
         lock_root = Path.home() / ".copilot" / "ci-shepherd" / "locks"
         with authority_lock(lock_root, args.authority):
             while True:

@@ -25,6 +25,7 @@ import hosted
 import live
 import run_report
 import round as contracts
+import test_pilot_tracked_only as fixtures
 
 
 class AgentMergeTests(WorkspaceTest, unittest.TestCase):
@@ -177,14 +178,45 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual([], self.task_writes())
         self.assertNotIn("reminder", self.chain())
 
-    def test_configuration_is_explicit_fork_only_and_rejects_unknown_modes(self):
+    def test_configuration_allows_manual_handoff_for_supported_targets_and_rejects_unknown_modes(self):
         environment = {"CI_SHEPHERD_ENABLE": "true", "CI_SHEPHERD_TRACKER": "99",
                        "CI_SHEPHERD_AUTHORITY_COMMENT": "500", "CI_SHEPHERD_TRACKER_NODE": "TRACKER99",
                        "CI_SHEPHERD_PR_HANDOFF": "manual"}
         self.assertEqual("manual", pilot.configuration(environment)["prHandoff"])
+        upstream = {"CI_SHEPHERD_ENABLE": "true", "SHEPHERD_TARGET": "upstream",
+                    "CI_SHEPHERD_UPSTREAM_TRACKER": "127",
+                    "CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT": "700",
+                    "CI_SHEPHERD_UPSTREAM_TRACKER_NODE": "TRACKER127",
+                    "CI_SHEPHERD_PR_HANDOFF": "manual"}
+        self.assertEqual("manual", pilot.configuration(upstream)["prHandoff"])
         environment["CI_SHEPHERD_PR_HANDOFF"] = "automatic"
         with self.assertRaises(ValueError):
             pilot.configuration(environment)
+
+    def test_upstream_manual_handoff_enrolls_direct_pr_but_preserves_human_hold(self):
+        api, _ = fixtures.TrackedOnlyTests().api(bindings.UPSTREAM)
+        api.pr_handoff = "manual"
+        api.read_authority()
+        value = api.mapping(20722)
+        chain = state.adopt(api.ledger, 20722, "pr", value["node_id"])
+        held = deepcopy(chain)
+        held["state"] = "human"
+        handoff.enroll(api, held, self.clock())
+        self.assertNotIn("handoff", held)
+
+        handoff.enroll(api, chain, self.clock())
+
+        self.assertEqual("handoff_pending", chain["handoff"]["phase"])
+        state.validate(api.ledger)
+
+        issue_ledger = state.new_ledger()
+        issue = state.adopt(issue_ledger, 20800, "issue", "ISSUE_NODE")
+        handoff.enroll(api, issue, self.clock())
+        self.assertNotIn("handoff", issue)
+        issue["handoff"] = deepcopy(chain["handoff"])
+        issue_ledger["repository"] = "microsoft/aspire"
+        with self.assertRaisesRegex(ValueError, "direct PRs only"):
+            state.validate(issue_ledger)
 
     def issue(self, quarantine=False, number=8):
         value = {"id": 1000 + number, "number": number, "node_id": f"NODE{number}", "state": "open",

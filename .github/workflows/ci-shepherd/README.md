@@ -1,18 +1,22 @@
 # CI Shepherd hybrid daily pilot
 
-`pilot` mode manages labeled open issues and PRs in `radical/aspire` only.
-The daily 09:17 UTC sweep is explicitly opt-in. Disabled, unconfigured and
-unchanged waiting sweeps skip the actual native job, not just its prompt.
+`pilot` repair mode manages labeled open issues and PRs in `radical/aspire` only.
+Optional manual handoff can track directly adopted open PRs in `microsoft/aspire`
+without dispatching repair work. The daily 09:17 UTC sweep is explicitly opt-in.
+Disabled, unconfigured and unchanged waiting sweeps skip the actual native job,
+not just its prompt.
 The existing `transport-proof`, `observe` and `live` fixture modes retain their
 legacy contracts; the pilot never adopts PR121 or writes its canonical comment.
 
 ## Opt-in manual PR handoff
 
-Set `CI_SHEPHERD_PR_HANDOFF=manual` for the **fork** pilot to transfer PR repairs
-out of Shepherd. An absent/empty value retains legacy behavior for unconverted
-items; other values and upstream manual handoff are rejected. The hosted prepare,
+Set `CI_SHEPHERD_PR_HANDOFF=manual` to transfer adopted PRs out of Shepherd.
+Upstream manual handoff is limited to directly adopted PRs; it does not enable
+upstream issue workers or child adoption. Human-stopped chains are not enrolled.
+An absent/empty value retains legacy behavior for unconverted items; other values
+are rejected. The hosted prepare,
 settlement and publication jobs receive this variable. For the existing local
-runner, export it or use `--pr-handoff manual` with `--target fork`.
+runner, export it or use `--pr-handoff manual` with an explicit target.
 For a 45-minute local validation interval, also export the existing
 `CI_SHEPHERD_REMINDER_DELAY_SECONDS=2700`; local control reads this environment
 setting rather than the hosted repository variable.
@@ -967,8 +971,9 @@ observation rather than replaying the old check inventory.
 A separately executed fresh `run` can spend an eligible remaining round only
 when actionable; `resume` never starts a worker, decision or CI rerun.
 
-**Every admitted decision uses a fresh agent.** A new Copilot1.0.92-3 process,
-UUID, temporary home and working directory outside the checkout receive only
+**Every admitted decision uses a fresh agent.** A new Copilot CLI process at
+version 1.0.92-3 or newer, with a fresh UUID, temporary home and working
+directory outside the checkout, receives only
 the actual workflow prompt body populated by the current `pilot.prompt(packet)`.
 No resumed conversation, user/repository instructions, memory, plugins or
 follow-up coaching are supplied. The sole tool is `safeoutputs-submit_decision`,
@@ -1457,18 +1462,18 @@ in the prompt. Any attempted tool request, execution, or completion fails
 validation before apply. Provider credential commands and inherited worker secrets
 are rejected. The launcher does not read the user's Copilot or gh configuration.
 
-**Local runtime proof is blocked on Copilot 1.0.92-3.** Its native credit flag
-rejects the requested five-credit limit with:
+**The local runner requires Copilot CLI 1.0.92-3 or newer.** It reserves the
+minimum 30 native credits accepted by the CLI. The separate hosted reasoning
+launcher still requests five native credits, which Copilot CLI 1.0.92-3 rejects:
 
 ```text
 error: Invalid value for --max-ai-credits: "5". Use at least 30 AI credits.
 ```
 
-The launcher fails closed rather than raising that budget silently. The native
-CLI has no verified twelve-turn enforcement here. Subprocess fixtures validate
-the boundary, not real inference. An isolated mock-provider probe verified the
-1.0.92-3 session, final-message, effective-tool fingerprint, and MCP call formats;
-it is not a successful inference or hosted proof.
+The hosted launcher fails closed rather than raising that budget silently. The
+native CLI has no verified twelve-turn enforcement here. Subprocess fixtures
+validate the boundary, not real inference; a live run is still required to verify
+newer CLI host-event compatibility.
 
 ## Manual hosted workflow
 

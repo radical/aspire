@@ -30,8 +30,8 @@ def configuration(environment, *, billing=False):
     event = environment.get("GITHUB_EVENT_NAME", "workflow_dispatch")
     binding = bindings.select(environment.get("SHEPHERD_TARGET", "fork"), event)
     pr_handoff = environment.get("CI_SHEPHERD_PR_HANDOFF") or None
-    if pr_handoff not in {None, "manual"} or pr_handoff and binding != bindings.FORK:
-        raise ValueError("CI_SHEPHERD_PR_HANDOFF supports only explicit fork-only manual handoff")
+    if pr_handoff not in {None, "manual"}:
+        raise ValueError("unsupported CI_SHEPHERD_PR_HANDOFF mode")
     prefix = "CI_SHEPHERD_" if binding == bindings.FORK else "CI_SHEPHERD_UPSTREAM_"
     required = tuple(prefix + name for name in ("TRACKER", "AUTHORITY_COMMENT", "TRACKER_NODE"))
     if any(not environment.get(key) for key in required):

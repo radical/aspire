@@ -145,7 +145,7 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
             return ""
         if argv[0] == "copilot":
             self.assertEqual(["copilot", "--no-auto-update", "--version"], argv)
-            return "GitHub Copilot CLI 1.0.92-3.fixture"
+            return "GitHub Copilot CLI 1.0.93-3."
         self.assertEqual(["gh", "api", "--hostname", "github.com"], argv[:4])
         path = argv[4]
         if path.endswith("/CI_SHEPHERD_ENABLE"):

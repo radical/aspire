@@ -9,6 +9,7 @@ from test_pilot import RUN
 import pilot
 import pilot_binding as bindings
 import pilot_github as github
+import pilot_handoff as handoff
 import pilot_state as state
 import test_pilot_tracked_only as fixtures
 
@@ -83,6 +84,42 @@ class PilotBindingTests(unittest.TestCase):
         self.assertEqual("agents/repos/microsoft/aspire/tasks", posts[0][1])
         self.assertEqual(("main", "copilot/restrict-workflows-to-microsoft-aspire", False),
                          tuple(posts[0][2][key] for key in ("base_ref", "head_ref", "create_pull_request")))
+
+    def test_upstream_manual_handoff_tracks_an_adopted_pr_without_repair_or_merge(self):
+        api, transport = self.api()
+        api.pr_handoff = "manual"
+        api.read_authority()
+        pr_value = transport.values["repos/microsoft/aspire/pulls/20722"]
+        pr_value.update(merged=False, merged_at=None)
+        pr_value["labels"] = [{"name": "shepherd-adopted"}, {"name": "NO-MERGE"}]
+
+        observations = api.sweep()
+        chain = state.find_chain(api.ledger, 20722)
+
+        self.assertTrue(handoff.converted(chain))
+        self.assertEqual("handoff_needed", chain["handoff"]["phase"])
+        self.assertEqual(0, chain["rounds"])
+        self.assertEqual([], chain["operations"])
+        self.assertEqual([], [write for write in transport.writes if write[0] != "PATCH"])
+        self.assertTrue(observations[20722]["managed"])
+        self.assertEqual("none", chain["handoff"]["mergeLabel"])
+
+    def test_upstream_manual_handoff_preserves_existing_human_chain(self):
+        api, transport = self.api()
+        api.pr_handoff = "manual"
+        api.read_authority()
+        value = api.mapping(20722)
+        chain = state.adopt(api.ledger, 20722, "pr", value["node_id"])
+        chain["state"] = "human"
+        api.persist()
+        transport.writes.clear()
+
+        observations = api.sweep()
+
+        self.assertEqual("human", chain["state"])
+        self.assertNotIn("handoff", chain)
+        self.assertTrue(observations[20722]["managed"])
+        self.assertEqual([], transport.writes)
 
     def test_cross_namespace_authority_wrong_repo_head_subject_and_stop_fail_closed(self):
         api, transport = self.api()
