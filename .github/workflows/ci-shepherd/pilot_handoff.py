@@ -352,7 +352,7 @@ def settle_initial(api, chain, packet, evidence, now, *, disabled=False):
 
 def monitor_guard(api, chain, observation):
     api.authority_guard()
-    fresh = observe(api, chain)
+    fresh = api.observe(chain)
     keys = ("number", "node", "head", "state", "managed", "originManaged", "originAdopted",
             "originHandsOff", "handsOff", "attention", "merged")
     if any(fresh.get(key) != observation.get(key) for key in keys):

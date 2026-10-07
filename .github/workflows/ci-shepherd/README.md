@@ -29,6 +29,8 @@ existing PR -> handoff_pending -> owned work quiescent -> handoff_needed
 
 The initial issue still receives native qualification. Its one worker creates a
 draft `[NO-MERGE]` PR against fork `main`, using nonclosing issue references.
+Initial status guards use the same issue-intake observation route as
+qualification; a PR is not required before dispatch.
 The compact initial send/task receipt replaces new repair-operation accounting
 for this path; no PR result collector is required. A lost POST response,
 missing/ambiguous artifact, unreadable session or nonterminal owned session holds

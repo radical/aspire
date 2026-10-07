@@ -216,6 +216,27 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(1, len(self.task_writes()))
         self.assertEqual([], [effect for effect in self.transport.writes if effect[1].endswith("/9/labels")])
 
+    def test_actual_local_initial_sweep_presents_then_dispatches_once_with_matching_guard(self):
+        self.issue()
+        api = self.fresh()
+        api.token, api.enabled = "fixture", lambda: True
+        calls = []
+
+        def executor(directory, packet, token):
+            calls.append(packet)
+            directory.mkdir()
+            contracts.write_json(directory / "usage.json", {"ai_credits": 2})
+            return reconciliation_evidence(decision(packet))
+
+        with patch.object(live, "clock", self.clock), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            outcome = local.run_sweep(api, self.work, RUN, {}, executor=executor)
+        self.assertEqual("waiting", outcome["outcome"])
+        self.assertEqual(1, len(calls))
+        self.assertEqual(1, len(self.task_writes()))
+        self.assertIsNotNone(self.chain()["statusId"])
+        self.assertEqual("TASK1", self.chain()["handoff"]["taskId"])
+
     def test_local_report_shows_compact_initial_task_without_claiming_legacy_spend(self):
         before = state.parse(self.transport.comments[0]["body"])
         packet, outcome = self.start_initial()
