@@ -553,7 +553,7 @@ public class AddMongoDBTests(ITestOutputHelper testOutputHelper)
         using var builder = TestDistributedApplicationBuilder.Create(testOutputHelper);
         using var certificate = CreateTestCertificate();
 
-        var password = builder.AddParameter("password", "p@ss/word", secret: true);
+        var password = builder.AddParameter("password", "Placeholder-p@ss/word", secret: true);
         var mongoExpress = null as IResourceBuilder<MongoExpressContainerResource>;
         var mongo = builder.AddMongoDB("mongo", password: password)
             .WithEndpoint("tcp", e =>
@@ -582,7 +582,7 @@ public class AddMongoDBTests(ITestOutputHelper testOutputHelper)
 
         var expected = new Dictionary<string, string>
         {
-            ["ME_CONFIG_MONGODB_URL"] = $"mongodb://admin:p%40ss%2Fword@mongo.dev.internal:27017/?authSource=admin&authMechanism=SCRAM-SHA-256&directConnection=true{(useTls ? "&tls=true" : "")}",
+            ["ME_CONFIG_MONGODB_URL"] = $"mongodb://admin:Placeholder-p%40ss%2Fword@mongo.dev.internal:27017/?authSource=admin&authMechanism=SCRAM-SHA-256&directConnection=true{(useTls ? "&tls=true" : "")}",
             ["ME_CONFIG_BASICAUTH"] = "false",
         };
         if (useTls)
@@ -597,7 +597,7 @@ public class AddMongoDBTests(ITestOutputHelper testOutputHelper)
         Assert.True(url.DirectConnection);
         Assert.Equal("mongo.dev.internal:27017", url.Server.ToString());
         Assert.Equal("admin", url.Username);
-        Assert.Equal("p@ss/word", url.Password);
+        Assert.Equal("Placeholder-p@ss/word", url.Password);
         Assert.Equal("admin", url.AuthenticationSource);
         Assert.Equal(ReadPreference.Primary, MongoClientSettings.FromUrl(url).ReadPreference);
     }

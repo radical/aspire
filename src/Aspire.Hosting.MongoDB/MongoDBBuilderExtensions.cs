@@ -772,7 +772,7 @@ public static class MongoDBBuilderExtensions
         // The image's entrypoint also parses this URL to wait for the server before starting Mongo Express. It strips the
         // scheme, then everything from the first '/', then everything up to the first '@', and treats the remainder as
         // `host:port`, e.g.:
-        //   mongodb://admin:p%40ss@mongo.dev.internal:27017/?authSource=admin&...  ->  mongo.dev.internal:27017
+        //   mongodb://admin:Placeholder-p%40ss@mongo.dev.internal:27017/?authSource=admin&...  ->  mongo.dev.internal:27017
         // The connection string URI-escapes the credentials, and it puts a '/' before the query whenever the server has a
         // password, which `AddMongoDB` always assigns.
         // See https://github.com/mongo-express/mongo-express-docker/blob/master/docker-entrypoint.sh
