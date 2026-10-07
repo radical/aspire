@@ -26,7 +26,7 @@ tools:
   github:
     toolsets: [pull_requests]
     allowed: [pull_request_read]
-    lockdown: true
+    lockdown: false
 ---
 
 # Hosted Agent Merge capability probe
