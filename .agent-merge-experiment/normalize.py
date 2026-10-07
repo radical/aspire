@@ -1,2 +1,2 @@
 def normalize_label(value: str) -> str:
-    return value.strip()
+    return value.strip().lower()
