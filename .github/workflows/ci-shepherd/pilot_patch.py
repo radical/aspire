@@ -147,6 +147,7 @@ def verify_evidence(proposal, evidence):
 
 
 def publish(api, chain, observation, proposal, evidence):
+    api.repair_authority(chain)
     verify_evidence(proposal, evidence)
     if proposal["head"] != observation["head"]:
         raise ValueError("validation head changed")

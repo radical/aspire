@@ -6,6 +6,103 @@ unchanged waiting sweeps skip the actual native job, not just its prompt.
 The existing `transport-proof`, `observe` and `live` fixture modes retain their
 legacy contracts; the pilot never adopts PR121 or writes its canonical comment.
 
+## Opt-in manual PR handoff
+
+Set `CI_SHEPHERD_PR_HANDOFF=manual` for the **fork** pilot to transfer PR repairs
+out of Shepherd. An absent/empty value retains legacy behavior for unconverted
+items; other values and upstream manual handoff are rejected. The hosted prepare,
+settlement and publication jobs receive this variable. For the existing local
+runner, export it or use `--pr-handoff manual` with `--target fork`.
+For a 45-minute local validation interval, also export the existing
+`CI_SHEPHERD_REMINDER_DELAY_SECONDS=2700`; local control reads this environment
+setting rather than the hosted repository variable.
+
+This is a manual handoff, **not automatic Agent Merge activation**:
+
+```text
+initial issue -> one initial worker -> verified PR + quiescent owned work
+              -> handoff_needed -> person enables app, merging OFF
+              -> operator-confirmed watching -> merged / closed / stale
+
+existing PR -> handoff_pending -> owned work quiescent -> handoff_needed
+```
+
+The initial issue still receives native qualification. Its one worker creates a
+draft `[NO-MERGE]` PR against fork `main`, using nonclosing issue references.
+The compact initial send/task receipt replaces new repair-operation accounting
+for this path; no PR result collector is required. A lost POST response,
+missing/ambiguous artifact, unreadable session or nonterminal owned session holds
+the boundary. There is no second initial worker, guessed PR or cancellation.
+The verified task, PR node, both PR repositories and branch ref must agree.
+Read-only observation reports an unmapped completed task as attention-needed;
+only an authorized writer persists the verified child mapping.
+
+Existing PRs enter `handoff_pending` before legacy reconciliation, review
+requests, source reads or native admission. Persisted legacy send reservations
+keep a transfer pending even if the worker is not yet visible. A definitive
+pre-POST rejection settles only that admission as no-send; a genuinely uncertain
+POST never does. Existing owned task/session receipts are checked until quiescent,
+without restarting work or acquiring result reports and invoices.
+
+The optional chain `handoff` record is the sticky no-repair authority. Removing
+the opt-in flag or adoption label, restarting, closing/reopening a PR or failing
+app activation cannot return it to local/cloud repairs. Reacquiring repair
+ownership is unsupported. Old operation, review and credit histories remain
+frozen, except for definitive unsent admission settlement. Unconverted chains
+keep their existing behavior. Quiescent converted workers stop occupying live
+slots, but unresolved historical credit reservations remain conservative holds:
+they can still block other legacy paid work. Its status reports
+`Legacy credit evidence unresolved`, not a fictitious active worker. This change
+does not reconcile or release unknown spending.
+
+Local run reports identify the compact initial task and handoff phase separately
+from frozen legacy history. Initial qualification/implementation usage is not
+collected in that history; zero recorded legacy credits is not a zero-spend claim.
+
+Before confirming ownership, read the app-native settings and verify Agent Merge
+is enabled with `merge_pr` **OFF**. Then use the existing authenticated local
+runner on the reviewed clean controller source, with hosted control disabled and
+no active hosted run:
+
+```shell
+python3 -B .github/workflows/ci-shepherd/local.py confirm-handoff \
+  --target fork --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir artifacts/ci-shepherd/handoff \
+  --pr VERIFIED_PR_NUMBER --expected-head VERIFIED_CURRENT_SHA \
+  --app-enabled --merge-disabled
+```
+
+These flags are explicit **operator assertions**, not a public-API verification
+of recurring ownership. Confirmation rechecks the exact managed PR/head, saved
+transfer state and owned task/session quiescence; it invokes no coding engine or
+activation endpoint. Assignment, task completion and green checks are not
+activation receipts. Keep merging disabled throughout this fork experiment.
+
+Transferred PR sweeps emit no repair packet, Git writes, cloud repair task or
+automatic reviewer request. They monitor PR head/lifecycle, publish owned status
+and reuse the existing persisted reminder send boundary. One human reminder is
+eligible per unchanged handoff-needed or stale-watching episode after
+`CI_SHEPHERD_REMINDER_DELAY_SECONDS`; the existing daily/manual cadence is
+unchanged. Head/lifecycle progress resets the episode, not `updated_at` churn
+from Shepherd's own comments. Unknown evidence and clock rollback retain the
+timer without sending, and an uncertain comment POST never blindly retries.
+
+A verified merged child may remove only the existing `shepherd-adopted` label
+from its exact mapped origin. A fresh hands-off/takeover blocks that effect.
+The final guard compares origin adoption/hands-off labels independently of
+whether the origin is already closed.
+Closed-unmerged PRs do not trigger merged cleanup. Shepherd does not close the
+issue, remove `bug`/`quarantined-test` labels or claim the underlying bug is fixed.
+
+**Quarantine mitigation transfer is currently unsupported.** GitHub can close
+an issue via a PR description, commit closing keywords or a manually linked
+default-branch PR. Complete bounded PR-body/commit checks can establish keyword
+risk, but their absence cannot establish that manual closure associations are
+safe. A mapped `quarantined-test` origin remains attention-needed/pending because
+that association evidence is unverified, never app-ready. Later app/human changes
+may introduce risk; monitoring reports it without opening another repair loop.
+See [GitHub's issue-linking rules](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+
 ## Pilot setup and stop controls
 
 The operator must create one open tracker **issue** and one canonical authority

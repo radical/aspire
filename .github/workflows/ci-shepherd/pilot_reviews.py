@@ -112,8 +112,13 @@ def evidence(chain, value, reviews, green):
 
 def process(api, chain, observation, now, *, allow_request=True):
     import pilot_state as state
+    import pilot_handoff
     from pilot_github import AuthorityUncertain
 
+    pilot_handoff.enroll(api, chain, now)
+    if pilot_handoff.converted(chain):
+        api.persist()
+        return
     summary = observation.get("copilotReview")
     if api.write and summary is not None:
         changed = False

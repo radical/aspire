@@ -10,6 +10,7 @@ import issue_pr
 import round as contracts
 import pilot_reminders as reminders
 import pilot_reviews as reviews
+import pilot_handoff as handoff
 
 MARKER = "<!-- ci-shepherd:pilot:v1 -->"
 STATUS_MARKER = "<!-- ci-shepherd:pilot-status:v1 -->"
@@ -54,7 +55,12 @@ def validate(ledger):
         contracts.exact(chain, {"id", "origin", "kind", "node", "child", "childNode", "state", "localAttempts",
                                 "rounds", "escalated", "operations", "dispositions", "statusId", "statusPending",
                                 "childAdoption"} | ({"reminder"} if "reminder" in chain else set())
-                        | ({"reviews"} if "reviews" in chain else set()), "chain")
+                        | ({"reviews"} if "reviews" in chain else set())
+                        | ({"handoff"} if "handoff" in chain else set()), "chain")
+        if "handoff" in chain:
+            handoff.validate(chain["handoff"])
+            if ledger["repository"] != "radical/aspire":
+                raise ValueError("manual handoff authority is fork-only")
         if "reminder" in chain:
             reminders.validate(chain["reminder"])
         if "reviews" in chain:
@@ -285,10 +291,14 @@ def worker_slots(ledger):
     return sum(operation["lane"] == "cloud" and (
         operation["workerReserved"] > 0 or operation["taskId"] is not None
     ) and operation["state"] != "no-send" and operation["workerState"] not in TERMINAL
-               for chain in ledger["chains"] for operation in chain["operations"])
+               for chain in ledger["chains"]
+               if not handoff.converted(chain) or chain["handoff"]["phase"] in {"initial", "handoff_pending"}
+               for operation in chain["operations"])
 
 
 def reserve(ledger, chain, identity, now, *, local, operation_id=None):
+    if handoff.converted(chain):
+        raise ValueError("manual handoff forbids legacy repair admission")
     issue_pr.text(identity, "identity", 16384)
     previous = next((operation for operation in chain["operations"] if operation["identity"] == identity), None)
     if previous is not None:
@@ -357,7 +367,7 @@ def select(ledger, observations):
     for offset in range(len(chains)):
         index = (ledger["cursor"] + offset) % len(chains)
         chain = chains[index]
-        if chain["state"] == "open" and not pending(chain) and observations.get(
+        if not handoff.converted(chain) and chain["state"] == "open" and not pending(chain) and observations.get(
                 chain["child"] or chain["origin"], {}).get("actionable") is True:
             ledger["cursor"] = (index + 1) % len(chains)
             return chain

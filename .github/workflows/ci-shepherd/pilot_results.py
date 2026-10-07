@@ -473,6 +473,8 @@ def reconcile_publications(api):
     if not api.write:
         return
     for chain in api.ledger["chains"]:
+        if "handoff" in chain:
+            continue
         for operation in chain["operations"]:
             record = operation.get("result")
             if record is None or record.get("publication") not in {"pending", "uncertain"}:
@@ -491,6 +493,8 @@ def reconcile_publications(api):
 
 
 def publish(api, chain, observation):
+    if "handoff" in chain:
+        return
     for operation in chain["operations"]:
         record = operation.get("result")
         if record is None or "version" not in record or record["status"] == "pending" or operation["taskId"] is None:

@@ -21,6 +21,7 @@ import pilot_binding as bindings
 import pilot_reminders as reminders
 import pilot_reviews as reviews
 import pilot_results as results
+import pilot_handoff as handoff
 
 
 def configuration(environment, *, billing=False):
@@ -28,12 +29,15 @@ def configuration(environment, *, billing=False):
         return None
     event = environment.get("GITHUB_EVENT_NAME", "workflow_dispatch")
     binding = bindings.select(environment.get("SHEPHERD_TARGET", "fork"), event)
+    pr_handoff = environment.get("CI_SHEPHERD_PR_HANDOFF") or None
+    if pr_handoff not in {None, "manual"} or pr_handoff and binding != bindings.FORK:
+        raise ValueError("CI_SHEPHERD_PR_HANDOFF supports only explicit fork-only manual handoff")
     prefix = "CI_SHEPHERD_" if binding == bindings.FORK else "CI_SHEPHERD_UPSTREAM_"
     required = tuple(prefix + name for name in ("TRACKER", "AUTHORITY_COMMENT", "TRACKER_NODE"))
     if any(not environment.get(key) for key in required):
         return None
     return {"tracker": int(environment[required[0]]), "authority": int(environment[required[1]]),
-            "node": environment[required[2]], "binding": binding,
+            "node": environment[required[2]], "binding": binding, "prHandoff": pr_handoff,
             "reminderDelay": 60 if billing else reminders.delay(environment.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS", "60"))}
 
 
@@ -47,6 +51,8 @@ def prepare(api, run, now, *, present=True):
     api.persist()
     review_started = False
     for chain in api.ledger["chains"]:
+        if handoff.converted(chain):
+            continue
         number = chain["child"] or chain["origin"]
         before = deepcopy(chain)
         reviews.process(api, chain, observations[number], now, allow_request=(
@@ -60,7 +66,8 @@ def prepare(api, run, now, *, present=True):
         for chain in api.ledger["chains"]:
             observed = observations[chain["child"] or chain["origin"]]
             try:
-                results.publish(api, chain, observed)
+                if not handoff.converted(chain):
+                    results.publish(api, chain, observed)
             except github.AuthorityUncertain:
                 raise
             except (IncompleteInventory, LostResponse, ValueError) as error:
@@ -70,6 +77,12 @@ def prepare(api, run, now, *, present=True):
                 api.publish_status(chain, observed, now)
             except (github.PresentationUncertain, LostResponse) as error:
                 print(f"CI Shepherd chain {chain['origin']} presentation requires human attention: {error}", file=sys.stderr)
+    for chain in api.ledger["chains"]:
+        if handoff.converted(chain):
+            handoff.merged_label(api, chain, observations[chain["child"] or chain["origin"]])
+    initial = handoff.initial_packet(api, run, now, observations)
+    if initial is not None:
+        return initial
     # A saturated chain does not starve independent due work.
     candidates = deepcopy(observations)
     for _ in api.ledger["chains"]:
@@ -298,6 +311,7 @@ def bound_worker_request(api, chain, operation, packet):
 
 
 def dispatch(api, chain, operation, packet, now):
+    api.repair_authority(chain)
     if not api.result_capable:
         raise ValueError("approved result collector unavailable; no worker admission")
     api.reconcile_workers()
@@ -340,6 +354,9 @@ def dispatch(api, chain, operation, packet, now):
         operation["workerState"] = "unknown"
         raise
     except (LostResponse, IncompleteInventory, ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
+        if not attempted and handoff.reject_unsent(api, chain, operation, sent=True):
+            print(f"CI Shepherd dispatch definitively not attempted after handoff: {error}", file=sys.stderr)
+            return {"outcome": "no-send", "taskId": None}
         state.finish(operation, "uncertain" if attempted else "no-send")
         if attempted:
             operation["workerState"] = "unknown"
@@ -354,7 +371,16 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
     if packet.get("target", "fork") != api.binding.name:
         raise ValueError("packet target binding mismatch")
     chain = next(chain for chain in api.ledger["chains"] if chain["id"] == packet["chain"])
+    if not billing_only:
+        handoff.enroll(api, chain, now)
+        if handoff.converted(chain):
+            api.persist()
+    if handoff.converted(chain) and packet.get("handoffInitial") is True:
+        return handoff.settle_initial(api, chain, packet, evidence, now, disabled=billing_only)
     operation = next(value for value in chain["operations"] if value["id"] == packet["operation"])
+    if handoff.converted(chain):
+        handoff.reject_unsent(api, chain, operation)
+        return {"outcome": "handoff; no repair"}
     state.settle_native(operation, usage)
     api.persist()
     if billing_only:
@@ -463,6 +489,7 @@ def hosted_api(run, environment, *, billing=False):
                                                    authority=config["authority"]),
                              config["tracker"], config["authority"], config["node"], write=True, binding=config["binding"])
     api.reminder_delay = config["reminderDelay"]
+    api.pr_handoff = config["prHandoff"]
     return api
 
 
@@ -497,7 +524,9 @@ def main(argv=None):
                 try:
                     usage = native_usage(args.usage)
                 except (ValueError, OSError, KeyError) as error:
-                    print(f"CI Shepherd native billing unavailable; reservation retained: {error}", file=sys.stderr)
+                    boundary = ("initial usage not collected in legacy history" if packet.get("handoffInitial")
+                                else "reservation retained")
+                    print(f"CI Shepherd native billing unavailable; {boundary}: {error}", file=sys.stderr)
                     usage = None
                 try:
                     evidence = contracts.read_json(args.evidence) if args.evidence and args.evidence.exists() else None
@@ -510,24 +539,33 @@ def main(argv=None):
                 if result["outcome"] == "validate":
                     contracts.write_json(args.result.parent / "local-request.json", result)
             else:
-                request = contracts.read_json(args.trusted / "local-request.json")
                 api.read_authority()
                 chain = next(value for value in api.ledger["chains"] if value["id"] == packet["chain"])
+                handoff.enroll(api, chain, live.clock())
                 operation = next(value for value in chain["operations"] if value["id"] == packet["operation"])
                 api.packet_time = issue_pr.timestamp(packet["preparedAt"])
-                try:
-                    evidence = contracts.read_json(args.evidence)
-                    now = live.clock()
-                    if not issue_pr.timestamp(packet["preparedAt"]) <= now < issue_pr.timestamp(packet["preparedAt"]) + timedelta(minutes=10):
-                        raise ValueError("local publication packet expired or clock rolled backwards")
-                    head = patch.publish(api, chain, packet["observation"], request["proposal"], evidence)
-                    chain["dispositions"].update(request["dispositions"])
+                if handoff.converted(chain):
                     api.persist()
-                    result = {"outcome": "published", "head": head}
-                except (ValueError, OSError, LostResponse) as error:
-                    state.finish(operation, "failed" if operation["state"] == "reserved" else "uncertain")
-                    api.persist()
-                    result = {"outcome": operation["state"], "error": str(error)}
+                    handoff.reject_unsent(api, chain, operation)
+                    result = {"outcome": "handoff; no repair"}
+                else:
+                    request = contracts.read_json(args.trusted / "local-request.json")
+                    try:
+                        evidence = contracts.read_json(args.evidence)
+                        now = live.clock()
+                        if not issue_pr.timestamp(packet["preparedAt"]) <= now < issue_pr.timestamp(packet["preparedAt"]) + timedelta(minutes=10):
+                            raise ValueError("local publication packet expired or clock rolled backwards")
+                        head = patch.publish(api, chain, packet["observation"], request["proposal"], evidence)
+                        chain["dispositions"].update(request["dispositions"])
+                        api.persist()
+                        result = {"outcome": "published", "head": head}
+                    except (ValueError, OSError, LostResponse) as error:
+                        if handoff.reject_unsent(api, chain, operation):
+                            result = {"outcome": "handoff; no repair"}
+                        else:
+                            state.finish(operation, "failed" if operation["state"] == "reserved" else "uncertain")
+                            api.persist()
+                            result = {"outcome": operation["state"], "error": str(error)}
             chain = next(value for value in api.ledger["chains"] if value["id"] == packet["chain"])
             # Presentation is not another repair; it remains available to
             # explain exhaustion/expiry while still honoring takeover/head.

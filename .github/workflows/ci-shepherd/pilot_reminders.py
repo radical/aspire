@@ -16,7 +16,9 @@ KINDS = {"workflow-approval": "workflow approval", "worker-input": "worker input
          "native-handoff": "an explicit human handoff",
          "child-adoption": "ambiguous child-adoption needing confirmation",
          "worker-result": "an ambiguous worker result needing review",
-         "copilot-review": "Copilot review needing confirmation"}
+         "copilot-review": "Copilot review needing confirmation",
+         "handoff-needed": "manual app handoff with merging OFF",
+         "watching-stale": "stale operator-confirmed app work"}
 
 
 def delay(value):
@@ -80,7 +82,8 @@ def valid_body(body, repository, number):
         r"|Issue #" + str(number) + r" at content state `([0-9a-f]{64})`)"
         r" is blocked on (workflow approval|worker input|an explicit human handoff"
         r"|ambiguous child-adoption needing confirmation|an ambiguous worker result needing review"
-        r"|Copilot review needing confirmation)\.\n"
+        r"|Copilot review needing confirmation|manual app handoff with merging OFF"
+        r"|stale operator-confirmed app work)\.\n"
         r"Please review: (" + base + r"/(?:actions/runs/[1-9][0-9]{0,19}|tasks/[A-Za-z0-9_-]{1,256}|pull/"
         + str(number) + r"|issues/" + str(number) + r"))\n\n" + re.escape(MARKER) + r"([0-9a-f-]{36}) -->", body)
     if match is None:
@@ -163,6 +166,15 @@ def workflow_evidence(api, head):
 
 def blocker(chain, observation):
     from pilot_github import native_handoff
+    if "handoff" in chain:
+        value = chain["handoff"]
+        if observation["attention"] is not None or observation["state"] != "open":
+            return None
+        if value["phase"] == "handoff_needed":
+            return "handoff-needed", value["id"]
+        if value["phase"] == "watching":
+            return "watching-stale", value["id"]
+        return None
 
     if observation["approval"] is not None:
         return "workflow-approval", observation["approval"]["id"]
@@ -186,18 +198,21 @@ def blocker(chain, observation):
     return None
 
 
-def matches(value, observation, current):
-    return current is not None and (value["head"], value["kind"]) == (observation["head"], current[0])
+def matches(value, observation, current, *, progress=None):
+    return (current is not None and (value["head"], value["kind"]) == (observation["head"], current[0])
+            and (progress is None or value["firstObservedAt"] == progress))
 
 
 def evidence_unknown(chain, observation):
+    if "handoff" in chain:
+        return observation["attention"] is not None
     return (observation["workflowAttention"] is not None
             or observation.get("copilotReview", {}).get("state") == "unavailable") or any(
         op["taskId"] is not None and op["workerState"] == "unknown" for op in chain["operations"])
 
 
 def notification_guard(api, chain, observation, value):
-    if not api.write or chain["state"] not in {"open", "human"}:
+    if not api.write or "handoff" not in chain and chain["state"] not in {"open", "human"}:
         raise ValueError("notification authority disabled or closed")
     if value["kind"] in {"worker-input", "worker-result"}:
         # A saved task may have resumed since observation. Refresh its receipt
@@ -211,7 +226,8 @@ def notification_guard(api, chain, observation, value):
     # Only adoption notices may inspect an unmanaged child; the origin stays managed.
     observed = api.guard(chain, observation, effect=False, require_managed=value["kind"] != "child-adoption")
     current = blocker(chain, observed)
-    if evidence_unknown(chain, observed) or not matches(value, observed, current):
+    if evidence_unknown(chain, observed) or not matches(
+            value, observed, current, progress=chain.get("handoff", {}).get("progressAt")):
         raise ValueError("human blocker changed or unknown before notification")
     if value["reason"] != current[1]:
         raise ValueError("human blocker link changed before notification")
@@ -246,7 +262,7 @@ def process(api, chain, observation, now):
     pending_adoption = (chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}
                          and observation["originManaged"] is True and observation["handsOff"] is False
                          and observation["state"] == "open" and not observation["managed"])
-    if not api.write or chain["state"] in {"closed", "hands-off"} or (
+    if not api.write or "handoff" not in chain and chain["state"] in {"closed", "hands-off"} or (
             not observation["managed"] and not pending_adoption):
         return
     current = blocker(chain, observation)
@@ -269,9 +285,10 @@ def process(api, chain, observation, now):
             api.persist()
             log("blocker resolved; episode cleared")
         return
-    if value is None or not matches(value, observation, current):
+    if value is None or not matches(value, observation, current, progress=chain.get("handoff", {}).get("progressAt")):
         value = {"id": str(uuid.uuid4()), "head": observation["head"], "kind": current[0], "reason": current[1],
-                 "firstObservedAt": issue_pr.stamp(now), "sendState": "observed", "commentId": None}
+                 "firstObservedAt": (chain["handoff"]["progressAt"] if "handoff" in chain
+                                     else issue_pr.stamp(now)), "sendState": "observed", "commentId": None}
         chain["reminder"] = value
         api.persist()
     elif value["sendState"] == "observed" and value["reason"] != current[1]:

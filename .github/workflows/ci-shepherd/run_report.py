@@ -86,6 +86,20 @@ def render(run, target, before, after, result, packet, started, ended):
             lines.append(f"- Chain state: {text(old['state'])} -> {text(chain['state'])}.")
         if chain["id"] in reasons:
             lines.append(f"- No new decision/task for this chain: {text(reasons[chain['id']])}")
+        handoff = chain.get("handoff")
+        if handoff:
+            lines.append(f"- Manual handoff: {text(handoff['phase'])}; responsible: @{text(handoff['responsible'])}; "
+                         f"initial send: {text(handoff['sendState'])}. No PR repairs.")
+            if handoff["attention"]:
+                lines.append(f"- Handoff attention: {text(handoff['attention'])}.")
+            if handoff["taskId"]:
+                task = handoff["taskId"]
+                task_link = f"[{text(task)}](https://github.com/{after['repository']}/tasks/{task})"
+                if task != old.get("handoff", {}).get("taskId"):
+                    new_tasks += 1
+                    lines.append(f"- New saved initial implementation task: {task_link}; not proof of a fix.")
+                else:
+                    lines.append(f"- Saved initial implementation task: {task_link}.")
         for operation in chain["operations"]:
             previous = old_operations.get(operation["id"], {})
             task = operation["taskId"]
@@ -142,6 +156,10 @@ def render(run, target, before, after, result, packet, started, ended):
                          f"pending: {chain['statusPending']}.")
     if not new_tasks:
         lines.extend(["", "No new saved repair task. An uncertain outcome does not prove no send occurred."])
+    if any("handoff" in chain for chain in after["chains"]):
+        lines.extend(["", "Legacy accounting below excludes transferred work. "
+                      "Initial qualification/implementation usage is not collected here; "
+                      "this is not a zero-spend claim. Unresolved frozen legacy reservations remain admission holds."])
     lines.extend([
         "", "## Accounting and limits", "",
         f"- Newly recorded credits: {actual - previous_actual:g}; cumulative known credits: {actual:g}.",

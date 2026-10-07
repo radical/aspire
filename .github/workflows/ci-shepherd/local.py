@@ -21,6 +21,7 @@ import pilot_binding as bindings
 import pilot_github as github
 import pilot_feedback as review_feedback
 import pilot_state as state
+import pilot_reminders as reminders
 import reasoning
 import round as contracts
 import run_report
@@ -85,6 +86,7 @@ class LocalGitHub(github.PilotGitHub):
             github.PilotTransport(token, write=write, binding=binding,
                                   tracker=tracker, authority=authority),
             tracker, authority, node, write=write, binding=binding)
+        self.reminder_delay = reminders.delay(os.environ.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS") or "60")
         self.result_collector = result_collector.LocalCollector(token)
 
     def authority_guard(self):
@@ -321,7 +323,8 @@ def run_sweep(api, directory, run, context, *, executor):
                     "outcome": "observed; no inference",
                     "reasons": [{"chain": chain["id"], "reason": api.next_action(chain, api.observe(chain))}
                                 for chain in api.ledger["chains"]],
-                    "roundLimitReached": any(chain["rounds"] >= api.binding.round_limit for chain in api.ledger["chains"]),
+                    "roundLimitReached": any("handoff" not in chain and chain["rounds"] >= api.binding.round_limit
+                                             for chain in api.ledger["chains"]),
                 }
         else:
             evidence = None
@@ -334,9 +337,13 @@ def run_sweep(api, directory, run, context, *, executor):
             try:
                 usage = pilot.native_usage(directory / "agent" / "usage.json")
             except (ValueError, OSError, KeyError) as error:
-                print(f"CI Shepherd local billing unavailable; reservation retained: {error}", file=sys.stderr)
+                boundary = ("initial usage not collected in legacy history" if packet.get("handoffInitial")
+                            else "reservation retained")
+                print(f"CI Shepherd local billing unavailable; {boundary}: {error}", file=sys.stderr)
             if usage is None:
-                print("CI Shepherd local billing unknown; native reservation retained.", file=sys.stderr)
+                boundary = ("initial usage not collected in legacy history." if packet.get("handoffInitial")
+                            else "native reservation retained.")
+                print(f"CI Shepherd local billing unknown; {boundary}", file=sys.stderr)
             api.packet_time = issue_pr.timestamp(packet["preparedAt"])
             # Packet validity and fresh session evidence are still checked by the core.
             result = pilot.settle(api, packet, evidence, usage, live.clock(), billing_only=not api.enabled())
@@ -359,7 +366,7 @@ def resume(api, operation_id, expected_head, now):
         chain = next((current for current in api.ledger["chains"] if current["operations"]
                       and current["operations"][-1]["id"] == operation_id), None)
         if (chain is None or chain["kind"] != "pr" or chain["child"] is not None
-                or chain["state"] != "human" or not chain["operations"]):
+                or chain["state"] != "human" or not chain["operations"] or "handoff" in chain):
             raise ValueError("not an upstream native handoff")
         latest = chain["operations"][-1]
         if (latest["id"] != operation_id or latest["state"] != "completed"
@@ -445,6 +452,11 @@ def resume(api, operation_id, expected_head, now):
         raise
 
 
+def confirm_handoff(api, number, head, now, *, app_enabled, merge_disabled):
+    import pilot_handoff
+    return pilot_handoff.confirm(api, number, head, now, app_enabled=app_enabled, merge_disabled=merge_disabled)
+
+
 def check_api(api, number):
     value = api.mapping(number)
     comments = api.api.pages(f"{api.prefix}/pulls/{number}/comments")
@@ -464,7 +476,7 @@ def check_api(api, number):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume"])
+    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume", "confirm-handoff"])
     parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name],
                         default=bindings.UPSTREAM.name)
     parser.add_argument("--tracker", type=int, required=True)
@@ -475,6 +487,11 @@ def main(argv=None):
     parser.add_argument("--operation")
     parser.add_argument("--expected-head")
     parser.add_argument("--pr", type=int)
+    parser.add_argument("--pr-handoff", choices=["manual"], default=os.environ.get("CI_SHEPHERD_PR_HANDOFF") or None)
+    parser.add_argument("--app-enabled", action="store_true",
+                        help="Operator declares app-native Agent Merge is enabled; not an API verification")
+    parser.add_argument("--merge-disabled", action="store_true",
+                        help="Operator declares the app's merge_pr action is OFF")
     parser.add_argument("--publish-worker-results", action="store_true",
                         help="Explicit unattended result comments for this selected target; default is preview only")
     args = parser.parse_args(argv)
@@ -485,12 +502,20 @@ def main(argv=None):
     if args.mode == "resume" and args.target == bindings.FORK.name:
         parser.error("resume requires an upstream target")
     binding = bindings.select(args.target)
-    if args.mode == "check-api":
+    if args.pr_handoff not in {None, "manual"} or args.pr_handoff and binding != bindings.FORK:
+        parser.error("manual PR handoff is fork-only")
+    if args.mode == "confirm-handoff" and (
+            binding != bindings.FORK or args.pr is None or not args.expected_head
+            or not args.app_enabled or not args.merge_disabled):
+        parser.error("confirm-handoff requires fork, exact --pr/--expected-head, --app-enabled and --merge-disabled")
+    if args.mode in {"check-api", "confirm-handoff"}:
         if (args.pr is None or args.pr <= 0 or args.pr == 121
                 or binding.subject is not None and args.pr != binding.subject):
-            parser.error("check-api requires an explicit supported --pr")
+            parser.error("this mode requires an explicit supported --pr")
     elif args.pr is not None:
-        parser.error("--pr is only supported by check-api")
+        parser.error("--pr is only supported by check-api or confirm-handoff")
+    if args.mode != "confirm-handoff" and (args.app_enabled or args.merge_disabled):
+        parser.error("app assertions are only supported by confirm-handoff")
     try:
         token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
         revision = command(["git", "--no-pager", "-C", str(ROOT), "rev-parse", "HEAD"])
@@ -500,6 +525,7 @@ def main(argv=None):
         if args.mode in {"observe", "check-api"}:
             api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=False,
                               revision=revision, binding=binding)
+            api.pr_handoff = args.pr_handoff
             api.read_authority()
             if args.mode == "check-api":
                 print(json.dumps(check_api(api, args.pr)), flush=True)
@@ -508,7 +534,7 @@ def main(argv=None):
             for chain in api.ledger["chains"]:
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())
             return 0
-        if args.mode != "resume" and not command(["copilot", "--no-auto-update", "--version"]).startswith("GitHub Copilot CLI 1.0.92-3."):
+        if args.mode not in {"resume", "confirm-handoff"} and not command(["copilot", "--no-auto-update", "--version"]).startswith("GitHub Copilot CLI 1.0.92-3."):
             raise ValueError("local decision engine must match the pinned Copilot1.0.92-3")
         lock_root = Path.home() / ".copilot" / "ci-shepherd" / "locks"
         with authority_lock(lock_root, args.authority):
@@ -517,7 +543,12 @@ def main(argv=None):
                 require_idle_actions(token)
                 api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=True,
                                   revision=revision, binding=binding)
+                api.pr_handoff = args.pr_handoff
                 api.publish_results = args.publish_worker_results
+                if args.mode == "confirm-handoff":
+                    print(json.dumps(confirm_handoff(api, args.pr, args.expected_head, live.clock(),
+                                                     app_enabled=args.app_enabled, merge_disabled=args.merge_disabled)), flush=True)
+                    return 0
                 if args.mode == "resume":
                     print(json.dumps(resume(api, args.operation, args.expected_head, live.clock())), flush=True)
                     return 0

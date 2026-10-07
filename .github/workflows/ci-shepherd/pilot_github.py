@@ -20,6 +20,7 @@ import pilot_results as results
 import pilot_feedback as review_feedback
 import pilot_authors as authors
 import pilot_reviews as copilot_reviews
+import pilot_handoff as handoff
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
@@ -63,6 +64,10 @@ class PilotTransport(live.HTTPTransport):
             raise ValueError("invalid pilot endpoint")
         if method == "POST" and endpoint == "graphql":
             validate_graphql(body, self.binding)
+            return
+        if (method == "DELETE" and self.binding == bindings.FORK and self.write and not path.query and body is None
+                and re.fullmatch(re.escape(PREFIX) + r"/issues/[1-9][0-9]*/labels/shepherd-adopted", path.path)
+                and not path.path.endswith("/121/labels/shepherd-adopted")):
             return
         if method == "GET" and re.fullmatch(
                 re.escape(f"repos/{self.binding.repository}") + r"/check-runs/[1-9][0-9]*/annotations", path.path):
@@ -118,7 +123,7 @@ class PilotTransport(live.HTTPTransport):
                     and (reminders.valid_body(body["body"], self.binding.repository, int(path.path.split("/")[-2]))
                          or results.valid_report(body["body"], self.binding.repository, int(path.path.split("/")[-2])))):
                 return
-            if method in {"POST", "PATCH"} and path.path.startswith(target + "/"):
+            if method in {"POST", "PATCH", "DELETE"} and path.path.startswith(target + "/"):
                 raise ValueError("upstream host publication is not authorized")
             controller_reads = {"user", "users/radical", PREFIX,
                                 f"{PREFIX}/issues/{self.tracker}", f"{PREFIX}/issues/{self.tracker}/comments"}
@@ -135,7 +140,7 @@ class PilotTransport(live.HTTPTransport):
         reads = (
             r"user|users/radical|" + prefix +
             r"(?:|/issues(?:/[1-9][0-9]*(?:/comments)?)?|/issues/comments/[1-9][0-9]*"
-            r"|/pulls(?:/[1-9][0-9]*(?:/(?:comments|reviews|files))?)?"
+            r"|/pulls(?:/[1-9][0-9]*(?:/(?:comments|reviews|files|commits))?)?"
             r"|/commits/[0-9a-f]{40}(?:/(?:check-runs|status))?"
             r"|/contents/\.ci-shepherd-pilot/(?:labels|test_labels)\.py"
             r"|/git/(?:commits/[0-9a-f]{40}|ref/heads/[A-Za-z0-9_./-]+))"
@@ -277,6 +282,7 @@ class PilotGitHub:
         self.worker_result_versions = {}
         self.worker_revisions = {}
         self.admission_reasons = {}
+        self.pr_handoff = None
 
     def owned(self, comment):
         return comment.get("user", {}).get("id") == self.actor["id"] and comment["user"].get("login") == self.actor["login"]
@@ -343,6 +349,25 @@ class PilotGitHub:
         return value
 
     def observe(self, chain):
+        if handoff.converted(chain) and (handoff.blocked(chain) or chain["handoff"]["sendState"] != "idle"):
+            return handoff.observe(self, chain)
+        return self._observe(chain)
+
+    def observe_initial(self, chain):
+        if chain["kind"] != "issue" or chain["child"] is not None:
+            raise ValueError("only initial issues may enter legacy intake observation")
+        return self._observe(chain)
+
+    def repair_authority(self, chain):
+        if self.pr_handoff == "manual" and not handoff.converted(chain):
+            handoff.enroll(self, chain, self.clock())
+            self.persist()
+        latest = self.read_authority()
+        current = state.find_chain(latest, chain["origin"])
+        if handoff.converted(chain) or current is not None and handoff.converted(current):
+            raise ValueError("manual handoff prohibits PR repair effects")
+
+    def _observe(self, chain):
         number = chain["child"] or chain["origin"]
         kind = "pr" if chain["child"] is not None else chain["kind"]
         value = self.mapping(number) if kind == "pr" else self.api.get(f"{self.prefix}/issues/{number}")
@@ -680,6 +705,13 @@ class PilotGitHub:
         return result
 
     def guard(self, chain, observation, *, effect=True, require_managed=True):
+        if not effect and handoff.converted(chain):
+            fresh = handoff.monitor_guard(self, chain, observation)
+            if not fresh["managed"] or fresh["attention"]:
+                raise ValueError("handoff notification/status management unknown or removed")
+            return fresh
+        if effect:
+            self.repair_authority(chain)
         if not require_managed and effect:
             # Only pending-adoption notifications may inspect an unmanaged child.
             raise ValueError("require_managed=False is only valid for a non-effect notification read")
@@ -733,7 +765,7 @@ class PilotGitHub:
         task = self.api.get(f"agents/repos/{self.repository}/tasks/{task_id}")
         return self.verify_task(task, task_id, chain, operation)
 
-    def verify_task(self, task, task_id, chain, operation):
+    def verify_task(self, task, task_id, chain, operation, *, summarize=True):
         if (task["id"] != task_id or task["repository"]["id"] != self.repository_id
                 or task["creator"]["id"] != self.actor["id"] or not isinstance(task.get("sessions"), list)
                 or type(task.get("session_count")) is not int
@@ -777,6 +809,8 @@ class PilotGitHub:
                 nano += state.amount(usage["amount"])
         if len(correlations) != len(set(correlations)):
             raise ValueError("duplicate task sessions")
+        if not summarize:
+            return task, None
         receipt = results.summarize(task, operation, pr)
         self.worker_result_heads[operation["id"]] = pr["head"]["sha"] if pr is not None else None
         self.worker_result_versions[operation["id"]] = results.task_version(task)
@@ -796,6 +830,12 @@ class PilotGitHub:
         self.worker_result_versions = {}
         self.worker_revisions = {}
         for chain in self.ledger["chains"]:
+            handoff.enroll(self, chain, self.clock())
+        if any(handoff.converted(chain) for chain in self.ledger["chains"]) and self.write:
+            self.persist()
+        for chain in self.ledger["chains"]:
+            if handoff.converted(chain):
+                continue
             for operation in chain["operations"]:
                 task_id = operation["taskId"]
                 if task_id is None:
@@ -940,6 +980,8 @@ class PilotGitHub:
             raise ValueError("authenticated authority must be read before discovery")
         self.reconcile_workers()
         for chain in self.ledger["chains"]:
+            if handoff.converted(chain):
+                continue
             # Never retry an uncertain send; settle it from observe() below.
             if self.write and chain["child"] is not None and chain["childAdoption"] == "reserved":
                 self.adopt_child(chain)
@@ -957,10 +999,16 @@ class PilotGitHub:
                 if verified["node_id"] != candidate["node_id"] or not managed(verified):
                     raise ValueError("upstream intake identity/management changed")
             state.adopt(self.ledger, number, "pr" if self.binding.subject is not None or "pull_request" in candidate else "issue", candidate["node_id"])
+        for chain in self.ledger["chains"]:
+            handoff.enroll(self, chain, self.clock())
+        if self.write and any(handoff.converted(chain) for chain in self.ledger["chains"]):
+            self.persist()
         observations = {}
         for chain in self.ledger["chains"]:
             observed = self.observe(chain)
             observations[observed["number"]] = observed
+            if handoff.converted(chain):
+                continue
             if self.write and chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}:
                 # Adoption settlement and chain classification must share one read.
                 self.adopt_child(chain, observed)
@@ -974,6 +1022,8 @@ class PilotGitHub:
         return observations
 
     def next_action(self, chain, observation):
+        if handoff.converted(chain):
+            return handoff.status(chain, observation)
         operation = chain["operations"][-1] if chain["operations"] else None
         unbilled = state.worker_billing_pending(chain)
         credit_blocked = (state.chain_spend(chain) + state.NATIVE_RESERVE > state.chain_allowance(self.ledger)
@@ -1008,6 +1058,10 @@ class PilotGitHub:
                 blocker += f" Lifetime action round limit ({self.binding.round_limit}) also reached."
         elif chain["rounds"] >= self.binding.round_limit:
             blocker = f"Lifetime action round limit ({self.binding.round_limit}) reached; human attention required."
+        elif (credit_blocked and handoff.unresolved_credit(self.ledger)
+              and state.repository_spend(self.ledger, self.clock()) + state.NATIVE_RESERVE > state.REPOSITORY_ALLOWANCE):
+            blocker = ("Legacy credit evidence unresolved in transferred history; no inference. "
+                       "Historical reservations retained; no active worker implied.")
         elif chain["id"] in self.admission_reasons:
             blocker = self.admission_reasons[chain["id"]]
         elif credit_blocked:
@@ -1040,6 +1094,8 @@ class PilotGitHub:
         return blocker
 
     def status(self, chain, observation, now):
+        if handoff.converted(chain):
+            return handoff.status(chain, observation) + f"\n{state.STATUS_MARKER}\nChain: {chain['id']}"
         operation = chain["operations"][-1] if chain["operations"] else None
         lane = operation["lane"] if operation else (
             "cloud" if chain["escalated"] or self.binding != bindings.FORK else "local")
@@ -1062,6 +1118,9 @@ class PilotGitHub:
                 f"{state.STATUS_MARKER}\nChain: {chain['id']}")
 
     def log_status(self, chain, observation, now):
+        if handoff.converted(chain):
+            print(handoff.status(chain, observation))
+            return
         operation = chain["operations"][-1] if chain["operations"] else None
         task = operation["taskId"] if operation else None
         worker = (operation["workerState"] or operation["state"]) if operation else "not started"
@@ -1083,11 +1142,14 @@ class PilotGitHub:
         print(summary)
 
     def publish_status(self, chain, observation, now):
+        if handoff.converted(chain) and observation["attention"] is not None:
+            return
         if self.binding != bindings.FORK:
             # Upstream comments are limited to fixed delayed human reminders.
             # Plain hosted logs remain available when the native job skips.
             return
-        if not self.write or not observation["managed"] or chain["state"] not in {"open", "human"}:
+        if not self.write or not observation["managed"] or (
+                not handoff.converted(chain) and chain["state"] not in {"open", "human"}):
             return
         body = self.status(chain, observation, now)
         number = observation["number"]
