@@ -1,0 +1,6149 @@
+{
+  "now": "2026-10-07T21:00:16+00:00",
+  "windows": {
+    "current": {
+      "start": "2026-09-30",
+      "end": "2026-10-06"
+    },
+    "prior": {
+      "start": "2026-09-23",
+      "end": "2026-09-29"
+    },
+    "last_five_weekdays": [
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-05",
+      "2026-10-06"
+    ]
+  },
+  "config": {
+    "rolling_window_days": 7,
+    "graph_history_days": 21,
+    "history_retention_days": 180,
+    "health_thresholds": {
+      "green": 90,
+      "yellow": 75
+    },
+    "primary_lane": "github-ci-main",
+    "diagnostics_lane": "github-ci-main",
+    "pr_ci": {
+      "id": "github-pr-ci",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "pull_request",
+      "label": "PR CI",
+      "attempt_one_population": true
+    },
+    "lanes": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "label": "GitHub CI \u2014 main",
+        "primary": true,
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "label": "GitHub outerloop \u2014 main",
+        "primary": false,
+        "diagnostics": true
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "definition_name": "microsoft-aspire",
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "label": "AzDO internal \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      },
+      {
+        "id": "azdo-source-index-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1693,
+        "definition_name": "microsoft-aspire-source-index",
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "schedule"
+        ],
+        "label": "AzDO source index \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      }
+    ]
+  },
+  "history": {
+    "lane_identity": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "definition_name": null,
+        "eligible_reasons": [],
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "definition_name": null,
+        "eligible_reasons": [],
+        "diagnostics": true
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "event": null,
+        "branch": "refs/heads/main",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "definition_name": "microsoft-aspire",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "diagnostics": false
+      },
+      {
+        "id": "azdo-source-index-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "event": null,
+        "branch": "refs/heads/main",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1693,
+        "definition_name": "microsoft-aspire-source-index",
+        "eligible_reasons": [
+          "schedule"
+        ],
+        "diagnostics": false
+      }
+    ],
+    "coverage": {
+      "start": "2026-08-25",
+      "end": "2026-10-06",
+      "days": 43,
+      "reduced": true,
+      "refresh_days": 42
+    },
+    "lanes": {
+      "github-ci-main": [
+        {
+          "date": "2026-08-25",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 4,
+          "other_failed": 7,
+          "evidence_reasons": {
+            "no_failed_test": 7
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:32812190860",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:32834178883",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:32880916910",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:32909638198",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-08-26",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 6,
+          "evidence_reasons": {
+            "no_failed_test": 6
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-27",
+          "passed": 3,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 3,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            2,
+            8,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33046510101",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33086828076",
+              "initial_attempt": 1,
+              "failed_test_cases": 8,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33116288348",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 8
+        },
+        {
+          "date": "2026-08-28",
+          "passed": 2,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33231909693",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 5,
+          "failed": 2,
+          "rolling_pass_rate": 27.8,
+          "rolling_passed": 10,
+          "rolling_failed": 26,
+          "test_failed": 1,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33434427094",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 4,
+          "failed": 5,
+          "rolling_pass_rate": 41.2,
+          "rolling_passed": 14,
+          "rolling_failed": 20,
+          "test_failed": 2,
+          "other_failed": 3,
+          "evidence_reasons": {
+            "no_failed_test": 3
+          },
+          "failed_test_case_counts": [
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33458228838",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33494022725",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 3,
+          "failed": 8,
+          "rolling_pass_rate": 43.6,
+          "rolling_passed": 17,
+          "rolling_failed": 22,
+          "test_failed": 4,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            7,
+            1,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33578521517",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33666247580",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33671638017",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33696222557",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": 38.5,
+          "rolling_passed": 15,
+          "rolling_failed": 24,
+          "test_failed": 3,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            1,
+            3,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33782779276",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33802459402",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33814653161",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 3
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": 31.8,
+          "rolling_passed": 14,
+          "rolling_failed": 30,
+          "test_failed": 2,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            1,
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33887016795",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:33902845984",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 34.1,
+          "rolling_passed": 15,
+          "rolling_failed": 29,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 34.1,
+          "rolling_passed": 15,
+          "rolling_failed": 29,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 27.0,
+          "rolling_passed": 10,
+          "rolling_failed": 27,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": 20.0,
+          "rolling_passed": 7,
+          "rolling_failed": 28,
+          "test_failed": 4,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            2,
+            2,
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34240077767",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34240101007",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34251319766",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34279845105",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 1,
+          "failed": 5,
+          "rolling_pass_rate": 16.7,
+          "rolling_passed": 5,
+          "rolling_failed": 25,
+          "test_failed": 5,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1,
+            1,
+            3,
+            2,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34296511200",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34330204291",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34379133718",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34401953654",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34413952365",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 3
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 13.3,
+          "rolling_passed": 4,
+          "rolling_failed": 26,
+          "test_failed": 3,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            9,
+            2,
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34433050282",
+              "initial_attempt": 1,
+              "failed_test_cases": 9,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34480468710",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34508764231",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 9
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 10.3,
+          "rolling_passed": 3,
+          "rolling_failed": 26,
+          "test_failed": 5,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            2,
+            1,
+            3
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34553168379",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34554475071",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34564571207",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34586660260",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34655355873",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 3
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 1,
+          "failed": 1,
+          "rolling_pass_rate": 10.0,
+          "rolling_passed": 3,
+          "rolling_failed": 27,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 8.3,
+          "rolling_passed": 3,
+          "rolling_failed": 33,
+          "test_failed": 4,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            10,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34733806595",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34740434278",
+              "initial_attempt": 1,
+              "failed_test_cases": 10,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34747853466",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34790579218",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 10
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 1,
+          "failed": 12,
+          "rolling_pass_rate": 8.2,
+          "rolling_passed": 4,
+          "rolling_failed": 45,
+          "test_failed": 4,
+          "other_failed": 8,
+          "evidence_reasons": {
+            "no_failed_test": 8
+          },
+          "failed_test_case_counts": [
+            2,
+            2,
+            1,
+            7
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34791816809",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34815567672",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34870408493",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:34882504789",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": 9.4,
+          "rolling_passed": 5,
+          "rolling_failed": 48,
+          "test_failed": 2,
+          "other_failed": 7,
+          "evidence_reasons": {
+            "no_failed_test": 7
+          },
+          "failed_test_case_counts": [
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35003412018",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35023788042",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": 9.3,
+          "rolling_passed": 5,
+          "rolling_failed": 49,
+          "test_failed": 1,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35053406342",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 9.6,
+          "rolling_passed": 5,
+          "rolling_failed": 47,
+          "test_failed": 6,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            7,
+            7,
+            7,
+            7,
+            7,
+            7
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35166494293",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35246832023",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35251762755",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35262261892",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35274272340",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35275989131",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.7,
+          "rolling_passed": 6,
+          "rolling_failed": 50,
+          "test_failed": 8,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            2,
+            3,
+            78,
+            2,
+            5,
+            1,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35322237059",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35337231287",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35349639380",
+              "initial_attempt": 1,
+              "failed_test_cases": 78,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35366726944",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35373021439",
+              "initial_attempt": 1,
+              "failed_test_cases": 5,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35377484081",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35383851199",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35407089360",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 78
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 9.1,
+          "rolling_passed": 5,
+          "rolling_failed": 50,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 10.2,
+          "rolling_passed": 5,
+          "rolling_failed": 44,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.6,
+          "rolling_passed": 5,
+          "rolling_failed": 42,
+          "test_failed": 5,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            79,
+            1,
+            1,
+            2,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35569654952",
+              "initial_attempt": 1,
+              "failed_test_cases": 79,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35576439465",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35631672622",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35634736322",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35649687113",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 79
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 13,
+          "rolling_pass_rate": 6.1,
+          "rolling_passed": 3,
+          "rolling_failed": 46,
+          "test_failed": 5,
+          "other_failed": 8,
+          "evidence_reasons": {
+            "no_failed_test": 8
+          },
+          "failed_test_case_counts": [
+            4,
+            1,
+            1,
+            2,
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35681382053",
+              "initial_attempt": 1,
+              "failed_test_cases": 4,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35683878838",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35756256834",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35761965051",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35786739288",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 4
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 2,
+          "failed": 11,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 4,
+          "rolling_failed": 51,
+          "test_failed": 3,
+          "other_failed": 8,
+          "evidence_reasons": {
+            "no_failed_test": 8
+          },
+          "failed_test_case_counts": [
+            1,
+            54,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35819211421",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35822193225",
+              "initial_attempt": 1,
+              "failed_test_cases": 54,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:35827905433",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 54
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 3,
+          "failed": 7,
+          "rolling_pass_rate": 11.9,
+          "rolling_passed": 7,
+          "rolling_failed": 52,
+          "test_failed": 2,
+          "other_failed": 5,
+          "evidence_reasons": {
+            "no_failed_test": 5
+          },
+          "failed_test_case_counts": [
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36006063704",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36073376302",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 1,
+          "failed": 13,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 7,
+          "rolling_failed": 55,
+          "test_failed": 9,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            2,
+            308,
+            1,
+            1,
+            1,
+            1,
+            2,
+            2,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36078415005",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36091981653",
+              "initial_attempt": 1,
+              "failed_test_cases": 308,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36123816571",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36151000465",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36171952125",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36179440800",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36192353146",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36197788662",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36201574198",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 308
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 10.9,
+          "rolling_passed": 7,
+          "rolling_failed": 57,
+          "test_failed": 3,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            2,
+            651,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36206679371",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36207777000",
+              "initial_attempt": 1,
+              "failed_test_cases": 651,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36215296244",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 651
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36318348933",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "test_failed": 6,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            128,
+            161,
+            1,
+            1,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36363480255",
+              "initial_attempt": 1,
+              "failed_test_cases": 128,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36371135786",
+              "initial_attempt": 1,
+              "failed_test_cases": 161,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36375862100",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36382543375",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36428029876",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36478836475",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 161
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 12.5,
+          "rolling_passed": 7,
+          "rolling_failed": 49,
+          "test_failed": 4,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1,
+            1,
+            2,
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36529913024",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36598610909",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36612367770",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36636729143",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 2,
+          "failed": 7,
+          "rolling_pass_rate": 13.5,
+          "rolling_passed": 7,
+          "rolling_failed": 45,
+          "test_failed": 3,
+          "other_failed": 4,
+          "evidence_reasons": {
+            "no_failed_test": 4
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36657927617",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36791310097",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36792855350",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 6,
+          "rolling_failed": 47,
+          "test_failed": 8,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [
+            1,
+            1,
+            2,
+            2,
+            2,
+            2,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36816020779",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36883975285",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36897940260",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36907052709",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36913448589",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36928109877",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36932541965",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:36937689303",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 2,
+          "failed": 6,
+          "rolling_pass_rate": 14.9,
+          "rolling_passed": 7,
+          "rolling_failed": 40,
+          "test_failed": 5,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_failed_test": 1
+          },
+          "failed_test_case_counts": [
+            4,
+            1,
+            1,
+            1,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36976170872",
+              "initial_attempt": 1,
+              "failed_test_cases": 4,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37008441326",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37016150984",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37026845324",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37028060129",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 4
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 1,
+          "failed": 5,
+          "rolling_pass_rate": 16.0,
+          "rolling_passed": 8,
+          "rolling_failed": 42,
+          "test_failed": 3,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 2
+          },
+          "failed_test_case_counts": [
+            1,
+            2,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37094416834",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37099309548",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37108975162",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 2
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 18.0,
+          "rolling_passed": 9,
+          "rolling_failed": 41,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": 19.1,
+          "rolling_passed": 9,
+          "rolling_failed": 38,
+          "test_failed": 5,
+          "other_failed": 2,
+          "evidence_reasons": {
+            "no_failed_test": 1,
+            "archive_size_limit": 1
+          },
+          "failed_test_case_counts": [
+            1,
+            3,
+            5,
+            2,
+            2
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37250324248",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37302773955",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37349943397",
+              "initial_attempt": 1,
+              "failed_test_cases": 5,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37379473346",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37387294685",
+              "initial_attempt": 1,
+              "failed_test_cases": 2,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 5
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 2,
+          "failed": 4,
+          "rolling_pass_rate": 22.4,
+          "rolling_passed": 11,
+          "rolling_failed": 38,
+          "test_failed": 4,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            3,
+            1,
+            3,
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37427038688",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37493630486",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37537999173",
+              "initial_attempt": 1,
+              "failed_test_cases": 3,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            },
+            {
+              "identity": "github:37543861411",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": false,
+              "incomplete_reasons": []
+            }
+          ],
+          "max_failed_test_cases": 3
+        }
+      ],
+      "github-outerloop-main": [
+        {
+          "date": "2026-08-25",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-26",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            1
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:32922923673",
+              "initial_attempt": 1,
+              "failed_test_cases": 1,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 1
+        },
+        {
+          "date": "2026-08-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_recognized_result_files": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-28",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_recognized_result_files": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_recognized_result_files": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_recognized_result_files": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 14.3,
+          "rolling_passed": 1,
+          "rolling_failed": 6,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "no_recognized_result_files": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 0,
+          "other_failed": 1,
+          "evidence_reasons": {
+            "missing_artifact": 1
+          },
+          "failed_test_case_counts": [],
+          "failed_test_incidents": [],
+          "max_failed_test_cases": 0
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            7
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33583058396",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            103
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33707012110",
+              "initial_attempt": 1,
+              "failed_test_cases": 103,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 103
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            6
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33828588223",
+              "initial_attempt": 1,
+              "failed_test_cases": 6,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 6
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            5
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:33938325384",
+              "initial_attempt": 1,
+              "failed_test_cases": 5,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 5
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            7
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34005812375",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            7
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34075510679",
+              "initial_attempt": 1,
+              "failed_test_cases": 7,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 7
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            6
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34179169787",
+              "initial_attempt": 1,
+              "failed_test_cases": 6,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 6
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            6
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34302202692",
+              "initial_attempt": 1,
+              "failed_test_cases": 6,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 6
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            87
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34428450548",
+              "initial_attempt": 1,
+              "failed_test_cases": 87,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 87
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            86
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34553646688",
+              "initial_attempt": 1,
+              "failed_test_cases": 86,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 86
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            89
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34666949973",
+              "initial_attempt": 1,
+              "failed_test_cases": 89,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 89
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            86
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34732405520",
+              "initial_attempt": 1,
+              "failed_test_cases": 86,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 86
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            86
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34798505665",
+              "initial_attempt": 1,
+              "failed_test_cases": 86,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 86
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            84
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:34920255358",
+              "initial_attempt": 1,
+              "failed_test_cases": 84,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 84
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            90
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35047006215",
+              "initial_attempt": 1,
+              "failed_test_cases": 90,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 90
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            94
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35173463386",
+              "initial_attempt": 1,
+              "failed_test_cases": 94,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 94
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            96
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35298318356",
+              "initial_attempt": 1,
+              "failed_test_cases": 96,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 96
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            107
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35414883941",
+              "initial_attempt": 1,
+              "failed_test_cases": 107,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 107
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            111
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35483312253",
+              "initial_attempt": 1,
+              "failed_test_cases": 111,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 111
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            110
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35553511933",
+              "initial_attempt": 1,
+              "failed_test_cases": 110,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 110
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            115
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35678543480",
+              "initial_attempt": 1,
+              "failed_test_cases": 115,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 115
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            109
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35809367842",
+              "initial_attempt": 1,
+              "failed_test_cases": 109,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 109
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            71
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:35946233512",
+              "initial_attempt": 1,
+              "failed_test_cases": 71,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 71
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            59
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36085179134",
+              "initial_attempt": 1,
+              "failed_test_cases": 59,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 59
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            35
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36210855253",
+              "initial_attempt": 1,
+              "failed_test_cases": 35,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 35
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            36
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36287958989",
+              "initial_attempt": 1,
+              "failed_test_cases": 36,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 36
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            229
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36369390186",
+              "initial_attempt": 1,
+              "failed_test_cases": 229,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 229
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            16
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36511652601",
+              "initial_attempt": 1,
+              "failed_test_cases": 16,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 16
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            21
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36659156328",
+              "initial_attempt": 1,
+              "failed_test_cases": 21,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 21
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            6
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36805510574",
+              "initial_attempt": 1,
+              "failed_test_cases": 6,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 6
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            20
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:36954841813",
+              "initial_attempt": 1,
+              "failed_test_cases": 20,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 20
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            28
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37088956675",
+              "initial_attempt": 1,
+              "failed_test_cases": 28,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 28
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            223
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37171969074",
+              "initial_attempt": 1,
+              "failed_test_cases": 223,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 223
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            29
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37255141922",
+              "initial_attempt": 1,
+              "failed_test_cases": 29,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 29
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "test_failed": 1,
+          "other_failed": 0,
+          "evidence_reasons": {},
+          "failed_test_case_counts": [
+            31
+          ],
+          "failed_test_incidents": [
+            {
+              "identity": "github:37403213750",
+              "initial_attempt": 1,
+              "failed_test_cases": 31,
+              "lower_bound": true,
+              "incomplete_reasons": [
+                "archive_size_limit",
+                "artifact_outside_attempt",
+                "no_recognized_result_files"
+              ]
+            }
+          ],
+          "max_failed_test_cases": 31
+        }
+      ],
+      "azdo-internal-main": [
+        {
+          "date": "2026-08-25",
+          "passed": 0,
+          "failed": 10,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-26",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-27",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-28",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 29
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 27
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 23
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 24
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 33
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 23
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 20
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 9,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 17
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 40
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 2,
+          "failed": 1,
+          "rolling_pass_rate": 5.0,
+          "rolling_passed": 2,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 3,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 6,
+          "failed": 1,
+          "rolling_pass_rate": 22.0,
+          "rolling_passed": 9,
+          "rolling_failed": 32
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 3,
+          "failed": 1,
+          "rolling_pass_rate": 31.6,
+          "rolling_passed": 12,
+          "rolling_failed": 26
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 2,
+          "failed": 3,
+          "rolling_pass_rate": 43.8,
+          "rolling_passed": 14,
+          "rolling_failed": 18
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 9,
+          "failed": 0,
+          "rolling_pass_rate": 62.2,
+          "rolling_passed": 23,
+          "rolling_failed": 14
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 5,
+          "failed": 1,
+          "rolling_pass_rate": 80.0,
+          "rolling_passed": 28,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 5,
+          "failed": 0,
+          "rolling_pass_rate": 83.8,
+          "rolling_passed": 31,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 83.8,
+          "rolling_passed": 31,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 5,
+          "failed": 1,
+          "rolling_pass_rate": 83.3,
+          "rolling_passed": 30,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 3,
+          "failed": 2,
+          "rolling_pass_rate": 81.1,
+          "rolling_passed": 30,
+          "rolling_failed": 7
+        }
+      ],
+      "azdo-source-index-main": [
+        {
+          "date": "2026-08-25",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-26",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-27",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-28",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-29",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-08-31",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": 0,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 100.0,
+          "rolling_passed": 1,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 100.0,
+          "rolling_passed": 2,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 100.0,
+          "rolling_passed": 3,
+          "rolling_failed": 0
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 75.0,
+          "rolling_passed": 3,
+          "rolling_failed": 1
+        }
+      ]
+    }
+  },
+  "lanes": {
+    "github-ci-main": {
+      "id": "github-ci-main",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "branch": "main",
+      "label": "GitHub CI \u2014 main",
+      "primary": true,
+      "diagnostics": true,
+      "recent": [
+        9,
+        42
+      ],
+      "current": [
+        11,
+        49
+      ],
+      "prior": [
+        7,
+        56
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 9.9,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 37548966175,
+        "identity": "github:37548966175",
+        "source": "github",
+        "created_at": "2026-10-06T23:52:55Z",
+        "initial_conclusion": "success",
+        "final_conclusion": "success"
+      }
+    },
+    "github-outerloop-main": {
+      "id": "github-outerloop-main",
+      "provider": "github-actions",
+      "workflow": "tests-outerloop.yml",
+      "event": "schedule",
+      "branch": "main",
+      "label": "GitHub outerloop \u2014 main",
+      "primary": false,
+      "diagnostics": true,
+      "recent": [
+        0,
+        5
+      ],
+      "current": [
+        0,
+        7
+      ],
+      "prior": [
+        0,
+        7
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 37403213750,
+        "identity": "github:37403213750",
+        "source": "github",
+        "created_at": "2026-10-06T02:15:08Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "azdo-internal-main": {
+      "id": "azdo-internal-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1602,
+      "definition_name": "microsoft-aspire",
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "batchedCI",
+        "individualCI"
+      ],
+      "label": "AzDO internal \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        24,
+        31
+      ],
+      "current": [
+        30,
+        37
+      ],
+      "prior": [
+        12,
+        38
+      ],
+      "change": {
+        "label": "\u2191 50 pts",
+        "delta": 49.5,
+        "meaningful": true
+      },
+      "health": {
+        "level": "yellow",
+        "label": "\ud83d\udfe1 Watch"
+      },
+      "latest": {
+        "id": 3097669,
+        "identity": "azure-devops:3097669",
+        "source": "azure-devops",
+        "created_at": "2026-10-06T22:14:55.9237909Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    },
+    "azdo-source-index-main": {
+      "id": "azdo-source-index-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1693,
+      "definition_name": "microsoft-aspire-source-index",
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "schedule"
+      ],
+      "label": "AzDO source index \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "recent": [
+        1,
+        2
+      ],
+      "current": [
+        3,
+        4
+      ],
+      "prior": [
+        0,
+        0
+      ],
+      "change": {
+        "label": "\u2014",
+        "delta": null,
+        "meaningful": false
+      },
+      "health": {
+        "level": "yellow",
+        "label": "\ud83d\udfe1 Watch"
+      },
+      "latest": {
+        "id": 3096586,
+        "identity": "azure-devops:3096586",
+        "source": "azure-devops",
+        "created_at": "2026-10-06T00:00:47.5940763Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      }
+    }
+  },
+  "reruns": {
+    "runs": 3,
+    "recovered": 1,
+    "human": 3,
+    "bot": 0,
+    "unrecovered": 2
+  },
+  "pr_ci": {
+    "label": "PR CI",
+    "current": {
+      "triggered": 476,
+      "evaluated": 291,
+      "initial_green": 117,
+      "final_green": 225,
+      "initial_failed": 174,
+      "rerun_recovered": 108,
+      "final_failed": 44,
+      "final_cancelled_after_rerun": 22,
+      "excluded": {
+        "superseded": 120,
+        "awaiting_approval": 30,
+        "ci_skipped": 35,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 117,
+        "p50": 25.65,
+        "p90": 44.31666666666667
+      },
+      "red_minutes": {
+        "n": 169,
+        "p50": 43.416666666666664,
+        "p90": 59.353333333333346
+      },
+      "attempt_one_minutes": {
+        "n": 286,
+        "p50": 40.35,
+        "p90": 56.18333333333334
+      },
+      "duration_unreliable": 5
+    },
+    "prior": {
+      "triggered": 524,
+      "evaluated": 288,
+      "initial_green": 125,
+      "final_green": 220,
+      "initial_failed": 163,
+      "rerun_recovered": 95,
+      "final_failed": 46,
+      "final_cancelled_after_rerun": 22,
+      "excluded": {
+        "superseded": 172,
+        "awaiting_approval": 34,
+        "ci_skipped": 30,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 125,
+        "p50": 28.266666666666666,
+        "p90": 42.25333333333333
+      },
+      "red_minutes": {
+        "n": 163,
+        "p50": 42.4,
+        "p90": 59.500000000000014
+      },
+      "attempt_one_minutes": {
+        "n": 288,
+        "p50": 38.44166666666666,
+        "p90": 55.896666666666675
+      },
+      "duration_unreliable": 0
+    },
+    "last_five_weekdays": {
+      "triggered": 404,
+      "evaluated": 238,
+      "initial_green": 89,
+      "final_green": 180,
+      "initial_failed": 149,
+      "rerun_recovered": 91,
+      "final_failed": 36,
+      "final_cancelled_after_rerun": 22,
+      "excluded": {
+        "superseded": 111,
+        "awaiting_approval": 28,
+        "ci_skipped": 27,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 89,
+        "p50": 26.833333333333332,
+        "p90": 44.94
+      },
+      "red_minutes": {
+        "n": 144,
+        "p50": 44.150000000000006,
+        "p90": 60.12833333333335
+      },
+      "attempt_one_minutes": {
+        "n": 233,
+        "p50": 41.35,
+        "p90": 56.9
+      },
+      "duration_unreliable": 5
+    },
+    "trend": [
+      {
+        "date": "2026-09-16",
+        "initial": 27.5974025974026,
+        "final": 58.76623376623377,
+        "recovered": 31.16883116883117,
+        "n": 308,
+        "duration_p50": 27.816666666666666,
+        "duration_p90": 63.15
+      },
+      {
+        "date": "2026-09-17",
+        "initial": 27.68166089965398,
+        "final": 61.937716262975776,
+        "recovered": 34.2560553633218,
+        "n": 289,
+        "duration_p50": 28.333333333333332,
+        "duration_p90": 65.08666666666666
+      },
+      {
+        "date": "2026-09-18",
+        "initial": 24.46808510638298,
+        "final": 54.60992907801418,
+        "recovered": 30.141843971631207,
+        "n": 282,
+        "duration_p50": 28.95,
+        "duration_p90": 66.26666666666667
+      },
+      {
+        "date": "2026-09-19",
+        "initial": 25.26690391459075,
+        "final": 53.736654804270465,
+        "recovered": 28.469750889679716,
+        "n": 281,
+        "duration_p50": 29.183333333333334,
+        "duration_p90": 66.14666666666668
+      },
+      {
+        "date": "2026-09-20",
+        "initial": 24.444444444444443,
+        "final": 54.81481481481482,
+        "recovered": 30.37037037037037,
+        "n": 270,
+        "duration_p50": 29.266666666666666,
+        "duration_p90": 66.28666666666666
+      },
+      {
+        "date": "2026-09-21",
+        "initial": 19.92337164750958,
+        "final": 54.02298850574713,
+        "recovered": 34.099616858237546,
+        "n": 261,
+        "duration_p50": 33.016666666666666,
+        "duration_p90": 68.5
+      },
+      {
+        "date": "2026-09-22",
+        "initial": 18.773946360153257,
+        "final": 54.02298850574713,
+        "recovered": 35.24904214559387,
+        "n": 261,
+        "duration_p50": 36.16666666666667,
+        "duration_p90": 69.63333333333334
+      },
+      {
+        "date": "2026-09-23",
+        "initial": 24.262295081967213,
+        "final": 57.049180327868854,
+        "recovered": 32.78688524590164,
+        "n": 305,
+        "duration_p50": 38.49166666666667,
+        "duration_p90": 68.46666666666671
+      },
+      {
+        "date": "2026-09-24",
+        "initial": 31.097560975609756,
+        "final": 64.32926829268293,
+        "recovered": 33.23170731707317,
+        "n": 328,
+        "duration_p50": 39.18333333333333,
+        "duration_p90": 66.15333333333334
+      },
+      {
+        "date": "2026-09-25",
+        "initial": 36.04651162790697,
+        "final": 71.80232558139535,
+        "recovered": 35.75581395348837,
+        "n": 344,
+        "duration_p50": 39.4,
+        "duration_p90": 60.55
+      },
+      {
+        "date": "2026-09-26",
+        "initial": 36.25730994152047,
+        "final": 72.51461988304094,
+        "recovered": 36.25730994152047,
+        "n": 342,
+        "duration_p50": 39.166666666666664,
+        "duration_p90": 60.10666666666667
+      },
+      {
+        "date": "2026-09-27",
+        "initial": 36.206896551724135,
+        "final": 72.70114942528735,
+        "recovered": 36.49425287356322,
+        "n": 348,
+        "duration_p50": 39.166666666666664,
+        "duration_p90": 60.00000000000001
+      },
+      {
+        "date": "2026-09-28",
+        "initial": 40.78549848942598,
+        "final": 74.62235649546828,
+        "recovered": 33.8368580060423,
+        "n": 331,
+        "duration_p50": 38.86666666666667,
+        "duration_p90": 58.4
+      },
+      {
+        "date": "2026-09-29",
+        "initial": 43.40277777777778,
+        "final": 76.38888888888889,
+        "recovered": 32.986111111111114,
+        "n": 288,
+        "duration_p50": 38.44166666666666,
+        "duration_p90": 55.896666666666675
+      },
+      {
+        "date": "2026-09-30",
+        "initial": 44.67213114754098,
+        "final": 80.73770491803279,
+        "recovered": 36.0655737704918,
+        "n": 244,
+        "duration_p50": 38.18333333333333,
+        "duration_p90": 55.13333333333333
+      },
+      {
+        "date": "2026-10-01",
+        "initial": 38.888888888888886,
+        "final": 79.48717948717949,
+        "recovered": 40.598290598290596,
+        "n": 234,
+        "duration_p50": 39.96666666666667,
+        "duration_p90": 55.39666666666667
+      },
+      {
+        "date": "2026-10-02",
+        "initial": 37.219730941704036,
+        "final": 79.37219730941705,
+        "recovered": 42.152466367713004,
+        "n": 223,
+        "duration_p50": 39.233333333333334,
+        "duration_p90": 55.60666666666667
+      },
+      {
+        "date": "2026-10-03",
+        "initial": 41.43426294820717,
+        "final": 81.67330677290836,
+        "recovered": 40.2390438247012,
+        "n": 251,
+        "duration_p50": 36.94166666666666,
+        "duration_p90": 55.34166666666667
+      },
+      {
+        "date": "2026-10-04",
+        "initial": 41.338582677165356,
+        "final": 80.70866141732283,
+        "recovered": 39.37007874015748,
+        "n": 254,
+        "duration_p50": 36.45,
+        "duration_p90": 55.093333333333334
+      },
+      {
+        "date": "2026-10-05",
+        "initial": 39.416058394160586,
+        "final": 76.64233576642336,
+        "recovered": 37.22627737226277,
+        "n": 274,
+        "duration_p50": 36.96666666666667,
+        "duration_p90": 55.82333333333334
+      },
+      {
+        "date": "2026-10-06",
+        "initial": 40.20618556701031,
+        "final": 77.31958762886597,
+        "recovered": 37.11340206185567,
+        "n": 291,
+        "duration_p50": 40.35,
+        "duration_p90": 56.18333333333334
+      }
+    ]
+  },
+  "failure_evidence_lanes": {
+    "github-ci-main": {
+      "label": "GitHub CI \u2014 main",
+      "test": {
+        "current": [
+          28,
+          38
+        ],
+        "prior": [
+          28,
+          49
+        ],
+        "change": {
+          "label": "\u2191 17 pts",
+          "delta": 16.5,
+          "meaningful": true,
+          "direction": "\ud83d\udd34 Worsening"
+        }
+      },
+      "other": {
+        "current": [
+          10,
+          38
+        ],
+        "prior": [
+          21,
+          49
+        ]
+      }
+    },
+    "github-outerloop-main": {
+      "label": "GitHub outerloop \u2014 main",
+      "test": {
+        "current": [
+          7,
+          7
+        ],
+        "prior": [
+          7,
+          7
+        ],
+        "change": {
+          "label": "\u2248 flat",
+          "delta": 0.0,
+          "meaningful": false,
+          "direction": "\u26aa Flat"
+        }
+      },
+      "other": {
+        "current": [
+          0,
+          7
+        ],
+        "prior": [
+          0,
+          7
+        ]
+      }
+    }
+  },
+  "evidence_coverage": {
+    "github-ci-main": {
+      "archive_size_limit": 1,
+      "no_failed_test": 51
+    },
+    "github-outerloop-main": {}
+  },
+  "evidence_incidents": {
+    "github-ci-main": [
+      {
+        "date": "2026-09-16",
+        "identity": "github:35053406342",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35166494293",
+        "initial_attempt": 1,
+        "failed_test_cases": 7,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35246832023",
+        "initial_attempt": 1,
+        "failed_test_cases": 7,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35251762755",
+        "initial_attempt": 1,
+        "failed_test_cases": 7,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35262261892",
+        "initial_attempt": 1,
+        "failed_test_cases": 7,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35274272340",
+        "initial_attempt": 1,
+        "failed_test_cases": 7,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35275989131",
+        "initial_attempt": 1,
+        "failed_test_cases": 7,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35322237059",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35337231287",
+        "initial_attempt": 1,
+        "failed_test_cases": 3,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35349639380",
+        "initial_attempt": 1,
+        "failed_test_cases": 78,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35366726944",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35373021439",
+        "initial_attempt": 1,
+        "failed_test_cases": 5,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35377484081",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35383851199",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35407089360",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-21",
+        "identity": "github:35569654952",
+        "initial_attempt": 1,
+        "failed_test_cases": 79,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-21",
+        "identity": "github:35576439465",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-21",
+        "identity": "github:35631672622",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-21",
+        "identity": "github:35634736322",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-21",
+        "identity": "github:35649687113",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-22",
+        "identity": "github:35681382053",
+        "initial_attempt": 1,
+        "failed_test_cases": 4,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-22",
+        "identity": "github:35683878838",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-22",
+        "identity": "github:35756256834",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-22",
+        "identity": "github:35761965051",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-22",
+        "identity": "github:35786739288",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-23",
+        "identity": "github:35819211421",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-23",
+        "identity": "github:35822193225",
+        "initial_attempt": 1,
+        "failed_test_cases": 54,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-23",
+        "identity": "github:35827905433",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-24",
+        "identity": "github:36006063704",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-24",
+        "identity": "github:36073376302",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36078415005",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36091981653",
+        "initial_attempt": 1,
+        "failed_test_cases": 308,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36123816571",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36151000465",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36171952125",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36179440800",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36192353146",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36197788662",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36201574198",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-26",
+        "identity": "github:36206679371",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-26",
+        "identity": "github:36207777000",
+        "initial_attempt": 1,
+        "failed_test_cases": 651,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-26",
+        "identity": "github:36215296244",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-27",
+        "identity": "github:36318348933",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36363480255",
+        "initial_attempt": 1,
+        "failed_test_cases": 128,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36371135786",
+        "initial_attempt": 1,
+        "failed_test_cases": 161,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36375862100",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36382543375",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36428029876",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36478836475",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-29",
+        "identity": "github:36529913024",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-29",
+        "identity": "github:36598610909",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-29",
+        "identity": "github:36612367770",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-29",
+        "identity": "github:36636729143",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-30",
+        "identity": "github:36657927617",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-30",
+        "identity": "github:36791310097",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-09-30",
+        "identity": "github:36792855350",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36816020779",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36883975285",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36897940260",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36907052709",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36913448589",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36928109877",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36932541965",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36937689303",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-02",
+        "identity": "github:36976170872",
+        "initial_attempt": 1,
+        "failed_test_cases": 4,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-02",
+        "identity": "github:37008441326",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-02",
+        "identity": "github:37016150984",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-02",
+        "identity": "github:37026845324",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-02",
+        "identity": "github:37028060129",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-03",
+        "identity": "github:37094416834",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-03",
+        "identity": "github:37099309548",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-03",
+        "identity": "github:37108975162",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-05",
+        "identity": "github:37250324248",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-05",
+        "identity": "github:37302773955",
+        "initial_attempt": 1,
+        "failed_test_cases": 3,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-05",
+        "identity": "github:37349943397",
+        "initial_attempt": 1,
+        "failed_test_cases": 5,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-05",
+        "identity": "github:37379473346",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-05",
+        "identity": "github:37387294685",
+        "initial_attempt": 1,
+        "failed_test_cases": 2,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-06",
+        "identity": "github:37427038688",
+        "initial_attempt": 1,
+        "failed_test_cases": 3,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-06",
+        "identity": "github:37493630486",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-06",
+        "identity": "github:37537999173",
+        "initial_attempt": 1,
+        "failed_test_cases": 3,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      },
+      {
+        "date": "2026-10-06",
+        "identity": "github:37543861411",
+        "initial_attempt": 1,
+        "failed_test_cases": 1,
+        "lower_bound": false,
+        "incomplete_reasons": []
+      }
+    ],
+    "github-outerloop-main": [
+      {
+        "date": "2026-09-16",
+        "identity": "github:35047006215",
+        "initial_attempt": 1,
+        "failed_test_cases": 90,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt",
+          "no_recognized_result_files"
+        ]
+      },
+      {
+        "date": "2026-09-17",
+        "identity": "github:35173463386",
+        "initial_attempt": 1,
+        "failed_test_cases": 94,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-18",
+        "identity": "github:35298318356",
+        "initial_attempt": 1,
+        "failed_test_cases": 96,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-19",
+        "identity": "github:35414883941",
+        "initial_attempt": 1,
+        "failed_test_cases": 107,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-20",
+        "identity": "github:35483312253",
+        "initial_attempt": 1,
+        "failed_test_cases": 111,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-21",
+        "identity": "github:35553511933",
+        "initial_attempt": 1,
+        "failed_test_cases": 110,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-22",
+        "identity": "github:35678543480",
+        "initial_attempt": 1,
+        "failed_test_cases": 115,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-23",
+        "identity": "github:35809367842",
+        "initial_attempt": 1,
+        "failed_test_cases": 109,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-24",
+        "identity": "github:35946233512",
+        "initial_attempt": 1,
+        "failed_test_cases": 71,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-25",
+        "identity": "github:36085179134",
+        "initial_attempt": 1,
+        "failed_test_cases": 59,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-26",
+        "identity": "github:36210855253",
+        "initial_attempt": 1,
+        "failed_test_cases": 35,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "archive_size_limit",
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-27",
+        "identity": "github:36287958989",
+        "initial_attempt": 1,
+        "failed_test_cases": 36,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "archive_size_limit",
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-28",
+        "identity": "github:36369390186",
+        "initial_attempt": 1,
+        "failed_test_cases": 229,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "archive_size_limit",
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-29",
+        "identity": "github:36511652601",
+        "initial_attempt": 1,
+        "failed_test_cases": 16,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-09-30",
+        "identity": "github:36659156328",
+        "initial_attempt": 1,
+        "failed_test_cases": 21,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-10-01",
+        "identity": "github:36805510574",
+        "initial_attempt": 1,
+        "failed_test_cases": 6,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-10-02",
+        "identity": "github:36954841813",
+        "initial_attempt": 1,
+        "failed_test_cases": 20,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt"
+        ]
+      },
+      {
+        "date": "2026-10-03",
+        "identity": "github:37088956675",
+        "initial_attempt": 1,
+        "failed_test_cases": 28,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "artifact_outside_attempt",
+          "no_recognized_result_files"
+        ]
+      },
+      {
+        "date": "2026-10-04",
+        "identity": "github:37171969074",
+        "initial_attempt": 1,
+        "failed_test_cases": 223,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "archive_size_limit",
+          "artifact_outside_attempt",
+          "no_recognized_result_files"
+        ]
+      },
+      {
+        "date": "2026-10-05",
+        "identity": "github:37255141922",
+        "initial_attempt": 1,
+        "failed_test_cases": 29,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "archive_size_limit",
+          "artifact_outside_attempt",
+          "no_recognized_result_files"
+        ]
+      },
+      {
+        "date": "2026-10-06",
+        "identity": "github:37403213750",
+        "initial_attempt": 1,
+        "failed_test_cases": 31,
+        "lower_bound": true,
+        "incomplete_reasons": [
+          "archive_size_limit",
+          "artifact_outside_attempt",
+          "no_recognized_result_files"
+        ]
+      }
+    ]
+  },
+  "chart": [
+    {
+      "date": "2026-09-16",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": 9.3,
+      "rolling_passed": 5,
+      "rolling_failed": 49,
+      "test_failed": 1,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "no_failed_test": 5
+      },
+      "failed_test_case_counts": [
+        2
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:35053406342",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-09-17",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": 9.6,
+      "rolling_passed": 5,
+      "rolling_failed": 47,
+      "test_failed": 6,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:35166494293",
+          "initial_attempt": 1,
+          "failed_test_cases": 7,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35246832023",
+          "initial_attempt": 1,
+          "failed_test_cases": 7,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35251762755",
+          "initial_attempt": 1,
+          "failed_test_cases": 7,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35262261892",
+          "initial_attempt": 1,
+          "failed_test_cases": 7,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35274272340",
+          "initial_attempt": 1,
+          "failed_test_cases": 7,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35275989131",
+          "initial_attempt": 1,
+          "failed_test_cases": 7,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 7
+    },
+    {
+      "date": "2026-09-18",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.7,
+      "rolling_passed": 6,
+      "rolling_failed": 50,
+      "test_failed": 8,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 2
+      },
+      "failed_test_case_counts": [
+        2,
+        3,
+        78,
+        2,
+        5,
+        1,
+        1,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:35322237059",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35337231287",
+          "initial_attempt": 1,
+          "failed_test_cases": 3,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35349639380",
+          "initial_attempt": 1,
+          "failed_test_cases": 78,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35366726944",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35373021439",
+          "initial_attempt": 1,
+          "failed_test_cases": 5,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35377484081",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35383851199",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35407089360",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 78
+    },
+    {
+      "date": "2026-09-19",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 9.1,
+      "rolling_passed": 5,
+      "rolling_failed": 50,
+      "test_failed": 0,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "no_failed_test": 1
+      },
+      "failed_test_case_counts": [],
+      "failed_test_incidents": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-20",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 10.2,
+      "rolling_passed": 5,
+      "rolling_failed": 44,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "failed_test_incidents": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-09-21",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.6,
+      "rolling_passed": 5,
+      "rolling_failed": 42,
+      "test_failed": 5,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "no_failed_test": 5
+      },
+      "failed_test_case_counts": [
+        79,
+        1,
+        1,
+        2,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:35569654952",
+          "initial_attempt": 1,
+          "failed_test_cases": 79,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35576439465",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35631672622",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35634736322",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35649687113",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 79
+    },
+    {
+      "date": "2026-09-22",
+      "passed": 0,
+      "failed": 13,
+      "rolling_pass_rate": 6.1,
+      "rolling_passed": 3,
+      "rolling_failed": 46,
+      "test_failed": 5,
+      "other_failed": 8,
+      "evidence_reasons": {
+        "no_failed_test": 8
+      },
+      "failed_test_case_counts": [
+        4,
+        1,
+        1,
+        2,
+        2
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:35681382053",
+          "initial_attempt": 1,
+          "failed_test_cases": 4,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35683878838",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35756256834",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35761965051",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35786739288",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 4
+    },
+    {
+      "date": "2026-09-23",
+      "passed": 2,
+      "failed": 11,
+      "rolling_pass_rate": 7.3,
+      "rolling_passed": 4,
+      "rolling_failed": 51,
+      "test_failed": 3,
+      "other_failed": 8,
+      "evidence_reasons": {
+        "no_failed_test": 8
+      },
+      "failed_test_case_counts": [
+        1,
+        54,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:35819211421",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35822193225",
+          "initial_attempt": 1,
+          "failed_test_cases": 54,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:35827905433",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 54
+    },
+    {
+      "date": "2026-09-24",
+      "passed": 3,
+      "failed": 7,
+      "rolling_pass_rate": 11.9,
+      "rolling_passed": 7,
+      "rolling_failed": 52,
+      "test_failed": 2,
+      "other_failed": 5,
+      "evidence_reasons": {
+        "no_failed_test": 5
+      },
+      "failed_test_case_counts": [
+        1,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36006063704",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36073376302",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-09-25",
+      "passed": 1,
+      "failed": 13,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 7,
+      "rolling_failed": 55,
+      "test_failed": 9,
+      "other_failed": 4,
+      "evidence_reasons": {
+        "no_failed_test": 4
+      },
+      "failed_test_case_counts": [
+        2,
+        308,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36078415005",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36091981653",
+          "initial_attempt": 1,
+          "failed_test_cases": 308,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36123816571",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36151000465",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36171952125",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36179440800",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36192353146",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36197788662",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36201574198",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 308
+    },
+    {
+      "date": "2026-09-26",
+      "passed": 0,
+      "failed": 3,
+      "rolling_pass_rate": 10.9,
+      "rolling_passed": 7,
+      "rolling_failed": 57,
+      "test_failed": 3,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        2,
+        651,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36206679371",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36207777000",
+          "initial_attempt": 1,
+          "failed_test_cases": 651,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36215296244",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 651
+    },
+    {
+      "date": "2026-09-27",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "test_failed": 1,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36318348933",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-09-28",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "test_failed": 6,
+      "other_failed": 4,
+      "evidence_reasons": {
+        "no_failed_test": 4
+      },
+      "failed_test_case_counts": [
+        128,
+        161,
+        1,
+        1,
+        1,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36363480255",
+          "initial_attempt": 1,
+          "failed_test_cases": 128,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36371135786",
+          "initial_attempt": 1,
+          "failed_test_cases": 161,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36375862100",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36382543375",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36428029876",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36478836475",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 161
+    },
+    {
+      "date": "2026-09-29",
+      "passed": 0,
+      "failed": 4,
+      "rolling_pass_rate": 12.5,
+      "rolling_passed": 7,
+      "rolling_failed": 49,
+      "test_failed": 4,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        1,
+        1,
+        2,
+        2
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36529913024",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36598610909",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36612367770",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36636729143",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-09-30",
+      "passed": 2,
+      "failed": 7,
+      "rolling_pass_rate": 13.5,
+      "rolling_passed": 7,
+      "rolling_failed": 45,
+      "test_failed": 3,
+      "other_failed": 4,
+      "evidence_reasons": {
+        "no_failed_test": 4
+      },
+      "failed_test_case_counts": [
+        1,
+        1,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36657927617",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36791310097",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36792855350",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 1
+    },
+    {
+      "date": "2026-10-01",
+      "passed": 2,
+      "failed": 9,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 6,
+      "rolling_failed": 47,
+      "test_failed": 8,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "no_failed_test": 1
+      },
+      "failed_test_case_counts": [
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36816020779",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36883975285",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36897940260",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36907052709",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36913448589",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36928109877",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36932541965",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:36937689303",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-10-02",
+      "passed": 2,
+      "failed": 6,
+      "rolling_pass_rate": 14.9,
+      "rolling_passed": 7,
+      "rolling_failed": 40,
+      "test_failed": 5,
+      "other_failed": 1,
+      "evidence_reasons": {
+        "no_failed_test": 1
+      },
+      "failed_test_case_counts": [
+        4,
+        1,
+        1,
+        1,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:36976170872",
+          "initial_attempt": 1,
+          "failed_test_cases": 4,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37008441326",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37016150984",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37026845324",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37028060129",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 4
+    },
+    {
+      "date": "2026-10-03",
+      "passed": 1,
+      "failed": 5,
+      "rolling_pass_rate": 16.0,
+      "rolling_passed": 8,
+      "rolling_failed": 42,
+      "test_failed": 3,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 2
+      },
+      "failed_test_case_counts": [
+        1,
+        2,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:37094416834",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37099309548",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37108975162",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 2
+    },
+    {
+      "date": "2026-10-04",
+      "passed": 1,
+      "failed": 0,
+      "rolling_pass_rate": 18.0,
+      "rolling_passed": 9,
+      "rolling_failed": 41,
+      "test_failed": 0,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [],
+      "failed_test_incidents": [],
+      "max_failed_test_cases": 0
+    },
+    {
+      "date": "2026-10-05",
+      "passed": 1,
+      "failed": 7,
+      "rolling_pass_rate": 19.1,
+      "rolling_passed": 9,
+      "rolling_failed": 38,
+      "test_failed": 5,
+      "other_failed": 2,
+      "evidence_reasons": {
+        "no_failed_test": 1,
+        "archive_size_limit": 1
+      },
+      "failed_test_case_counts": [
+        1,
+        3,
+        5,
+        2,
+        2
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:37250324248",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37302773955",
+          "initial_attempt": 1,
+          "failed_test_cases": 3,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37349943397",
+          "initial_attempt": 1,
+          "failed_test_cases": 5,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37379473346",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37387294685",
+          "initial_attempt": 1,
+          "failed_test_cases": 2,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 5
+    },
+    {
+      "date": "2026-10-06",
+      "passed": 2,
+      "failed": 4,
+      "rolling_pass_rate": 22.4,
+      "rolling_passed": 11,
+      "rolling_failed": 38,
+      "test_failed": 4,
+      "other_failed": 0,
+      "evidence_reasons": {},
+      "failed_test_case_counts": [
+        3,
+        1,
+        3,
+        1
+      ],
+      "failed_test_incidents": [
+        {
+          "identity": "github:37427038688",
+          "initial_attempt": 1,
+          "failed_test_cases": 3,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37493630486",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37537999173",
+          "initial_attempt": 1,
+          "failed_test_cases": 3,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        },
+        {
+          "identity": "github:37543861411",
+          "initial_attempt": 1,
+          "failed_test_cases": 1,
+          "lower_bound": false,
+          "incomplete_reasons": []
+        }
+      ],
+      "max_failed_test_cases": 3
+    }
+  ],
+  "verdict": "holding",
+  "collection": {
+    "mode": "incremental",
+    "refresh_dates": [
+      "2026-10-04",
+      "2026-10-05",
+      "2026-10-06"
+    ],
+    "fetched_records": 34,
+    "fetched_pr_records": 177,
+    "active_records": 537,
+    "active_pr_records": 3183,
+    "reused_records": 503,
+    "replaced_records": 34,
+    "lane_seconds": {
+      "github-pr-ci": 19.915,
+      "github-ci-main": 0.047,
+      "github-outerloop-main": 2.869,
+      "azdo-internal-main": 2.459,
+      "azdo-source-index-main": 0.971
+    },
+    "provider_commands": 363,
+    "provider_retries": 0,
+    "evidence": {
+      "selected_failed_runs": 271,
+      "cache_hits": 271,
+      "artifact_list_requests": 271,
+      "artifact_downloads": 0
+    },
+    "collection_seconds": 26.784,
+    "total_seconds": 349.908
+  },
+  "execution_source": {
+    "commit": "8bc1bbed5ed31991af016347fb6ada48a4b93019",
+    "dirty": false,
+    "paths": [
+      "aspire-rolling-ci-health.prompt.txt",
+      "scripts/ci_health.py",
+      "aspire-ci-report-common.prompt.txt",
+      "scripts/test_ci_health.py"
+    ]
+  }
+}
