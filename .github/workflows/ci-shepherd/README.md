@@ -32,9 +32,19 @@ draft `[NO-MERGE]` PR against fork `main`, using nonclosing issue references.
 Initial status guards use the same issue-intake observation route as
 qualification; a PR is not required before dispatch.
 The compact initial send/task receipt replaces new repair-operation accounting
-for this path; no PR result collector is required. A lost POST response,
+for this path; no PR result collector is required. Compact prepared/send
+reservations and outstanding tasks share the existing two-worker capacity with
+legacy workers, including taskless uncertain sends. Admission reserves one slot
+before qualification and rechecks capacity before POST without counting its own
+reservation twice. A lost POST response,
 missing/ambiguous artifact, unreadable session or nonterminal owned session holds
 the boundary. There is no second initial worker, guessed PR or cancellation.
+An optional compact `taskTerminal` receipt releases only live worker capacity
+after verifying the exact saved task and all sessions terminal. A missing PR
+artifact still retains the original task identity and mapping attention; it
+does not permit handoff or a replacement worker. Sweeps and pre-POST guards
+refresh this receipt; resumed or unavailable task/session evidence reclaims the
+slot. No spending reservation is released.
 The verified task, PR node, both PR repositories and branch ref must agree.
 Read-only observation reports an unmapped completed task as attention-needed;
 only an authorized writer persists the verified child mapping.
@@ -45,6 +55,10 @@ keep a transfer pending even if the worker is not yet visible. A definitive
 pre-POST rejection settles only that admission as no-send; a genuinely uncertain
 POST never does. Existing owned task/session receipts are checked until quiescent,
 without restarting work or acquiring result reports and invoices.
+Owned review requests, including confirmed waiting requests, also keep the
+transfer pending until fresh matching published-review evidence resolves them.
+A vanished reviewer request alone is not completion; converted sweeps never
+request another review or rewrite the frozen review history.
 
 The optional chain `handoff` record is the sticky no-repair authority. Removing
 the opt-in flag or adoption label, restarting, closing/reopening a PR or failing

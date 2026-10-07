@@ -17,7 +17,8 @@ SENDS = {"idle", "prepared", "sent", "known", "uncertain", "human"}
 
 def validate(value):
     contracts.exact(value, {"id", "phase", "responsible", "head", "progressAt", "confirmedAt",
-                           "sendState", "taskId", "attention", "mergeLabel"}, "manual handoff")
+                           "sendState", "taskId", "attention", "mergeLabel"}
+                    | ({"taskTerminal"} if "taskTerminal" in value else set()), "manual handoff")
     if str(uuid.UUID(value["id"])) != value["id"] or value["phase"] not in PHASES:
         raise ValueError("invalid handoff identity/phase")
     if value["responsible"] != "radical" or value["sendState"] not in SENDS:
@@ -29,6 +30,9 @@ def validate(value):
         issue_pr.timestamp(value["confirmedAt"])
     if value["taskId"] is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", value["taskId"]):
         raise ValueError("invalid initial task identity")
+    if "taskTerminal" in value and (type(value["taskTerminal"]) is not bool
+            or value["taskId"] is None or value["sendState"] != "known"):
+        raise ValueError("terminal capacity receipt requires a known initial task")
     if value["attention"] is not None:
         issue_pr.text(value["attention"], "handoff attention", 1000)
     if value["mergeLabel"] not in {"none", "sent", "uncertain", "confirmed"}:
@@ -66,17 +70,18 @@ def enroll(api, chain, now):
 
 def quiescent(api, chain):
     """Read every owned task; admission receipts, not age, distinguish unsent work."""
+    import pilot_reviews
     import pilot_state as state
     record = chain["handoff"]
+    record.pop("taskTerminal", None)
     if record["sendState"] in {"sent", "uncertain"}:
         raise ValueError("Initial task send outcome unknown; no retry or cancellation.")
     tasks = [(op["taskId"], op) for op in chain["operations"] if op["taskId"] is not None]
     if any(op["taskId"] is None and op["state"] in {"reserved", "sent", "waiting", "uncertain"}
            for op in chain["operations"]):
         raise ValueError("Owned legacy admission/send unresolved; wait for definitive no-send or task receipt.")
-    pending_reviews = [review for review in chain.get("reviews", []) if review["state"] in {"sent", "uncertain"}]
+    pending_reviews = [review for review in chain.get("reviews", []) if review["state"] in pilot_reviews.PENDING]
     if pending_reviews:
-        import pilot_reviews
         pr = api.mapping(chain["child"] or chain["origin"])
         inventory = api.api.pages(f"{api.prefix}/pulls/{pr['number']}/reviews")
         evidence = pilot_reviews.evidence(chain, pr, inventory, False)
@@ -93,12 +98,31 @@ def quiescent(api, chain):
         if task["state"] not in state.TERMINAL:
             raise ValueError("Owned task/session still active; wait without cancellation.")
         if task_id == record["taskId"]:
+            record["taskTerminal"] = True
             initial_task = task
         elif chain["kind"] == "issue" and chain["child"] is None and task["artifacts"]:
             if initial_task is not None:
                 raise ValueError("Multiple owned issue task artifacts; human mapping verification required.")
             initial_task = task
     return initial_task
+
+
+def refresh_capacity(api):
+    """Revalidate released compact slots without mapping or replacing workers."""
+    changed = False
+    for chain in api.ledger["chains"]:
+        record = chain.get("handoff")
+        if record is None or record["phase"] not in {"initial", "handoff_pending"} or not record.get("taskTerminal"):
+            continue
+        before = deepcopy(record)
+        try:
+            quiescent(api, chain)
+        except (ValueError, KeyError, TypeError, IncompleteInventory) as error:
+            record["attention"] = str(error)[:1000]
+            print(f"CI Shepherd handoff #{chain['origin']} capacity attention-needed: {record['attention']}", file=sys.stderr)
+        changed |= record != before
+    if changed:
+        api.persist()
 
 
 def map_child(api, chain, task):
@@ -239,12 +263,16 @@ def reject_unsent(api, chain, operation, *, sent=False):
 
 
 def initial_packet(api, run, now, observations):
+    import pilot_state as state
     for chain in api.ledger["chains"]:
         value = chain.get("handoff")
         if value is None or value["phase"] != "initial" or value["sendState"] != "idle":
             continue
         observed = observations[chain["origin"]]
         if not observed["actionable"] or not observed["managed"]:
+            continue
+        if state.worker_slots(api.ledger) >= 2:
+            api.admission_reasons[chain["id"]] = "Tracking authority worker capacity exhausted; no inference."
             continue
         packet = {"schemaVersion": 1, "kind": "pilot", "packetId": str(uuid.uuid4()), "run": deepcopy(run),
                   "chain": chain["id"], "operation": value["id"], "preparedAt": issue_pr.stamp(now),
@@ -259,15 +287,26 @@ def initial_packet(api, run, now, observations):
 
 
 def initial_guard(api, chain, observed):
+    import pilot_state as state
     from pilot_github import fingerprint
     if (chain["kind"] != "issue" or chain["child"] is not None
-            or chain["handoff"]["phase"] != "initial" or chain["handoff"]["taskId"] is not None):
+            or chain["handoff"]["phase"] != "initial" or chain["handoff"]["taskId"] is not None
+            or chain["handoff"]["sendState"] not in {"prepared", "sent"}):
         raise ValueError("Initial issue implementation no longer eligible.")
     api.adoption_effect_guard()
     fresh = api.observe_initial(chain)
     if (not fresh["managed"] or fresh["state"] != "open"
             or fingerprint(fresh) != fingerprint(observed)):
         raise ValueError("Initial issue basis/management changed.")
+    # A task can resume after the sweep released its slot, even when its PR
+    # artifact is missing. Refresh terminal capacity receipts before each POST
+    # guard without treating them as PR mapping or ownership evidence.
+    refresh_capacity(api)
+    api.authority_guard()
+    # Prepared/sent already reserves this worker's slot, including the final
+    # pre-POST check. Do not charge its own admission a second time.
+    if state.worker_slots(api.ledger) > 2:
+        raise ValueError("Tracking authority worker capacity exhausted; no initial worker.")
     return fresh
 
 

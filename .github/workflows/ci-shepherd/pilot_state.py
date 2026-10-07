@@ -288,11 +288,15 @@ def worker_billing_pending(chain):
 
 
 def worker_slots(ledger):
-    return sum(operation["lane"] == "cloud" and (
+    active = [chain for chain in ledger["chains"]
+              if not handoff.converted(chain) or chain["handoff"]["phase"] in {"initial", "handoff_pending"}]
+    compact = sum(handoff.converted(chain) and (
+        chain["handoff"]["taskId"] is not None and not chain["handoff"].get("taskTerminal", False)
+        or chain["handoff"]["sendState"] in {"prepared", "sent", "uncertain"}) for chain in active)
+    return compact + sum(operation["lane"] == "cloud" and (
         operation["workerReserved"] > 0 or operation["taskId"] is not None
     ) and operation["state"] != "no-send" and operation["workerState"] not in TERMINAL
-               for chain in ledger["chains"]
-               if not handoff.converted(chain) or chain["handoff"]["phase"] in {"initial", "handoff_pending"}
+               for chain in active
                for operation in chain["operations"])
 
 

@@ -16,6 +16,7 @@ from test_pilot_lifecycle import LifecycleTransport, RUN, PREFIX, TASKS, decisio
 import local
 import pilot
 import pilot_github as github
+import pilot_handoff as handoff
 import pilot_patch
 import pilot_reminders as reminders
 import pilot_state as state
@@ -109,6 +110,30 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(frozen, self.chain()["operations"])
         self.assertEqual(1, len(self.task_writes()))
 
+    def test_confirmed_waiting_review_blocks_transfer_until_fresh_published_completion(self):
+        from test_pilot_reviews import BOT, ReviewTests
+        self.transport, self.clock = ReviewTests().api()
+        self.transport.values[PREFIX + "/pulls/7"].update(merged=False, merged_at=None)
+        self.prepare(self.fresh(manual=False, collector=True))
+        frozen = deepcopy(self.chain()["reviews"])
+        self.assertEqual("waiting", frozen[0]["state"])
+        for requested in ([BOT], []):
+            self.transport.values[PREFIX + "/pulls/7"]["requested_reviewers"] = requested
+            self.prepare()
+            self.assertEqual("handoff_pending", self.chain()["handoff"]["phase"])
+            self.assertIn("review request unresolved", self.chain()["handoff"]["attention"])
+            self.assertEqual(frozen, self.chain()["reviews"])
+        self.transport.values[PREFIX + "/pulls/7/reviews"] = [{
+            "id": 60, "user": BOT, "commit_id": "a" * 40, "state": "COMMENTED", "body": "",
+            "submitted_at": "2026-10-04T00:01:00Z"}]
+        self.clock.advance(minutes=1)
+        self.prepare()
+        self.assertEqual("handoff_needed", self.chain()["handoff"]["phase"])
+        self.assertEqual(frozen, self.chain()["reviews"])
+        self.assertEqual(1, len([effect for effect in self.transport.writes
+                                 if effect[1].endswith("/requested_reviewers")]))
+        self.assertEqual([], self.task_writes())
+
     def test_reserved_legacy_effect_prevents_ready_transfer_after_last_authorization(self):
         api, packet = self.prepare(self.fresh(manual=False, collector=True))
         chain, operation = api.ledger["chains"][0], api.ledger["chains"][0]["operations"][0]
@@ -161,15 +186,15 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         with self.assertRaises(ValueError):
             pilot.configuration(environment)
 
-    def issue(self, quarantine=False):
-        value = {"id": 1008, "number": 8, "node_id": "NODE8", "state": "open",
+    def issue(self, quarantine=False, number=8):
+        value = {"id": 1000 + number, "number": number, "node_id": f"NODE{number}", "state": "open",
                  "labels": [{"name": "shepherd-adopted"}, {"name": "bug"}],
                  "title": "Fixture issue", "body": "Implement a focused fix",
-                 "html_url": "https://github.com/radical/aspire/issues/8"}
+                 "html_url": f"https://github.com/radical/aspire/issues/{number}"}
         if quarantine:
             value["labels"].append({"name": "quarantined-test"})
         self.transport.values[PREFIX + "/issues"] = [value]
-        self.transport.values[PREFIX + "/issues/8"] = value
+        self.transport.values[PREFIX + f"/issues/{number}"] = value
         return value
 
     def finish_initial(self):
@@ -236,6 +261,258 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(1, len(self.task_writes()))
         self.assertIsNotNone(self.chain()["statusId"])
         self.assertEqual("TASK1", self.chain()["handoff"]["taskId"])
+
+    def test_actual_local_sweeps_bound_initial_workers_until_verified_release(self):
+        issues = [self.issue(number=number) for number in (8, 10, 11)]
+        self.transport.values[PREFIX + "/issues"] = issues
+        calls = []
+        runs = []
+
+        def executor(directory, packet, token):
+            calls.append(packet["observation"]["number"])
+            directory.mkdir()
+            contracts.write_json(directory / "usage.json", {"ai_credits": 2})
+            return reconciliation_evidence(decision(packet))
+
+        def sweep():
+            api = self.fresh()
+            api.token, api.enabled = "fixture", lambda: True
+            directory = self.work / f"sweep-{len(runs)}"
+            directory.mkdir()
+            runs.append(directory)
+            return local.run_sweep(api, directory, RUN, {}, executor=executor)
+
+        with patch.object(live, "clock", self.clock), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual("waiting", sweep()["outcome"])
+            self.assertEqual("waiting", sweep()["outcome"])
+            for _ in range(2):
+                self.assertEqual("observed; no inference", sweep()["outcome"])
+            self.assertEqual([8, 10], calls)
+            self.assertEqual(2, len(self.task_writes()))
+            self.finish_initial()
+            self.assertEqual("waiting", sweep()["outcome"])
+        self.assertEqual([8, 10, 11], calls)
+        self.assertEqual(3, len(self.task_writes()))
+        self.assertEqual("handoff_needed", self.chain()["handoff"]["phase"])
+        self.assertEqual(2, state.worker_slots(state.parse(self.transport.comments[0]["body"])))
+
+    def test_actual_local_terminal_unmapped_tasks_release_slots_without_replacement_or_handoff(self):
+        issues = [self.issue(number=number) for number in (8, 10, 11)]
+        self.transport.values[PREFIX + "/issues"] = issues
+        calls, runs = [], []
+
+        def executor(directory, packet, token):
+            calls.append(packet["observation"]["number"])
+            directory.mkdir()
+            contracts.write_json(directory / "usage.json", {"ai_credits": 2})
+            return reconciliation_evidence(decision(packet))
+
+        def sweep():
+            api = self.fresh()
+            api.token, api.enabled = "fixture", lambda: True
+            directory = self.work / f"sweep-{len(runs)}"
+            directory.mkdir()
+            runs.append(directory)
+            return local.run_sweep(api, directory, RUN, {}, executor=executor)
+
+        with patch.object(live, "clock", self.clock), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            for _ in range(2):
+                self.assertEqual("waiting", sweep()["outcome"])
+            before = state.parse(self.transport.comments[0]["body"])
+            for number in (1, 2):
+                task = self.transport.values[TASKS + f"/TASK{number}"]
+                task["state"] = task["sessions"][0]["state"] = "completed"
+            self.assertEqual("waiting", sweep()["outcome"])
+            self.assertEqual("observed; no inference", sweep()["outcome"])
+        after = state.parse(self.transport.comments[0]["body"])
+        self.assertEqual([8, 10, 11], calls)
+        self.assertEqual(3, len(self.task_writes()))
+        self.assertEqual(1, state.worker_slots(after))
+        self.assertEqual(state.repository_spend(before, self.clock()), state.repository_spend(after, self.clock()))
+        for number, task_id in ((8, "TASK1"), (10, "TASK2")):
+            chain = state.find_chain(after, number)
+            self.assertIsNone(chain["child"])
+            self.assertEqual(("initial", "known", task_id), tuple(
+                chain["handoff"][key] for key in ("phase", "sendState", "taskId")))
+            self.assertIn("no unique verified PR", chain["handoff"]["attention"])
+
+    def test_terminal_capacity_receipt_is_revoked_on_unknown_or_nonterminal_task_evidence(self):
+        for evidence in ("running", "active-session", "missing-session", "foreign-task", "unavailable"):
+            with self.subTest(evidence=evidence):
+                self.transport = LifecycleTransport()
+                self.start_initial()
+                task = self.transport.values[TASKS + "/TASK1"]
+                task["state"] = task["sessions"][0]["state"] = "completed"
+                api, packet = self.prepare()
+                self.assertIsNone(packet)
+                self.assertEqual(0, state.worker_slots(api.ledger))
+                saved = deepcopy(task)
+                if evidence == "running":
+                    task["state"] = task["sessions"][0]["state"] = "in_progress"
+                elif evidence == "active-session":
+                    task["sessions"][0]["state"] = "in_progress"
+                elif evidence == "missing-session":
+                    task["sessions"] = []
+                elif evidence == "foreign-task":
+                    task["creator"]["id"] = 1
+                else:
+                    del self.transport.values[TASKS + "/TASK1"]
+                api, packet = self.prepare()
+                self.assertIsNone(packet)
+                self.assertEqual(1, state.worker_slots(api.ledger))
+                self.assertFalse(self.chain()["handoff"].get("taskTerminal", False))
+                self.assertIsNotNone(self.chain()["handoff"]["attention"])
+                self.assertEqual("TASK1", self.chain()["handoff"]["taskId"])
+                self.assertEqual("initial", self.chain()["handoff"]["phase"])
+                self.assertEqual(1, len(self.task_writes()))
+                self.transport.values[TASKS + "/TASK1"] = saved
+                api, _ = self.prepare()
+                self.assertEqual(0, state.worker_slots(api.ledger))
+
+    def test_resumed_unmapped_tasks_reclaim_capacity_at_final_initial_post_guard(self):
+        issues = [self.issue(number=number) for number in (8, 10, 11)]
+        self.transport.values[PREFIX + "/issues"] = issues
+        for _ in range(2):
+            api, packet = self.prepare()
+            pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        for number in (1, 2):
+            task = self.transport.values[TASKS + f"/TASK{number}"]
+            task["state"] = task["sessions"][0]["state"] = "completed"
+        api, packet = self.prepare()
+        self.assertEqual(11, packet["observation"]["number"])
+        original = api.adoption_effect_guard
+        checks = []
+
+        def guard():
+            checks.append(True)
+            if len(checks) == 2:
+                for number in (1, 2):
+                    task = self.transport.values[TASKS + f"/TASK{number}"]
+                    task["state"] = task["sessions"][0]["state"] = "in_progress"
+            original()
+
+        with patch.object(api, "adoption_effect_guard", guard), redirect_stderr(io.StringIO()):
+            result = pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.assertEqual("human", result["outcome"])
+        self.assertIn("capacity exhausted", result["error"])
+        self.assertEqual(2, len(self.task_writes()))
+        after = state.parse(self.transport.comments[0]["body"])
+        self.assertEqual(2, state.worker_slots(after))
+        for number in (8, 10):
+            self.assertFalse(state.find_chain(after, number)["handoff"].get("taskTerminal", False))
+
+    def test_resumed_compact_tasks_block_unconverted_legacy_final_post(self):
+        issues = [self.issue(number=number) for number in (8, 10)]
+        self.transport.values[PREFIX + "/issues"] = issues
+        for _ in issues:
+            api, packet = self.prepare()
+            pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        for number in (1, 2):
+            task = self.transport.values[TASKS + f"/TASK{number}"]
+            task["state"] = task["sessions"][0]["state"] = "completed"
+        self.transport.values[PREFIX + "/issues"] = [*issues, dict(self.pull, pull_request={})]
+        api, packet = self.prepare(self.fresh(manual=False, collector=True))
+        self.assertEqual(7, packet["observation"]["number"])
+        original = api.guard
+        resumed = []
+
+        def guard(chain, observation, **kwargs):
+            if chain["operations"][-1]["state"] == "sent" and not resumed:
+                resumed.append(True)
+                for number in (1, 2):
+                    task = self.transport.values[TASKS + f"/TASK{number}"]
+                    task["state"] = task["sessions"][0]["state"] = "in_progress"
+            return original(chain, observation, **kwargs)
+
+        with patch.object(api, "guard", guard), redirect_stderr(io.StringIO()):
+            result = pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.assertEqual([True], resumed)
+        self.assertEqual("no-send", result["outcome"])
+        self.assertEqual(2, len(self.task_writes()))
+        after = state.parse(self.transport.comments[0]["body"])
+        self.assertEqual(2, state.worker_slots(after))
+        self.assertEqual("no-send", state.find_chain(after, 7)["operations"][-1]["state"])
+        for number in (8, 10):
+            self.assertFalse(state.find_chain(after, number)["handoff"].get("taskTerminal", False))
+
+    def test_mixed_legacy_and_compact_uncertain_send_block_another_initial_worker(self):
+        api, packet = self.prepare(self.fresh(manual=False, collector=True))
+        pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        issue = self.issue()
+        self.transport.values[PREFIX + "/issues"] = [dict(self.pull, pull_request={}), issue]
+        self.transport.lose_send_response = True
+        api, packet = self.prepare()
+        self.assertIsNotNone(packet, "one legacy worker leaves one compact slot")
+        result = pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.assertEqual("uncertain", result["outcome"])
+        third = self.issue(number=10)
+        self.transport.values[PREFIX + "/issues"] = [dict(self.pull, pull_request={}), issue, third]
+        for _ in range(2):
+            api, packet = self.prepare()
+            self.assertIsNone(packet)
+        self.assertEqual(2, state.worker_slots(api.ledger))
+        self.assertEqual(2, len(self.task_writes()))
+        self.assertIsNone(state.find_chain(api.ledger, 8)["handoff"]["taskId"])
+        self.assertEqual("idle", state.find_chain(api.ledger, 10)["handoff"]["sendState"])
+
+    def test_initial_settlement_rechecks_capacity_without_double_counting_own_reservation(self):
+        self.issue()
+        api, packet = self.prepare()
+        for number in (10, 11):
+            chain = state.adopt(api.ledger, number, "issue", f"NODE{number}")
+            handoff.enroll(api, chain, self.clock())
+            chain["handoff"]["sendState"] = "uncertain"
+        api.persist()
+        result = pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.assertEqual("human", result["outcome"])
+        self.assertIn("capacity exhausted", result["error"])
+        self.assertEqual([], self.task_writes())
+        self.assertEqual("human", self.chain()["handoff"]["sendState"])
+        self.assertEqual(2, state.worker_slots(state.parse(self.transport.comments[0]["body"])))
+
+    def test_capacity_taken_after_sent_receipt_still_prevents_initial_post(self):
+        self.issue()
+        api, packet = self.prepare()
+        original = api.adoption_effect_guard
+        checks = []
+
+        def guard():
+            checks.append(True)
+            if len(checks) == 2:
+                self.assertEqual("sent", self.chain()["handoff"]["sendState"])
+                for number in (10, 11):
+                    chain = state.adopt(api.ledger, number, "issue", f"NODE{number}")
+                    handoff.enroll(api, chain, self.clock())
+                    chain["handoff"]["sendState"] = "uncertain"
+                api.persist()
+            original()
+
+        with patch.object(api, "adoption_effect_guard", guard):
+            result = pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.assertEqual(2, len(checks))
+        self.assertEqual("human", result["outcome"])
+        self.assertIn("capacity exhausted", result["error"])
+        self.assertEqual([], self.task_writes())
+        self.assertEqual("human", self.chain()["handoff"]["sendState"])
+        self.assertEqual(2, state.worker_slots(state.parse(self.transport.comments[0]["body"])))
+
+    def test_compact_workers_also_block_unconverted_legacy_worker_admission(self):
+        issues = [self.issue(number=number) for number in (8, 10)]
+        self.transport.values[PREFIX + "/issues"] = issues
+        for _ in issues:
+            api, packet = self.prepare()
+            self.assertIsNotNone(packet)
+            pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.transport.values[PREFIX + "/issues"] = [*issues, dict(self.pull, pull_request={})]
+        api, packet = self.prepare(self.fresh(manual=False, collector=True))
+        self.assertIsNone(packet)
+        legacy = state.find_chain(api.ledger, 7)
+        self.assertNotIn("handoff", legacy)
+        self.assertEqual([], legacy["operations"])
+        self.assertIn("capacity exhausted", api.admission_reasons[legacy["id"]])
+        self.assertEqual(2, len(self.task_writes()))
 
     def test_local_report_shows_compact_initial_task_without_claiming_legacy_spend(self):
         before = state.parse(self.transport.comments[0]["body"])

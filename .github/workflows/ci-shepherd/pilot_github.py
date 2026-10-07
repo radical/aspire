@@ -745,7 +745,14 @@ class PilotGitHub:
         # Paid decisions always bind the complete raw worker evidence.
         if fingerprint(fresh, worker_evidence=effect) != fingerprint(observation, worker_evidence=effect):
             raise ValueError("subject basis changed")
+        if effect:
+            handoff.refresh_capacity(self)
         self.authority_guard()
+        if (effect and state.worker_slots(self.ledger) > 2 and any(
+                operation["lane"] == "cloud" and operation["workerReserved"] > 0
+                and operation["state"] in {"reserved", "sent"} and operation["taskId"] is None
+                for operation in chain["operations"])):
+            raise ValueError("tracking authority worker capacity exhausted")
         if effect and chain["rounds"] > self.binding.round_limit:
             raise ValueError("lifetime action round limit exceeded")
         if effect and (chain["state"] != "open" or state.chain_spend(chain) > state.chain_allowance(self.ledger) or state.repository_spend(
@@ -821,6 +828,7 @@ class PilotGitHub:
         return task, state.amount(nano / 1e9) if billed else None
 
     def admission_slots(self, head_ref):
+        handoff.refresh_capacity(self)
         return state.worker_slots(self.ledger)
 
     def reconcile_workers(self, *, adopt_children=True, acquisition=True):
