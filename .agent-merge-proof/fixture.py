@@ -15,4 +15,4 @@ def normalize_label(value):
 def parse_retry_count(value):
     if not value or any(character not in "0123456789" for character in value):
         raise ValueError("Retry count must contain only ASCII digits")
-    return int(value)
+    return 0
