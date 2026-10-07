@@ -16,16 +16,10 @@ zeros. Signs, separators, whitespace, and Unicode digits are invalid.
 `normalize_label` trims surrounding whitespace, lowercases, and preserves internal
 spacing.
 
-The dedicated workflow runs only for this fork and its disposable base, on
-fixture/workflow changes. It runs on pushes to the disposable base/head as well
-as pull requests: GitHub does not run `pull_request` workflows while a PR has
-merge conflicts. Push runs can test each side during that interval. PR runs
-check the exact head, not a synthetic merge. The check name is
-`Agent Merge fixture`; verify its real check run and GitHub Actions app ID before
-making that exact context required on the disposable base.
-
-This dedicated fork-only lane does not use Aspire's ProjectGraph or conditional
-test selector, so no production test-trigger-map edge is added.
+This source-only fixture uses local unit tests and independent acceptance
+assertions. It does not provide an Actions workflow or a required fixture
+check. Required-CI repair remains blocked without authorized workflow
+publication; local success is not evidence of that capability.
 
 After **every published conflict resolution**, the worker must post an
 explanatory PR comment linking the repair commit. Explain which behaviors were
@@ -34,7 +28,6 @@ preserved and why non-obvious choices were needed. Start automatic comments with
 worker.
 
 Keep the PR draft and labeled `NO-MERGE`. Never merge, enable auto-merge, enqueue,
-or weaken the tests, workflow, required context, or protection. The disposable
-base's temporary protection must be restored after closing the PR without
-landing. Baseline success is not evidence of hosted Agent Merge activation,
-instruction uptake, recurring work, or remote required-check repair.
+or weaken the tests or existing checks/protection. Do not change branch
+protection for this source-only trial. Baseline success is not evidence of hosted
+Agent Merge activation, instruction uptake, or recurring work.
