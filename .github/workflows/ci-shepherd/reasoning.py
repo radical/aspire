@@ -27,7 +27,7 @@ MINIMUM_COPILOT_VERSION = (1, 0, 92, 3)
 def copilot_version_supported(value):
     if not isinstance(value, str):
         return False
-    value = value.removeprefix("GitHub Copilot CLI ").rstrip(".")
+    value = value.splitlines()[0].removeprefix("GitHub Copilot CLI ").rstrip(".") if value else ""
     match = COPILOT_VERSION.fullmatch(value)
     if match is None:
         return False

@@ -85,6 +85,7 @@ class ReasoningTests(WorkspaceTest, unittest.TestCase):
     def test_copilot_version_gate_requires_the_minimum_supported_cli_contract(self):
         for version, supported in [
             ("GitHub Copilot CLI 1.0.93-3.", True),
+            ("GitHub Copilot CLI 1.0.93-3.\nRun 'copilot update' to check for updates.", True),
             ("1.0.92-3", True),
             ("1.0.92", True),
             ("1.0.92-2", False),
