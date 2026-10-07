@@ -1,0 +1,33 @@
+name: Agent Merge proof fixture
+
+on:
+  pull_request:
+    branches: [app-agent-merge-proof-base]
+    paths:
+      - '.agent-merge-proof/**'
+      - '.github/workflows/agent-merge-proof-fixture.yml'
+  push:
+    branches: [app-agent-merge-proof-base, app-repair-capability-pilot]
+    paths:
+      - '.agent-merge-proof/**'
+      - '.github/workflows/agent-merge-proof-fixture.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: Agent Merge fixture
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # A PR run must validate the worker's exact published commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Run fixture tests
+        run: |
+          python3 --version
+          python3 -B -m unittest discover -s .agent-merge-proof -p 'test_*.py' -v
