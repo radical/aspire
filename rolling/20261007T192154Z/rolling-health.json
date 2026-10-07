@@ -1,0 +1,3550 @@
+{
+  "now": "2026-10-07T19:21:54+00:00",
+  "windows": {
+    "current": {
+      "start": "2026-09-30",
+      "end": "2026-10-06"
+    },
+    "prior": {
+      "start": "2026-09-23",
+      "end": "2026-09-29"
+    },
+    "last_five_weekdays": [
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-05",
+      "2026-10-06"
+    ]
+  },
+  "config": {
+    "rolling_window_days": 7,
+    "graph_history_days": 30,
+    "history_retention_days": 180,
+    "health_thresholds": {
+      "green": 90,
+      "yellow": 75
+    },
+    "primary_lane": "github-ci-main",
+    "diagnostics_lane": "github-ci-main",
+    "branch_activity": {
+      "prefix": "release/"
+    },
+    "pr_ci": {
+      "id": "github-pr-ci",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "pull_request",
+      "label": "PR CI",
+      "attempt_one_population": true
+    },
+    "lanes": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "label": "GitHub CI \u2014 main",
+        "primary": true,
+        "diagnostics": true
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "label": "GitHub outerloop \u2014 main",
+        "primary": false,
+        "diagnostics": true
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "branch": "refs/heads/main",
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ],
+        "label": "AzDO internal \u2014 main",
+        "primary": false,
+        "diagnostics": false
+      }
+    ]
+  },
+  "history": {
+    "lane_identity": [
+      {
+        "id": "github-ci-main",
+        "provider": "github-actions",
+        "workflow": "ci.yml",
+        "event": "push",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "eligible_reasons": []
+      },
+      {
+        "id": "github-outerloop-main",
+        "provider": "github-actions",
+        "workflow": "tests-outerloop.yml",
+        "event": "schedule",
+        "branch": "main",
+        "organization": null,
+        "project": null,
+        "definition_id": null,
+        "eligible_reasons": []
+      },
+      {
+        "id": "azdo-internal-main",
+        "provider": "azure-devops",
+        "workflow": null,
+        "event": null,
+        "branch": "refs/heads/main",
+        "organization": "dnceng",
+        "project": "internal",
+        "definition_id": 1602,
+        "eligible_reasons": [
+          "batchedCI",
+          "individualCI"
+        ]
+      }
+    ],
+    "coverage": {
+      "start": "2026-09-01",
+      "end": "2026-10-06",
+      "days": 36,
+      "reduced": true,
+      "refresh_days": 36
+    },
+    "lanes": {
+      "github-ci-main": [
+        {
+          "date": "2026-09-01",
+          "passed": 4,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 3,
+          "failed": 8,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 27.0,
+          "rolling_passed": 10,
+          "rolling_failed": 27
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": 20.0,
+          "rolling_passed": 7,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 1,
+          "failed": 5,
+          "rolling_pass_rate": 16.7,
+          "rolling_passed": 5,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 13.3,
+          "rolling_passed": 4,
+          "rolling_failed": 26
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 10.3,
+          "rolling_passed": 3,
+          "rolling_failed": 26
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 1,
+          "failed": 1,
+          "rolling_pass_rate": 10.0,
+          "rolling_passed": 3,
+          "rolling_failed": 27
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 8.3,
+          "rolling_passed": 3,
+          "rolling_failed": 33
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 1,
+          "failed": 12,
+          "rolling_pass_rate": 8.2,
+          "rolling_passed": 4,
+          "rolling_failed": 45
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": 9.4,
+          "rolling_passed": 5,
+          "rolling_failed": 48
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 1,
+          "failed": 6,
+          "rolling_pass_rate": 9.3,
+          "rolling_passed": 5,
+          "rolling_failed": 49
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 9.6,
+          "rolling_passed": 5,
+          "rolling_failed": 47
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.7,
+          "rolling_passed": 6,
+          "rolling_failed": 50
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 9.1,
+          "rolling_passed": 5,
+          "rolling_failed": 50
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 10.2,
+          "rolling_passed": 5,
+          "rolling_failed": 44
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.6,
+          "rolling_passed": 5,
+          "rolling_failed": 42
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 13,
+          "rolling_pass_rate": 6.1,
+          "rolling_passed": 3,
+          "rolling_failed": 46
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 2,
+          "failed": 11,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 4,
+          "rolling_failed": 51,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 11
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 3,
+          "failed": 7,
+          "rolling_pass_rate": 11.9,
+          "rolling_passed": 7,
+          "rolling_failed": 52,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 7
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 1,
+          "failed": 13,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 7,
+          "rolling_failed": 55,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 13
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 10.9,
+          "rolling_passed": 7,
+          "rolling_failed": 57,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 3
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 1,
+          "failed": 10,
+          "rolling_pass_rate": 10.8,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 10
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 12.5,
+          "rolling_passed": 7,
+          "rolling_failed": 49,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 4
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 2,
+          "failed": 7,
+          "rolling_pass_rate": 13.5,
+          "rolling_passed": 7,
+          "rolling_failed": 45,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 7
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 2,
+          "failed": 9,
+          "rolling_pass_rate": 11.3,
+          "rolling_passed": 6,
+          "rolling_failed": 47,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 9
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 2,
+          "failed": 6,
+          "rolling_pass_rate": 14.9,
+          "rolling_passed": 7,
+          "rolling_failed": 40,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 6
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 1,
+          "failed": 5,
+          "rolling_pass_rate": 16.0,
+          "rolling_passed": 8,
+          "rolling_failed": 42,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 5
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 18.0,
+          "rolling_passed": 9,
+          "rolling_failed": 41,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 0
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 1,
+          "failed": 7,
+          "rolling_pass_rate": 19.1,
+          "rolling_passed": 9,
+          "rolling_failed": 38,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 7
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 2,
+          "failed": 4,
+          "rolling_pass_rate": 22.4,
+          "rolling_passed": 11,
+          "rolling_failed": 38,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 4
+        }
+      ],
+      "github-outerloop-main": [
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "confirmed_test_failed": 0,
+          "other_failed": 0,
+          "insufficient_failed": 1
+        }
+      ],
+      "azdo-internal-main": [
+        {
+          "date": "2026-09-01",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-02",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-03",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-04",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-05",
+          "passed": 0,
+          "failed": 1,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-06",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": null,
+          "rolling_passed": null,
+          "rolling_failed": null
+        },
+        {
+          "date": "2026-09-07",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-08",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 23
+        },
+        {
+          "date": "2026-09-09",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-10",
+          "passed": 0,
+          "failed": 6,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-11",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 24
+        },
+        {
+          "date": "2026-09-12",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 25
+        },
+        {
+          "date": "2026-09-13",
+          "passed": 0,
+          "failed": 5,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 30
+        },
+        {
+          "date": "2026-09-14",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 33
+        },
+        {
+          "date": "2026-09-15",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-16",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 23
+        },
+        {
+          "date": "2026-09-17",
+          "passed": 0,
+          "failed": 3,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 20
+        },
+        {
+          "date": "2026-09-18",
+          "passed": 0,
+          "failed": 9,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-19",
+          "passed": 0,
+          "failed": 2,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 22
+        },
+        {
+          "date": "2026-09-20",
+          "passed": 0,
+          "failed": 0,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 17
+        },
+        {
+          "date": "2026-09-21",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 21
+        },
+        {
+          "date": "2026-09-22",
+          "passed": 0,
+          "failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 28
+        },
+        {
+          "date": "2026-09-23",
+          "passed": 0,
+          "failed": 11,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-24",
+          "passed": 0,
+          "failed": 4,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 40
+        },
+        {
+          "date": "2026-09-25",
+          "passed": 0,
+          "failed": 8,
+          "rolling_pass_rate": 0.0,
+          "rolling_passed": 0,
+          "rolling_failed": 39
+        },
+        {
+          "date": "2026-09-26",
+          "passed": 2,
+          "failed": 1,
+          "rolling_pass_rate": 5.0,
+          "rolling_passed": 2,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-27",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 7.3,
+          "rolling_passed": 3,
+          "rolling_failed": 38
+        },
+        {
+          "date": "2026-09-28",
+          "passed": 6,
+          "failed": 1,
+          "rolling_pass_rate": 22.0,
+          "rolling_passed": 9,
+          "rolling_failed": 32
+        },
+        {
+          "date": "2026-09-29",
+          "passed": 3,
+          "failed": 1,
+          "rolling_pass_rate": 31.6,
+          "rolling_passed": 12,
+          "rolling_failed": 26
+        },
+        {
+          "date": "2026-09-30",
+          "passed": 2,
+          "failed": 3,
+          "rolling_pass_rate": 43.8,
+          "rolling_passed": 14,
+          "rolling_failed": 18
+        },
+        {
+          "date": "2026-10-01",
+          "passed": 9,
+          "failed": 0,
+          "rolling_pass_rate": 62.2,
+          "rolling_passed": 23,
+          "rolling_failed": 14
+        },
+        {
+          "date": "2026-10-02",
+          "passed": 5,
+          "failed": 1,
+          "rolling_pass_rate": 80.0,
+          "rolling_passed": 28,
+          "rolling_failed": 7
+        },
+        {
+          "date": "2026-10-03",
+          "passed": 5,
+          "failed": 0,
+          "rolling_pass_rate": 83.8,
+          "rolling_passed": 31,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-04",
+          "passed": 1,
+          "failed": 0,
+          "rolling_pass_rate": 83.8,
+          "rolling_passed": 31,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-05",
+          "passed": 5,
+          "failed": 1,
+          "rolling_pass_rate": 83.3,
+          "rolling_passed": 30,
+          "rolling_failed": 6
+        },
+        {
+          "date": "2026-10-06",
+          "passed": 3,
+          "failed": 2,
+          "rolling_pass_rate": 81.1,
+          "rolling_passed": 30,
+          "rolling_failed": 7
+        }
+      ]
+    }
+  },
+  "lanes": {
+    "github-ci-main": {
+      "id": "github-ci-main",
+      "provider": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "branch": "main",
+      "label": "GitHub CI \u2014 main",
+      "primary": true,
+      "diagnostics": true,
+      "status": "complete",
+      "unknown_dates": [],
+      "refresh_error": null,
+      "current": [
+        11,
+        49
+      ],
+      "prior": [
+        7,
+        56
+      ],
+      "active_dates": 7,
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 9.9,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 37548966175,
+        "identity": "github:37548966175",
+        "source": "github",
+        "branch": "main",
+        "created_at": "2026-10-06T23:52:55Z",
+        "initial_conclusion": "success",
+        "final_conclusion": "success"
+      },
+      "daily": [
+        {
+          "date": "2026-09-07",
+          "unknown": false,
+          "passed": 0,
+          "failed": 0,
+          "triggered": 0,
+          "rolling_passed": 10,
+          "rolling_failed": 27,
+          "rolling_pass_rate": 27.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-08-31",
+          "expired_passed": null,
+          "expired_failed": null,
+          "movement": "unknown",
+          "direction": null
+        },
+        {
+          "date": "2026-09-08",
+          "unknown": false,
+          "passed": 1,
+          "failed": 6,
+          "triggered": 7,
+          "rolling_passed": 7,
+          "rolling_failed": 28,
+          "rolling_pass_rate": 20.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-01",
+          "expired_passed": 4,
+          "expired_failed": 5,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-09",
+          "unknown": false,
+          "passed": 1,
+          "failed": 5,
+          "triggered": 6,
+          "rolling_passed": 5,
+          "rolling_failed": 25,
+          "rolling_pass_rate": 16.7,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-02",
+          "expired_passed": 3,
+          "expired_failed": 8,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-10",
+          "unknown": false,
+          "passed": 0,
+          "failed": 8,
+          "triggered": 8,
+          "rolling_passed": 4,
+          "rolling_failed": 26,
+          "rolling_pass_rate": 13.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-03",
+          "expired_passed": 1,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-11",
+          "unknown": false,
+          "passed": 0,
+          "failed": 7,
+          "triggered": 7,
+          "rolling_passed": 3,
+          "rolling_failed": 26,
+          "rolling_pass_rate": 10.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-04",
+          "expired_passed": 1,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-12",
+          "unknown": false,
+          "passed": 1,
+          "failed": 1,
+          "triggered": 2,
+          "rolling_passed": 3,
+          "rolling_failed": 27,
+          "rolling_pass_rate": 10.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-05",
+          "expired_passed": 1,
+          "expired_failed": 0,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-13",
+          "unknown": false,
+          "passed": 0,
+          "failed": 6,
+          "triggered": 9,
+          "rolling_passed": 3,
+          "rolling_failed": 33,
+          "rolling_pass_rate": 8.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-06",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-14",
+          "unknown": false,
+          "passed": 1,
+          "failed": 12,
+          "triggered": 15,
+          "rolling_passed": 4,
+          "rolling_failed": 45,
+          "rolling_pass_rate": 8.2,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-07",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-15",
+          "unknown": false,
+          "passed": 2,
+          "failed": 9,
+          "triggered": 11,
+          "rolling_passed": 5,
+          "rolling_failed": 48,
+          "rolling_pass_rate": 9.4,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-08",
+          "expired_passed": 1,
+          "expired_failed": 6,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-16",
+          "unknown": false,
+          "passed": 1,
+          "failed": 6,
+          "triggered": 9,
+          "rolling_passed": 5,
+          "rolling_failed": 49,
+          "rolling_pass_rate": 9.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-09",
+          "expired_passed": 1,
+          "expired_failed": 5,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-17",
+          "unknown": false,
+          "passed": 0,
+          "failed": 6,
+          "triggered": 6,
+          "rolling_passed": 5,
+          "rolling_failed": 47,
+          "rolling_pass_rate": 9.6,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-10",
+          "expired_passed": 0,
+          "expired_failed": 8,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-18",
+          "unknown": false,
+          "passed": 1,
+          "failed": 10,
+          "triggered": 12,
+          "rolling_passed": 6,
+          "rolling_failed": 50,
+          "rolling_pass_rate": 10.7,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-11",
+          "expired_passed": 0,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-19",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 5,
+          "rolling_failed": 50,
+          "rolling_pass_rate": 9.1,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-12",
+          "expired_passed": 1,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-20",
+          "unknown": false,
+          "passed": 0,
+          "failed": 0,
+          "triggered": 0,
+          "rolling_passed": 5,
+          "rolling_failed": 44,
+          "rolling_pass_rate": 10.2,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-13",
+          "expired_passed": 0,
+          "expired_failed": 6,
+          "movement": "aging_only",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-21",
+          "unknown": false,
+          "passed": 1,
+          "failed": 10,
+          "triggered": 12,
+          "rolling_passed": 5,
+          "rolling_failed": 42,
+          "rolling_pass_rate": 10.6,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-14",
+          "expired_passed": 1,
+          "expired_failed": 12,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-22",
+          "unknown": false,
+          "passed": 0,
+          "failed": 13,
+          "triggered": 20,
+          "rolling_passed": 3,
+          "rolling_failed": 46,
+          "rolling_pass_rate": 6.1,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-15",
+          "expired_passed": 2,
+          "expired_failed": 9,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-23",
+          "unknown": false,
+          "passed": 2,
+          "failed": 11,
+          "triggered": 14,
+          "rolling_passed": 4,
+          "rolling_failed": 51,
+          "rolling_pass_rate": 7.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-16",
+          "expired_passed": 1,
+          "expired_failed": 6,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-24",
+          "unknown": false,
+          "passed": 3,
+          "failed": 7,
+          "triggered": 12,
+          "rolling_passed": 7,
+          "rolling_failed": 52,
+          "rolling_pass_rate": 11.9,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-17",
+          "expired_passed": 0,
+          "expired_failed": 6,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-25",
+          "unknown": false,
+          "passed": 1,
+          "failed": 13,
+          "triggered": 16,
+          "rolling_passed": 7,
+          "rolling_failed": 55,
+          "rolling_pass_rate": 11.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-18",
+          "expired_passed": 1,
+          "expired_failed": 10,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-26",
+          "unknown": false,
+          "passed": 0,
+          "failed": 3,
+          "triggered": 3,
+          "rolling_passed": 7,
+          "rolling_failed": 57,
+          "rolling_pass_rate": 10.9,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-19",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-27",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "rolling_pass_rate": 10.8,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-20",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "down"
+        },
+        {
+          "date": "2026-09-28",
+          "unknown": false,
+          "passed": 1,
+          "failed": 10,
+          "triggered": 12,
+          "rolling_passed": 7,
+          "rolling_failed": 58,
+          "rolling_pass_rate": 10.8,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-21",
+          "expired_passed": 1,
+          "expired_failed": 10,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-29",
+          "unknown": false,
+          "passed": 0,
+          "failed": 4,
+          "triggered": 4,
+          "rolling_passed": 7,
+          "rolling_failed": 49,
+          "rolling_pass_rate": 12.5,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-22",
+          "expired_passed": 0,
+          "expired_failed": 13,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-30",
+          "unknown": false,
+          "passed": 2,
+          "failed": 7,
+          "triggered": 10,
+          "rolling_passed": 7,
+          "rolling_failed": 45,
+          "rolling_pass_rate": 13.5,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-23",
+          "expired_passed": 2,
+          "expired_failed": 11,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-01",
+          "unknown": false,
+          "passed": 2,
+          "failed": 9,
+          "triggered": 11,
+          "rolling_passed": 6,
+          "rolling_failed": 47,
+          "rolling_pass_rate": 11.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-24",
+          "expired_passed": 3,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-10-02",
+          "unknown": false,
+          "passed": 2,
+          "failed": 6,
+          "triggered": 9,
+          "rolling_passed": 7,
+          "rolling_failed": 40,
+          "rolling_pass_rate": 14.9,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-25",
+          "expired_passed": 1,
+          "expired_failed": 13,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-03",
+          "unknown": false,
+          "passed": 1,
+          "failed": 5,
+          "triggered": 7,
+          "rolling_passed": 8,
+          "rolling_failed": 42,
+          "rolling_pass_rate": 16.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-26",
+          "expired_passed": 0,
+          "expired_failed": 3,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-04",
+          "unknown": false,
+          "passed": 1,
+          "failed": 0,
+          "triggered": 1,
+          "rolling_passed": 9,
+          "rolling_failed": 41,
+          "rolling_pass_rate": 18.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-27",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-05",
+          "unknown": false,
+          "passed": 1,
+          "failed": 7,
+          "triggered": 9,
+          "rolling_passed": 9,
+          "rolling_failed": 38,
+          "rolling_pass_rate": 19.1,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-28",
+          "expired_passed": 1,
+          "expired_failed": 10,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-06",
+          "unknown": false,
+          "passed": 2,
+          "failed": 4,
+          "triggered": 6,
+          "rolling_passed": 11,
+          "rolling_failed": 38,
+          "rolling_pass_rate": 22.4,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-29",
+          "expired_passed": 0,
+          "expired_failed": 4,
+          "movement": "new_and_expired",
+          "direction": "up"
+        }
+      ],
+      "activity": {
+        "status": "complete",
+        "branches": [
+          {
+            "branch": "release/13.6",
+            "current": [
+              0,
+              5
+            ],
+            "prior": [
+              0,
+              14
+            ],
+            "change": {
+              "label": "\u2248 flat",
+              "delta": 0.0,
+              "meaningful": false
+            },
+            "active_dates": 4,
+            "triggered": 7,
+            "latest": {
+              "id": 37519615485,
+              "identity": "github:37519615485",
+              "source": "github",
+              "branch": "release/13.6",
+              "created_at": "2026-10-06T19:31:30Z",
+              "initial_conclusion": "failure",
+              "final_conclusion": "failure"
+            }
+          }
+        ]
+      }
+    },
+    "github-outerloop-main": {
+      "id": "github-outerloop-main",
+      "provider": "github-actions",
+      "workflow": "tests-outerloop.yml",
+      "event": "schedule",
+      "branch": "main",
+      "label": "GitHub outerloop \u2014 main",
+      "primary": false,
+      "diagnostics": true,
+      "status": "complete",
+      "unknown_dates": [],
+      "refresh_error": null,
+      "current": [
+        0,
+        7
+      ],
+      "prior": [
+        0,
+        7
+      ],
+      "active_dates": 7,
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false
+      },
+      "health": {
+        "level": "red",
+        "label": "\ud83d\udd34 Unhealthy"
+      },
+      "latest": {
+        "id": 37403213750,
+        "identity": "github:37403213750",
+        "source": "github",
+        "branch": "main",
+        "created_at": "2026-10-06T02:15:08Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      },
+      "daily": [
+        {
+          "date": "2026-09-07",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-08-31",
+          "expired_passed": null,
+          "expired_failed": null,
+          "movement": "unknown",
+          "direction": null
+        },
+        {
+          "date": "2026-09-08",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-01",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-09",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-02",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-10",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-03",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-11",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-04",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-12",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-05",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-13",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-06",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-14",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-07",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-15",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-08",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-16",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-09",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-17",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-10",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-18",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-11",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-19",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-12",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-20",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-13",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-21",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-14",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-22",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-15",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-23",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-16",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-24",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-17",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-25",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-18",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-26",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-19",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-27",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-20",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-28",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-21",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-29",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-22",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-30",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-23",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-01",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-24",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-02",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-25",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-03",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-26",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-04",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-27",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-05",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-28",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-06",
+          "unknown": false,
+          "passed": 0,
+          "failed": 1,
+          "triggered": 1,
+          "rolling_passed": 0,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-29",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        }
+      ],
+      "activity": {
+        "status": "complete",
+        "branches": []
+      }
+    },
+    "azdo-internal-main": {
+      "id": "azdo-internal-main",
+      "provider": "azure-devops",
+      "organization": "dnceng",
+      "project": "internal",
+      "definition_id": 1602,
+      "branch": "refs/heads/main",
+      "eligible_reasons": [
+        "batchedCI",
+        "individualCI"
+      ],
+      "label": "AzDO internal \u2014 main",
+      "primary": false,
+      "diagnostics": false,
+      "status": "complete",
+      "unknown_dates": [],
+      "refresh_error": null,
+      "current": [
+        30,
+        37
+      ],
+      "prior": [
+        12,
+        38
+      ],
+      "active_dates": 7,
+      "change": {
+        "label": "\u2191 50 pts",
+        "delta": 49.5,
+        "meaningful": true
+      },
+      "health": {
+        "level": "yellow",
+        "label": "\ud83d\udfe1 Watch"
+      },
+      "latest": {
+        "id": 3097669,
+        "identity": "azure-devops:3097669",
+        "source": "azure-devops",
+        "branch": "main",
+        "created_at": "2026-10-06T22:14:55.9237909Z",
+        "initial_conclusion": "failure",
+        "final_conclusion": "failure"
+      },
+      "daily": [
+        {
+          "date": "2026-09-07",
+          "unknown": false,
+          "passed": 0,
+          "failed": 0,
+          "triggered": 0,
+          "rolling_passed": 0,
+          "rolling_failed": 25,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-08-31",
+          "expired_passed": null,
+          "expired_failed": null,
+          "movement": "unknown",
+          "direction": null
+        },
+        {
+          "date": "2026-09-08",
+          "unknown": false,
+          "passed": 0,
+          "failed": 5,
+          "triggered": 5,
+          "rolling_passed": 0,
+          "rolling_failed": 23,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-01",
+          "expired_passed": 0,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-09",
+          "unknown": false,
+          "passed": 0,
+          "failed": 5,
+          "triggered": 5,
+          "rolling_passed": 0,
+          "rolling_failed": 21,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-02",
+          "expired_passed": 0,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-10",
+          "unknown": false,
+          "passed": 0,
+          "failed": 6,
+          "triggered": 6,
+          "rolling_passed": 0,
+          "rolling_failed": 22,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-03",
+          "expired_passed": 0,
+          "expired_failed": 5,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-11",
+          "unknown": false,
+          "passed": 0,
+          "failed": 7,
+          "triggered": 7,
+          "rolling_passed": 0,
+          "rolling_failed": 24,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-04",
+          "expired_passed": 0,
+          "expired_failed": 5,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-12",
+          "unknown": false,
+          "passed": 0,
+          "failed": 2,
+          "triggered": 2,
+          "rolling_passed": 0,
+          "rolling_failed": 25,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-05",
+          "expired_passed": 0,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-13",
+          "unknown": false,
+          "passed": 0,
+          "failed": 5,
+          "triggered": 5,
+          "rolling_passed": 0,
+          "rolling_failed": 30,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-06",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-14",
+          "unknown": false,
+          "passed": 0,
+          "failed": 3,
+          "triggered": 3,
+          "rolling_passed": 0,
+          "rolling_failed": 33,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-07",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-15",
+          "unknown": false,
+          "passed": 0,
+          "failed": 0,
+          "triggered": 0,
+          "rolling_passed": 0,
+          "rolling_failed": 28,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-08",
+          "expired_passed": 0,
+          "expired_failed": 5,
+          "movement": "aging_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-16",
+          "unknown": false,
+          "passed": 0,
+          "failed": 0,
+          "triggered": 0,
+          "rolling_passed": 0,
+          "rolling_failed": 23,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-09",
+          "expired_passed": 0,
+          "expired_failed": 5,
+          "movement": "aging_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-17",
+          "unknown": false,
+          "passed": 0,
+          "failed": 3,
+          "triggered": 3,
+          "rolling_passed": 0,
+          "rolling_failed": 20,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-10",
+          "expired_passed": 0,
+          "expired_failed": 6,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-18",
+          "unknown": false,
+          "passed": 0,
+          "failed": 9,
+          "triggered": 9,
+          "rolling_passed": 0,
+          "rolling_failed": 22,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-11",
+          "expired_passed": 0,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-19",
+          "unknown": false,
+          "passed": 0,
+          "failed": 2,
+          "triggered": 2,
+          "rolling_passed": 0,
+          "rolling_failed": 22,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-12",
+          "expired_passed": 0,
+          "expired_failed": 2,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-20",
+          "unknown": false,
+          "passed": 0,
+          "failed": 0,
+          "triggered": 0,
+          "rolling_passed": 0,
+          "rolling_failed": 17,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-13",
+          "expired_passed": 0,
+          "expired_failed": 5,
+          "movement": "aging_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-21",
+          "unknown": false,
+          "passed": 0,
+          "failed": 7,
+          "triggered": 7,
+          "rolling_passed": 0,
+          "rolling_failed": 21,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-14",
+          "expired_passed": 0,
+          "expired_failed": 3,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-22",
+          "unknown": false,
+          "passed": 0,
+          "failed": 7,
+          "triggered": 7,
+          "rolling_passed": 0,
+          "rolling_failed": 28,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-15",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-23",
+          "unknown": false,
+          "passed": 0,
+          "failed": 11,
+          "triggered": 11,
+          "rolling_passed": 0,
+          "rolling_failed": 39,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-16",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-24",
+          "unknown": false,
+          "passed": 0,
+          "failed": 4,
+          "triggered": 4,
+          "rolling_passed": 0,
+          "rolling_failed": 40,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-17",
+          "expired_passed": 0,
+          "expired_failed": 3,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-25",
+          "unknown": false,
+          "passed": 0,
+          "failed": 8,
+          "triggered": 8,
+          "rolling_passed": 0,
+          "rolling_failed": 39,
+          "rolling_pass_rate": 0.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-18",
+          "expired_passed": 0,
+          "expired_failed": 9,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-09-26",
+          "unknown": false,
+          "passed": 2,
+          "failed": 1,
+          "triggered": 3,
+          "rolling_passed": 2,
+          "rolling_failed": 38,
+          "rolling_pass_rate": 5.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-19",
+          "expired_passed": 0,
+          "expired_failed": 2,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-27",
+          "unknown": false,
+          "passed": 1,
+          "failed": 0,
+          "triggered": 1,
+          "rolling_passed": 3,
+          "rolling_failed": 38,
+          "rolling_pass_rate": 7.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-20",
+          "expired_passed": 0,
+          "expired_failed": 0,
+          "movement": "new_only",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-28",
+          "unknown": false,
+          "passed": 6,
+          "failed": 1,
+          "triggered": 7,
+          "rolling_passed": 9,
+          "rolling_failed": 32,
+          "rolling_pass_rate": 22.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-21",
+          "expired_passed": 0,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-29",
+          "unknown": false,
+          "passed": 3,
+          "failed": 1,
+          "triggered": 4,
+          "rolling_passed": 12,
+          "rolling_failed": 26,
+          "rolling_pass_rate": 31.6,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-22",
+          "expired_passed": 0,
+          "expired_failed": 7,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-09-30",
+          "unknown": false,
+          "passed": 2,
+          "failed": 3,
+          "triggered": 5,
+          "rolling_passed": 14,
+          "rolling_failed": 18,
+          "rolling_pass_rate": 43.8,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-23",
+          "expired_passed": 0,
+          "expired_failed": 11,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-01",
+          "unknown": false,
+          "passed": 9,
+          "failed": 0,
+          "triggered": 9,
+          "rolling_passed": 23,
+          "rolling_failed": 14,
+          "rolling_pass_rate": 62.2,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-24",
+          "expired_passed": 0,
+          "expired_failed": 4,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-02",
+          "unknown": false,
+          "passed": 5,
+          "failed": 1,
+          "triggered": 6,
+          "rolling_passed": 28,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 80.0,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-25",
+          "expired_passed": 0,
+          "expired_failed": 8,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-03",
+          "unknown": false,
+          "passed": 5,
+          "failed": 0,
+          "triggered": 5,
+          "rolling_passed": 31,
+          "rolling_failed": 6,
+          "rolling_pass_rate": 83.8,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-26",
+          "expired_passed": 2,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "up"
+        },
+        {
+          "date": "2026-10-04",
+          "unknown": false,
+          "passed": 1,
+          "failed": 0,
+          "triggered": 1,
+          "rolling_passed": 31,
+          "rolling_failed": 6,
+          "rolling_pass_rate": 83.8,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-27",
+          "expired_passed": 1,
+          "expired_failed": 0,
+          "movement": "new_and_expired",
+          "direction": "flat"
+        },
+        {
+          "date": "2026-10-05",
+          "unknown": false,
+          "passed": 5,
+          "failed": 1,
+          "triggered": 6,
+          "rolling_passed": 30,
+          "rolling_failed": 6,
+          "rolling_pass_rate": 83.3,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-28",
+          "expired_passed": 6,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "down"
+        },
+        {
+          "date": "2026-10-06",
+          "unknown": false,
+          "passed": 3,
+          "failed": 2,
+          "triggered": 5,
+          "rolling_passed": 30,
+          "rolling_failed": 7,
+          "rolling_pass_rate": 81.1,
+          "rolling_unknown": false,
+          "expired_date": "2026-09-29",
+          "expired_passed": 3,
+          "expired_failed": 1,
+          "movement": "new_and_expired",
+          "direction": "down"
+        }
+      ],
+      "activity": {
+        "status": "complete",
+        "branches": [
+          {
+            "branch": "release/13.6",
+            "current": [
+              5,
+              5
+            ],
+            "prior": [
+              2,
+              13
+            ],
+            "change": {
+              "label": "\u2191 85 pts",
+              "delta": 84.6,
+              "meaningful": true
+            },
+            "active_dates": 4,
+            "triggered": 5,
+            "latest": {
+              "id": 3097490,
+              "identity": "azure-devops:3097490",
+              "source": "azure-devops",
+              "branch": "release/13.6",
+              "created_at": "2026-10-06T19:48:13.9005239Z",
+              "initial_conclusion": "success",
+              "final_conclusion": "success"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "reruns": {
+    "runs": 3,
+    "recovered": 1,
+    "human": 3,
+    "bot": 0,
+    "unrecovered": 2
+  },
+  "pr_ci": {
+    "label": "PR CI",
+    "current": {
+      "triggered": 476,
+      "evaluated": 291,
+      "initial_green": 117,
+      "final_green": 225,
+      "initial_failed": 174,
+      "rerun_recovered": 108,
+      "final_failed": 44,
+      "final_cancelled_after_rerun": 22,
+      "excluded": {
+        "superseded": 120,
+        "awaiting_approval": 30,
+        "ci_skipped": 35,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 117,
+        "p50": 25.65,
+        "p90": 44.31666666666667
+      },
+      "red_minutes": {
+        "n": 169,
+        "p50": 43.416666666666664,
+        "p90": 59.353333333333346
+      },
+      "attempt_one_minutes": {
+        "n": 286,
+        "p50": 40.35,
+        "p90": 56.18333333333334
+      },
+      "duration_unreliable": 5
+    },
+    "prior": {
+      "triggered": 524,
+      "evaluated": 288,
+      "initial_green": 125,
+      "final_green": 220,
+      "initial_failed": 163,
+      "rerun_recovered": 95,
+      "final_failed": 46,
+      "final_cancelled_after_rerun": 22,
+      "excluded": {
+        "superseded": 172,
+        "awaiting_approval": 34,
+        "ci_skipped": 30,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 125,
+        "p50": 28.266666666666666,
+        "p90": 42.25333333333333
+      },
+      "red_minutes": {
+        "n": 163,
+        "p50": 42.4,
+        "p90": 59.500000000000014
+      },
+      "attempt_one_minutes": {
+        "n": 288,
+        "p50": 38.44166666666666,
+        "p90": 55.896666666666675
+      },
+      "duration_unreliable": 0
+    },
+    "last_five_weekdays": {
+      "triggered": 404,
+      "evaluated": 238,
+      "initial_green": 89,
+      "final_green": 180,
+      "initial_failed": 149,
+      "rerun_recovered": 91,
+      "final_failed": 36,
+      "final_cancelled_after_rerun": 22,
+      "excluded": {
+        "superseded": 111,
+        "awaiting_approval": 28,
+        "ci_skipped": 27,
+        "startup_failure": 0,
+        "incomplete": 0
+      },
+      "green_minutes": {
+        "n": 89,
+        "p50": 26.833333333333332,
+        "p90": 44.94
+      },
+      "red_minutes": {
+        "n": 144,
+        "p50": 44.150000000000006,
+        "p90": 60.12833333333335
+      },
+      "attempt_one_minutes": {
+        "n": 233,
+        "p50": 41.35,
+        "p90": 56.9
+      },
+      "duration_unreliable": 5
+    },
+    "trend": [
+      {
+        "date": "2026-09-07",
+        "initial": 33.62637362637363,
+        "final": 56.48351648351648,
+        "recovered": 22.857142857142858,
+        "n": 455,
+        "duration_p50": 26.716666666666665,
+        "duration_p90": 45.21333333333334
+      },
+      {
+        "date": "2026-09-08",
+        "initial": 32.22506393861892,
+        "final": 58.05626598465473,
+        "recovered": 25.831202046035806,
+        "n": 391,
+        "duration_p50": 26.90833333333333,
+        "duration_p90": 50.41833333333335
+      },
+      {
+        "date": "2026-09-09",
+        "initial": 30.193905817174514,
+        "final": 54.57063711911357,
+        "recovered": 24.37673130193906,
+        "n": 361,
+        "duration_p50": 26.616666666666667,
+        "duration_p90": 52.18666666666667
+      },
+      {
+        "date": "2026-09-10",
+        "initial": 25.846153846153847,
+        "final": 49.23076923076923,
+        "recovered": 23.384615384615383,
+        "n": 325,
+        "duration_p50": 26.666666666666668,
+        "duration_p90": 52.626666666666665
+      },
+      {
+        "date": "2026-09-11",
+        "initial": 23.239436619718308,
+        "final": 50.352112676056336,
+        "recovered": 27.112676056338028,
+        "n": 284,
+        "duration_p50": 27.03333333333333,
+        "duration_p90": 54.93833333333334
+      },
+      {
+        "date": "2026-09-12",
+        "initial": 20.54263565891473,
+        "final": 51.55038759689923,
+        "recovered": 31.007751937984494,
+        "n": 258,
+        "duration_p50": 27.075000000000003,
+        "duration_p90": 56.66333333333335
+      },
+      {
+        "date": "2026-09-13",
+        "initial": 20.883534136546185,
+        "final": 50.602409638554214,
+        "recovered": 29.718875502008032,
+        "n": 249,
+        "duration_p50": 27.05,
+        "duration_p90": 59.923333333333346
+      },
+      {
+        "date": "2026-09-14",
+        "initial": 24.829931972789115,
+        "final": 55.78231292517007,
+        "recovered": 30.952380952380953,
+        "n": 294,
+        "duration_p50": 27.1,
+        "duration_p90": 57.733333333333334
+      },
+      {
+        "date": "2026-09-15",
+        "initial": 26.95924764890282,
+        "final": 58.62068965517241,
+        "recovered": 31.661442006269592,
+        "n": 319,
+        "duration_p50": 27.766666666666666,
+        "duration_p90": 60.20333333333335
+      },
+      {
+        "date": "2026-09-16",
+        "initial": 27.5974025974026,
+        "final": 58.76623376623377,
+        "recovered": 31.16883116883117,
+        "n": 308,
+        "duration_p50": 27.816666666666666,
+        "duration_p90": 63.15
+      },
+      {
+        "date": "2026-09-17",
+        "initial": 27.68166089965398,
+        "final": 61.937716262975776,
+        "recovered": 34.2560553633218,
+        "n": 289,
+        "duration_p50": 28.333333333333332,
+        "duration_p90": 65.08666666666666
+      },
+      {
+        "date": "2026-09-18",
+        "initial": 24.46808510638298,
+        "final": 54.60992907801418,
+        "recovered": 30.141843971631207,
+        "n": 282,
+        "duration_p50": 28.95,
+        "duration_p90": 66.26666666666667
+      },
+      {
+        "date": "2026-09-19",
+        "initial": 25.26690391459075,
+        "final": 53.736654804270465,
+        "recovered": 28.469750889679716,
+        "n": 281,
+        "duration_p50": 29.183333333333334,
+        "duration_p90": 66.14666666666668
+      },
+      {
+        "date": "2026-09-20",
+        "initial": 24.444444444444443,
+        "final": 54.81481481481482,
+        "recovered": 30.37037037037037,
+        "n": 270,
+        "duration_p50": 29.266666666666666,
+        "duration_p90": 66.28666666666666
+      },
+      {
+        "date": "2026-09-21",
+        "initial": 19.92337164750958,
+        "final": 54.02298850574713,
+        "recovered": 34.099616858237546,
+        "n": 261,
+        "duration_p50": 33.016666666666666,
+        "duration_p90": 68.5
+      },
+      {
+        "date": "2026-09-22",
+        "initial": 18.773946360153257,
+        "final": 54.02298850574713,
+        "recovered": 35.24904214559387,
+        "n": 261,
+        "duration_p50": 36.16666666666667,
+        "duration_p90": 69.63333333333334
+      },
+      {
+        "date": "2026-09-23",
+        "initial": 24.262295081967213,
+        "final": 57.049180327868854,
+        "recovered": 32.78688524590164,
+        "n": 305,
+        "duration_p50": 38.49166666666667,
+        "duration_p90": 68.46666666666671
+      },
+      {
+        "date": "2026-09-24",
+        "initial": 31.097560975609756,
+        "final": 64.32926829268293,
+        "recovered": 33.23170731707317,
+        "n": 328,
+        "duration_p50": 39.18333333333333,
+        "duration_p90": 66.15333333333334
+      },
+      {
+        "date": "2026-09-25",
+        "initial": 36.04651162790697,
+        "final": 71.80232558139535,
+        "recovered": 35.75581395348837,
+        "n": 344,
+        "duration_p50": 39.4,
+        "duration_p90": 60.55
+      },
+      {
+        "date": "2026-09-26",
+        "initial": 36.25730994152047,
+        "final": 72.51461988304094,
+        "recovered": 36.25730994152047,
+        "n": 342,
+        "duration_p50": 39.166666666666664,
+        "duration_p90": 60.10666666666667
+      },
+      {
+        "date": "2026-09-27",
+        "initial": 36.206896551724135,
+        "final": 72.70114942528735,
+        "recovered": 36.49425287356322,
+        "n": 348,
+        "duration_p50": 39.166666666666664,
+        "duration_p90": 60.00000000000001
+      },
+      {
+        "date": "2026-09-28",
+        "initial": 40.78549848942598,
+        "final": 74.62235649546828,
+        "recovered": 33.8368580060423,
+        "n": 331,
+        "duration_p50": 38.86666666666667,
+        "duration_p90": 58.4
+      },
+      {
+        "date": "2026-09-29",
+        "initial": 43.40277777777778,
+        "final": 76.38888888888889,
+        "recovered": 32.986111111111114,
+        "n": 288,
+        "duration_p50": 38.44166666666666,
+        "duration_p90": 55.896666666666675
+      },
+      {
+        "date": "2026-09-30",
+        "initial": 44.67213114754098,
+        "final": 80.73770491803279,
+        "recovered": 36.0655737704918,
+        "n": 244,
+        "duration_p50": 38.18333333333333,
+        "duration_p90": 55.13333333333333
+      },
+      {
+        "date": "2026-10-01",
+        "initial": 38.888888888888886,
+        "final": 79.48717948717949,
+        "recovered": 40.598290598290596,
+        "n": 234,
+        "duration_p50": 39.96666666666667,
+        "duration_p90": 55.39666666666667
+      },
+      {
+        "date": "2026-10-02",
+        "initial": 37.219730941704036,
+        "final": 79.37219730941705,
+        "recovered": 42.152466367713004,
+        "n": 223,
+        "duration_p50": 39.233333333333334,
+        "duration_p90": 55.60666666666667
+      },
+      {
+        "date": "2026-10-03",
+        "initial": 41.43426294820717,
+        "final": 81.67330677290836,
+        "recovered": 40.2390438247012,
+        "n": 251,
+        "duration_p50": 36.94166666666666,
+        "duration_p90": 55.34166666666667
+      },
+      {
+        "date": "2026-10-04",
+        "initial": 41.338582677165356,
+        "final": 80.70866141732283,
+        "recovered": 39.37007874015748,
+        "n": 254,
+        "duration_p50": 36.45,
+        "duration_p90": 55.093333333333334
+      },
+      {
+        "date": "2026-10-05",
+        "initial": 39.416058394160586,
+        "final": 76.64233576642336,
+        "recovered": 37.22627737226277,
+        "n": 274,
+        "duration_p50": 36.96666666666667,
+        "duration_p90": 55.82333333333334
+      },
+      {
+        "date": "2026-10-06",
+        "initial": 40.20618556701031,
+        "final": 77.31958762886597,
+        "recovered": 37.11340206185567,
+        "n": 291,
+        "duration_p50": 40.35,
+        "duration_p90": 56.18333333333334
+      }
+    ]
+  },
+  "category_trends": {
+    "test": {
+      "label": "Test",
+      "current": [
+        0,
+        49
+      ],
+      "prior": [
+        0,
+        56
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "build": {
+      "label": "Build / tooling",
+      "current": [
+        0,
+        49
+      ],
+      "prior": [
+        0,
+        56
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    },
+    "workflow": {
+      "label": "Workflow / other",
+      "current": [
+        0,
+        49
+      ],
+      "prior": [
+        0,
+        56
+      ],
+      "change": {
+        "label": "\u2248 flat",
+        "delta": 0.0,
+        "meaningful": false,
+        "direction": "\u26aa Flat"
+      }
+    }
+  },
+  "multi_category_runs": {
+    "current": 0,
+    "prior": 0
+  },
+  "chart": [
+    {
+      "date": "2026-09-07",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 27.0,
+      "rolling_passed": 10,
+      "rolling_failed": 27
+    },
+    {
+      "date": "2026-09-08",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": 20.0,
+      "rolling_passed": 7,
+      "rolling_failed": 28
+    },
+    {
+      "date": "2026-09-09",
+      "passed": 1,
+      "failed": 5,
+      "rolling_pass_rate": 16.7,
+      "rolling_passed": 5,
+      "rolling_failed": 25
+    },
+    {
+      "date": "2026-09-10",
+      "passed": 0,
+      "failed": 8,
+      "rolling_pass_rate": 13.3,
+      "rolling_passed": 4,
+      "rolling_failed": 26
+    },
+    {
+      "date": "2026-09-11",
+      "passed": 0,
+      "failed": 7,
+      "rolling_pass_rate": 10.3,
+      "rolling_passed": 3,
+      "rolling_failed": 26
+    },
+    {
+      "date": "2026-09-12",
+      "passed": 1,
+      "failed": 1,
+      "rolling_pass_rate": 10.0,
+      "rolling_passed": 3,
+      "rolling_failed": 27
+    },
+    {
+      "date": "2026-09-13",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": 8.3,
+      "rolling_passed": 3,
+      "rolling_failed": 33
+    },
+    {
+      "date": "2026-09-14",
+      "passed": 1,
+      "failed": 12,
+      "rolling_pass_rate": 8.2,
+      "rolling_passed": 4,
+      "rolling_failed": 45
+    },
+    {
+      "date": "2026-09-15",
+      "passed": 2,
+      "failed": 9,
+      "rolling_pass_rate": 9.4,
+      "rolling_passed": 5,
+      "rolling_failed": 48
+    },
+    {
+      "date": "2026-09-16",
+      "passed": 1,
+      "failed": 6,
+      "rolling_pass_rate": 9.3,
+      "rolling_passed": 5,
+      "rolling_failed": 49
+    },
+    {
+      "date": "2026-09-17",
+      "passed": 0,
+      "failed": 6,
+      "rolling_pass_rate": 9.6,
+      "rolling_passed": 5,
+      "rolling_failed": 47
+    },
+    {
+      "date": "2026-09-18",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.7,
+      "rolling_passed": 6,
+      "rolling_failed": 50
+    },
+    {
+      "date": "2026-09-19",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 9.1,
+      "rolling_passed": 5,
+      "rolling_failed": 50
+    },
+    {
+      "date": "2026-09-20",
+      "passed": 0,
+      "failed": 0,
+      "rolling_pass_rate": 10.2,
+      "rolling_passed": 5,
+      "rolling_failed": 44
+    },
+    {
+      "date": "2026-09-21",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.6,
+      "rolling_passed": 5,
+      "rolling_failed": 42
+    },
+    {
+      "date": "2026-09-22",
+      "passed": 0,
+      "failed": 13,
+      "rolling_pass_rate": 6.1,
+      "rolling_passed": 3,
+      "rolling_failed": 46
+    },
+    {
+      "date": "2026-09-23",
+      "passed": 2,
+      "failed": 11,
+      "rolling_pass_rate": 7.3,
+      "rolling_passed": 4,
+      "rolling_failed": 51,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 11
+    },
+    {
+      "date": "2026-09-24",
+      "passed": 3,
+      "failed": 7,
+      "rolling_pass_rate": 11.9,
+      "rolling_passed": 7,
+      "rolling_failed": 52,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 7
+    },
+    {
+      "date": "2026-09-25",
+      "passed": 1,
+      "failed": 13,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 7,
+      "rolling_failed": 55,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 13
+    },
+    {
+      "date": "2026-09-26",
+      "passed": 0,
+      "failed": 3,
+      "rolling_pass_rate": 10.9,
+      "rolling_passed": 7,
+      "rolling_failed": 57,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 3
+    },
+    {
+      "date": "2026-09-27",
+      "passed": 0,
+      "failed": 1,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 1
+    },
+    {
+      "date": "2026-09-28",
+      "passed": 1,
+      "failed": 10,
+      "rolling_pass_rate": 10.8,
+      "rolling_passed": 7,
+      "rolling_failed": 58,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 10
+    },
+    {
+      "date": "2026-09-29",
+      "passed": 0,
+      "failed": 4,
+      "rolling_pass_rate": 12.5,
+      "rolling_passed": 7,
+      "rolling_failed": 49,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 4
+    },
+    {
+      "date": "2026-09-30",
+      "passed": 2,
+      "failed": 7,
+      "rolling_pass_rate": 13.5,
+      "rolling_passed": 7,
+      "rolling_failed": 45,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 7
+    },
+    {
+      "date": "2026-10-01",
+      "passed": 2,
+      "failed": 9,
+      "rolling_pass_rate": 11.3,
+      "rolling_passed": 6,
+      "rolling_failed": 47,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 9
+    },
+    {
+      "date": "2026-10-02",
+      "passed": 2,
+      "failed": 6,
+      "rolling_pass_rate": 14.9,
+      "rolling_passed": 7,
+      "rolling_failed": 40,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 6
+    },
+    {
+      "date": "2026-10-03",
+      "passed": 1,
+      "failed": 5,
+      "rolling_pass_rate": 16.0,
+      "rolling_passed": 8,
+      "rolling_failed": 42,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 5
+    },
+    {
+      "date": "2026-10-04",
+      "passed": 1,
+      "failed": 0,
+      "rolling_pass_rate": 18.0,
+      "rolling_passed": 9,
+      "rolling_failed": 41,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 0
+    },
+    {
+      "date": "2026-10-05",
+      "passed": 1,
+      "failed": 7,
+      "rolling_pass_rate": 19.1,
+      "rolling_passed": 9,
+      "rolling_failed": 38,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 7
+    },
+    {
+      "date": "2026-10-06",
+      "passed": 2,
+      "failed": 4,
+      "rolling_pass_rate": 22.4,
+      "rolling_passed": 11,
+      "rolling_failed": 38,
+      "confirmed_test_failed": 0,
+      "other_failed": 0,
+      "insufficient_failed": 4
+    }
+  ],
+  "timeline_dates": [
+    "2026-09-07",
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11",
+    "2026-09-12",
+    "2026-09-13",
+    "2026-09-14",
+    "2026-09-15",
+    "2026-09-16",
+    "2026-09-17",
+    "2026-09-18",
+    "2026-09-19",
+    "2026-09-20",
+    "2026-09-21",
+    "2026-09-22",
+    "2026-09-23",
+    "2026-09-24",
+    "2026-09-25",
+    "2026-09-26",
+    "2026-09-27",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-03",
+    "2026-10-04",
+    "2026-10-05",
+    "2026-10-06"
+  ],
+  "latest_evidence": "2026-10-06T23:52:55Z",
+  "verdict": "holding",
+  "collection": {
+    "mode": "bootstrap",
+    "refresh_dates": [
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-05",
+      "2026-09-06",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-12",
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-19",
+      "2026-09-20",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-26",
+      "2026-09-27",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04",
+      "2026-10-05",
+      "2026-10-06"
+    ],
+    "fetched_records": 569,
+    "fetched_pr_records": 2711,
+    "active_records": 569,
+    "active_pr_records": 2711,
+    "reused_records": 0,
+    "replaced_records": 486,
+    "lane_seconds": {
+      "github-pr-ci": 265.477,
+      "github-ci-main": 2.8,
+      "github-outerloop-main": 24.65,
+      "azdo-internal-main": 2.193
+    },
+    "lane_failures": {},
+    "provider_commands": 1273,
+    "provider_retries": 0,
+    "evidence": {
+      "disabled": true
+    },
+    "collection_seconds": 295.582,
+    "total_seconds": 295.986
+  },
+  "execution_source": {
+    "commit": "fd1808ed74f6017848ddbb626eda6e05cd39cefd",
+    "dirty": false,
+    "paths": [
+      "aspire-rolling-ci-health.prompt.txt",
+      "scripts/ci_health.py",
+      "aspire-ci-report-common.prompt.txt",
+      "scripts/test_ci_health.py"
+    ]
+  }
+}
