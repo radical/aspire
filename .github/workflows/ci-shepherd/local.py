@@ -487,7 +487,8 @@ def check_api(api, number):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume", "confirm-handoff"])
-    parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name],
+    parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name,
+                                            bindings.FORK_MERGE_PROOF.name],
                         default=bindings.UPSTREAM.name)
     parser.add_argument("--tracker", type=int, required=True)
     parser.add_argument("--authority", type=int, required=True)
@@ -517,7 +518,9 @@ def main(argv=None):
         parser.error("resume requires --operation and --expected-head")
     if args.mode == "resume" and args.target == bindings.FORK.name:
         parser.error("resume requires an upstream target")
-    binding = bindings.select(args.target)
+    binding = bindings.FORK_MERGE_PROOF if args.target == bindings.FORK_MERGE_PROOF.name else bindings.select(args.target)
+    if binding == bindings.FORK_MERGE_PROOF and args.mode not in {"observe", "check-api", "confirm-handoff"}:
+        parser.error("isolated fork proof supports only observation and manual handoff confirmation")
     if args.pr_handoff not in {None, "manual"}:
         parser.error("unsupported manual PR handoff mode")
     if args.mode == "confirm-handoff" and (

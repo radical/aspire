@@ -45,7 +45,7 @@ class AuthorityUncertain(ValueError):
 
 class PilotTransport(live.HTTPTransport):
     def __init__(self, token, *, write=False, binding=bindings.FORK, tracker=None, authority=None):
-        if binding not in {bindings.FORK, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
+        if binding not in {bindings.FORK, bindings.FORK_MERGE_PROOF, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
             raise ValueError("closed pilot transport binding required")
         super().__init__(token, write=write)
         self.binding = binding
@@ -62,6 +62,16 @@ class PilotTransport(live.HTTPTransport):
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
+        if self.binding == bindings.FORK_MERGE_PROOF and method != "GET" and (
+                "/tasks" in path.path or path.path.endswith("/requested_reviewers")):
+            raise ValueError("isolated fork proof cannot dispatch workers or request reviews")
+        if (self.binding == bindings.FORK_MERGE_PROOF and method == "PATCH" and self.write
+                and self.authority is not None and path.path == f"{PREFIX}/issues/comments/{self.authority}"
+                and isinstance(body, dict) and set(body) == {"body"}
+                and state.parse(body["body"])["repository"] == self.binding.repository
+                and all(chain["origin"] == self.binding.subject
+                        for chain in state.parse(body["body"])["chains"])):
+            return
         if method == "POST" and endpoint == "graphql":
             validate_graphql(body, self.binding)
             return
@@ -242,7 +252,7 @@ class PilotGitHub:
         return collector is not None and getattr(collector, "capable", True)
 
     def __init__(self, transport, tracker, authority_id, tracker_node, *, write=False, binding=bindings.FORK):
-        if binding not in {bindings.FORK, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
+        if binding not in {bindings.FORK, bindings.FORK_MERGE_PROOF, bindings.UPSTREAM, bindings.UPSTREAM_ALL}:
             raise ValueError("closed pilot binding required")
         self.binding = binding
         self.repository, self.repository_id = binding.repository, binding.repository_id
@@ -265,7 +275,7 @@ class PilotGitHub:
         if (repository["id"] != self.repository_id or repository["full_name"] != self.repository
                 or repository["default_branch"] != "main"):
             raise ValueError("pilot target identity/default branch mismatch")
-        if binding != bindings.FORK:
+        if binding.repository != bindings.FORK.repository:
             controller = self.api.get(PREFIX)
             if controller.get("id") != live.REPOSITORY_ID or controller.get("full_name") != REPOSITORY:
                 raise ValueError("controller repository mismatch")
@@ -301,7 +311,7 @@ class PilotGitHub:
         observed = state.parse(candidates[0]["body"])
         if observed["repository"] != self.repository:
             raise ValueError("authority target namespace mismatch")
-        if self.binding == bindings.UPSTREAM and any(
+        if self.binding in {bindings.UPSTREAM, bindings.FORK_MERGE_PROOF} and any(
                 chain["origin"] != self.binding.subject for chain in observed["chains"]):
             raise ValueError("upstream trial subject mismatch")
         if self.expected is None:
@@ -343,7 +353,7 @@ class PilotGitHub:
         if (value["number"] != number or value["base"]["repo"]["id"] != self.repository_id
                 or value["head"]["repo"]["id"] != self.repository_id
                 or value["base"]["repo"]["full_name"] != self.repository or value["head"]["repo"]["full_name"] != self.repository
-                or value["base"]["ref"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", value["head"]["sha"])
+                or value["base"]["ref"] != self.binding.base_ref or not re.fullmatch(r"[0-9a-f]{40}", value["head"]["sha"])
                 or not re.fullmatch(r"[A-Za-z0-9_./-]+", value["head"]["ref"])):
             raise ValueError("PR fork/head/base identity mismatch")
         if self.binding == bindings.UPSTREAM and value["head"]["ref"] != "copilot/restrict-workflows-to-microsoft-aspire":

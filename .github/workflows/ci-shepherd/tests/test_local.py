@@ -48,6 +48,44 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
                 else:
                     command.assert_not_called()
 
+    def test_isolated_fork_binding_accepts_only_exact_disposable_base(self):
+        fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        pr = test_pilot_github.pr(139)
+        pr["base"]["ref"] = bindings.FORK_MERGE_PROOF.base_ref
+        fixture.transport.values["repos/radical/aspire/pulls/139"] = pr
+        with patch.object(local.github, "PilotTransport", return_value=fixture.transport):
+            api = local.LocalGitHub("fixture-token", 138, 6066457421, "TRACKER138",
+                                   write=False, revision="b" * 40, binding=bindings.FORK_MERGE_PROOF)
+        self.assertEqual(pr, api.mapping(139))
+        pr["base"]["ref"] = "main"
+        with self.assertRaisesRegex(ValueError, "base identity mismatch"):
+            api.mapping(139)
+        with self.assertRaisesRegex(ValueError, "subject mismatch"):
+            api.mapping(140)
+        with self.assertRaisesRegex(ValueError, "isolated fork base"):
+            bindings.Binding("upstream", "microsoft/aspire", 696529789, 139, 10,
+                             bindings.FORK_MERGE_PROOF.base_ref)
+        with self.assertRaises(ValueError):
+            bindings.select("fork-merge-proof")
+        transport = local.github.PilotTransport("fixture-token", write=True,
+                                                binding=bindings.FORK_MERGE_PROOF, authority=6066457421)
+        endpoint = "repos/radical/aspire/issues/comments/6066457421"
+        body = {"body": state.render(state.new_ledger())}
+        transport.validate_endpoint("PATCH", endpoint, body)
+        for invalid in ("https://evil.example/" + endpoint, endpoint + "#fragment"):
+            with self.assertRaisesRegex(ValueError, "invalid pilot endpoint"):
+                transport.validate_endpoint("PATCH", invalid, body)
+        foreign = state.new_ledger()
+        state.adopt(foreign, 140, "pr", "FOREIGN")
+        with self.assertRaises(ValueError):
+            transport.validate_endpoint("PATCH", endpoint, {"body": state.render(foreign)})
+        for endpoint in ("agents/repos/radical/aspire/tasks",
+                         "repos/radical/aspire/pulls/139/requested_reviewers"):
+            with self.assertRaisesRegex(ValueError, "cannot dispatch"):
+                transport.validate_endpoint("POST", endpoint, {})
+
     def test_wrong_ambient_actor_fails_without_saved_credential_fallback(self):
         fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
         fixture.setUp()

@@ -1053,6 +1053,12 @@ still be `radical`. Credentials for the same account can expose different
 Copilot history schemas; unavailable capabilities hold notification, without
 retrying another credential or weakening evidence guards.
 
+The local-only `fork-merge-proof` binding observes/confirms PR139 in
+`radical/aspire` against the exact disposable base
+`fork-merge-proof-base-18213f39`, never `main`. It cannot dispatch workers
+or request reviews and is not selectable by hosted controllers. All normal
+bindings retain their `main` base and repository/head identity checks.
+
 ```shell
 python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_*.py' -q
 artifacts/ci-shepherd/tooling/gh-aw compile ci-shepherd --validate --no-check-update
