@@ -277,6 +277,8 @@ class PilotGitHub:
         self.high_water = None
         self.clock = live.clock
         self.reminder_delay = 60
+        self.pr_reminders = False
+        self.reminder_repeat = 300
         self.worker_results = {}
         self.worker_result_heads = {}
         self.worker_result_versions = {}

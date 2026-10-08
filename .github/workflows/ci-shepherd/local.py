@@ -86,6 +86,7 @@ class LocalGitHub(github.PilotGitHub):
                                   tracker=tracker, authority=authority),
             tracker, authority, node, write=write, binding=binding)
         self.reminder_delay = reminders.delay(os.environ.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS") or "60")
+        self.pr_reminders, self.reminder_repeat = reminders.configuration(os.environ)
         self.result_collector = result_collector.LocalCollector(token)
 
     def authority_guard(self):

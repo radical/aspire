@@ -36,9 +36,11 @@ def configuration(environment, *, billing=False):
     required = tuple(prefix + name for name in ("TRACKER", "AUTHORITY_COMMENT", "TRACKER_NODE"))
     if any(not environment.get(key) for key in required):
         return None
+    pr_reminders, reminder_repeat = reminders.configuration(environment)
     return {"tracker": int(environment[required[0]]), "authority": int(environment[required[1]]),
             "node": environment[required[2]], "binding": binding, "prHandoff": pr_handoff,
-            "reminderDelay": 60 if billing else reminders.delay(environment.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS", "60"))}
+            "reminderDelay": 60 if billing else reminders.delay(environment.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS", "60")),
+            "prReminders": pr_reminders, "reminderRepeat": reminder_repeat}
 
 
 def prepare(api, run, now, *, present=True):
@@ -489,6 +491,8 @@ def hosted_api(run, environment, *, billing=False):
                                                    authority=config["authority"]),
                              config["tracker"], config["authority"], config["node"], write=True, binding=config["binding"])
     api.reminder_delay = config["reminderDelay"]
+    api.pr_reminders = config["prReminders"]
+    api.reminder_repeat = config["reminderRepeat"]
     api.pr_handoff = config["prHandoff"]
     return api
 

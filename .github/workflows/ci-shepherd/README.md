@@ -1028,6 +1028,25 @@ No invented worker hard cap or cancellation endpoint is exposed.
 
 ## Pilot validation
 
+The optional [PR human reminder policy](policies/reminders.md) uses the existing
+persist-before-POST reminder boundary. Enable it with
+`CI_SHEPHERD_PR_REMINDERS=true`; the pilot sets
+`CI_SHEPHERD_REMINDER_DELAY_SECONDS=120` and
+`CI_SHEPHERD_REMINDER_REPEAT_SECONDS=300`. Only `radical` is mentioned.
+Set the same repository variables for hosted controllers; the prepare,
+settlement and publication stages explicitly forward them.
+Ready notices require all current-head CI green, including optional checks,
+cleared conflicts/review threads and affirmative final merge readiness.
+Blocked/behind merge states are explicit holds; unknown readiness never
+authorizes a notice. Draft, approval and `NO-MERGE` holds are
+disclosed as human-review work, not merge readiness. Pending CI or worker
+completion alone is not a stuck signal. Failed-repair notices require a
+matching current-head attempt basis and freshly verified terminal sessions.
+Desktop Agent Merge activity is not
+observable here and is explicitly disclosed; timeline events are not owned
+worker receipts. Policy eligibility tests do not prove a live repair loop or
+human inbox delivery.
+
 ```shell
 python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_*.py' -q
 artifacts/ci-shepherd/tooling/gh-aw compile ci-shepherd --validate --no-check-update

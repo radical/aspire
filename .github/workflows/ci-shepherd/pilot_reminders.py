@@ -5,6 +5,7 @@ import re
 import hashlib
 import json
 import uuid
+import zlib
 from urllib.parse import parse_qs
 
 from github import IncompleteInventory, LostResponse, Response
@@ -18,7 +19,35 @@ KINDS = {"workflow-approval": "workflow approval", "worker-input": "worker input
          "worker-result": "an ambiguous worker result needing review",
          "copilot-review": "Copilot review needing confirmation",
          "handoff-needed": "manual app handoff with merging OFF",
-         "watching-stale": "stale operator-confirmed app work"}
+         "watching-stale": "stale operator-confirmed app work",
+         "pr-ready": "ready for human merge/review action",
+         "pr-review": "awaiting human review",
+         "pr-stuck": "stuck after unsuccessful Copilot repair"}
+PR_KINDS = {"pr-ready", "pr-review", "pr-stuck"}
+HOLDS = {"draft": "draft", "approval": "missing approval", "safety": "NO-MERGE",
+         "review": "pending review", "decision": "explicit human decision",
+         "gate": "merge requirements blocked", "base": "branch behind base"}
+STUCK_REASONS = {"failed-repair": "stuck after unsuccessful Copilot repair",
+                 "human-input": "waiting for explicit human input"}
+ACTIVITY_DISCLOSURE = (
+    "Desktop Agent Merge activity is not observable here; this reminder is not "
+    "proof of worker completion or merge authority."
+)
+
+
+def configuration(environment):
+    enabled = environment.get("CI_SHEPHERD_PR_REMINDERS", "false")
+    if enabled not in {"true", "false"}:
+        raise ValueError("CI_SHEPHERD_PR_REMINDERS must be true or false")
+    return enabled == "true", delay(environment.get("CI_SHEPHERD_REMINDER_REPEAT_SECONDS", "300"))
+
+
+def description(value):
+    if value["kind"] == "pr-review":
+        return KINDS[value["kind"]] + "; held: " + ", ".join(HOLDS[key] for key in value["reason"].split("-"))
+    if value["kind"] == "pr-stuck":
+        return STUCK_REASONS[value["reason"]]
+    return KINDS[value["kind"]]
 
 
 def delay(value):
@@ -28,7 +57,8 @@ def delay(value):
 
 
 def validate(value):
-    contracts.exact(value, {"id", "head", "kind", "reason", "firstObservedAt", "sendState", "commentId"}, "reminder")
+    extra = {"activity", "sentAt"} if isinstance(value.get("kind"), str) and value["kind"] in PR_KINDS else set()
+    contracts.exact(value, {"id", "head", "kind", "reason", "firstObservedAt", "sendState", "commentId"} | extra, "reminder")
     issue_pr.text(value["id"], "reminder id")
     issue_pr.text(value["head"], "reminder head")
     issue_pr.text(value["kind"], "reminder kind")
@@ -42,6 +72,22 @@ def validate(value):
     if not re.fullmatch(pattern, value["reason"]):
         raise ValueError("invalid reminder reason identity")
     issue_pr.timestamp(value["firstObservedAt"])
+    if extra:
+        if len(value["head"]) != 40:
+            raise ValueError("PR reminder requires a git head")
+        if not isinstance(value["activity"], str) or not re.fullmatch(r"[0-9a-f]{8}", value["activity"]):
+            raise ValueError("invalid reminder activity")
+        if value["sentAt"] is not None:
+            issue_pr.timestamp(value["sentAt"])
+        if value["sendState"] in {"sent", "uncertain", "confirmed"} and value["sentAt"] is None:
+            raise ValueError("PR reminder send timestamp required")
+        if value["kind"] == "pr-ready" and value["reason"] != "merge":
+            raise ValueError("invalid ready reason")
+        if value["kind"] == "pr-review" and (
+                value["reason"].split("-") != [key for key in HOLDS if key in value["reason"].split("-")]):
+            raise ValueError("invalid readiness holds")
+        if value["kind"] == "pr-stuck" and value["reason"] not in STUCK_REASONS:
+            raise ValueError("invalid stuck reason")
     if value["sendState"] not in {"observed", "sent", "uncertain", "confirmed"}:
         raise ValueError("invalid reminder send state")
     if value["commentId"] is not None:
@@ -67,15 +113,31 @@ def link(value, repository, number):
 def render(value, repository, number):
     validate(value)
     subject, descriptor = ("PR", "head") if len(value["head"]) == 40 else ("Issue", "content state")
+    clause = ("is " if value["kind"] in PR_KINDS else "is blocked on ") + description(value)
+    disclosure = ACTIVITY_DISCLOSURE + "\n\n" if value["kind"] in PR_KINDS else ""
     return (f"[automated] @radical CI Shepherd needs human help.\n\n"
-            f"{subject} #{number} at {descriptor} `{value['head']}` is blocked on {KINDS[value['kind']]}.\n"
-            f"Please review: {link(value, repository, number)}\n\n{MARKER}{value['id']} -->")
+            f"{subject} #{number} at {descriptor} `{value['head']}` {clause}.\n"
+            f"Please review: {link(value, repository, number)}\n\n{disclosure}{MARKER}{value['id']} -->")
 
 
 def valid_body(body, repository, number):
     if not isinstance(body, str):
         return False
     base = re.escape(f"https://github.com/{repository}")
+    policy = re.fullmatch(
+        r"\[automated\] @radical CI Shepherd needs human help\.\n\nPR #" + str(number)
+        + r" at head `([0-9a-f]{40})` is (ready for human merge/review action"
+        r"|awaiting human review; held: ([A-Za-z ,\-]+)"
+        r"|stuck after unsuccessful Copilot repair|waiting for explicit human input)\.\nPlease review: "
+        + base + r"/pull/" + str(number) + r"\n\n" + re.escape(ACTIVITY_DISCLOSURE)
+        + r"\n\n" + re.escape(MARKER) + r"([0-9a-f-]{36}) -->", body)
+    if policy is not None:
+        _, text, holds, identity = policy.groups()
+        try:
+            return (str(uuid.UUID(identity)) == identity and (
+                holds is None or holds.split(", ") == [text for text in HOLDS.values() if text in holds.split(", ")]))
+        except ValueError:
+            return False
     match = re.fullmatch(
         r"\[automated\] @radical CI Shepherd needs human help\.\n\n"
         r"(?:PR #" + str(number) + r" at head `([0-9a-f]{40})`"
@@ -166,6 +228,8 @@ def workflow_evidence(api, head):
 
 def blocker(chain, observation):
     from pilot_github import native_handoff
+    if "prNotice" in observation:
+        return observation["prNotice"]
     if "handoff" in chain:
         value = chain["handoff"]
         if observation["attention"] is not None or observation["state"] != "open":
@@ -200,10 +264,14 @@ def blocker(chain, observation):
 
 def matches(value, observation, current, *, progress=None):
     return (current is not None and (value["head"], value["kind"]) == (observation["head"], current[0])
-            and (progress is None or value["firstObservedAt"] == progress))
+            and (value.get("activity") == observation.get("noticeActivity")
+                 if value["kind"] in PR_KINDS else progress is None or value["firstObservedAt"] == progress)
+            and (value["reason"] == current[1] if value["kind"] in PR_KINDS else True))
 
 
 def evidence_unknown(chain, observation):
+    if observation.get("noticeUnknown"):
+        return True
     if "handoff" in chain:
         return observation["attention"] is not None
     return (observation["workflowAttention"] is not None
@@ -214,6 +282,9 @@ def evidence_unknown(chain, observation):
 def notification_guard(api, chain, observation, value):
     if not api.write or "handoff" not in chain and chain["state"] not in {"open", "human"}:
         raise ValueError("notification authority disabled or closed")
+    if value["kind"] in PR_KINDS and any(op["taskId"] is not None for op in chain["operations"]):
+        api.reconcile_workers(adopt_children=False)
+        api.persist()
     if value["kind"] in {"worker-input", "worker-result"}:
         # A saved task may have resumed since observation. Refresh its receipt
         # without adoption effects before deciding whether the notice is still due.
@@ -225,12 +296,141 @@ def notification_guard(api, chain, observation, value):
         api.persist()
     # Only adoption notices may inspect an unmanaged child; the origin stays managed.
     observed = api.guard(chain, observation, effect=False, require_managed=value["kind"] != "child-adoption")
+    if getattr(api, "pr_reminders", False) and len(value["head"]) == 40:
+        observed = policy_observation(api, chain, observed)
     current = blocker(chain, observed)
     if evidence_unknown(chain, observed) or not matches(
             value, observed, current, progress=chain.get("handoff", {}).get("progressAt")):
         raise ValueError("human blocker changed or unknown before notification")
     if value["reason"] != current[1]:
         raise ValueError("human blocker link changed before notification")
+
+
+def policy_observation(api, chain, observation):
+    """Read-only PR policy evidence; never admits repairs on app-owned PRs."""
+    import pilot_authors as authors
+    import pilot_feedback as feedback
+    import pilot_history as history
+    import pilot_results as results
+    import pilot_state as state
+    result = {**observation, "prNotice": None}
+    try:
+        # Reuse the complete current-head inventory/identity adapters, not cached
+        # handoff status or workflow summaries. Optional red checks also hold ready.
+        observed = api._observe(chain)
+        if observed["attention"] or observed["workflowAttention"]:
+            raise IncompleteInventory("PR notification inventories unavailable")
+        pr = api.mapping(observation["number"])
+        if pr["head"]["sha"] != observed["head"] or observed["head"] != observation["head"]:
+            raise IncompleteInventory("PR notification head changed during observation")
+        reviews = api.api.pages(f"{api.prefix}/pulls/{pr['number']}/reviews")
+        comments = api.api.pages(f"{api.prefix}/issues/{pr['number']}/comments")
+        inline = api.api.pages(f"{api.prefix}/pulls/{pr['number']}/comments")
+        resolved = feedback.resolved(api.transport, api.binding, pr["number"], pr["node_id"],
+                                     observed["head"], inline) if inline else set()
+        work = history.read(api.transport, api.binding, pr["number"], pr["node_id"])
+        activity = [comment for comment in comments if authors.feedback(comment.get("user"))
+                    and not (api.owned(comment) and (
+                        valid_body(comment.get("body"), api.repository, pr["number"])
+                        or comment["id"] == chain["statusId"]
+                        or results.owned_report(api, chain, comment)))]
+        latest = {}
+        for review in reviews:
+            if review["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+                latest[review["user"]["id"]] = review
+        requested = {reviewer["id"] for reviewer in pr["requested_reviewers"]}
+        approval = any(review["state"] == "APPROVED" and review["commit_id"] == observed["head"]
+                       and reviewer not in requested and review["user"].get("type") != "Bot"
+                       and reviewer not in {authors.REVIEWER_ID, authors.WORKER_ID}
+                       for reviewer, review in latest.items())
+        unresolved = bool([comment for comment in inline if comment["id"] not in resolved]) or any(
+            review["state"] == "CHANGES_REQUESTED" for review in latest.values())
+        events = sorted(work["events"], key=lambda event: (issue_pr.timestamp(event["at"]), event["id"]))
+        task_states, session_states = {}, {}
+        record = chain.get("handoff", {})
+        if record.get("sendState") in {"sent", "uncertain"} or any(
+                op["taskId"] is None and op["state"] in {"reserved", "sent", "waiting", "uncertain"}
+                for op in chain["operations"]):
+            raise IncompleteInventory("owned task send has no verified receipt")
+        owned = [op for op in chain["operations"] if op["taskId"] is not None]
+        if record.get("taskId") is not None:
+            owned.append({"id": record["id"], "taskId": record["taskId"]})
+        for operation in owned:
+            task = api.api.get(f"agents/repos/{api.repository}/tasks/{operation['taskId']}")
+            api.verify_task(task, operation["taskId"], chain, operation, summarize=False)
+            task_states[operation["id"]] = task["state"]
+            session_states[operation["id"]] = [(session["id"], session["state"]) for session in task["sessions"]]
+            if task["state"] == "waiting_for_user" and not any(
+                    session["state"] == "waiting_for_user" for session in task["sessions"]):
+                raise IncompleteInventory("input task has no verified input session")
+        # History is descriptive, not execution authority. An unpaired recent
+        # start is insufficient terminal evidence to notify; wait conservatively.
+        unconfirmed = bool(events and events[-1]["state"] == "started") or any(
+            status not in state.TERMINAL | {"waiting_for_user"} for status in task_states.values()) or any(
+            status not in state.TERMINAL | {"waiting_for_user"}
+            for sessions in session_states.values() for _, status in sessions)
+        current_feedback = {item["id"] for item in observed["feedback"]}
+        current_attempts = [
+            operation for operation in chain["operations"] if operation["taskId"] is not None
+            and results.basis(operation).get("head") == observed["head"]
+            and (current_feedback.intersection(results.basis(operation)["feedback"]) or (
+                results.basis(operation).get("ciEvidence") == observed["ciEvidence"]
+                and any(identity.startswith(("check:", "status:", "workflow:"))
+                        for identity in results.basis(operation)["feedback"])))
+        ]
+        failed = any(task_states[operation["id"]] in {"failed", "timed_out", "cancelled"}
+                     for operation in current_attempts)
+        green = observed.get("copilotReview", {}).get("green", False)
+        holds = []
+        if pr["draft"]:
+            holds.append("draft")
+        if not approval:
+            holds.append("approval")
+        if any(label["name"].upper() == "NO-MERGE" for label in pr["labels"]):
+            holds.append("safety")
+        if requested or pr.get("requested_teams"):
+            holds.append("review")
+        if chain["state"] == "human":
+            holds.append("decision")
+        merge_state = pr["mergeable_state"]
+        if merge_state == "blocked":
+            holds.append("gate")
+        elif merge_state == "behind":
+            holds.append("base")
+        elif merge_state != "clean" and green and pr["mergeable"] is True:
+            raise IncompleteInventory("final merge readiness unavailable")
+        same_blocker_attempts = [
+            op for op in current_attempts if task_states.get(op["id"]) in state.TERMINAL
+            and any(identity.startswith(("check:", "status:", "workflow:"))
+                    for identity in results.basis(op)["feedback"])
+        ]
+        notice = None
+        if not unconfirmed and pr["state"] == "open":
+            if (observed["approval"] or chain["state"] == "human" or any(
+                    status == "waiting_for_user" for status in task_states.values())):
+                notice = ("pr-stuck", "human-input")
+            elif green and pr["mergeable"] is True and not unresolved:
+                notice = ("pr-review", "-".join(holds)) if holds else ("pr-ready", "merge")
+            elif failed and not observed["pendingCI"] and (unresolved or not green or pr["mergeable"] is False):
+                notice = ("pr-stuck", "failed-repair")
+            elif len(same_blocker_attempts) >= 2 and not green and not observed["pendingCI"]:
+                notice = ("pr-stuck", "failed-repair")
+        basis = [
+            observed["head"], observed["description"], pr["draft"], pr["mergeable"], merge_state, holds,
+            [(item["id"], item["updated_at"], item["body"]) for item in activity],
+            [(item["id"], item["body"], item.get("updated_at"), item["id"] in resolved) for item in inline],
+            reviews, events, green, observed["ciEvidence"], observed["pendingCI"], observed["approval"],
+            [(op["id"], op["taskId"]) for op in chain["operations"]],
+            task_states, session_states,
+        ]
+        activity = json.dumps(basis, sort_keys=True, separators=(",", ":"))
+        # CRC tracks inactivity only; fresh identity/head/eligibility guards
+        # authorize sends separately. Keep raw feedback out of the authority.
+        result.update(prNotice=notice, noticeActivity=f"{zlib.crc32(activity.encode('utf-8')):08x}")
+    except (IncompleteInventory, ValueError, KeyError, TypeError) as error:
+        result.update(noticeUnknown=True)
+        print(f"CI Shepherd PR notification evidence unknown: {error}")
+    return result
 
 
 def reconcile(api, chain, number, target=None):
@@ -244,6 +444,8 @@ def reconcile(api, chain, number, target=None):
         if len(candidates) == 1:
             issue_pr.positive(candidates[0]["id"], "reminder receipt")
             value.update(sendState="confirmed", commentId=candidates[0]["id"])
+            if value["kind"] in PR_KINDS:
+                value["sentAt"] = issue_pr.stamp(api.clock())
             api.persist()
             return "confirmed by owned comment receipt"
         return "uncertain; no unique owned receipt, never retry"
@@ -262,9 +464,18 @@ def process(api, chain, observation, now):
     pending_adoption = (chain["child"] is not None and chain["childAdoption"] in {"sent", "uncertain"}
                          and observation["originManaged"] is True and observation["handsOff"] is False
                          and observation["state"] == "open" and not observation["managed"])
+    if (api.write and getattr(api, "pr_reminders", False)
+            and (observation["state"] == "closed" or observation["handsOff"] is True)
+            and chain.get("reminder", {}).get("kind") in PR_KINDS):
+        chain.pop("reminder")
+        api.persist()
+        log("terminal outcome/takeover; notification episode cleared")
+        return
     if not api.write or "handoff" not in chain and chain["state"] in {"closed", "hands-off"} or (
             not observation["managed"] and not pending_adoption):
         return
+    if getattr(api, "pr_reminders", False) and len(observation["head"]) == 40:
+        observation = policy_observation(api, chain, observation)
     current = blocker(chain, observation)
     value = chain.get("reminder")
     if current is not None and current[0] == "worker-result" and any(
@@ -287,8 +498,10 @@ def process(api, chain, observation, now):
         return
     if value is None or not matches(value, observation, current, progress=chain.get("handoff", {}).get("progressAt")):
         value = {"id": str(uuid.uuid4()), "head": observation["head"], "kind": current[0], "reason": current[1],
-                 "firstObservedAt": (chain["handoff"]["progressAt"] if "handoff" in chain
+                 "firstObservedAt": (chain["handoff"]["progressAt"] if "handoff" in chain and current[0] not in PR_KINDS
                                      else issue_pr.stamp(now)), "sendState": "observed", "commentId": None}
+        if current[0] in PR_KINDS:
+            value.update(activity=observation["noticeActivity"], sentAt=None)
         chain["reminder"] = value
         api.persist()
     elif value["sendState"] == "observed" and value["reason"] != current[1]:
@@ -301,14 +514,18 @@ def process(api, chain, observation, now):
         log(reconcile(api, chain, observation["number"], target))
         return
     if value["sendState"] == "confirmed":
-        log(f"{KINDS[value['kind']]}; already notified, comment {value['commentId']}")
-        return
+        if value["kind"] not in PR_KINDS or value["sentAt"] is None or (
+                now - issue_pr.timestamp(value["sentAt"])).total_seconds() < api.reminder_repeat:
+            log(f"{description(value)}; already notified, comment {value['commentId']}")
+            return
+        value.update(id=str(uuid.uuid4()), sendState="observed", commentId=None)
+        api.persist()
     elapsed = (now - issue_pr.timestamp(value["firstObservedAt"])).total_seconds()
     if elapsed < 0:
         log("clock rollback; timer retained, no ping")
         return
     if elapsed < api.reminder_delay:
-        log(f"{KINDS[value['kind']]}; delay {api.reminder_delay}s, remaining {max(0, api.reminder_delay - elapsed):g}s")
+        log(f"{description(value)}; delay {api.reminder_delay}s, remaining {max(0, api.reminder_delay - elapsed):g}s")
         return
 
     target = chain["origin"] if value["kind"] == "child-adoption" else observation["number"]
@@ -316,6 +533,8 @@ def process(api, chain, observation, now):
     try:
         notification_guard(api, chain, observation, value)
         value["sendState"] = "sent"
+        if value["kind"] in PR_KINDS:
+            value["sentAt"] = issue_pr.stamp(now)
         api.persist()
         notification_guard(api, chain, observation, value)
         body = render(value, api.repository, observation["number"])
@@ -327,8 +546,12 @@ def process(api, chain, observation, now):
             raise LostResponse("reminder result unknown")
         issue_pr.positive(response.payload["id"], "reminder receipt")
         value.update(sendState="confirmed", commentId=response.payload["id"])
+        if value["kind"] in PR_KINDS:
+            # Start cooldown at confirmation, not the pre-POST timestamp:
+            # read/network latency must not shorten time between actual notices.
+            value["sentAt"] = issue_pr.stamp(api.clock())
         api.persist()
-        log(f"{KINDS[value['kind']]}; notified @radical, comment {value['commentId']}")
+        log(f"{description(value)}; notified @radical, comment {value['commentId']}")
     except AuthorityUncertain:
         raise
     except (ValueError, KeyError, TypeError, AttributeError) as error:

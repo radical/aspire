@@ -17,9 +17,449 @@ import pilot_binding as bindings
 import pilot_github as github
 import pilot_reminders as reminders
 import pilot_state as state
+import pilot_handoff as handoff
 
 
 class ReminderTests(WorkspaceTest, unittest.TestCase):
+    def setup_pr_policy(self):
+        self.setup_api(bindings.FORK)
+        self.api.pr_reminders = True
+        self.api.reminder_delay = 120
+        self.api.reminder_repeat = 300
+        self.set_runs([])
+        self.pull = self.transport.values[f"{self.api.prefix}/pulls/7"]
+        self.pull.update(merged=False, merged_at=None, mergeable=True, mergeable_state="clean")
+        self.transport.values[f"{self.api.prefix}/issues/7/comments"] = []
+        self.transport.values[f"{self.api.prefix}/pulls/7/comments"] = []
+        self.transport.values[f"{self.api.prefix}/pulls/7/reviews"] = [{
+            "id": 22, "state": "APPROVED", "user": {"id": 99, "login": "reviewer"},
+            "commit_id": self.pull["head"]["sha"], "body": "",
+            "submitted_at": "2026-10-04T00:00:00Z",
+        }]
+        self.status = {"id": 30, "context": "required", "state": "success"}
+        self.transport.values[f"{self.api.prefix}/commits/{self.pull['head']['sha']}/status"] = {
+            "statuses": [self.status], "state": "success"}
+
+    def test_pr_ready_delay_repeat_and_controller_churn_do_not_reset_episode(self):
+        self.setup_pr_policy()
+        self.tick()
+        self.assertIn("reminder", self.chain)
+        self.assertEqual("pr-ready", self.chain["reminder"]["kind"])
+        self.api.clock.advance(seconds=119)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("ready for human merge/review action", self.posts[0])
+        self.tick()
+        self.api.clock.advance(seconds=299)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual(2, len(self.posts))
+        self.assertTrue(all(reminders.valid_body(body, self.api.repository, 7) for body in self.posts))
+        self.assertNotEqual(self.posts[0], self.posts[1])
+
+    def test_draft_no_merge_hold_is_disclosed_without_claiming_merge_ready(self):
+        self.setup_pr_policy()
+        self.pull["draft"] = True
+        self.pull["labels"].append({"name": "NO-MERGE"})
+        self.transport.values[f"{self.api.prefix}/pulls/7/reviews"] = []
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("awaiting human review; held: draft, missing approval, NO-MERGE", self.posts[0])
+
+    def test_optional_red_ci_and_pending_ci_without_failed_repair_never_notify(self):
+        self.setup_pr_policy()
+        for outcome in ("failure", "pending"):
+            self.status["state"] = outcome
+            self.tick()
+            self.api.clock.advance(seconds=600)
+            self.tick()
+        self.assertEqual([], self.posts)
+        self.assertNotIn("reminder", self.chain)
+
+    def test_failed_repair_with_unresolved_ci_notifies_but_resumed_work_suppresses(self):
+        self.setup_pr_policy()
+        self.status["state"] = "failure"
+        self.chain, operation, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport)
+        task["state"] = task["sessions"][0]["state"] = "failed"
+        self.api.reconcile_workers()
+        self.api.persist()
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("stuck after unsuccessful Copilot repair", self.posts[0])
+        task["state"] = task["sessions"][0]["state"] = "in_progress"
+        self.api.clock.advance(seconds=300)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertNotIn("reminder", self.chain)
+
+    def test_real_human_comment_resets_timer_but_own_reminders_do_not(self):
+        self.setup_pr_policy()
+        self.tick()
+        self.api.clock.advance(seconds=119)
+        self.transport.values[f"{self.api.prefix}/issues/7/comments"].append({
+            "id": 55, "body": "I am looking now", "user": ACTOR,
+            "updated_at": "2026-10-04T00:01:59Z"})
+        self.tick()
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.api.clock.advance(seconds=119)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+
+    def test_terminal_worker_completion_alone_is_not_a_notification(self):
+        self.setup_pr_policy()
+        self.status["state"] = "failure"
+        self.transport.history = [{
+            "__typename": "CopilotWorkFinishedEvent", "id": "DONE1",
+            "createdAt": "2026-10-04T00:00:00Z", "actor": {"login": "Copilot"},
+            "sessionId": "SESSION1",
+        }]
+        self.tick()
+        self.api.clock.advance(seconds=600)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.assertNotIn("reminder", self.chain)
+
+    def test_two_verified_same_head_ci_attempts_with_ci_still_red_need_human(self):
+        self.setup_pr_policy()
+        self.status["state"] = "failure"
+        self.chain, first, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport, completed=True)
+        second = deepcopy(first)
+        second.update(id=str(uuid.uuid4()), taskId="SECOND7", identity=first["identity"].rsplit(":round:", 1)[0] + ":round:2")
+        self.chain["operations"].append(second)
+        self.chain["rounds"] += 1
+        second_task = deepcopy(task)
+        second_task["id"] = "SECOND7"
+        second_task["sessions"][0].update(id="SECOND_SESSION", task_id="SECOND7")
+        second_task["sessions"][0]["prompt"] = github.CORRELATION + json.dumps({
+            "chain": self.chain["id"], "operation": second["id"], "origin": 7})
+        self.transport.values[f"agents/repos/{self.api.repository}/tasks/SECOND7"] = second_task
+        self.api.persist()
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("stuck after unsuccessful Copilot repair", self.posts[0])
+        self.status["state"] = "success"
+        self.tick()
+        self.assertEqual("pr-ready", self.chain["reminder"]["kind"])
+        self.assertEqual("observed", self.chain["reminder"]["sendState"])
+
+    def test_waiting_for_user_is_explicit_input_not_active_worker(self):
+        self.setup_pr_policy()
+        self.chain, _, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport)
+        task["state"] = task["sessions"][0]["state"] = "waiting_for_user"
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("waiting for explicit human input", self.posts[0])
+
+    def test_resolved_review_threads_and_pending_rereview_are_disclosed(self):
+        self.setup_pr_policy()
+        self.pull["requested_reviewers"] = [{"id": 99, "login": "reviewer"}]
+        comment = {"id": 66, "node_id": "COMMENT66", "body": "Fix this",
+                   "updated_at": "2026-10-04T00:00:00Z", "user": ACTOR}
+        self.transport.values[f"{self.api.prefix}/pulls/7/comments"] = [comment]
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.transport.resolved_reviews.add(66)
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertIn("missing approval, pending review", self.posts[0])
+
+    def test_pr_policy_handoff_is_monitor_only_and_terminal_outcomes_clear_episode(self):
+        self.setup_pr_policy()
+        self.api.pr_handoff = "manual"
+        handoff.enroll(self.api, self.chain, self.api.clock())
+        self.api.persist()
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual([], self.chain["operations"])
+        self.assertEqual(0, self.chain["rounds"])
+        self.pull.update(state="closed", merged=False)
+        self.tick()
+        self.assertNotIn("reminder", self.chain)
+        self.assertEqual("closed", self.chain["handoff"]["phase"])
+        self.pull.update(merged=True, merged_at="2026-10-04T00:03:00Z")
+        self.tick()
+        self.assertEqual("merged", self.chain["handoff"]["phase"])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual([], [write for write in self.transport.writes if write[1].endswith("/tasks")])
+
+    def test_pr_policy_lost_response_recovers_once_without_duplicate_post(self):
+        for outcome, confirmed in (("lost-with-receipt", True), ("lost-no-receipt", False)):
+            with self.subTest(outcome=outcome):
+                self.setup_pr_policy()
+                self.tick()
+                self.send_outcome = outcome
+                self.api.clock.advance(seconds=120)
+                self.tick()
+                self.assertEqual(1, len(self.posts))
+                self.api.clock.advance(seconds=299)
+                self.tick()
+                self.assertEqual(1, len(self.posts))
+                self.assertEqual("confirmed" if confirmed else "uncertain", self.chain["reminder"]["sendState"])
+
+    def test_pr_policy_unknown_inventory_preserves_receipt_and_never_writes_notice(self):
+        self.setup_pr_policy()
+        self.tick()
+        before = deepcopy(self.chain["reminder"])
+        self.runs_response = IncompleteInventory("HTTP 403")
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.assertEqual(before, self.chain["reminder"])
+
+    def test_pr_policy_changed_blocker_in_second_guard_vetoes_send(self):
+        self.setup_pr_policy()
+        self.tick()
+        original = self.api.persist
+
+        def persist():
+            original()
+            if self.chain.get("reminder", {}).get("sendState") == "sent":
+                self.status["state"] = "failure"
+
+        self.api.persist = persist
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.assertEqual("observed", self.chain["reminder"]["sendState"])
+        self.tick()
+        self.assertNotIn("reminder", self.chain)
+
+    def test_pr_policy_takeover_and_conflicts_do_not_send_ready_notice(self):
+        self.setup_pr_policy()
+        self.tick()
+        self.pull["mergeable"] = False
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual([], self.posts)
+        self.assertNotIn("reminder", self.chain)
+        self.pull["mergeable"] = True
+        self.tick()
+        self.pull["labels"].append({"name": "shepherd-hands-off"})
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual([], self.posts)
+
+    def test_pr_policy_configuration_is_opt_in_and_rejects_invalid_timers(self):
+        self.assertEqual((False, 300), reminders.configuration({}))
+        self.assertEqual((True, 300), reminders.configuration({
+            "CI_SHEPHERD_PR_REMINDERS": "true", "CI_SHEPHERD_REMINDER_REPEAT_SECONDS": "300"}))
+        for value in ("0", "-1", "300.5", "86401"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                reminders.configuration({"CI_SHEPHERD_REMINDER_REPEAT_SECONDS": value})
+        with self.assertRaises(ValueError):
+            reminders.configuration({"CI_SHEPHERD_PR_REMINDERS": "maybe"})
+
+    def test_source_head_change_resets_ready_episode_and_invalidates_prior_approval(self):
+        self.setup_pr_policy()
+        self.tick()
+        old = deepcopy(self.chain["reminder"])
+        self.api.clock.advance(seconds=119)
+        self.pull["head"]["sha"] = "b" * 40
+        self.transport.values[f"{self.api.prefix}/commits/{'b' * 40}/status"] = {
+            "statuses": [self.status], "state": "success"}
+        self.tick()
+        self.assertNotEqual(old["id"], self.chain["reminder"]["id"])
+        self.assertEqual("pr-review", self.chain["reminder"]["kind"])
+        self.assertEqual("approval", self.chain["reminder"]["reason"])
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual([], self.posts)
+
+    def test_pr_reminder_rejects_noncanonical_holds_and_missing_send_time(self):
+        self.setup_pr_policy()
+        self.tick()
+        for changes in ({"kind": "pr-ready", "reason": "anything"},
+                        {"kind": "pr-review", "reason": "draft-draft"},
+                        {"kind": "pr-review", "reason": "approval-draft"},
+                        {"sendState": "confirmed", "commentId": 1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                reminders.validate({**self.chain["reminder"], **changes})
+
+    def test_network_latency_does_not_shorten_notification_cooldown(self):
+        self.setup_pr_policy()
+        original = self.api.transport
+
+        def delayed(method, endpoint, body):
+            response = original(method, endpoint, body)
+            if method == "POST" and endpoint.endswith("/comments"):
+                self.api.clock.advance(seconds=10)
+            return response
+
+        self.api.transport = self.api.api.transport = delayed
+        self.tick()
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual("2026-10-04T00:02:10Z", self.chain["reminder"]["sentAt"])
+        self.api.clock.advance(seconds=299)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.api.clock.advance(seconds=1)
+        self.tick()
+        self.assertEqual(2, len(self.posts))
+
+    def test_merge_requirement_holds_never_claim_ready(self):
+        for merge_state in ("blocked", "behind", "unknown"):
+            with self.subTest(merge_state=merge_state):
+                self.setup_pr_policy()
+                self.pull["mergeable_state"] = merge_state
+                self.tick()
+                self.api.clock.advance(seconds=120)
+                self.tick()
+                if merge_state == "unknown":
+                    self.assertEqual([], self.posts)
+                else:
+                    self.assertEqual(1, len(self.posts))
+                    self.assertIn("awaiting human review; held:", self.posts[0])
+                    self.assertNotEqual("pr-ready", self.chain["reminder"]["kind"])
+
+    def test_aggregate_terminal_task_with_active_session_suppresses_notice(self):
+        for task_state in ("completed", "failed"):
+            with self.subTest(task_state=task_state):
+                self.setup_pr_policy()
+                self.status["state"] = "failure"
+                self.chain, _, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport, completed=True)
+                task["state"] = task_state
+                task["sessions"][0]["state"] = "in_progress"
+                _, log = self.tick()
+                self.assertIn("terminal task has a nonterminal session", log)
+                self.api.clock.advance(seconds=600)
+                self.tick()
+                self.assertEqual([], self.posts)
+
+    def test_input_task_with_active_or_missing_input_session_suppresses_notice(self):
+        for session_state in ("in_progress", "completed"):
+            with self.subTest(session_state=session_state):
+                self.setup_pr_policy()
+                self.chain, _, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport)
+                task["state"] = "waiting_for_user"
+                task["sessions"][0]["state"] = session_state
+                self.tick()
+                self.api.clock.advance(seconds=600)
+                self.tick()
+                self.assertEqual([], self.posts)
+
+    def test_compact_handoff_task_is_freshly_verified_alongside_legacy_tasks(self):
+        self.setup_pr_policy()
+        self.chain, _, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport, completed=True)
+        self.api.pr_handoff = "manual"
+        handoff.enroll(self.api, self.chain, self.api.clock())
+        record = self.chain["handoff"]
+        record.update(taskId="INITIAL7", sendState="known")
+        initial = deepcopy(task)
+        initial.update(id="INITIAL7", state="in_progress")
+        initial["sessions"][0].update(id="INITIAL_SESSION", task_id="INITIAL7", state="in_progress",
+                                     prompt=github.CORRELATION + json.dumps({
+                                         "chain": self.chain["id"], "operation": record["id"], "origin": 7}))
+        self.transport.values[f"agents/repos/{self.api.repository}/tasks/INITIAL7"] = initial
+        observation = self.api._observe(self.chain)
+        pending = reminders.policy_observation(self.api, self.chain, observation)
+        self.assertNotIn("noticeUnknown", pending)
+        self.assertIsNone(pending["prNotice"])
+        initial["state"] = initial["sessions"][0]["state"] = "completed"
+        complete = reminders.policy_observation(self.api, self.chain, observation)
+        self.assertEqual(("pr-ready", "merge"), complete["prNotice"])
+        self.assertEqual([], self.posts)
+
+    def test_taskless_uncertain_owned_send_holds_notification(self):
+        self.setup_pr_policy()
+        self.chain, operation, _ = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport)
+        operation.update(taskId=None, state="uncertain")
+        self.api.persist()
+        _, log = self.tick()
+        self.assertIn("owned task send has no verified receipt", log)
+        self.api.clock.advance(seconds=600)
+        self.tick()
+        self.assertEqual([], self.posts)
+
+    def test_old_head_failed_task_is_not_a_current_head_unsuccessful_repair(self):
+        self.setup_pr_policy()
+        self.status["state"] = "failure"
+        self.chain, _, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport)
+        task["state"] = task["sessions"][0]["state"] = "failed"
+        self.api.reconcile_workers()
+        self.api.persist()
+        self.pull["head"]["sha"] = "b" * 40
+        self.transport.values[f"{self.api.prefix}/commits/{'b' * 40}/status"] = {
+            "statuses": [self.status], "state": "failure"}
+        self.tick()
+        self.api.clock.advance(seconds=600)
+        self.tick()
+        self.assertEqual([], self.posts)
+
+    def test_same_head_failed_task_does_not_explain_different_current_ci_failure(self):
+        self.setup_pr_policy()
+        self.status["state"] = "failure"
+        self.chain, _, task = fixtures.TrackedOnlyTests().seed_worker(self.api, self.transport)
+        task["state"] = task["sessions"][0]["state"] = "failed"
+        self.api.reconcile_workers()
+        self.api.persist()
+        self.status.update(id=31, context="different")
+        self.tick()
+        self.api.clock.advance(seconds=600)
+        self.tick()
+        self.assertEqual([], self.posts)
+
+    def test_hosted_and_local_clients_receive_pr_policy_settings(self):
+        import local
+        self.setup_pr_policy()
+        environment = {
+            "CI_SHEPHERD_ENABLE": "true", "CI_SHEPHERD_TRACKER": "99",
+            "CI_SHEPHERD_AUTHORITY_COMMENT": "500", "CI_SHEPHERD_TRACKER_NODE": "TRACKER99",
+            "CI_SHEPHERD_USER_TOKEN": "fixture-token",
+            "CI_SHEPHERD_PR_REMINDERS": "true",
+            "CI_SHEPHERD_REMINDER_DELAY_SECONDS": "120", "CI_SHEPHERD_REMINDER_REPEAT_SECONDS": "300",
+        }
+        with patch.object(hosted, "require_host"), patch.dict("os.environ", environment, clear=True), \
+                patch.object(github, "PilotTransport", return_value=self.api.transport):
+            hosted_client = pilot.hosted_api(RUN, environment)
+            local_client = local.LocalGitHub("fixture-token", 99, 500, "TRACKER99",
+                                            write=True, revision="b" * 40, binding=bindings.FORK)
+        for client in (hosted_client, local_client):
+            self.assertEqual((True, 120, 300),
+                             (client.pr_reminders, client.reminder_delay, client.reminder_repeat))
+
+    def test_large_feedback_is_evaluable_without_copying_raw_bodies_into_authority(self):
+        self.setup_pr_policy()
+        body = "Distinct feedback content " * 2000
+        self.transport.values[f"{self.api.prefix}/issues/7/comments"].append({
+            "id": 55, "body": body, "user": ACTOR, "updated_at": "2026-10-04T00:00:00Z"})
+        self.tick()
+        self.assertRegex(self.chain["reminder"]["activity"], r"^[0-9a-f]{8}$")
+        stored = state.render(self.api.ledger)
+        self.assertNotIn("Distinct feedback content", stored)
+        self.api.clock.advance(seconds=120)
+        self.tick()
+        self.assertEqual(1, len(self.posts))
+        self.transport.values[f"{self.api.prefix}/issues/7/comments"][0]["body"] = body + "Real progress"
+        previous = self.chain["reminder"]["activity"]
+        self.tick()
+        self.assertNotEqual(previous, self.chain["reminder"]["activity"])
+        self.assertEqual("observed", self.chain["reminder"]["sendState"])
+        for activity in ("ABCDEF12", "1234567", "123456789", "[]", 12345678):
+            with self.subTest(activity=activity), self.assertRaisesRegex(ValueError, "invalid reminder activity"):
+                reminders.validate({**self.chain["reminder"], "activity": activity})
+
     def setup_api(self, binding=bindings.UPSTREAM):
         api, transport = fixtures.TrackedOnlyTests().api(binding)
         original = api.transport
