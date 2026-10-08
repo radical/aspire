@@ -4,5 +4,5 @@ ALIASES = {"web": "frontend", "api": "backend", "gateway": "backend"}
 
 
 def canonical_service(value):
-    key = value.lower()
+    key = value.strip().lower()
     return ALIASES.get(key, key)
