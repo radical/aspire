@@ -8,6 +8,17 @@ not just its prompt.
 The existing `transport-proof`, `observe` and `live` fixture modes retain their
 legacy contracts; the pilot never adopts PR121 or writes its canonical comment.
 
+## Development branch workflow
+
+The canonical feature integration branch is `ci-shepherd` in `radical/aspire`.
+Start task branches from that branch and integrate completed, reviewed work back
+into it. In this workstream, "merge to the main branch" means the `ci-shepherd`
+integration branch, **not** repository `main`.
+
+Publishing to repository `main` or delivering changes upstream requires a
+separate explicit request. Disposable validation base and fixture branches are
+isolated from the product branch; do not merge them into `ci-shepherd`.
+
 ## Opt-in manual PR handoff
 
 Set `CI_SHEPHERD_PR_HANDOFF=manual` to transfer adopted PRs out of Shepherd.
