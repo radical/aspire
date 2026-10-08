@@ -19,6 +19,11 @@ five minutes between confirmed notices. Both timers accept whole seconds
 from 1 through 86400. Existing blocker reminders retain their one-shot
 behavior when the PR policy is disabled.
 
+Local credentials use `GH_TOKEN`, then `GITHUB_TOKEN`, then saved `radical`
+credentials only when neither ambient credential is supplied. Actor identity
+and history capabilities are freshly checked; failures never trigger a
+credential fallback or relaxed notification guard.
+
 ## Ready for human action
 
 Require complete fresh current-head CI evidence, including optional checks,

@@ -1047,6 +1047,12 @@ observable here and is explicitly disclosed; timeline events are not owned
 worker receipts. Policy eligibility tests do not prove a live repair loop or
 human inbox delivery.
 
+Local execution honors `GH_TOKEN`, then `GITHUB_TOKEN`, then the saved
+`radical` credential when neither is supplied. The authenticated actor must
+still be `radical`. Credentials for the same account can expose different
+Copilot history schemas; unavailable capabilities hold notification, without
+retrying another credential or weakening evidence guards.
+
 ```shell
 python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_*.py' -q
 artifacts/ci-shepherd/tooling/gh-aw compile ci-shepherd --validate --no-check-update

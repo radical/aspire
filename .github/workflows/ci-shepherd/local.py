@@ -74,6 +74,13 @@ def require_idle_actions(token, *, reader=metadata):
         raise ValueError("hosted run inventory incomplete")
 
 
+def selected_token():
+    # Credentials for the same actor can expose different Copilot API schemas.
+    # Honor the supplied credential; never retry with another after a failure.
+    return (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+            or command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"]))
+
+
 class LocalGitHub(github.PilotGitHub):
     # Inline patch validation/publication is implemented only by the hosted runner.
     inline_repairs = False
@@ -531,7 +538,7 @@ def main(argv=None):
             or args.resolve_conflicts or args.merge_disabled):
         parser.error("app assertions are only supported by confirm-handoff")
     try:
-        token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
+        token = selected_token()
         revision = command(["git", "--no-pager", "-C", str(ROOT), "rev-parse", "HEAD"])
         if args.mode not in {"observe", "check-api"} and command(
                 ["git", "--no-pager", "-C", str(ROOT), "status", "--porcelain"]):

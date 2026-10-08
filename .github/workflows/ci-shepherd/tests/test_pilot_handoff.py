@@ -625,6 +625,7 @@ class ResumeTests(WorkspaceTest, unittest.TestCase):
                 return ""
             self.fail(f"unexpected command: {argv}")
         with patch.object(local, "command", command), \
+                patch.object(local, "selected_token", return_value="fixture-token"), \
                 patch.object(local, "authority_lock", return_value=nullcontext()) as lock, \
                 patch.object(local, "require_source") as source, \
                 patch.object(local, "require_idle_actions") as idle, \

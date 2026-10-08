@@ -29,6 +29,38 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.use_native_cli()
+        environment = patch.dict(os.environ, {"GH_TOKEN": "", "GITHUB_TOKEN": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_credential_selection_honors_ambient_precedence_and_saved_fallback(self):
+        for environment, expected in (
+                ({"GH_TOKEN": "ambient-gh", "GITHUB_TOKEN": "ambient-github"}, "ambient-gh"),
+                ({"GITHUB_TOKEN": "ambient-github"}, "ambient-github"),
+                ({}, "saved-radical"),
+                ({"GH_TOKEN": "", "GITHUB_TOKEN": ""}, "saved-radical")):
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(local, "command", return_value="saved-radical") as command:
+                self.assertEqual(expected, local.selected_token())
+                if expected == "saved-radical":
+                    command.assert_called_once_with(
+                        ["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
+                else:
+                    command.assert_not_called()
+
+    def test_wrong_ambient_actor_fails_without_saved_credential_fallback(self):
+        fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.transport.values["user"] = {"id": 999, "login": "different-actor"}
+        with patch.dict(os.environ, {"GH_TOKEN": "ambient-wrong"}), \
+                patch.object(local.github, "PilotTransport", return_value=fixture.transport), \
+                patch.object(local, "command") as command:
+            with self.assertRaisesRegex(ValueError, "operator identity mismatch"):
+                local.LocalGitHub(local.selected_token(), 99, 500, "TRACKER99",
+                                  write=False, revision="b" * 40, binding=bindings.FORK)
+            command.assert_not_called()
+        self.assertEqual([], fixture.transport.writes)
 
     def test_version_preflight_rejects_node_shim_without_running_it(self):
         shim = self.work / "bin" / "copilot"
