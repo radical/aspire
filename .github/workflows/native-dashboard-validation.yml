@@ -69,7 +69,7 @@ jobs:
         shell: pwsh
         env:
           CONFIGURATION: ${{ inputs.configuration }}
-          NUGET_PACKAGES: ${{ github.workspace }}/.packages
+          NUGET_PACKAGES: ${{ format('{0}/.nuget/packages', github.workspace) }}
         run: |
           & ./dotnet.cmd test `
             --project tests/Aspire.Dashboard.Tests/Aspire.Dashboard.Tests.csproj `
@@ -89,7 +89,7 @@ jobs:
         shell: pwsh
         env:
           CONFIGURATION: ${{ inputs.configuration }}
-          NUGET_PACKAGES: ${{ github.workspace }}/.packages
+          NUGET_PACKAGES: ${{ format('{0}/.nuget/packages', github.workspace) }}
         run: >
           ./dotnet.cmd test
           --project tests/Aspire.Dashboard.Playwright.Tests/Aspire.Dashboard.Playwright.Tests.csproj

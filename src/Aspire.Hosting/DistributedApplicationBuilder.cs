@@ -6,7 +6,6 @@
 #pragma warning disable ASPIREPIPELINES002
 #pragma warning disable ASPIREPIPELINES004
 #pragma warning disable ASPIRECONTAINERRUNTIME001
-#pragma warning disable ASPIREFILESYSTEM001
 #pragma warning disable ASPIREUSERSECRETS001
 #pragma warning disable ASPIREWATCH001
 
@@ -226,6 +225,8 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
 
         _innerBuilder.Services.AddSingleton<BackchannelLoggerProvider>();
         _innerBuilder.Services.AddSingleton<ILoggerProvider>(sp => sp.GetRequiredService<BackchannelLoggerProvider>());
+        // Suppress routine HttpClientFactory Debug cleanup in every sink while retaining Information and higher diagnostics.
+        _innerBuilder.Logging.AddFilter("Microsoft.Extensions.Http.DefaultHttpClientFactory", LogLevel.Information);
         _innerBuilder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
         _innerBuilder.Logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Error);
         _innerBuilder.Logging.AddFilter("Grpc.AspNetCore.Server.ServerCallHandler", LogLevel.Error);
