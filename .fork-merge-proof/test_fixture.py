@@ -4,6 +4,12 @@ from fixture import canonical_service
 
 
 class FixtureTests(unittest.TestCase):
+    def test_gateway_alias(self):
+        self.assertEqual("backend", canonical_service("GATEWAY"))
+
+    def test_edge_alias_ignores_outer_whitespace_and_case(self):
+        self.assertEqual("backend", canonical_service(" \tEdGe\n "))
+
     def test_aliases_ignore_outer_whitespace_and_case(self):
         self.assertEqual("frontend", canonical_service("  WEB  "))
         self.assertEqual("backend", canonical_service("\tAPI\n"))

@@ -1,6 +1,6 @@
 """Disposable fork-only behavior fixture, not production Aspire code."""
 
-ALIASES = {"web": "frontend", "api": "backend"}
+ALIASES = {"web": "frontend", "api": "backend", "gateway": "backend", "edge": "backend"}
 
 
 def canonical_service(value):
