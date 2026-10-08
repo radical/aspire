@@ -1,0 +1,22 @@
+name: CI Shepherd fixture (fork-only)
+
+on:
+  pull_request:
+    paths:
+      - '.ci-shepherd-fixture/**'
+      - '.github/workflows/ci-shepherd-fixture.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-fixture:
+    name: Check Shepherd fixture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Run fixture tests
+        run: python3 -m unittest discover -s .ci-shepherd-fixture -p 'test_*.py' -v
