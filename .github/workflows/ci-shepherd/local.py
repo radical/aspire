@@ -451,9 +451,12 @@ def resume(api, operation_id, expected_head, now):
         raise
 
 
-def confirm_handoff(api, number, head, now, *, app_enabled, merge_disabled):
+def confirm_handoff(api, number, head, now, *, app_enabled, address_reviews, fix_ci, resolve_conflicts,
+                    merge_disabled):
     import pilot_handoff
-    return pilot_handoff.confirm(api, number, head, now, app_enabled=app_enabled, merge_disabled=merge_disabled)
+    return pilot_handoff.confirm(api, number, head, now, app_enabled=app_enabled,
+                                 address_reviews=address_reviews, fix_ci=fix_ci,
+                                 resolve_conflicts=resolve_conflicts, merge_disabled=merge_disabled)
 
 
 def check_api(api, number):
@@ -489,6 +492,12 @@ def main(argv=None):
     parser.add_argument("--pr-handoff", choices=["manual"], default=os.environ.get("CI_SHEPHERD_PR_HANDOFF") or None)
     parser.add_argument("--app-enabled", action="store_true",
                         help="Operator declares app-native Agent Merge is enabled; not an API verification")
+    parser.add_argument("--address-reviews", action="store_true",
+                        help="Operator declares Agent Merge address_reviews is ON")
+    parser.add_argument("--fix-ci", action="store_true",
+                        help="Operator declares Agent Merge fix_ci is ON")
+    parser.add_argument("--resolve-conflicts", action="store_true",
+                        help="Operator declares Agent Merge resolve_conflicts is ON")
     parser.add_argument("--merge-disabled", action="store_true",
                         help="Operator declares the app's merge_pr action is OFF")
     parser.add_argument("--publish-worker-results", action="store_true",
@@ -505,15 +514,20 @@ def main(argv=None):
         parser.error("unsupported manual PR handoff mode")
     if args.mode == "confirm-handoff" and (
             args.pr is None or not args.expected_head
-            or not args.app_enabled or not args.merge_disabled):
-        parser.error("confirm-handoff requires exact --pr/--expected-head, --app-enabled and --merge-disabled")
+            or not args.app_enabled or not args.address_reviews or not args.fix_ci
+            or not args.resolve_conflicts or not args.merge_disabled):
+        parser.error(
+            "confirm-handoff requires exact --pr/--expected-head, --app-enabled, "
+            "--address-reviews, --fix-ci, --resolve-conflicts and --merge-disabled")
     if args.mode in {"check-api", "confirm-handoff"}:
         if (args.pr is None or args.pr <= 0 or args.pr == 121
                 or binding.subject is not None and args.pr != binding.subject):
             parser.error("this mode requires an explicit supported --pr")
     elif args.pr is not None:
         parser.error("--pr is only supported by check-api or confirm-handoff")
-    if args.mode != "confirm-handoff" and (args.app_enabled or args.merge_disabled):
+    if args.mode != "confirm-handoff" and (
+            args.app_enabled or args.address_reviews or args.fix_ci
+            or args.resolve_conflicts or args.merge_disabled):
         parser.error("app assertions are only supported by confirm-handoff")
     try:
         token = command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"])
@@ -547,7 +561,10 @@ def main(argv=None):
                 api.publish_results = args.publish_worker_results
                 if args.mode == "confirm-handoff":
                     print(json.dumps(confirm_handoff(api, args.pr, args.expected_head, live.clock(),
-                                                     app_enabled=args.app_enabled, merge_disabled=args.merge_disabled)), flush=True)
+                                                     app_enabled=args.app_enabled,
+                                                     address_reviews=args.address_reviews, fix_ci=args.fix_ci,
+                                                     resolve_conflicts=args.resolve_conflicts,
+                                                     merge_disabled=args.merge_disabled)), flush=True)
                     return 0
                 if args.mode == "resume":
                     print(json.dumps(resume(api, args.operation, args.expected_head, live.clock())), flush=True)

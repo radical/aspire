@@ -580,18 +580,51 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         self.prepare()
         api = self.fresh(manual=False)
         with self.assertRaises(ValueError):
-            local.confirm_handoff(api, 7, "b" * 40, self.clock(), app_enabled=True, merge_disabled=True)
+            local.confirm_handoff(api, 7, "b" * 40, self.clock(), app_enabled=True,
+                                  address_reviews=True, fix_ci=True, resolve_conflicts=True,
+                                  merge_disabled=True)
         with self.assertRaises(ValueError):
-            local.confirm_handoff(api, 7, "a" * 40, self.clock(), app_enabled=True, merge_disabled=False)
+            local.confirm_handoff(api, 7, "a" * 40, self.clock(), app_enabled=True,
+                                  address_reviews=True, fix_ci=True, resolve_conflicts=True,
+                                  merge_disabled=False)
+        for missing in ("address_reviews", "fix_ci", "resolve_conflicts"):
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                options = {"address_reviews": True, "fix_ci": True, "resolve_conflicts": True}
+                options[missing] = False
+                local.confirm_handoff(self.fresh(manual=False), 7, "a" * 40, self.clock(),
+                                      app_enabled=True, **options, merge_disabled=True)
         local.confirm_handoff(self.fresh(manual=False), 7, "a" * 40, self.clock(),
-                              app_enabled=True, merge_disabled=True)
+                              app_enabled=True, address_reviews=True, fix_ci=True,
+                              resolve_conflicts=True, merge_disabled=True)
         self.assertEqual("watching", self.chain()["handoff"]["phase"])
         self.assertEqual([], self.task_writes())
+
+    def test_handoff_status_requests_review_ci_and_conflict_actions_but_not_merge(self):
+        self.prepare()
+        message = handoff.status(self.chain(), {"url": "https://github.com/radical/aspire/pull/7"})
+
+        self.assertIn("address_reviews", message)
+        self.assertIn("fix_ci", message)
+        self.assertIn("resolve_conflicts", message)
+        self.assertIn("merge_pr", message)
+        self.assertIn("OFF", message)
+        self.assertIn("ON", message)
+
+    def test_watching_status_reports_expected_settings_without_claiming_api_verification(self):
+        self.prepare()
+        local.confirm_handoff(self.fresh(), 7, "a" * 40, self.clock(),
+                              app_enabled=True, address_reviews=True, fix_ci=True,
+                              resolve_conflicts=True, merge_disabled=True)
+        message = handoff.status(self.chain(), {"url": "https://github.com/radical/aspire/pull/7"})
+
+        self.assertIn("Expected Agent Merge settings:", message)
+        self.assertIn("settings are not API-verified", message)
 
     def test_watching_stale_reminder_resets_only_after_substantive_head_progress(self):
         self.prepare()
         local.confirm_handoff(self.fresh(), 7, "a" * 40, self.clock(),
-                              app_enabled=True, merge_disabled=True)
+                              app_enabled=True, address_reviews=True, fix_ci=True,
+                              resolve_conflicts=True, merge_disabled=True)
         self.prepare(present=True)
         self.clock.advance(seconds=61)
         self.prepare(present=True)
@@ -905,7 +938,8 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
                 patch.object(local, "authority_lock", return_value=nullcontext()), \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             result = local.main(["confirm-handoff", "--target", "fork", "--pr", "7",
-                                 "--expected-head", "a" * 40, "--app-enabled", "--merge-disabled",
+                                 "--expected-head", "a" * 40, "--app-enabled", "--address-reviews",
+                                 "--fix-ci", "--resolve-conflicts", "--merge-disabled",
                                  "--tracker", "99", "--authority", "500", "--tracker-node", "TRACKER99",
                                  "--workdir", str(self.work)])
         self.assertEqual(0, result)
@@ -1132,20 +1166,23 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
     def test_repeated_manual_confirmation_does_not_reset_stale_progress_or_receipt(self):
         self.prepare()
         local.confirm_handoff(self.fresh(), 7, "a" * 40, self.clock(),
-                              app_enabled=True, merge_disabled=True)
+                              app_enabled=True, address_reviews=True, fix_ci=True,
+                              resolve_conflicts=True, merge_disabled=True)
         self.prepare(present=True)
         self.clock.advance(seconds=61)
         self.prepare(present=True)
         before = self.chain()
         local.confirm_handoff(self.fresh(), 7, "a" * 40, self.clock(),
-                              app_enabled=True, merge_disabled=True)
+                              app_enabled=True, address_reviews=True, fix_ci=True,
+                              resolve_conflicts=True, merge_disabled=True)
         self.assertEqual(before["handoff"]["progressAt"], self.chain()["handoff"]["progressAt"])
         self.assertEqual(before["reminder"], self.chain()["reminder"])
 
     def test_same_head_closed_reopened_watching_pr_starts_new_reminder_episode(self):
         self.prepare()
         local.confirm_handoff(self.fresh(), 7, "a" * 40, self.clock(),
-                              app_enabled=True, merge_disabled=True)
+                              app_enabled=True, address_reviews=True, fix_ci=True,
+                              resolve_conflicts=True, merge_disabled=True)
         self.prepare(present=True)
         self.clock.advance(seconds=61)
         self.prepare(present=True)

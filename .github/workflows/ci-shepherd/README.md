@@ -25,7 +25,7 @@ This is a manual handoff, **not automatic Agent Merge activation**:
 
 ```text
 initial issue -> one initial worker -> verified PR + quiescent owned work
-              -> handoff_needed -> person enables app, merging OFF
+              -> handoff_needed -> person enables review/CI/conflict actions, merge OFF
               -> operator-confirmed watching -> merged / closed / stale
 
 existing PR -> handoff_pending -> owned work quiescent -> handoff_needed
@@ -80,23 +80,26 @@ from frozen legacy history. Initial qualification/implementation usage is not
 collected in that history; zero recorded legacy credits is not a zero-spend claim.
 
 Before confirming ownership, read the app-native settings and verify Agent Merge
-is enabled with `merge_pr` **OFF**. Then use the existing authenticated local
-runner on the reviewed clean controller source, with hosted control disabled and
-no active hosted run:
+is enabled with `address_reviews`, `fix_ci` and `resolve_conflicts` **ON**, and
+`merge_pr` **OFF**. Then use the existing authenticated local runner on the
+reviewed clean controller source, with hosted control disabled and no active
+hosted run:
 
 ```shell
 python3 -B .github/workflows/ci-shepherd/local.py confirm-handoff \
   --target fork --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
   --tracker-node TRACKER_NODE --workdir artifacts/ci-shepherd/handoff \
   --pr VERIFIED_PR_NUMBER --expected-head VERIFIED_CURRENT_SHA \
-  --app-enabled --merge-disabled
+  --app-enabled --address-reviews --fix-ci --resolve-conflicts --merge-disabled
 ```
 
 These flags are explicit **operator assertions**, not a public-API verification
 of recurring ownership. Confirmation rechecks the exact managed PR/head, saved
 transfer state and owned task/session quiescence; it invokes no coding engine or
 activation endpoint. Assignment, task completion and green checks are not
-activation receipts. Keep merging disabled throughout this fork experiment.
+activation receipts. Agent Merge may address reviews, fix CI and resolve
+conflicts, but it must not merge PRs; keep merging disabled throughout this fork
+experiment.
 
 Transferred PR sweeps emit no repair packet, Git writes, cloud repair task or
 automatic reviewer request. They monitor PR head/lifecycle, publish owned status

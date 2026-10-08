@@ -406,9 +406,11 @@ def monitor_guard(api, chain, observation):
     return fresh
 
 
-def confirm(api, number, head, now, *, app_enabled, merge_disabled):
-    if app_enabled is not True or merge_disabled is not True or not re.fullmatch(r"[0-9a-f]{40}", head):
-        raise ValueError("Explicit app-enabled, merging-OFF and exact head assertions required.")
+def confirm(api, number, head, now, *, app_enabled, address_reviews, fix_ci, resolve_conflicts, merge_disabled):
+    if (app_enabled is not True or address_reviews is not True or fix_ci is not True
+            or resolve_conflicts is not True or merge_disabled is not True
+            or not re.fullmatch(r"[0-9a-f]{40}", head)):
+        raise ValueError("Explicit Agent Merge action, merging-OFF and exact head assertions required.")
     api.read_authority()
     import pilot_state as state
     chain = state.find_chain(api.ledger, number)
@@ -427,7 +429,10 @@ def confirm(api, number, head, now, *, app_enabled, merge_disabled):
         value.update(phase="watching", confirmedAt=issue_pr.stamp(now), progressAt=issue_pr.stamp(now))
         chain.pop("reminder", None)
     api.persist()
-    return {"outcome": "operator confirmed app ownership; activation not API-verified", "pr": number, "head": head}
+    return {
+        "outcome": "operator confirmed review, CI and conflict actions enabled with merging OFF; activation not API-verified",
+        "pr": number, "head": head,
+    }
 
 
 def merged_label(api, chain, observation):
@@ -466,9 +471,11 @@ def merged_label(api, chain, observation):
 def status(chain, observation):
     value = chain["handoff"]
     attention = value["attention"] or (
-        "Enable Agent Merge manually in the app with merging OFF; activation is not verified."
+        "Enable Agent Merge manually in the app with `address_reviews`, `fix_ci` and "
+        "`resolve_conflicts` ON, and `merge_pr` OFF; activation is not verified."
         if value["phase"] == "handoff_needed" else
-        "Operator confirmed app ownership with merging OFF; monitor only, not API-verified activation."
+        "Expected Agent Merge settings: `address_reviews`, `fix_ci` and `resolve_conflicts` ON, "
+        "`merge_pr` OFF; settings are not API-verified. Monitor only."
         if value["phase"] == "watching" else "No PR repairs; observe lifecycle or unresolved owned work.")
     task = f"\nInitial task: {value['taskId']}" if value["taskId"] else ""
     receipt = f"\nPost-merge adoption-label receipt: {value['mergeLabel']}." if value["phase"] == "merged" else ""
