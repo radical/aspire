@@ -24,6 +24,35 @@ COPILOT_VERSION = re.compile(
 MINIMUM_COPILOT_VERSION = (1, 0, 92, 3)
 
 
+def native_executable(executable):
+    guidance = (
+        f"requires a native Copilot CLI executable; selected {executable!r}. "
+        "Install the native CLI from https://gh.io/copilot-install and put its "
+        "copilot binary first on the controller PATH (or pass its absolute path). "
+        "Node and shell launchers are not supported; the child PATH remains restricted."
+    )
+    selected = shutil.which(executable)
+    if selected is None:
+        raise ValueError(guidance)
+    path = Path(selected).resolve()
+    with path.open("rb") as stream:
+        header = stream.read(64)
+        # ELF, thin/universal Mach-O (both byte orders), and PE executables.
+        # Inspect the file, not a shebang/version subprocess that could need Node.
+        native = header[:4] in {
+            b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+            b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+            b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
+        }
+        if header[:2] == b"MZ" and len(header) == 64:
+            stream.seek(int.from_bytes(header[60:64], "little"))
+            native = stream.read(4) == b"PE\0\0"
+    if not native:
+        raise ValueError(guidance + f" Resolved path: {path}.")
+    return str(path)
+
+
 def copilot_version_supported(value):
     if not isinstance(value, str):
         return False
@@ -226,6 +255,7 @@ def collect(session_root, logs, outcome, output):
 
 
 def execute(directory, packet, session_id, executable, *, process=None, provider_env=None):
+    executable = native_executable(executable)
     directory = Path(directory).resolve()
     directory.mkdir(mode=0o700)
     contracts.write_json(directory / "packet.json", packet)
@@ -234,7 +264,6 @@ def execute(directory, packet, session_id, executable, *, process=None, provider
         if not provider_env.get("COPILOT_PROVIDER_BASE_URL"):
             raise ValueError("no scoped inference provider configured; user GitHub tokens are not accepted")
     env = child_environment(directory, provider_env)
-    executable = shutil.which(executable) or str(Path(executable).resolve())
     prompt = render((Path(__file__).parent / "prompts" / "round.md").read_text(), packet=json.dumps(packet))
     (directory / "prompt.txt").write_text(prompt, encoding="utf-8")
     argv = [

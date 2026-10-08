@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from helpers import FakeProcess, WorkspaceTest, decision_for, fixture_executable
 import round as shepherd
+import reasoning
 
 
 RUN = {
@@ -16,6 +17,10 @@ RUN = {
 
 
 class RoundTests(WorkspaceTest, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_native_cli()
+
     def prepare(self, name="run"):
         directory = self.work / name
         packet, envelope = shepherd.prepare(directory, RUN)
@@ -108,6 +113,11 @@ class RoundTests(WorkspaceTest, unittest.TestCase):
 
     def test_real_subprocess_boundary_validates_before_apply(self):
         executable = fixture_executable(self.work)
+        # This Python transport fixture is not a CLI install. Native selection
+        # is covered separately; retain real subprocess/evidence validation here.
+        selection = patch.object(reasoning, "native_executable", return_value=executable)
+        selection.start()
+        self.addCleanup(selection.stop)
         directory = self.work / "subprocess"
         receipt = shepherd.smoke(directory, RUN, executable, provider_env={})
         self.assertEqual(receipt["effects"], [])

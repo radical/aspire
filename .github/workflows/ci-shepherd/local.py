@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -166,10 +165,10 @@ def checkpoint_usage(events):
 
 
 def execute(directory, packet, token, *, process=subprocess.run, executable="copilot"):
+    executable = reasoning.native_executable(executable)
     directory = Path(directory).resolve()
     directory.mkdir(mode=0o700)
     session_id = str(uuid.uuid4())
-    executable = shutil.which(executable) or str(Path(executable).resolve())
     text = prompt(packet)
     (directory / "prompt.txt").write_text(text, encoding="utf-8")
     contracts.write_json(directory / "launch.json", {"sessionId": session_id, "resumed": False})
@@ -535,7 +534,7 @@ def main(argv=None):
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())
             return 0
         if args.mode not in {"resume", "confirm-handoff"} and not reasoning.copilot_version_supported(
-                command(["copilot", "--no-auto-update", "--version"])):
+                command([reasoning.native_executable("copilot"), "--no-auto-update", "--version"])):
             raise ValueError("local decision engine requires Copilot CLI 1.0.92-3 or newer")
         lock_root = Path.home() / ".copilot" / "ci-shepherd" / "locks"
         with authority_lock(lock_root, args.authority):

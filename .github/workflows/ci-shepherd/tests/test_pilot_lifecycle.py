@@ -193,6 +193,7 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
                          (boundary["state"], boundary["taskId"], boundary["nativeActual"], boundary["workerReserved"]))
 
     def test_hosted_cli_and_native_evidence_restart_without_duplicate_decision_or_dispatch(self):
+        self.use_native_cli()
         directory = self.work / "first"
         output = self.work / "output"
         config = {"CI_SHEPHERD_ENABLE": "true", "CI_SHEPHERD_TRACKER": "99",
@@ -222,7 +223,8 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
             self.assertEqual([], packet["observation"]["workerResults"])
             self.assertEqual([], self.task_writes())
             native = directory / "native"
-            evidence = local.execute(native, packet, "fixture-token", process=process)
+            evidence = local.execute(native, packet, "fixture-token", process=process,
+                                     executable=str((self.work / "bin" / "copilot").resolve()))
             verified, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
             self.assertEqual([{
                 "toolName": "safeoutputs-submit_decision", "toolCallId": "call-1",

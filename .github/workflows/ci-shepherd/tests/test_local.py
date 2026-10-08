@@ -26,6 +26,21 @@ from helpers import result_capable
 
 
 class LocalTests(WorkspaceTest, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_native_cli()
+
+    def test_version_preflight_rejects_node_shim_without_running_it(self):
+        shim = self.work / "bin" / "copilot"
+        shim.write_text("#!/usr/bin/env node\n")
+        stderr = io.StringIO()
+        with patch.object(local, "command", side_effect=self.command) as commands, redirect_stderr(stderr):
+            result = local.main(["run", "--target", "fork", "--tracker", "99", "--authority", "500",
+                                 "--tracker-node", "TRACKER99", "--workdir", str(self.work / "run")])
+        self.assertEqual(1, result)
+        self.assertIn("native Copilot CLI executable", stderr.getvalue())
+        self.assertEqual(["gh", "git", "git"], [call.args[0][0] for call in commands.call_args_list])
+
     def test_report_failure_preserves_primary_controller_error(self):
         fixture = test_pilot.PilotTests("test_unchanged_wait_does_not_reserve_native")
         fixture.setUp()
@@ -143,8 +158,9 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
                 return "b" * 40
             self.assertEqual("--porcelain", argv[-1])
             return ""
-        if argv[0] == "copilot":
-            self.assertEqual(["copilot", "--no-auto-update", "--version"], argv)
+        if Path(argv[0]).name == "copilot":
+            self.assertTrue(Path(argv[0]).is_absolute())
+            self.assertEqual([argv[0], "--no-auto-update", "--version"], argv)
             return "GitHub Copilot CLI 1.0.93-3."
         self.assertEqual(["gh", "api", "--hostname", "github.com"], argv[:4])
         path = argv[4]
@@ -163,6 +179,8 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         self.assertNotEqual(*(argv[argv.index("--session-id") + 1] for argv, _ in launches))
         self.assertNotEqual(*(kwargs["env"]["HOME"] for _, kwargs in launches))
         for argv, kwargs in launches:
+            self.assertEqual(str((self.work / "bin" / "copilot").resolve()), argv[0])
+            self.assertEqual(os.defpath, kwargs["env"]["PATH"])
             self.assertEqual(local.prompt(self.packet()), argv[argv.index("--prompt") + 1])
             self.assertEqual(["safeoutputs-submit_decision"],
                              argv[argv.index("--available-tools") + 1:argv.index("--allow-tool")])
@@ -178,6 +196,14 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
             self.assertEqual("0", kwargs["env"]["GH_AW_HARNESS_MAX_RETRIES"])
             self.assertEqual(600, kwargs["timeout"])
         self.assertEqual(2, pilot.native_usage(self.work / "0" / "usage.json"))
+
+    def test_node_shim_is_rejected_before_inference(self):
+        shim = self.work / "bin" / "copilot"
+        shim.write_text("#!/usr/bin/env node\n")
+        process = FakePilotProcess()
+        with self.assertRaisesRegex(ValueError, "native Copilot CLI executable"):
+            local.execute(self.work / "agent", self.packet(), "fixture-token", process=process)
+        self.assertEqual([], process.launches)
 
     def test_resumed_or_wrong_version_native_evidence_is_rejected_without_losing_billing(self):
         for key, value in (("alreadyInUse", True), ("copilotVersion", "other")):

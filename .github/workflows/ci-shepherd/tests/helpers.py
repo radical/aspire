@@ -1,9 +1,11 @@
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import sys
 import uuid
+from unittest.mock import patch
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +23,16 @@ class WorkspaceTest:
         self.work = Path("artifacts/ci-shepherd/tests") / str(uuid.uuid4())
         self.work.mkdir(parents=True)
         self.addCleanup(shutil.rmtree, self.work)
+
+    def use_native_cli(self):
+        binaries = self.work / "bin"
+        binaries.mkdir()
+        executable = binaries / "copilot"
+        executable.write_bytes(b"\x7fELF" + b"\0" * 60)
+        executable.chmod(0o700)
+        environment = patch.dict(os.environ, {"PATH": str(binaries.resolve()) + os.pathsep + os.environ.get("PATH", "")})
+        environment.start()
+        self.addCleanup(environment.stop)
 
 
 def decision_for(packet):

@@ -984,6 +984,16 @@ pattern. See `copilot help permissions` for this distinction.
 The same host-event validation requires a fresh session, verified version,
 exact tool grants, one successful submission and matching final JSON.
 
+Both Python launchers require the selected `copilot` executable to be a native
+ELF, Mach-O or PE binary. Symlinks are resolved to an absolute binary path before
+launch, including the local version preflight. Missing executables, Node shims
+and shell wrappers fail before inference with native-install guidance.
+Install the [native CLI](https://github.com/github/copilot-cli#installation)
+and put its binary first on the controller's `PATH`, or pass an absolute native
+path when calling `execute`. Selection does not search npm package internals or
+skip the first `PATH` match. The isolated child keeps `PATH=os.defpath`;
+Node is not added to it.
+
 Inference uses the operator's Copilot allowance and the existing30-credit native
 admission setting. The CLI authentication token is kept out of prompts and
 stripped from tool environments; the decision server has no GitHub client.

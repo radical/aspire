@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest.mock import patch
 
 from helpers import FakeProcess, WorkspaceTest, decision_for, host_events, wire_report
 import reasoning
@@ -7,6 +9,55 @@ from test_round import RUN
 
 
 class ReasoningTests(WorkspaceTest, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.use_native_cli()
+
+    def test_native_executable_formats_and_symlinks_resolve_to_absolute_paths(self):
+        binary = self.work / "native"
+        headers = [
+            b"\x7fELF",
+            b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+            b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+            b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
+            b"MZ" + b"\0" * 58 + (64).to_bytes(4, "little") + b"PE\0\0",
+        ]
+        for header in headers:
+            with self.subTest(header=header):
+                binary.write_bytes(header)
+                binary.chmod(0o700)
+                self.assertEqual(str(binary.resolve()), reasoning.native_executable(str(binary)))
+        link = self.work / "linked-copilot"
+        link.symlink_to(binary.resolve())
+        self.assertEqual(str(binary.resolve()), reasoning.native_executable(str(link)))
+
+    def test_missing_nonexecutable_and_unknown_launchers_fail_with_install_guidance(self):
+        binary = self.work / "unsupported"
+        for header in (b"#!/usr/bin/env node\n", b"#!/bin/sh\n", b"", b"MZ" + b"\0" * 62):
+            binary.write_bytes(header)
+            binary.chmod(0o700)
+            with self.subTest(header=header), self.assertRaisesRegex(ValueError, "https://gh.io/copilot-install"):
+                reasoning.native_executable(str(binary))
+        binary.write_bytes(b"\x7fELF")
+        binary.chmod(0o600)
+        for candidate in (str(binary), str(self.work / "missing")):
+            with self.subTest(candidate=candidate), self.assertRaisesRegex(ValueError, "native Copilot CLI executable"):
+                reasoning.native_executable(candidate)
+        with patch.dict(os.environ, {"PATH": str(self.work / "empty")}):
+            with self.assertRaisesRegex(ValueError, "native Copilot CLI executable"):
+                reasoning.native_executable("copilot")
+
+    def test_node_shim_is_rejected_before_inference(self):
+        shim = self.work / "bin" / "copilot"
+        shim.write_text("#!/usr/bin/env node\n")
+        packet, envelope = shepherd.prepare(self.work / "run", RUN)
+        process = FakeProcess()
+        with self.assertRaisesRegex(ValueError, "native Copilot CLI executable"):
+            reasoning.execute(self.work / "agent", packet, envelope["sessionId"], "copilot",
+                              process=process, provider_env={})
+        self.assertEqual([], process.launches)
+
     def test_each_launch_has_fresh_session_and_isolated_environment(self):
         process = FakeProcess()
         sessions = []
@@ -18,6 +69,8 @@ class ReasoningTests(WorkspaceTest, unittest.TestCase):
             sessions.append(envelope["sessionId"])
         self.assertNotEqual(*sessions)
         for argv, kwargs in process.launches:
+            self.assertEqual(str((self.work / "bin" / "copilot").resolve()), argv[0])
+            self.assertEqual(os.defpath, kwargs["env"]["PATH"])
             self.assertNotIn("--resume", argv)
             self.assertNotIn("--continue", argv)
             start = argv.index("--available-tools") + 1
