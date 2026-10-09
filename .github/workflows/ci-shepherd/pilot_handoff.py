@@ -79,6 +79,10 @@ def quiescent(api, chain):
     """Read every owned task; admission receipts, not age, distinguish unsent work."""
     import pilot_reviews
     import pilot_state as state
+    if "sourceWorkItem" in chain:
+        import work_item_execution
+        work_item_execution.quiescent(api, chain)
+        return None
     record = chain["handoff"]
     record.pop("taskTerminal", None)
     if record["sendState"] in {"sent", "uncertain"}:
@@ -177,7 +181,8 @@ def observe(api, chain):
               "attention": None, "url": f"https://github.com/{api.repository}/"
               + ("pull/" if chain["child"] or chain["kind"] == "pr" else "issues/") + str(number)}
     try:
-        task = quiescent(api, chain) if record["phase"] in {"initial", "handoff_pending"} else None
+        task = quiescent(api, chain) if (
+            "sourceWorkItem" in chain or record["phase"] in {"initial", "handoff_pending"}) else None
         if chain["kind"] == "issue" and chain["child"] is None:
             if task is None:
                 raise ValueError("Initial implementation has no verified PR; no redispatch.")
@@ -200,7 +205,12 @@ def observe(api, chain):
             origin = api.api.get(f"{api.prefix}/issues/{chain['origin']}")
             if origin["node_id"] != chain["node"] or origin["number"] != chain["origin"]:
                 raise ValueError("Mapped origin issue identity changed.")
-        active = managed(origin) if origin is not None else managed(pr)
+        if "sourceWorkItem" in chain:
+            import work_item_execution
+            work_item_execution.source_guard(api, chain)
+            active = True
+        else:
+            active = managed(origin) if origin is not None else managed(pr)
         result.update(number=number, node=pr["node_id"], head=pr["head"]["sha"], state=pr["state"],
                       kind="pr", managed=active and pr["state"] == "open"
                       and not any(label["name"] == "shepherd-hands-off" for label in pr["labels"]),

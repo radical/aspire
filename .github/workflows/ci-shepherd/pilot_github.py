@@ -28,6 +28,23 @@ CORRELATION = "ci-shepherd-pilot: "
 WORKER_STATES = state.TERMINAL | {"queued", "in_progress", "idle", "waiting_for_user"}
 
 
+def validate_cloud_read(path, body):
+    if body is not None:
+        raise ValueError("GET body forbidden")
+    query = parse_qs(path.query, strict_parsing=True)
+    if "/git/ref/" in path.path:
+        if query:
+            raise ValueError("ref query forbidden")
+        return
+    allowed = {"page", "per_page"} | ({"state"} if path.path.endswith("/pulls") else set())
+    if (set(query) - allowed or any(len(values) != 1 for values in query.values())
+            or query.get("per_page", ["100"]) != ["100"]
+            or not re.fullmatch(r"[1-9][0-9]*", query.get("page", ["1"])[0])
+            or int(query.get("page", ["1"])[0]) > 10
+            or "state" in query and query["state"] != ["all"]):
+        raise ValueError("invalid bounded cloud inventory query")
+
+
 def validate_graphql(value, binding):
     if isinstance(value, dict) and value.get("query") in (review_feedback.QUERY, review_feedback.COMMENTS_QUERY):
         review_feedback.validate_request(value, binding)
@@ -101,6 +118,12 @@ class PilotTransport(live.HTTPTransport):
         if self.binding != bindings.FORK:
             target = "repos/" + self.binding.repository
             subject = str(self.binding.subject) if self.binding.subject is not None else r"[1-9][0-9]*"
+            # These reads verify imported task artifacts, not upstream dispatch.
+            if method == "GET" and self.binding == bindings.UPSTREAM_ALL and re.fullmatch(
+                    re.escape(target) + r"/(?:pulls|pulls/[1-9][0-9]*/commits|issues/[1-9][0-9]*/timeline"
+                    r"|git/ref/heads/[A-Za-z0-9_./-]+)", path.path):
+                validate_cloud_read(path, body)
+                return
             if method == "GET" and (path.path == target or re.fullmatch(
                     re.escape(target) + r"/(?:issues/" + subject + r"(?:/comments)?|issues/comments/[1-9][0-9]*"
                     r"|pulls/" + subject + r"(?:/(?:comments|reviews|files))?|commits/[0-9a-f]{40}/(?:check-runs|status))",
@@ -157,6 +180,9 @@ class PilotTransport(live.HTTPTransport):
             r"|agents/repos/" + re.escape(REPOSITORY) + r"/tasks/[A-Za-z0-9_-]+"
         )
         if method == "GET":
+            if re.fullmatch(prefix + r"/issues/[1-9][0-9]*/timeline", path.path):
+                validate_cloud_read(path, body)
+                return
             if body is not None or not re.fullmatch(reads, path.path):
                 raise ValueError("pilot read endpoint is not allowed")
             return
@@ -840,10 +866,14 @@ class PilotGitHub:
         return task, state.amount(nano / 1e9) if billed else None
 
     def admission_slots(self, head_ref):
+        import work_item_execution
+        work_item_execution.refresh_all(self)
         handoff.refresh_capacity(self)
         return state.worker_slots(self.ledger)
 
     def reconcile_workers(self, *, adopt_children=True, acquisition=True):
+        import work_item_execution
+        work_item_execution.refresh_all(self)
         details = {}
         self.worker_results = {}
         self.worker_result_heads = {}

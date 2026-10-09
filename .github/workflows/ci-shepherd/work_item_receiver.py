@@ -140,6 +140,10 @@ def receive(api, read_control, emit):
     api.persist()
     assignments = record["assignments"]
     active = assignments[-1] if assignments else None
+    if active is not None and "execution" in active:
+        saved = active["execution"]
+        return {"outcome": "cloud_owned", "assignment_id": active["id"],
+                "state": saved["state"], "task_id": saved["task_id"], "pr": deepcopy(saved["pr"])}
     if active is not None and active["result"] is None and active["delivery"] != "abandoned":
         if active["delivery"] == "reserved":
             packet = items.worker_packet(record, active, {

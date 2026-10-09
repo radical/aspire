@@ -70,7 +70,8 @@ def validate(ledger):
                                 "rounds", "escalated", "operations", "dispositions", "statusId", "statusPending",
                                 "childAdoption"} | ({"reminder"} if "reminder" in chain else set())
                         | ({"reviews"} if "reviews" in chain else set())
-                        | ({"handoff"} if "handoff" in chain else set()), "chain")
+                        | ({"handoff"} if "handoff" in chain else set())
+                        | ({"sourceWorkItem"} if "sourceWorkItem" in chain else set()), "chain")
         if "handoff" in chain:
             handoff.validate(chain["handoff"])
             if ledger["repository"] == "microsoft/aspire" and chain["kind"] != "pr":
@@ -201,6 +202,23 @@ def validate(ledger):
                     raise ValueError("invalid worker version session count")
                 if version["updated_at"] is not None:
                     issue_pr.timestamp(version["updated_at"])
+    import work_item_execution
+    for chain in ledger["chains"]:
+        if "sourceWorkItem" in chain:
+            work_item_execution.source(ledger, chain)
+    tasks, imports = set(), set()
+    for record, assignment, saved in work_item_execution.executions(ledger):
+        if saved["task_id"] is not None:
+            if saved["task_id"] in tasks:
+                raise ValueError("cloud task already owned")
+            tasks.add(saved["task_id"])
+        identity = saved["imported_chain_id"]
+        if identity is not None:
+            matched = [chain for chain in ledger["chains"] if chain["id"] == identity]
+            if identity in imports or len(matched) != 1 or matched[0].get("sourceWorkItem") != {
+                    "item_id": record["id"], "assignment_id": assignment["id"]}:
+                raise ValueError("cloud import reverse binding mismatch")
+            imports.add(identity)
     return ledger
 
 
@@ -268,7 +286,8 @@ def chain_allowance(ledger):
 
 
 def repository_spend(ledger, now):
-    total = 0
+    import work_item_execution
+    total = work_item_execution.spend(ledger, now)
     for chain in ledger["chains"]:
         for record in chain.get("reviews", []):
             total += record["reserved"]
@@ -302,12 +321,13 @@ def worker_billing_pending(chain):
 
 
 def worker_slots(ledger):
+    import work_item_execution
     active = [chain for chain in ledger["chains"]
               if not handoff.converted(chain) or chain["handoff"]["phase"] in {"initial", "handoff_pending"}]
     compact = sum(handoff.converted(chain) and (
         chain["handoff"]["taskId"] is not None and not chain["handoff"].get("taskTerminal", False)
         or chain["handoff"]["sendState"] in {"prepared", "sent", "uncertain"}) for chain in active)
-    return compact + sum(operation["lane"] == "cloud" and (
+    return work_item_execution.slots(ledger) + compact + sum(operation["lane"] == "cloud" and (
         operation["workerReserved"] > 0 or operation["taskId"] is not None
     ) and operation["state"] != "no-send" and operation["workerState"] not in TERMINAL
                for chain in active

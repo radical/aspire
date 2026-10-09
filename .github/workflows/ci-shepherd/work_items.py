@@ -203,7 +203,8 @@ def validate_record(record):
         raise ValueError("assignment history bound exhausted")
     ids, revisions = set(), set()
     for assignment in assignments:
-        contracts.exact(assignment, {"id", "revision", "route", "basis", "delivery", "result", "validation"},
+        contracts.exact(assignment, {"id", "revision", "route", "basis", "delivery", "result", "validation"}
+                        | ({"execution"} if "execution" in assignment else set()),
                         "assignment")
         identifier(assignment["id"], "assignment")
         issue_pr.positive(assignment["revision"], "assignment revision")
@@ -236,6 +237,9 @@ def validate_record(record):
             if assignment["result"] is None:
                 raise ValueError("validation without result")
             validate_validation(assignment["validation"], assignment, record["id"])
+        if "execution" in assignment:
+            import work_item_execution
+            work_item_execution.validate(assignment["execution"], record, assignment)
     for assignment in assignments[:-1]:
         if assignment["result"] is None and assignment["delivery"] != "abandoned":
             raise ValueError("multiple active assignments")
@@ -330,6 +334,9 @@ def claim(record, control):
     if control["action"] != "run" or control["pr_review"] is not None:
         return None
     assignments = record["assignments"]
+    if any("execution" in assignment and assignment["execution"]["state"] != "no_send"
+           for assignment in assignments):
+        raise ValueError("cloud execution already owns this item; human reconciliation required")
     if assignments and (assignments[-1]["result"] is None and assignments[-1]["delivery"] != "abandoned"
                         or assignments[-1]["revision"] == control["revision"]):
         return None
@@ -384,6 +391,13 @@ def checkpoint(record, result, worker_id, validation):
         raise ValueError("result requires a persisted delivery intent")
     if validation is not None:
         validate_validation(validation, assignment, record["id"])
+    if "execution" in assignment:
+        saved = assignment["execution"]
+        if saved["session_id"] != worker_id or saved["task_id"] is None:
+            raise ValueError("cloud checkpoint requires verified host session")
+        if validation is not None and (
+                saved["pr"] is None or validation["resulting_head"] != saved["pr"]["sha"]):
+            raise ValueError("cloud validation head differs from verified PR")
     if assignment["result"] is not None:
         if assignment["result"] != result or assignment["validation"] != validation:
             raise ValueError("conflicting checkpoint")

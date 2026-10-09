@@ -124,3 +124,64 @@ class WorkItemGitHub(pilot_github.PilotGitHub):
                 or response.payload.get("body") != body or not self.owned(response.payload)):
             raise LostResponse("issue-comment response uncertain; never blindly replay")
         return response.payload["id"]
+
+
+class CloudWorkItemTransport(pilot_github.PilotTransport):
+    """A task-creation capability separate from legacy upstream repair effects."""
+
+    def __init__(self, token, tracker, authority, control):
+        self.control = deepcopy(items.validate_control(control))
+        self.approved_request = None
+        binding = bindings.FORK if control["issue"]["repository"] == "radical/aspire" else bindings.UPSTREAM_ALL
+        super().__init__(token, write=True, binding=binding, tracker=tracker, authority=authority)
+        self.task_repository = binding.repository
+
+    def validate_endpoint(self, method, endpoint, body):
+        target = self.binding.repository
+        if method == "POST" and endpoint == f"agents/repos/{target}/tasks":
+            if self.approved_request is None or body != self.approved_request:
+                raise ValueError("exact canonical cloud send intent required")
+            return
+        if method != "GET" and not (
+                method == "PATCH" and endpoint == f"repos/radical/aspire/issues/comments/{self.authority}"):
+            raise ValueError("cloud adapter cannot publish comments, labels, PRs or ownership changes")
+        super().validate_endpoint(method, endpoint, body)
+
+
+class CloudWorkItemGitHub(WorkItemGitHub):
+    def __init__(self, token, tracker, authority, node, *, revision, control, transport=None):
+        self.token, self.revision = token, revision
+        self.control = deepcopy(items.validate_control(control))
+        binding = bindings.FORK if control["issue"]["repository"] == "radical/aspire" else bindings.UPSTREAM_ALL
+        transport = transport if transport is not None else CloudWorkItemTransport(token, tracker, authority, control)
+        pilot_github.PilotGitHub.__init__(
+            self, transport, tracker, authority, node, write=True, binding=binding)
+
+    def start_task(self, body, before_send):
+        import work_item_execution as execution
+        latest = self.read_authority()
+        record = next((item for item in latest.get("workItems", []) if item["id"] == self.control["id"]), None)
+        assignment = record["assignments"][-1] if record and record["assignments"] else None
+        if (record is None or record["control"] != self.control or assignment is None
+                or assignment.get("execution", {}).get("state") != "sending"
+                or assignment["execution"]["task_id"] is not None
+                or body != execution.request(self, record, assignment)):
+            raise ValueError("canonical cloud send intent mismatch")
+        self.guard_work_item(self.control)
+        before_send()
+        if isinstance(self.transport, CloudWorkItemTransport):
+            self.transport.approved_request = deepcopy(body)
+        try:
+            response = self.transport("POST", f"agents/repos/{self.repository}/tasks", body)
+        finally:
+            if isinstance(self.transport, CloudWorkItemTransport):
+                self.transport.approved_request = None
+        if (not isinstance(response, Response) or response.status != 201
+                or not isinstance(response.payload, dict)):
+            raise LostResponse("cloud task response uncertain")
+        identity = response.payload.get("id")
+        try:
+            items.identifier(identity, "returned cloud task")
+        except ValueError as error:
+            raise LostResponse("cloud task response identity uncertain") from error
+        return identity

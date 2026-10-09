@@ -19,6 +19,138 @@ Publishing to repository `main` or delivering changes upstream requires a
 separate explicit request. Disposable validation base and fixture branches are
 isolated from the product branch; do not merge them into `ci-shepherd`.
 
+## Explicit issue-linked Cloud Agent execution
+
+`work_item_execution.py` adds a separate, **default-off manual cloud lane**.
+It starts a GitHub Copilot Cloud Agent task that may write a new branch and
+open one draft PR. This is intentionally different from the packet-only
+receiver below: the operator approves cloud writes before launch, not the exact
+future PR body. Copilot's PR/result is not independently validated diagnosis,
+passing tests, readiness or resolution of the source issue.
+
+The adapter uses the documented public-preview Agent Tasks API rather than
+changing issue assignees. Creating a task captures its actual task ID; assigning
+the issue separately could start a second implementation and is not supported.
+Execution requires a supported user credential with Agent tasks read/write
+permission and a Copilot Business/Enterprise subscription. App installation
+tokens are unsupported. There is no credential fallback after rejection.
+
+Use an existing fork-controller authority whose ledger target matches the
+source issue repository. An upstream item requires a `microsoft/aspire` authority
+used by `--target upstream` monitoring; a fork-target authority cannot import an
+upstream PR. This does not enable upstream label-discovered issue dispatch.
+Controller code stays on the `ci-shepherd` feature branch; cloud tasks work
+against `main` in their explicitly approved source repository.
+
+Trusted item/approval/result/validation files must be operator-controlled and
+outside the worker checkout. Cloud permission is **not** inferred from the v1
+item's `local_edits`, `draft_pr` or exact local publication destination. Start
+with a new unfinished item and run `prepare` to reserve cloud ownership and
+obtain an `approval_template` bound to its assignment. A packet that already
+escaped cannot be converted into another worker. Prepare writes canonical
+authority but does not start a task.
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_execution.py prepare \
+  --item /absolute/operator/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-prepare
+```
+
+Review the complete returned approval and place it in a separate trusted file.
+All four permissions must explicitly be true:
+
+```json
+{
+  "schema_version": 1,
+  "item_id": "example-item",
+  "assignment_id": "EXACT_PREPARED_ASSIGNMENT_ID",
+  "control_revision": 1,
+  "repository": "microsoft/aspire",
+  "base": "main",
+  "allow_cloud_task": true,
+  "allow_branch_writes": true,
+  "allow_draft_pr": true,
+  "track_linked_pr": true
+}
+```
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_execution.py execute \
+  --item /absolute/operator/item.json --approval /absolute/operator/approval.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-execute
+
+python3 -B .github/workflows/ci-shepherd/work_item_execution.py observe \
+  --item /absolute/operator/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-observe
+
+python3 -B .github/workflows/ci-shepherd/work_item_execution.py import \
+  --item /absolute/operator/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-import
+```
+
+Every invocation requires a fresh exclusive output directory and writes
+`receipt.json`. Like local Shepherd, effects require clean pinned controller
+source, the selected `radical` user, `CI_SHEPHERD_ENABLE=true`, manually disabled
+hosted Shepherd, no active hosted runs, and the machine-wide authority lock.
+This is a serialized single-operator-host model, **not distributed exactly-once**:
+authority writes are guarded PATCHes, not a cross-host atomic compare-and-swap.
+
+Execution persists credit reservation and `sending` before one task POST, then
+saves the returned task ID before detail reads. Unknown POST outcomes, missing
+response IDs, crashes and uncertain persistence never authorize a second POST.
+Re-entry reports uncertainty or the saved identity; a changed item ID/revision
+cannot bypass unresolved same-issue work. Human reconciliation is required;
+do not reset receipts or authority to retry.
+
+The API chooses the new head branch. It does not offer a fresh-branch naming
+guarantee, `draft` request field, runtime limit or hard credit cap. The prompt
+requests draft status; import independently verifies it. Shared reservation/
+billing accounting blocks later admissions but cannot cap remote worker spend.
+Unknown billing retains a hold; active/resumed/unreadable tasks retain capacity.
+
+PR import requires exact task/session/repository/creator/correlation, a unique
+pull and branch artifact, independent PR and git-ref reads, and an exact
+platform cross-reference from the source issue. Numeric pull IDs and issue
+representation IDs are distinct and verified separately. The current PR body
+must reference the same issue; unrelated historical links, author/title matches,
+untrusted worker URLs and prose-only claims never select a PR. Closing references
+in PR bodies/commits are rejected. Absence of closing keywords does not establish
+the safety of every manual Development-sidebar association.
+
+Import persists one **direct PR chain** and a bidirectional source-work-item
+reference in the same target authority. Its sticky manual-handoff state disables
+legacy PR repair and automatic review requests. This exact imported source
+authorizes monitoring an unlabeled PR; normal upstream intake still requires its
+existing labels and skips issues. Active tasks remain `handoff_pending`; terminal
+verified tasks can become `handoff_needed`. `shepherd-hands-off`, paused/changed
+source control and unavailable identity block ownership confirmation.
+
+There is **no automatic Agent Merge activation or confirmation, merge, issue
+closure, label adoption or diagnostic comment** in this adapter. Existing
+`confirm-handoff` still requires separately supplied explicit operator assertions;
+PR discovery is not evidence that Agent Merge owns the PR.
+
+Optional `checkpoint` accepts the existing strict operator-attributed result
+and independent host validation:
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_execution.py checkpoint \
+  --item /absolute/operator/item.json --result /absolute/operator/result.json \
+  --validation /absolute/operator/validation.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-checkpoint
+```
+
+The adapter binds worker ID from the verified task session; validation head must
+match the independently verified PR. Omit validation when independent evidence
+is absent. No transcript scraping turns worker claims into host attestation.
+Cloud-owned receiver re-entry never emits another local worker or PR publication
+request. The original packet-only lane remains unchanged for noncloud items.
+
 ## Manual issue-linked work items (packet-only receiver)
 
 `work_item_receiver.py` is a separate lane from label discovery and legacy cloud
