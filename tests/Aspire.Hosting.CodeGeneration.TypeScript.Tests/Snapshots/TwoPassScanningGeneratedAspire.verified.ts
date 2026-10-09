@@ -9655,7 +9655,7 @@ export interface DistributedApplicationBuilder {
     /**
      * Adds a C# application resource
      * @param options Additional options.
-     * @experimental
+     * @deprecated Use addDotnetProject from the Aspire.Hosting.Dotnet package instead.
      */
     addCSharpApp(name: string, path: string, options?: AddCSharpAppOptions): CSharpAppResourcePromise;
     /**
@@ -9887,7 +9887,7 @@ export interface DistributedApplicationBuilderPromise extends PromiseLike<Distri
     /**
      * Adds a C# application resource
      * @param options Additional options.
-     * @experimental
+     * @deprecated Use addDotnetProject from the Aspire.Hosting.Dotnet package instead.
      */
     addCSharpApp(name: string, path: string, options?: AddCSharpAppOptions): CSharpAppResourcePromise;
     /**
@@ -10398,7 +10398,7 @@ class DistributedApplicationBuilderImpl implements DistributedApplicationBuilder
     /**
      * Adds a C# application resource
      * @param optionsBag Additional options.
-     * @experimental
+     * @deprecated Use addDotnetProject from the Aspire.Hosting.Dotnet package instead.
      */
     addCSharpApp(name: string, path: string, optionsBag?: AddCSharpAppOptions): CSharpAppResourcePromise {
         let options = optionsBag?.options;
