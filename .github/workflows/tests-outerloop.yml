@@ -49,6 +49,7 @@ jobs:
       extraRunSheetBuilderArgs: "-p:RunOuterloopTests=true"
       extraTestArgs: "--filter-trait outerloop=true"
       enablePlaywrightInstall: true
+      testProject: "Dashboard.Playwright"
 
   # On a scheduled failure, file/append a single deduplicated issue: a
   # 'failing-test' issue listing the failed outerloop tests, or an

@@ -32,6 +32,10 @@ on:
         required: false
         type: boolean
         default: false
+      testProject:
+        required: false
+        type: string
+        default: ''
 
 jobs:
 
@@ -79,11 +83,16 @@ jobs:
 
       - name: Inject enablePlaywrightInstall into runsheet properties
         id: inject_properties
+        env:
+          TEST_PROJECT: ${{ inputs.testProject }}
         run: |
           RUNSHEET='${{ steps.generate_tests_matrix_raw.outputs.runsheet }}'
           if [ "$RUNSHEET" = "[]" ] || [ -z "$RUNSHEET" ]; then
             echo "runsheet=[]" >> $GITHUB_OUTPUT
           else
+            if [ -n "$TEST_PROJECT" ]; then
+              RUNSHEET=$(echo "$RUNSHEET" | jq -c --arg project "$TEST_PROJECT" '[.[] | select(.project == $project)]')
+            fi
             UPDATED=$(echo "$RUNSHEET" | jq -c --argjson epw ${{ inputs.enablePlaywrightInstall }} '[.[] | .properties.enablePlaywrightInstall = $epw]')
             echo "runsheet=$UPDATED" >> $GITHUB_OUTPUT
           fi
