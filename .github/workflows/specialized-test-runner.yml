@@ -146,6 +146,8 @@ jobs:
     needs: [generate_tests_matrix]
     if: ${{ needs.generate_tests_matrix.outputs.requiresCliArchive == 'true' }}
     uses: ./.github/workflows/build-cli-e2e-image.yml
+    with:
+      includePolyglotImages: false
 
   run_tests:
     name: ${{ matrix.tests.project }}
