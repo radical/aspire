@@ -36,7 +36,6 @@
   <ItemGroup>
     <Compile Include="..\Aspire.Dashboard.Tests\Shared\MockDashboardClient.cs" Link="Integration\Playwright\Infrastructure\MockDashboardClient.cs" />
     <Compile Include="..\Aspire.Dashboard.Tests\Shared\TerminalTestProducer.cs" Link="Shared\TerminalTestProducer.cs" />
-    <Compile Include="$(TestsSharedDir)TestDashboardTelemetrySender.cs" Link="shared\TestDashboardTelemetrySender.cs" />
     <Compile Include="$(TestsSharedDir)TestStringLocalizer.cs" Link="shared\TestStringLocalizer.cs" />
     <Compile Include="$(TestsSharedDir)TestDialogService.cs" Link="shared\TestDialogService.cs" />
     <Compile Include="$(TestsSharedDir)TestDashboardClient.cs" Link="shared\TestDashboardClient.cs" />
