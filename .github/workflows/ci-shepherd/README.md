@@ -19,6 +19,277 @@ Publishing to repository `main` or delivering changes upstream requires a
 separate explicit request. Disposable validation base and fixture branches are
 isolated from the product branch; do not merge them into `ci-shepherd`.
 
+## Manual issue-linked work items (packet-only receiver)
+
+`work_item_receiver.py` is a separate lane from label discovery and legacy cloud
+issue workers. It validates a manually authored JSON item, verifies its linked
+open issue, and persists assignment/result/send receipts in the existing
+canonical authority comment's optional `workItems` collection. Legacy `chains`,
+budgets and serialized ledgers without `workItems` are unchanged.
+
+**Dispatch means emitting a worker packet, not launching a session.** This lane
+does not run a coding worker, push Git changes, create a PR, rerun CI, merge or
+close trackers. A host/app-session adapter must launch the bounded specialist,
+verify its session identity and independently attest validation. That adapter
+and a PR publisher are outside this implementation; end-to-end worker execution
+is not yet complete. The receiver never uses the legacy cloud issue-worker path,
+which creates PRs without this content-review checkpoint.
+
+Every item must already be associated with an issue. External workflow-failure
+intake is responsible for finding/reusing the appropriate deduplicated tracking
+issue or obtaining permission to create it. The receiver creates no issues and
+performs no generalized intake/discovery.
+
+### Trusted human control
+
+Place the item outside a worker-writable checkout. Workers must not edit this
+file, the authority comment, checkpoint inputs or host validation documents.
+The authenticated operator supplies these trusted inputs; JSON validation does
+not authenticate an arbitrary file's author.
+
+This synthetic example is not a live incident or an instruction to execute it:
+
+```json
+{
+  "schema_version": 1,
+  "id": "example-item",
+  "revision": 1,
+  "issue": {
+    "repository": "radical/aspire",
+    "number": 900,
+    "node_id": "ISSUE900"
+  },
+  "reported_kind": "workflow_failure",
+  "requested_route": "workflow_failure",
+  "action": "run",
+  "occurrence": {
+    "repository": "radical/aspire",
+    "run_id": 100,
+    "run_attempt": 1,
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "job_id": 200,
+    "artifact_id": null
+  },
+  "scope": "Fix only the reproduced cause of the pinned failure.",
+  "authority": {
+    "local_edits": true,
+    "issue_comment": false,
+    "draft_pr": true,
+    "destination": {
+      "target_repository": "radical/aspire",
+      "base": "ci-shepherd",
+      "head_repository": "radical/aspire",
+      "branch": "example-fix"
+    }
+  },
+  "pr_review": null
+}
+```
+
+`id`, issue identity, occurrence and `reported_kind` are immutable intake
+identity. A tracker may cover multiple runs, but an item pins one occurrence:
+repository, run ID, attempt, source SHA, job and optional artifact ID. Accepting
+these references does not mean logs or artifacts were fetched or verified.
+`occurrence` may be null except for `reported_kind=workflow_failure`.
+
+Human changes to route, scope, action or policy must increment `revision`.
+Reusing a revision with different content or moving backwards fails closed.
+`reported_kind` is the initial hypothesis (`workflow_failure`, `flaky_test`,
+`product_bug` or `unknown`), never the eventual diagnosis or a PR veto.
+`requested_route` selects the host-owned `workflow-failure/v1`, `flaky-test/v1`
+or `product-bug/v1` specialist prompt and effective policy in `work_items.py`.
+Assignment packets prohibit all GitHub writes; local edits are permitted only
+when the current control explicitly allows them.
+
+`action=run` requests bounded work, `pause` blocks new effects, and `publish`
+requests only publication handling, not another worker. Supplying `pr_review`
+is approval-only even if `action=run` is retained: it is consumed before worker
+admission and never starts another assignment.
+
+PR destination is explicit and independent of the issue URL. Both target and
+head repositories and both refs are required when `draft_pr=true`; approved
+pushes are limited to `radical/aspire`, while the target may be the fork or
+`microsoft/aspire`. These fields authorize only a request packet here, not a push.
+Issue-comment permission is separately false by default.
+
+### Receiver and host checkpoint
+
+Use the existing open fork-controller tracker, canonical authority comment and
+verified tracker node. Like the existing local controller, actual execution
+requires reviewed clean controller source, `CI_SHEPHERD_ENABLE=true`, the hosted
+Shepherd workflow manually disabled, no active hosted runs, the selected
+`radical` credential and the machine-wide authority lock.
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_receiver.py receive \
+  --item /absolute/operator-controlled/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE \
+  --workdir /absolute/operator-controlled/unique-receive-directory
+```
+
+Each command requires a new exclusive output directory. `packet.json`, when
+present, contains one complete revision-bound assignment or publication packet.
+`receipt.json` states whether work was dispatched, is waiting, needs human
+attention, produced a PR preview, or emitted an approved draft-PR request.
+Packets and receipts are transport artifacts, never replacement authority.
+
+The host launches at most one worker for a saved assignment and checkpoint
+submits the authenticated/host-attributed result, never a JSON envelope scraped
+from untrusted tool or task logs:
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_receiver.py checkpoint \
+  --item /absolute/operator-controlled/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE \
+  --result /absolute/host-controlled/result.json --worker-id VERIFIED_SESSION_ID \
+  --validation /absolute/host-controlled/validation.json \
+  --workdir /absolute/operator-controlled/unique-checkpoint-directory
+```
+
+Omit `--validation` when independent validation is unavailable; this prevents
+PR eligibility, rather than treating worker-reported tests as validated.
+The result contract has exactly these fields:
+
+```json
+{
+  "schema_version": 1,
+  "item_id": "example-item",
+  "assignment_id": "HOST_ISSUED_ASSIGNMENT_ID",
+  "evaluated_revision": 1,
+  "worker_id": "VERIFIED_SESSION_ID",
+  "actual_classification": "product_bug_candidate",
+  "transience": "not_established",
+  "outcome": "fixed",
+  "same_failure": true,
+  "evidence": ["The exact failure was reproduced and traced to a boundary check."],
+  "changed_files": ["src/example.py"],
+  "tests": [{"command": "python3 -m unittest test_example", "result": "passed"}],
+  "pr_proposal": {
+    "title": "Fix reproduced boundary-check failure",
+    "body": "Root cause and validated fix. Refs #900."
+  },
+  "summary": "Fixed the reproduced cause of the pinned occurrence."
+}
+```
+
+Actual classification is `infrastructure`, `flaky_test_candidate`,
+`product_bug_candidate` or `inconclusive`. Transience is independently
+`confirmed`, `not_established` or `not_transient`; one failure cannot establish
+flakiness/transience. Outcomes are `fixed`, `no_fix`, `inconclusive` or
+`out_of_scope`. Tests explicitly report `passed`, `failed` or `not_run`.
+`pr_proposal` is nullable. All worker evidence remains a claim.
+
+The independent host-validation document binds `schema_version=1`, `item_id`,
+`assignment_id`, `evaluated_revision`, exact `resulting_head`,
+`product_bug`, `same_failure`, `in_scope`, authoritative `tests` and `evidence`.
+The host must verify those facts against the actual checkout, cause and executed
+commands. A caller-controlled JSON document is an attestation, not proof supplied
+by this receiver; no automatic validation engine is implemented.
+
+An identical checkpoint is idempotent; a conflicting result, wrong worker,
+assignment or evaluated revision is rejected. Human control may advance while
+work finishes: the result retains `evaluated_revision`, and the checkpoint reads
+the latest control without pretending the result evaluated that newer revision.
+
+### Route changes and delivery recovery
+
+Shepherd keeps the same item and all bounded assignment history. An active
+worker finishes its current bounded step and checkpoints before a changed route
+can receive one new specialist packet. Human control never creates parallel
+replacement assignments; unchanged re-entry does not dispatch again.
+
+Delivery states are deliberately distinct:
+
+| Saved state | Meaning and recovery |
+| --- | --- |
+| `reserved` | No delivery intent was persisted; safe to deliver that exact assignment once. A higher human revision can abandon it and reserve one replacement. |
+| `delivering` | Output may have escaped; restart reports uncertainty and does not redispatch. The host must verify delivery/session identity and checkpoint, or obtain human reconciliation. |
+| `delivered` | Assignment packet was written and receipt persisted; wait for its host checkpoint. |
+| `abandoned` | Definitely-undelivered reservation superseded by human control; never accept its result or deliver it. |
+
+Output failure after delivery intent is uncertainty even if the output file is
+missing; filesystem inspection alone cannot prove nobody received the packet.
+There is no automatic recovery/reset for ambiguous delivery. Known-undelivered
+recovery retains old history rather than recreating the item. Assignment history
+is bounded at ten per item, item collection at ten, and the existing 60,000-byte
+authority bound remains. Exhaustion requires human attention, not truncation or
+an allowance reset.
+
+### Draft-content approval and next-run issue reporting
+
+A product bug discovered under workflow-failure or flaky-test intake can become
+PR-eligible. Eligibility requires a claimed product fix of the same failure,
+changed files, passing reported tests and independent host evidence establishing
+the real product bug, in-scope cause/fix, passing authoritative tests and exact
+resulting head. Flaky findings, infrastructure, inconclusive/unresolved results,
+unrelated changes and failed validation never produce a PR preview/request.
+
+The receiver first emits `pr_preview` with the complete accepted result, host
+validation, assignment, exact destination and proposed title/body. After the
+human sees it, increment the control revision and add:
+
+```json
+{
+  "assignment_id": "HOST_ISSUED_ASSIGNMENT_ID",
+  "preview_revision": 1,
+  "title": "EXACT_PREVIEW_TITLE",
+  "body": "EXACT_PREVIEW_BODY"
+}
+```
+
+This is the value of `pr_review`, not a new work item. Retain the same
+route/scope/effective authority/destination and use `action=run` or `publish`.
+An approval-only revision preserves the evaluated result and emits one
+`draft_pr_request` without another assignment. A changed title/body, evidence,
+validated head, route, scope or policy revokes that preview. The downstream
+publisher must independently reread current control and canonical authority
+immediately before publication and require the exact approved revision,
+assignment, evidence, head, destination and content. It must create a draft and
+never merge. **No PR is opened by this receiver.**
+Delivered and uncertain publication-request receipts survive later control
+revisions, including authority revocation. Revision-only re-entry cannot emit
+the same request again; uncertainty blocks all replacement requests. A new
+request requires a distinct evaluated assignment and its own exact human preview
+approval, not a repeated approval on a newer revision. Only a reservation known
+not to have been delivered can be superseded safely.
+A higher `action=run` revision with `pr_review=null` can request another bounded
+assignment after a delivered request, even on the same route. It bypasses the
+consumed preview without deleting the prior publication receipt; the new
+checkpoint produces a new assignment-bound preview. Uncertain publication
+delivery blocks this replacement path.
+
+For a useful result without an appropriate PR, checkpoint itself posts nothing.
+The next receive produces an evidence-backed issue-comment preview asking for
+human route/action. Only explicit current `authority.issue_comment=true` with
+an unpaused action permits the controller to post that report; no permission is
+inferred from draft-PR policy or intake kind. Use `action=publish` if a higher
+revision changes reporting permission without requesting another worker.
+
+Reports distinguish worker claims and host attestations, carry `[automated]`,
+and contain only controller-built issue/run/job links. Worker URLs and mentions
+are sanitized. Exact body/send intent is persisted before POST; a lost response
+holds uncertainty and can be reconciled only with one exact owned comment.
+It never blindly posts twice. Fresh control, issue identity, hands-off,
+enablement, source and authority are checked before effects. A PR request is
+not a created PR, so this lane cannot report a fabricated PR link.
+
+Human response updates the same JSON item/revision. Green CI alone is not
+tracker resolution. Closing the tracker remains human-owned, and this lane
+never supplies closing links or closes it.
+
+### Offline verification
+
+All work-item tests use fake authority/transport boundaries and synthetic
+incidents; they do not launch sessions or mutate real issues:
+
+```shell
+PYTHONPATH=.github/workflows/ci-shepherd:.github/workflows/ci-shepherd/tests \
+  python3 -B -m unittest test_work_items test_work_item_receiver test_work_item_github -v
+python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_*.py' -q
+```
+
 ## Opt-in manual PR handoff
 
 Set `CI_SHEPHERD_PR_HANDOFF=manual` to transfer adopted PRs out of Shepherd.

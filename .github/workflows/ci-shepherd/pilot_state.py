@@ -45,11 +45,25 @@ def new_ledger(repository="radical/aspire"):
 
 
 def validate(ledger):
-    contracts.exact(ledger, {"schemaVersion", "repository", "cursor", "chains"}, "pilot ledger")
+    keys = {"schemaVersion", "repository", "cursor", "chains"}
+    if isinstance(ledger, dict) and "workItems" in ledger:
+        keys.add("workItems")
+    contracts.exact(ledger, keys, "pilot ledger")
     if ledger["schemaVersion"] != 1 or ledger["repository"] not in {"radical/aspire", "microsoft/aspire"}:
         raise ValueError("unsupported pilot authority")
     if type(ledger["cursor"]) is not int or ledger["cursor"] < 0 or not isinstance(ledger["chains"], list):
         raise ValueError("invalid pilot cursor/chains")
+    if "workItems" in ledger:
+        import work_items
+        records = ledger["workItems"]
+        if not isinstance(records, list) or len(records) > work_items.MAX_ITEMS:
+            raise ValueError("work-item authority bound exhausted")
+        identities = set()
+        for record in records:
+            work_items.validate_record(record)
+            if record["id"] in identities:
+                raise ValueError("duplicate work-item ID")
+            identities.add(record["id"])
     nodes, subjects, operations, chains = set(), set(), set(), set()
     for chain in ledger["chains"]:
         contracts.exact(chain, {"id", "origin", "kind", "node", "child", "childNode", "state", "localAttempts",
