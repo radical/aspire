@@ -53,7 +53,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sigstore;
 using Spectre.Console;
+using Tuf;
 using RootCommand = Aspire.Cli.Commands.RootCommand;
 
 namespace Aspire.Cli;
@@ -578,6 +580,38 @@ public class Program
 
         // Npm and Playwright CLI operations.
         builder.Services.AddSingleton<INpmRunner, NpmRunner>();
+        builder.Services.AddSingleton<ITrustRootProvider>(serviceProvider =>
+        {
+            var executionContext = serviceProvider.GetRequiredService<CliExecutionContext>();
+            var logger = serviceProvider.GetRequiredService<ILogger<TufTrustRootProvider>>();
+            // Building the command tree resolves this provider even during completion.
+            // TUF initialization seeds the cache, so completion must use memory to avoid disk writes.
+            try
+            {
+                ITufCache cache = isCompletion
+                    ? new InMemoryTufCache()
+                    : new FileSystemTufCache(Path.Combine(executionContext.CacheDirectory.FullName, "tuf"));
+
+                return new TufTrustRootProvider(
+                    TufTrustRootProvider.ProductionUrl,
+                    new TufTrustRootProviderOptions { Cache = cache });
+            }
+            catch (Exception ex) when (!isCompletion && ex is IOException or UnauthorizedAccessException)
+            {
+                // Work around https://github.com/mitchdenny/sigstore-dotnet/issues/47.
+                // Tuf 1.1.0 can throw while seeding an existing Windows cache directory whose ACL
+                // denies file creation. Keep verification enabled and lose only disk persistence.
+                logger.LogWarning(
+                    ex,
+                    "Unable to initialize the TUF disk cache. Using an in-memory cache for this process.");
+
+                return new TufTrustRootProvider(
+                    TufTrustRootProvider.ProductionUrl,
+                    new TufTrustRootProviderOptions { Cache = new InMemoryTufCache() });
+            }
+        });
+        builder.Services.AddSingleton(serviceProvider =>
+            new SigstoreVerifier(serviceProvider.GetRequiredService<ITrustRootProvider>()));
         builder.Services.AddHttpClient<INpmProvenanceChecker, SigstoreNpmProvenanceChecker>();
         builder.Services.AddHttpClient<IGitHubArtifactAttestationVerifier, GitHubArtifactAttestationVerifier>();
         builder.Services.AddSingleton<IAspireSkillsBundleProvider, AspireSkillsBundleProvider>();
