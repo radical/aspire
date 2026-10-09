@@ -28,7 +28,7 @@ CORRELATION = "ci-shepherd-pilot: "
 WORKER_STATES = state.TERMINAL | {"queued", "in_progress", "idle", "waiting_for_user"}
 
 
-def validate_cloud_read(path, body):
+def validate_cloud_read(path, body, repository):
     if body is not None:
         raise ValueError("GET body forbidden")
     query = parse_qs(path.query, strict_parsing=True)
@@ -36,13 +36,19 @@ def validate_cloud_read(path, body):
         if query:
             raise ValueError("ref query forbidden")
         return
-    allowed = {"page", "per_page"} | ({"state"} if path.path.endswith("/pulls") else set())
+    allowed = {"page", "per_page"} | ({"state", "head"} if path.path.endswith("/pulls") else set())
     if (set(query) - allowed or any(len(values) != 1 for values in query.values())
             or query.get("per_page", ["100"]) != ["100"]
             or not re.fullmatch(r"[1-9][0-9]*", query.get("page", ["1"])[0])
             or int(query.get("page", ["1"])[0]) > 10
             or "state" in query and query["state"] != ["all"]):
         raise ValueError("invalid bounded cloud inventory query")
+    if "head" in query:
+        owner, separator, branch = query["head"][0].partition(":")
+        if owner != repository.split("/", 1)[0] or not separator:
+            raise ValueError("invalid bounded pull head filter")
+        import work_items
+        work_items.ref(branch)
 
 
 def validate_graphql(value, binding):
@@ -122,7 +128,7 @@ class PilotTransport(live.HTTPTransport):
             if method == "GET" and self.binding == bindings.UPSTREAM_ALL and re.fullmatch(
                     re.escape(target) + r"/(?:pulls|pulls/[1-9][0-9]*/commits|issues/[1-9][0-9]*/timeline"
                     r"|git/ref/heads/[A-Za-z0-9_./-]+)", path.path):
-                validate_cloud_read(path, body)
+                validate_cloud_read(path, body, self.binding.repository)
                 return
             if method == "GET" and (path.path == target or re.fullmatch(
                     re.escape(target) + r"/(?:issues/" + subject + r"(?:/comments)?|issues/comments/[1-9][0-9]*"
@@ -181,7 +187,10 @@ class PilotTransport(live.HTTPTransport):
         )
         if method == "GET":
             if re.fullmatch(prefix + r"/issues/[1-9][0-9]*/timeline", path.path):
-                validate_cloud_read(path, body)
+                validate_cloud_read(path, body, self.binding.repository)
+                return
+            if path.path == PREFIX + "/pulls" and "head" in parse_qs(path.query, strict_parsing=True):
+                validate_cloud_read(path, body, self.binding.repository)
                 return
             if body is not None or not re.fullmatch(reads, path.path):
                 raise ValueError("pilot read endpoint is not allowed")

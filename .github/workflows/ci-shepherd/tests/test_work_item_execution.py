@@ -3,6 +3,7 @@ from contextlib import nullcontext, redirect_stderr, redirect_stdout
 import io
 from pathlib import Path
 import tempfile
+from urllib.parse import parse_qs, urlencode, urlparse
 import unittest
 from unittest.mock import patch
 
@@ -260,6 +261,24 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([], chain["operations"])
         self.assertEqual(self.issue["id"], self.api.ledger["workItems"][0]["assignments"][0]["execution"]["pr"]["issue_id"])
         self.assertTrue(all(method == "PATCH" for method, _, _ in self.transport.writes))
+
+    def test_import_only_reads_exact_head_inventory_even_when_broad_inventory_exceeds_bound(self):
+        original = Transport.__call__
+        expected = self.repository.split("/", 1)[0] + ":" + self.pull["head"]["ref"]
+        policy = work_item_github.CloudWorkItemTransport("fixture", 99, 500, self.control)
+        def filtered(instance, method, endpoint, body):
+            if method == "GET" and endpoint.split("?")[0] == f"{self.prefix}/pulls":
+                policy.validate_endpoint(method, endpoint, body)
+                query = parse_qs(urlparse(endpoint).query)
+                if query.get("head") != [expected]:
+                    return Response([dict(self.pull, body="x" * 1_000_001)], {})
+            return original(instance, method, endpoint, body)
+        with patch.object(Transport, "__call__", filtered):
+            self.assertEqual("tracked", execution.import_pr(self.api, self.read)["outcome"])
+        inventory = [endpoint for method, endpoint, _ in self.transport.reads
+                     if method == "GET" and endpoint.split("?")[0] == f"{self.prefix}/pulls"]
+        self.assertEqual(2, len(inventory))
+        self.assertTrue(all(parse_qs(urlparse(endpoint).query)["head"] == [expected] for endpoint in inventory))
 
     def test_real_monitor_blocks_resumed_worker_and_receiver_never_publishes_again(self):
         self.assertEqual("tracked", execution.import_pr(self.api, self.read)["outcome"])
@@ -549,6 +568,24 @@ class UpstreamMappingTests(MappingTests):
 
 
 class EntrypointTests(unittest.TestCase):
+    def test_pull_head_filter_rejects_foreign_owner_and_malformed_refs(self):
+        for repository in ("radical/aspire", "microsoft/aspire"):
+            item = control()
+            item["issue"]["repository"] = repository
+            transport = work_item_github.CloudWorkItemTransport("fixture", 99, 500, item)
+            owner = repository.split("/", 1)[0]
+            base = f"repos/{repository}/pulls?"
+            transport.validate_endpoint("GET", base + urlencode({
+                "state": "all", "head": owner + ":copilot/fix-7", "page": 1, "per_page": 100}), None)
+            for head in ("foreign:fix-7", owner + ":", owner + ":../fix", owner + ":fix..7",
+                         owner + ":fix//7", owner + ":fix.lock", owner + ":fix/",
+                         owner + ":fix:7", owner + ":fix 7", owner + ":.hidden"):
+                with self.subTest(repository=repository, head=head), self.assertRaises(ValueError):
+                    transport.validate_endpoint("GET", base + urlencode({"state": "all", "head": head}), None)
+            with self.assertRaises(ValueError):
+                transport.validate_endpoint("GET", base + urlencode([
+                    ("head", owner + ":fix-7"), ("head", owner + ":fix-8")]), None)
+
     def test_prepare_cli_reserves_and_emits_approval_without_remote_launch(self):
         api = CloudAuthority()
         with tempfile.TemporaryDirectory() as temporary:

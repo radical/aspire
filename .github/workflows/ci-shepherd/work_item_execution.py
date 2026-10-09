@@ -332,8 +332,16 @@ def mapped_pr(api, record, assignment, observed):
     branches = [entry["data"] for entry in artifacts if entry.get("provider") == "github" and entry.get("type") == "branch"]
     if len(pulls) != 1 or len(branches) != 1:
         raise ValueError("missing or ambiguous task PR/branch artifact")
+    branch = branches[0]
+    if (not isinstance(branch, dict) or set(branch) != {"base_ref", "head_ref"}
+            or branch["base_ref"] != "main"
+            or branch["head_ref"] != observed["sessions"][0]["head_ref"]):
+        raise ValueError("task PR/branch/session identity mismatch")
+    items.ref(branch["head_ref"])
+    issue_pr.positive(pulls[0].get("id"), "task pull artifact ID")
     prefix = f"repos/{api.repository}"
-    inventory = api.api.pages(prefix + "/pulls", query={"state": "all"}, max_bytes=1_000_000)
+    head = f"{api.repository.split('/', 1)[0]}:{branch['head_ref']}"
+    inventory = api.api.pages(prefix + "/pulls", query={"head": head, "state": "all"}, max_bytes=1_000_000)
     matches = [entry for entry in inventory if entry.get("id") == pulls[0].get("id")]
     if len(matches) != 1:
         raise ValueError("task pull artifact mapping unavailable")
