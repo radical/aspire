@@ -18,7 +18,7 @@ import work_item_receiver as receiver
 
 
 BEGIN, END = "CSWORKITEMBEGIN", "CSWORKITEMEND"
-MAX_LOG = 100_000
+MAX_LOG = pilot_results.MAX_LOG
 
 
 def parse_result(text, record, assignment, session):

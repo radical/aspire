@@ -49,6 +49,15 @@ class ResultContractTests(unittest.TestCase):
             with self.subTest(text=bad), self.assertRaises(ValueError):
                 followup.parse_result(bad, record, assignment, "session-1")
 
+    def test_bounded_historical_session_log_over_100kb_is_scanned_for_result_envelope(self):
+        assignment = {"id": "assignment", "revision": 1}
+        with self.assertRaisesRegex(ValueError, "missing or conflicting worker result JSON"):
+            followup.parse_result(
+                "x" * 100_001,
+                {"id": "example-item"},
+                assignment,
+                "session-1")
+
     def test_renderer_wrapped_base64_roundtrips_multiword_strings_but_raw_json_is_not_accepted(self):
         assignment = {"id": "assignment", "revision": 1}
         claimed = result(assignment)
