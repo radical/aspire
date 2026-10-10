@@ -70,7 +70,8 @@ class PromptTemplateTests(unittest.TestCase):
                 self.assertIn("Reviewed instructions.", changed[key])
         self.assertEqual({
             "cloud-work-item.md", "local-work-item.md", "repair-worker.md", "initial-handoff.md",
-            "fork-fixture-worker.md", "transport-proof.md", "target-fork.md", "target-upstream.md"}, seen)
+            "fork-fixture-worker.md", "transport-proof.md", "target-fork.md", "target-upstream.md",
+            "failure-investigation.md"}, seen)
 
     def test_missing_invalid_and_extra_template_bindings_fail_closed(self):
         import prompt_templates

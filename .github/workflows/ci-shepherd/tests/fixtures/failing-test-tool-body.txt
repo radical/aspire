@@ -1,0 +1,66 @@
+### Build information
+
+Build: https://github.com/microsoft/aspire/actions/runs/37738467720/attempts/1
+Build error leg or test failing: Aspire.Cli.EndToEnd.Tests.DotnetToolSmokeTests.CreateAndRunAspireStarterProject
+Logs: [CLI Smoke Test \(dev\)](https://github.com/microsoft/aspire/actions/runs/37738467720/job/113184419877)
+Artifact: [smoke-test-results-dev](https://github.com/microsoft/aspire/actions/runs/37738467720/artifacts/11533196429)
+
+### Fill in the error message template
+
+<!-- Error message template  -->
+## Error Message
+
+Fill the error message using [step by step known issues guidance](https://github.com/dotnet/arcade/blob/main/Documentation/Projects/Build%20Analysis/KnownIssueJsonStepByStep.md).
+
+<!-- Use ErrorMessage for String.Contains matches. Use ErrorPattern for regex matches (single line/no backtracking). Set BuildRetry to `true` to retry builds with this error. Set ExcludeConsoleLog to `true` to skip helix logs analysis. -->
+
+```json
+{
+  "ErrorMessage": "System.InvalidOperationException : Command failed with non-zero exit code (detected ERR prompt at sequence 8). Check the terminal recording for details.",
+  "ErrorPattern": "",
+  "BuildRetry": false,
+  "ExcludeConsoleLog": false
+}
+```
+
+### Error details
+
+```yml
+Error Message: System.InvalidOperationException : Command failed with non-zero exit code (detected ERR prompt at sequence 8). Check the terminal recording for details.
+Stack Trace:
+   at Aspire.Tests.Shared.Hex1bAutomatorTestHelpers.WaitForSuccessPromptAsync(Hex1bTerminalAutomator auto, SequenceCounter counter, Nullable`1 timeout) in /home/runner/work/aspire/aspire/tests/Shared/Hex1bAutomatorTestHelpers.cs:line 256
+   at Aspire.Tests.Shared.Hex1bAutomatorTestHelpers.RunCommandAsync(Hex1bTerminalAutomator auto, String command, SequenceCounter counter, Nullable`1 timeout) in /home/runner/work/aspire/aspire/tests/Shared/Hex1bAutomatorTestHelpers.cs:line 274
+   at Aspire.Cli.EndToEnd.Tests.Helpers.CliE2EAutomatorHelpers.InstallAspireCliAsync(Hex1bTerminalAutomator auto, CliInstallStrategy strategy, SequenceCounter counter) in /home/runner/work/aspire/aspire/tests/Aspire.Cli.EndToEnd.Tests/Helpers/CliE2EAutomatorHelpers.cs:line 160
+   at Aspire.Cli.EndToEnd.Tests.DotnetToolSmokeTests.CreateAndRunAspireStarterProject() in /home/runner/work/aspire/aspire/tests/Aspire.Cli.EndToEnd.Tests/DotnetToolSmokeTests.cs:line 47
+   at Aspire.Cli.EndToEnd.Tests.DotnetToolSmokeTests.CreateAndRunAspireStarterProject() in /home/runner/work/aspire/aspire/tests/Aspire.Cli.EndToEnd.Tests/DotnetToolSmokeTests.cs:line 104
+--- End of stack trace from previous location ---
+```
+
+<details>
+<summary>Standard Output</summary>
+
+```yml
+DotnetTool strategy resolved: DotnetTool (latest prerelease)
+Temporary workspace created at: /tmp/Aspire.Cli.EndToEnd.Tests/Workspace/hz1iv4sg.tei
+Marked temporary workspace for preservation: /tmp/Aspire.Cli.EndToEnd.Tests/Workspace/hz1iv4sg.tei
+Creating Docker test terminal:
+  Test name:      CreateAndRunAspireStarterProject
+  Strategy:       DotnetTool (latest prerelease)
+  Expected ver:   (not available)
+  Variant:        DotNet
+  Dockerfile:     (prebuilt image)
+  Image:          aspire-cli-e2e-dotnet:prebuilt
+  Workspace:      /tmp/Aspire.Cli.EndToEnd.Tests/Workspace/hz1iv4sg.tei
+  Docker socket:  True
+  Dimensions:     160x48
+  Recording:      /home/runner/work/aspire/aspire/testresults/recordings/CreateAndRunAspireStarterProject.cast
+[TerminalRun] Could not capture diagnostics before shutdown: Command failed with non-zero exit code (detected ERR prompt at sequence 8). Check the terminal recording for details.
+[TerminalRun] Captured diagnostics to: /home/runner/work/aspire/aspire/testresults/workspaces/CreateAndRunAspireStarterProject
+[TerminalRun]   Source workspace: /tmp/Aspire.Cli.EndToEnd.Tests/Workspace/hz1iv4sg.tei
+[TerminalRun]   logs/: 4 file(s)
+
+```
+
+</details>
+
+<!-- failing-test-signature: v1:d1ab87b1277ffa24 -->

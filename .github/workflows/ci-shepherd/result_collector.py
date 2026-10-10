@@ -11,11 +11,11 @@ import round as contracts
 from pilot_results import CollectionError, MAX_LOG, safe_text
 
 
-def bounded_command(argv, environment, *, limit=MAX_LOG, timeout=60):
+def bounded_command(argv, environment, *, limit=MAX_LOG, timeout=60, cwd=None):
     """Drain both pipes without buffering an unbounded response or deadlocking."""
     output = {"out": bytearray(), "err": bytearray()}
     deadline = time.monotonic() + timeout
-    with subprocess.Popen(argv, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+    with subprocess.Popen(argv, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd) as process:
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ, "out")
             selector.register(process.stderr, selectors.EVENT_READ, "err")
@@ -48,7 +48,7 @@ def bounded_command(argv, environment, *, limit=MAX_LOG, timeout=60):
 
 
 class LocalCollector:
-    """Only gh 2.101.0's proven renderer and the selected keyring identity."""
+    """Only audited CLI renderers and the selected keyring identity."""
 
     def __init__(self, token, *, command=bounded_command, environment=None):
         self.token, self.command = token, command
@@ -64,7 +64,10 @@ class LocalCollector:
         environment["GH_PROMPT_DISABLED"] = "1"
         environment["GH_HOST"] = "github.com"
         code, version, _ = self.command(["gh", "--version"], environment, limit=4096, timeout=10)
-        if code or not version.startswith("gh version 2.101.0 "):
+        # Both tagged shared/log.go render assistant markdown and tool output.
+        # https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/agent-task/shared/log.go
+        # A version bump needs another renderer audit, not an open-ended range.
+        if code or not version.startswith(("gh version 2.101.0 ", "gh version 2.102.0 ")):
             raise CollectionError("unsupported")
         for args in (["--user", "radical"], []):
             code, token, _ = self.command(
@@ -96,6 +99,20 @@ class LocalCollector:
                 raise CollectionError("authentication")
             if re.search(r"\b(?:502|503|504)\b|connection reset|TLS handshake timeout", error, re.I):
                 raise CollectionError("transient")
+            raise CollectionError("transport")
+        return output
+
+    def pinned(self, occurrence):
+        """Read only the already host-verified pinned job, never the latest run."""
+        import work_items
+        work_items.repository(occurrence["repository"])
+        for key in ("run_id", "run_attempt", "job_id"):
+            if type(occurrence[key]) is not int or occurrence[key] <= 0:
+                raise CollectionError("identity")
+        environment = self.verified_environment()
+        path = f"repos/{occurrence['repository']}/actions/jobs/{occurrence['job_id']}/logs"
+        code, output, _ = self.command(["gh", "api", path], environment)
+        if code:
             raise CollectionError("transport")
         return output
 

@@ -115,7 +115,10 @@ def validate_control(value):
             issue_pr.positive(occurrence["artifact_id"], "artifact ID")
         sha(occurrence["head_sha"])
     authority = value["authority"]
-    contracts.exact(authority, {"local_edits", "issue_comment", "draft_pr", "destination"}, "authority")
+    contracts.exact(authority, {"local_edits", "issue_comment", "draft_pr", "destination"}
+                    | ({"issue_create"} if "issue_create" in authority else set()), "authority")
+    if "issue_create" in authority:
+        boolean(authority["issue_create"], "issue creation")
     for key in ("local_edits", "issue_comment", "draft_pr"):
         boolean(authority[key], key)
     destination = authority["destination"]
@@ -143,7 +146,17 @@ def validate_control(value):
 def validate_result(value):
     contracts.exact(value, {"schema_version", "item_id", "assignment_id", "evaluated_revision", "worker_id",
                             "actual_classification", "transience", "outcome", "same_failure", "evidence",
-                            "changed_files", "tests", "pr_proposal", "summary"}, "worker result")
+                            "changed_files", "tests", "pr_proposal", "summary"}
+                    | ({"recommended_route"} if "recommended_route" in value else set())
+                    | ({"proposed_actions"} if "proposed_actions" in value else set())
+                    | ({"investigation"} if "investigation" in value else set()), "worker result")
+    if "investigation" in value:
+        import work_item_investigation
+        work_item_investigation.validate(value["investigation"])
+    if "recommended_route" in value:
+        issue_pr.choice(value["recommended_route"], ROUTES, "recommended route")
+    if "proposed_actions" in value:
+        validate_actions(value["proposed_actions"])
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
         raise ValueError("unsupported result schema")
     for key in ("item_id", "assignment_id", "worker_id"):
@@ -162,6 +175,47 @@ def validate_result(value):
     proposal(value["pr_proposal"])
     text(value["summary"], "result summary", 1500)
     return value
+
+
+def validate_result_version(value, assignment):
+    if ({"recommended_route", "proposed_actions", "investigation"} & set(value)
+            and assignment.get("request_version") != 2
+            and assignment.get("execution", {}).get("request_version") != 2):
+        raise ValueError("proposal extensions require version 2 assignment")
+
+
+def validate_actions(actions):
+    if not isinstance(actions, list) or len(actions) > 3:
+        raise ValueError("invalid proposed action list")
+    for action in actions:
+        contracts.exact(action, {"kind", "target", "title", "body", "evidence", "justification",
+                                "test_identity"}, "proposed action")
+        issue_pr.choice(action["kind"], {"comment_issue", "create_issue", "link_existing_tracker"}, "action kind")
+        target = action["target"]
+        contracts.exact(target, {"repository", "number", "node_id"}, "proposal target")
+        repository(target["repository"])
+        if action["kind"] == "create_issue":
+            if target["number"] is not None or target["node_id"] is not None:
+                raise ValueError("creation cannot target an existing issue")
+        else:
+            issue_pr.positive(target["number"], "proposed issue")
+            identifier(target["node_id"], "proposed issue node")
+        proposal({"title": action["title"], "body": action["body"]})
+        texts(action["evidence"], "proposed evidence")
+        text(action["justification"], "proposed justification", 1500)
+        test = action["test_identity"]
+        if test is None:
+            if action["kind"] != "comment_issue":
+                raise ValueError("tracker proposal requires exact test identity")
+        else:
+            contracts.exact(test, {"canonical_name", "workflow_file"}, "test identity")
+            text(test["canonical_name"], "canonical test", 500)
+            if "\n" in test["canonical_name"]:
+                raise ValueError("invalid canonical test")
+            text(test["workflow_file"], "workflow file", 256)
+            if (not re.fullmatch(r"\.github/workflows/[A-Za-z0-9_][A-Za-z0-9_.-]*\.ya?ml",
+                                 test["workflow_file"]) or ".." in test["workflow_file"]):
+                raise ValueError("invalid workflow file")
 
 
 def validate_validation(value, assignment, item_id):
@@ -201,8 +255,12 @@ def validate_record(record):
     ids, revisions = set(), set()
     for assignment in assignments:
         contracts.exact(assignment, {"id", "revision", "route", "basis", "delivery", "result", "validation"}
-                        | ({"execution"} if "execution" in assignment else set()),
+                        | ({"execution"} if "execution" in assignment else set())
+                        | ({"request_version"} if "request_version" in assignment else set()),
                         "assignment")
+        if "request_version" in assignment and (type(assignment["request_version"]) is not int
+                                               or assignment["request_version"] != 2):
+            raise ValueError("unsupported assignment request version")
         identifier(assignment["id"], "assignment")
         issue_pr.positive(assignment["revision"], "assignment revision")
         if assignment["id"] in ids or assignment["revision"] in revisions:
@@ -225,6 +283,7 @@ def validate_record(record):
                 raise ValueError("assignment intake identity mismatch")
         if assignment["result"] is not None:
             validate_result(assignment["result"])
+            validate_result_version(assignment["result"], assignment)
             if (assignment["delivery"] not in {"delivering", "delivered"}
                     or assignment["result"]["assignment_id"] != assignment["id"]
                     or assignment["result"]["item_id"] != record["id"]
@@ -286,7 +345,9 @@ def validate_record(record):
     if comment is not None:
         contracts.exact(comment, {"assignment_id", "body", "delivery", "comment_id"}, "comment boundary")
         assignment = next((entry for entry in assignments if entry["id"] == comment["assignment_id"]), None)
-        if assignment is None or assignment["result"] is None:
+        followup = assignment.get("execution", {}).get("followup") if assignment else None
+        if assignment is None or (assignment["result"] is None and (
+                followup is None or followup["status"] != "unavailable")):
             raise ValueError("comment requires accepted result")
         text(comment["body"], "comment body", 14000)
         marker = f"<!-- ci-shepherd:work-item:{record['id']}:{assignment['id']} -->"
@@ -340,13 +401,16 @@ def claim(record, control):
     if len(assignments) >= MAX_ASSIGNMENTS:
         raise ValueError("assignment history bound exhausted; human attention required")
     assignment = {"id": str(uuid.uuid4()), "revision": control["revision"], "route": control["requested_route"],
-                  "basis": basis(control), "delivery": "reserved", "result": None, "validation": None}
+                  "basis": basis(control), "delivery": "reserved", "result": None, "validation": None,
+                  "request_version": 2}
     assignments.append(assignment)
     return assignment
 
 
 def worker_packet(record, assignment, authority):
     reference, specialized = SPECIALISTS[assignment["route"]]
+    if assignment.get("request_version") == 2 and assignment["route"] in {"workflow_failure", "flaky_test"}:
+        specialized += "\n" + prompt_templates.load("failure-investigation")
     return {
         "kind": "worker_packet", "schema_version": 1, "item_id": record["id"],
         "assignment_id": assignment["id"], "revision": assignment["revision"],
@@ -378,6 +442,7 @@ def checkpoint(record, result, worker_id, validation):
     if (assignment is None or result["evaluated_revision"] != assignment["revision"]
             or assignment["delivery"] == "abandoned"):
         raise ValueError("result assignment mismatch")
+    validate_result_version(result, assignment)
     if assignment["delivery"] not in {"delivering", "delivered"}:
         raise ValueError("result requires a persisted delivery intent")
     if validation is not None:

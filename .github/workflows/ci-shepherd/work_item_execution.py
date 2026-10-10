@@ -48,7 +48,18 @@ def validate_approval(value, record, assignment):
 def validate(value, record, assignment):
     contracts.exact(value, {"approval", "state", "task_id", "session_id", "task_state", "at",
                            "worker_actual", "worker_reserved", "worker_at", "pr",
-                           "imported_chain_id", "attention"}, "cloud execution")
+                           "imported_chain_id", "attention"}
+                    | ({"request_version"} if "request_version" in value else set())
+                    | ({"followup"} if "followup" in value else set())
+                    | ({"tracker_followup"} if "tracker_followup" in value else set()), "cloud execution")
+    if "request_version" in value and (type(value["request_version"]) is not int or value["request_version"] != 2):
+        raise ValueError("unsupported cloud request version")
+    if "followup" in value:
+        import work_item_followup
+        work_item_followup.validate(value["followup"], record, assignment)
+    if "tracker_followup" in value:
+        import work_item_tracker
+        work_item_tracker.validate(value["tracker_followup"], record, assignment)
     issue_pr.choice(value["state"], STATES, "execution state")
     issue_pr.timestamp(value["at"])
     for key in ("worker_actual", "worker_reserved"):
@@ -151,7 +162,8 @@ def prepare(api, read_control):
         assignment["execution"] = {
             "approval": None, "state": "reserved", "task_id": None, "session_id": None,
             "task_state": None, "at": issue_pr.stamp(live.clock()), "worker_actual": None,
-            "worker_reserved": 0, "worker_at": None, "pr": None, "imported_chain_id": None, "attention": None}
+            "worker_reserved": 0, "worker_at": None, "pr": None, "imported_chain_id": None, "attention": None,
+            "request_version": 2}
         # Cloud ownership is distinct from packet transport delivery.
         assignment["delivery"] = "delivered"
     receiver.fresh(api, read_control, control)
@@ -167,13 +179,24 @@ def request(api, record, assignment):
                 "authority": {"repository": api.repository, "tracker": api.tracker,
                               "comment_id": api.authority_id, "tracker_node": api.tracker_node},
                 "approval": value["approval"]}
+    if "request_version" in value:
+        identity["request_version"] = value["request_version"]
     specialist = items.SPECIALISTS[assignment["route"]][1]
+    if value.get("request_version") == 2 and assignment["route"] in {"workflow_failure", "flaky_test"}:
+        specialist += "\n" + prompt_templates.load("failure-investigation")
     prompt = CORRELATION + json.dumps(identity, separators=(",", ":"), sort_keys=True) + "\n" + prompt_templates.load(
-        "cloud-work-item",
+        "cloud-work-item-result" if value.get("request_version") == 2 else "cloud-work-item",
         specialist=specialist,
         tracker=str(api.tracker),
         authority=str(api.authority_id),
         evidence_json=json.dumps(assignment["basis"], sort_keys=True),
+        **({"result_json": json.dumps({
+            "schema_version": 1, "item_id": record["id"], "assignment_id": assignment["id"],
+            "evaluated_revision": assignment["revision"], "worker_id": "HOST_VERIFIED_SESSION_ID",
+            "actual_classification": "inconclusive", "transience": "not_established",
+            "outcome": "inconclusive", "same_failure": False, "evidence": [], "changed_files": [],
+            "tests": [], "pr_proposal": None, "summary": "Describe the actual outcome."
+        }, sort_keys=True)} if value.get("request_version") == 2 else {}),
     )
     body = {"prompt": prompt, "base_ref": "main", "create_pull_request": True}
     if len(json.dumps(body).encode()) > 20000:

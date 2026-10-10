@@ -148,6 +148,95 @@ class CloudWorkItemTransport(pilot_github.PilotTransport):
         super().validate_endpoint(method, endpoint, body)
 
 
+class FollowupTransport(WorkItemTransport):
+    """Exact saved-PR reads only; no task POST, PR import or general reads."""
+
+    def __init__(self, token, tracker, authority, control):
+        super().__init__(token, tracker, authority, control)
+        self.task_id = None
+        self.saved_pull = None
+        self.tracker_search = None
+        self.tracker_issues = set()
+        self.tracker_runs = set()
+        self.read_only = False
+
+    def validate_endpoint(self, method, endpoint, body):
+        if self.read_only and method != "GET":
+            raise ValueError("read-only follow-up transport prohibits every GitHub mutation")
+        if method == "PATCH":
+            if (endpoint != f"repos/radical/aspire/issues/comments/{self.authority}"
+                    or not isinstance(body, dict) or set(body) != {"body"}):
+                raise ValueError("follow-up authority target namespace mismatch")
+            ledger = state.parse(body["body"])
+            bound = [item for item in ledger.get("workItems", []) if item["id"] == self.control["id"]]
+            if (ledger["repository"] != self.control["issue"]["repository"]
+                    or len(bound) != 1 or bound[0]["control"] != self.control):
+                raise ValueError("follow-up authority target/control mismatch")
+            return
+        issue = self.control["issue"]
+        occurrence = self.control["occurrence"]
+        reads = set()
+        if self.task_id is not None:
+            items.identifier(self.task_id, "follow-up task")
+            reads.add(f"agents/repos/{issue['repository']}/tasks/{self.task_id}")
+        if self.saved_pull is not None:
+            items.issue_pr.positive(self.saved_pull, "saved follow-up PR")
+            reads.add(f"repos/{issue['repository']}/pulls/{self.saved_pull}")
+        if occurrence is not None:
+            prefix = f"repos/{occurrence['repository']}/actions"
+            reads.update({
+                f"{prefix}/runs/{occurrence['run_id']}/attempts/{occurrence['run_attempt']}",
+                f"{prefix}/jobs/{occurrence['job_id']}",
+            })
+        if method == "GET" and endpoint in reads and body is None:
+            return
+        if method == "GET" and body is None and (
+                endpoint == self.tracker_search or endpoint in self.tracker_issues
+                or endpoint in self.tracker_runs):
+            return
+        super().validate_endpoint(method, endpoint, body)
+
+
+class FollowupGitHub(WorkItemGitHub):
+    def __init__(self, token, tracker, authority, node, *, revision, control, transport=None):
+        transport = transport if transport is not None else FollowupTransport(token, tracker, authority, control)
+        binding = bindings.FORK if control["issue"]["repository"] == "radical/aspire" else bindings.UPSTREAM_ALL
+        self.token, self.revision = token, revision
+        self.control = deepcopy(items.validate_control(control))
+        pilot_github.PilotGitHub.__init__(
+            self, transport, tracker, authority, node, write=True, binding=binding)
+
+
+class ReadOnlyFollowupGitHub(FollowupGitHub):
+    """Simulated receipts on disk; remote authority stays the freshness anchor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.transport.read_only = True
+        self.remote_expected = None
+        self.simulated = None
+        self.write = False
+
+    def read_authority(self):
+        observed = super().read_authority()
+        if self.remote_expected is None:
+            self.remote_expected = deepcopy(observed)
+        if observed != self.remote_expected:
+            raise ValueError("repository authority changed during read-only collection")
+        return deepcopy(self.simulated if self.simulated is not None else observed)
+
+    def authority_guard(self):
+        local.require_idle_actions(self.token)
+        if super().read_authority() != self.remote_expected:
+            raise ValueError("repository authority changed during read-only collection")
+
+    def persist(self):
+        state.render(self.ledger)
+        self.authority_guard()
+        self.simulated = deepcopy(self.ledger)
+        self.expected = deepcopy(self.ledger)
+
+
 class CloudWorkItemGitHub(WorkItemGitHub):
     def __init__(self, token, tracker, authority, node, *, revision, control, transport=None):
         self.token, self.revision = token, revision

@@ -26,7 +26,9 @@ authority and task-correlation code:
 
 | File | Consumer |
 | --- | --- |
-| `prompts/cloud-work-item.md` | Explicit issue-linked Cloud Agent task |
+| `prompts/cloud-work-item.md` | Historical issue-linked Cloud Agent requests |
+| `prompts/cloud-work-item-result.md` | Version 2 requests with correlated final JSON |
+| `prompts/failure-investigation.md` | Shared investigation for new workflow/test failure assignments |
 | `prompts/local-work-item.md` | Packet-only local worker |
 | `prompts/route-*.md` | Workflow failure, flaky test and product bug specialists |
 | `prompts/repair-worker.md` | Existing PR/issue repair worker |
@@ -53,10 +55,10 @@ assembled in code, not editable template instructions.
 
 Instruction edits do not grant permissions or change runtime guards. Review
 changes against the corresponding result validator and authority checks, and
-run the behavioral prompt and affected launch tests. This extraction preserves
-existing rendered prompts, including historical task correlation. It does not
-add a structured final-result contract to the cloud work-item lane; that
-requires a separate contract change.
+run the behavioral prompt and affected launch tests. Absent `request_version`
+retains the historical request. New assignments store version 2; cloud
+correlation also includes that version. Editing new instructions does not
+retroactively require historical workers to have returned JSON.
 
 ## Explicit issue-linked Cloud Agent execution
 
@@ -188,7 +190,169 @@ The adapter binds worker ID from the verified task session; validation head must
 match the independently verified PR. Omit validation when independent evidence
 is absent. No transcript scraping turns worker claims into host attestation.
 Cloud-owned receiver re-entry never emits another local worker or PR publication
-request. The original packet-only lane remains unchanged for noncloud items.
+request. The original packet-only lane still does not launch workers or publish
+PRs; new failure packets also receive the shared investigation instructions.
+
+Version 2 makes worker-authored drafts conditional on validated changes, but
+the platform request still has `create_pull_request: true`. The platform may
+initialize an empty draft anyway. There is no guarantee of no platform-created
+PR; such a draft is never evidence of a fix or grounds for automatic import.
+
+### Owned-task collection and no-fix follow-up
+
+`work_item_followup.py` operates on the **existing saved task** independently of
+PR discovery/import. It cannot dispatch, redispatch, import a PR, close an issue,
+or activate Agent Merge. Use a new exclusive output directory for each call:
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_followup.py collect \
+  --item /absolute/operator/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-collection
+
+python3 -B .github/workflows/ci-shepherd/work_item_followup.py preview \
+  --item /absolute/operator/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-preview
+```
+
+Normal `collect`/`preview` PATCH canonical authority receipts. For a fully
+read-only rehearsal, add `--read-only` to `collect`: it writes only local
+`authority-preview.json` and `receipt.json`, with the comment preview in the
+receipt. The transport denies every GitHub mutation and remote authority is
+still checked throughout. The simulated ledger is not an execution/publication
+receipt. `report --read-only` is rejected. Read-only collection still performs
+bounded authenticated task/run/job/log reads; it does not use a stale local
+transcript as canonical task identity.
+
+New cloud instructions require exactly one
+`CSWORKITEMBEGIN<canonical Base64 of strict UTF-8 JSON>CSWORKITEMEND` envelope
+in a fenced `text` block, with the existing result
+fields and exact item, assignment and evaluated revision. A host-session
+placeholder is bound only to the independently verified task session.
+The parser normalizes renderer whitespace, verifies canonical Base64 and
+limits decoded JSON to 16,000 bytes. Raw JSON framing is rejected because the
+audited CLI Markdown renderer can insert newlines inside JSON strings.
+Missing, malformed, conflicting or foreign JSON remains unavailable; there is
+**no synthesis of worker JSON** from a host narrative. Rendered CLI logs mix
+assistant and tool text, so even schema-valid envelopes remain untrusted worker
+claims, never authenticated final-message provenance or fix attestation.
+
+Collection reserves at most three attempts before bounded log reads, verifies
+the exact task/session before and after them, and rejects resumption, changed
+identity or freshness. Pinned run attempt, head and job are verified before
+reading original job logs. An interrupted final attempt is finalized as
+unavailable on fresh re-entry without another log read, allowing a report
+preview without granting publication permission.
+Missing logs and unknown diagnosis are explicit.
+An already verified but unimported PR is reread only by its saved number;
+task/session/artifact and PR identity guards still apply. This read permission
+does not import the PR or allow unrelated PR reads or writes.
+Task transcripts over 100,000 bytes cannot be checkpointed. Only redacted,
+bounded excerpts and result claims are saved; URLs, selected credentials and
+common secret assignments are removed. Redaction is not permission to include
+secrets in worker output.
+
+Optional `--assessment /absolute/operator/assessment.json` on `collect` accepts
+an operator-owned `{summary, evidence, unknowns}` object. Its statements are
+separately attributed operator evidence, **not worker JSON or independently
+verified root-cause conclusions**. Empty/closed drafts and task completion do
+not establish a fix; an unvalidated outcome stays inconclusive. A later passing
+test at a different SHA is not proof that the original package/feed failure
+recovered or was transient.
+
+`preview` persists a deduplicated notification body without posting it.
+Explicit `report` uses the same arguments and requires fresh item-bound
+`issue_comment` permission. False permission yields preview only; do not
+rewrite historical cloud approval to grant it. The existing reserved →
+delivering → delivered/uncertain receipt and exact-owned-body recovery prevent
+blind replay on lost responses. The task and source authority are rechecked at
+the final send callback. The report tags `@radical`, separates platform/pinned
+evidence from worker claims and operator assessment, and asks for direction on
+the same still-open occurrence.
+
+Version 2 failure prompts request comparable latest and last-passing test
+evidence, including workflow, branch, lane, job, test, execution status and exact
+SHAs. Optional `investigation` receipts are checked for internal consistency:
+an unrelated green lane or skipped baseline cannot establish a passing
+comparison. These checks do not authenticate worker-provided run evidence.
+`recommended_route` and typed `proposed_actions` are optional result extensions;
+they request review, not authority or another task.
+
+### Dedicated test-tracker proposals
+
+The operator CLI accepts a checkpointed typed `create_issue` or
+`link_existing_tracker` proposal. It invokes the existing
+`tools/CreateFailingTestIssue` default JSON-generation path, without `--create`,
+`--force-new` or `--dry-run`. It validates exact canonical test, API-resolved
+`.github/workflows/<file>.yml|yaml`, pinned run/attempt/job and tool output before
+using its template body and `ComputeStableSignature`. Short workflow aliases
+are rejected. No second hashing implementation is added. It uses the existing
+`<!-- failing-test-signature: v1:<XxHash3 hex> -->` marker, rereads every matching
+issue and verifies current test/workflow identity; titles are not dedup keys.
+Canonical test and explicit workflow fields are matched as complete supported
+template lines, never substrings of log text or longer identifiers.
+Tool test fields use the tool's Markdown-escaped serialization; explicit
+canonical-test fields use raw names. Supplied `Build:` evidence is validated
+even when an explicit workflow field exists, so contradictory links cannot
+bypass host workflow checks.
+Ordinary tool-generated bodies omit the workflow path. For those, dedup resolves
+the single canonical `Build:` run/optional attempt URL through a narrowly
+authorized read and checks its repository/run/attempt and API workflow path.
+The build may be an older occurrence of the same test/workflow; it does not
+replace the current item's pinned occurrence. Missing, ambiguous or mismatched
+build evidence fails closed.
+Incomplete, ambiguous or identity-mismatched search results deny creation.
+An open match is linked separately from original occurrence ownership; a closed
+match is preview-only, not reopened.
+
+```shell
+env -u GH_TOKEN -u GITHUB_TOKEN \
+  python3 -B .github/workflows/ci-shepherd/work_item_tracker_bridge.py \
+  --item /absolute/operator-controlled/item.json \
+  --proposal /absolute/operator-controlled/checkpointed-tracker-action.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE \
+  --workdir /absolute/operator-controlled/new-tracker-preview \
+  --read-only
+```
+
+Use the command-scoped saved credential only when it is the independently
+verified selected `radical` account; do not switch credentials after an
+unexplained failure. The normal clean-source, hosted-disabled/idle and identity
+gates still apply. Restore/build the repository .NET SDK/tool first when absent.
+The tool runs in the exclusive output directory. Raw JSON/diagnostics are
+removed; `generated-preview.json` retains validated, redacted evidence.
+`receipt.json` contains the linked tracker or exact title/body creation preview,
+item-bound `approval_template`, and current `creation_permission`.
+
+Historical tasks without worker proposals may instead supply `--operator-test`
+with `{item_id, assignment_id, evaluated_revision, test_identity}`. This is
+separately attributed trusted operator input, not invented worker JSON.
+Collection still verifies the exact saved task/session and occurrence.
+`--read-only` simulates reservations/link receipts in local
+`authority-preview.json`; no GitHub writes occur. Without it, preparation
+persists authority reservations/linkage but never creates an issue.
+
+Publication is a deliberately narrow **app/tool integration interface**, not a
+CLI issue-creation command. `work_item_tracker.publish` requires fresh optional
+`authority.issue_create: true` (absent denies), exact item/assignment/revision/
+repository/title/body approval, and an injected `create_issue` callback that
+honors the final guard. The host calls its app `create_issue` tool with the exact
+approved repository/title/body, then returns the issue identity/body to the
+interface for current reread and durable delivery receipt. An uncertain result
+is recovered only through the exact ownership marker and body, never by retrying
+creation. The generator/dedup/operator preview bridge is operational; live tool
+execution remains the app host's callback, not a generic Python POST or autonomous
+publication capability. The original issue remains
+open, and cloud draft/comment permissions do not grant issue creation.
+
+Both publication boundaries hold durable intent and recover only an exact
+owned body on uncertainty; they never blindly resend. Dedup is repeated before
+creation, but GitHub search is not a transactional lock against independent
+human issue creation. Retain the controller's authority lock, review the
+preview, and treat unavailable search/current reads as blocked rather than
+assuming no existing tracker.
 
 ## Manual issue-linked work items (packet-only receiver)
 
@@ -757,7 +921,10 @@ changed heads are not attributed to the worker without additional evidence.
 
 The local `result_collector.py` adapter uses the documented
 [`gh agent-task view SESSION -R REPOSITORY --log`](https://cli.github.com/manual/gh_agent-task_view).
-Only gh 2.101.0 is supported. Before each collection, it checks that both the
+Only gh 2.101.0 and 2.102.0 are supported. Version 2.102.0's public view command
+and [`shared/log.go` renderer](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/agent-task/shared/log.go)
+were verified before extending the pin; upgrades still require another renderer
+audit. Before each collection, it checks that both the
 explicit `radical` keyring credential and the ambient keyring credential equal the
 controller's selected token in memory. Only then are process-scoped `GH_TOKEN` /
 `GITHUB_TOKEN` overrides omitted for the CLI. No authentication configuration is

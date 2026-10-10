@@ -94,7 +94,7 @@ def comment_body(control, assignment):
     return body
 
 
-def report(api, read_control, control, record):
+def report(api, read_control, control, record, *, render_body=comment_body, before_send=None, publish=True):
     assignment = record["assignments"][-1]
     comment = record["comment"]
     if comment is not None and comment["assignment_id"] == assignment["id"]:
@@ -110,20 +110,24 @@ def report(api, read_control, control, record):
         if comment["delivery"] == "delivered":
             return {"outcome": "human_wait"}
         if comment["delivery"] == "reserved":
-            comment["body"] = comment_body(control, assignment)
+            comment["body"] = render_body(control, assignment)
     else:
-        comment = {"assignment_id": assignment["id"], "body": comment_body(control, assignment),
+        comment = {"assignment_id": assignment["id"], "body": render_body(control, assignment),
                    "delivery": "reserved", "comment_id": None}
         record["comment"] = comment
     api.persist()
-    if not control["authority"]["issue_comment"] or control["action"] == "pause":
+    if not publish or not control["authority"]["issue_comment"] or control["action"] == "pause":
         return {"outcome": "human_wait", "comment_preview": comment["body"]}
     fresh(api, read_control, control)
     comment["delivery"] = "delivering"
     api.persist()
     fresh(api, read_control, control)
     try:
-        identity = api.post_comment(control["issue"], comment["body"], lambda: unchanged(read_control, control))
+        def final_guard():
+            unchanged(read_control, control)
+            if before_send is not None:
+                before_send()
+        identity = api.post_comment(control["issue"], comment["body"], final_guard)
     except LostResponse:
         comment["delivery"] = "uncertain"
         api.persist()
