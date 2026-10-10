@@ -19,6 +19,45 @@ Publishing to repository `main` or delivering changes upstream requires a
 separate explicit request. Disposable validation base and fixture branches are
 isolated from the product branch; do not merge them into `ci-shepherd`.
 
+## Reviewing launch instructions
+
+Embedded worker instructions live in `prompts/`, separately from transport,
+authority and task-correlation code:
+
+| File | Consumer |
+| --- | --- |
+| `prompts/cloud-work-item.md` | Explicit issue-linked Cloud Agent task |
+| `prompts/local-work-item.md` | Packet-only local worker |
+| `prompts/route-*.md` | Workflow failure, flaky test and product bug specialists |
+| `prompts/repair-worker.md` | Existing PR/issue repair worker |
+| `prompts/initial-handoff.md` | Initial issue task with manual PR handoff |
+| `prompts/fork-fixture-worker.md` | Bounded legacy fork fixture worker |
+| `prompts/transport-proof.md` | Decision transport proof |
+| `prompts/target-fork.md`, `prompts/target-upstream.md` | Target-specific instructions |
+| `prompts/round.md` | Native reasoning round (existing template) |
+
+The native decision wrappers already use `policies/pilot.md`, `policies/pr.md`,
+the shared `policies/repair-scope.md`, and the workflow body in
+`../ci-shepherd.md`. Those remain their sources of instructions.
+
+Edit prose in the relevant file, retaining its exact `{{placeholder}}` set.
+Values are supplied by code and substituted once; braces in quoted evidence
+are not evaluated. Missing files, unexpected placeholders and invalid bindings
+fail closed. Route instructions are loaded at process startup; restart the
+controller to use edits.
+
+Worker templates use backslash-newline to wrap paragraphs for review while
+preserving rendered spaces. Ordinary newlines remain part of the prompt; one
+final file newline is omitted. Task-correlation prefixes and JSON remain
+assembled in code, not editable template instructions.
+
+Instruction edits do not grant permissions or change runtime guards. Review
+changes against the corresponding result validator and authority checks, and
+run the behavioral prompt and affected launch tests. This extraction preserves
+existing rendered prompts, including historical task correlation. It does not
+add a structured final-result contract to the cloud work-item lane; that
+requires a separate contract change.
+
 ## Explicit issue-linked Cloud Agent execution
 
 `work_item_execution.py` adds a separate, **default-off manual cloud lane**.

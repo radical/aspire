@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, build_opener
 
 import live
+import prompt_templates
 import issue_pr
 import reasoning
 import receipts
@@ -136,10 +137,7 @@ def reasoner_context(packet, context, resume):
 
 def output_prompt(packet, context=None, *, resume=None):
     if packet["kind"] == "transport-proof":
-        return ("Copy every field of this packet into one JSON object, add only outcome: wait. "
-                "Call submit_decision exactly once with that object as a JSON decision string, then "
-                "return the same JSON object as your entire final answer. No other tools/actions.\n"
-                + json.dumps(packet, ensure_ascii=True))
+        return (prompt_templates.load("transport-proof", packet_json=json.dumps(packet, ensure_ascii=True)))
     policy = (Path(__file__).parent / "policies" / "pr.md").read_text()
     # The output crosses the Actions expression boundary only as host-produced
     # prompt data, never into a run: shell interpolation.
