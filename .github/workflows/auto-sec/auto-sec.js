@@ -3506,7 +3506,10 @@ function checkPatchUploadSafety(patchText) {
 async function runAgentOutputScrub({ core, github = null, context = null, fs = require('node:fs'), env = process.env, workDir = '/tmp/gh-aw', readBaseTexts = null }) {
     try {
         return await scrubAgentOutputs({ core, github, context, fs, env, workDir, readBaseTexts });
-    } catch {
+    } catch (error) {
+        const codes = new Set(['EACCES', 'EPERM', 'ENOENT', 'ENOTEMPTY', 'EBUSY', 'EISDIR', 'ENOTDIR']);
+        const operations = new Set(['rmdir', 'unlink', 'scandir', 'open', 'read', 'write', 'mkdir', 'lstat']);
+        core.info(`Trial scrub diagnostic: code=${codes.has(error?.code) ? error.code : 'other'} operation=${operations.has(error?.syscall) ? error.syscall : 'other'}`);
         // File, Git, and API errors can include private paths or data. Report a fixed reason;
         // do not authorize publication even if some earlier cleanup operations succeeded.
         const violations = [{ source: 'filesystem', reason: 'io-error' }];
