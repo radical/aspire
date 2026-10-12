@@ -62,6 +62,73 @@ retroactively require historical workers to have returned JSON.
 
 ## Explicit issue-linked Cloud Agent execution
 
+### Normal minimal-feed lifecycle
+
+The normal pilot host accepts one explicit minimal issue feed. It does not
+discover upstream issues from labels. Select manual `pilot` mode and the
+matching authority target (`upstream` for a `microsoft/aspire` issue); the
+`issue_feed` input is exactly:
+
+```json
+{"reported_kind":"workflow_failure","issue_url":"https://github.com/microsoft/aspire/issues/20872"}
+```
+
+The issue is prospective input, not approval to dispatch. The host independently
+reads issue identity/state and at most four referenced run-attempts with complete
+bounded job inventories. The standard normal prompt selects a host-issued failed
+occurrence and route, or records the missing evidence for human attention.
+No caller-authored diagnosis, run selection or investigation instructions are
+accepted. Models never grant capabilities.
+
+Accepted intake persists the existing work-item control/assignment and returns
+an **approval-required** receipt containing the exact task request and approval
+template. Separately approve that item/assignment/revision-bound template through
+the host-owned `CI_SHEPHERD_WORK_ITEM_APPROVAL` variable. A fresh normal invocation
+with the same authority target consumes it using the existing durable
+`reserved -> sending -> sent/uncertain` execution protocol. No sending/uncertain
+receipt is redispatched. The existing task contract allows a branch and draft PR
+even for diagnosis-only work; these effects require explicit approval.
+
+Later normal runs need neither the feed nor a local preview. They rediscover
+task/session IDs exclusively from canonical `workItems`, refresh platform state
+and billing, and collect a terminal result through the existing three-attempt
+bounded collector. Active/resumed tasks wait; closed, paused, hands-off or
+source-revision-changed items retain history without new effects. Imported
+tasks remain chain-owned. Historical requests retain their existing contracts.
+
+Exact no-PR/no-fix and missing/malformed results produce normal assessment
+packets. PR artifacts use the existing exact mapping checks; mapping denial is
+assessment evidence, not a reason to discard an exact result. Assessment records
+worker claims, platform facts and unknowns separately, and cannot validate a fix,
+import a PR, publish a proposal, enable Agent Merge, rerun CI, merge or close.
+`normalRuns` adds bounded native inference receipts to the same canonical
+authority; native holds and actuals count toward both item lifetime and repository
+rolling budgets. Billing settles before disabled/stale/expired decision rejection.
+An interrupted native reservation is not automatically reissued.
+Large accepted results remain complete in canonical assignments. A marked
+descriptive excerpt keeps normal assessment input bounded; a full-result digest
+prevents omitted claims from changing unnoticed during settlement.
+
+The hosted reader supports only audited gh 2.102.0 and the already selected
+`radical` OAuth token. A private, securely created temporary `hosts.yml` replaces
+the unavailable hosted keyring for that read only and is removed on exit. It
+never runs login or changes global authentication. Unsupported credentials,
+renderer versions or exact-session reads remain unavailable; local keyring
+identity checks are unchanged. The native reasoner receives no token or approval.
+
+Local normal `run`/`watch` also accepts `--issue-feed /absolute/feed.json` and
+separate `--cloud-approval /absolute/approval.json`. Existing source, idle-host,
+enable, authority-lock and keyring guards remain required. Default scheduled
+runs still select the fork; fresh upstream follow-up uses manual normal
+`pilot` with `target: upstream`, not a default fork schedule.
+
+Behavioral fresh-client and fresh-process coverage:
+
+```shell
+PYTHONPATH=.github/workflows/ci-shepherd:.github/workflows/ci-shepherd/tests \
+python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_normal_loop.py' -v
+```
+
 `work_item_execution.py` adds a separate, **default-off manual cloud lane**.
 It starts a GitHub Copilot Cloud Agent task that may write a new branch and
 open one draft PR. This is intentionally different from the packet-only

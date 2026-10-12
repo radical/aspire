@@ -15,6 +15,17 @@ def text(value):
 def accounting(ledger):
     actual = reserved = 0
     unknown = False
+    for receipt in ledger.get("normalRuns", []):
+        actual += receipt["nativeActual"] or 0
+        reserved += receipt["nativeReserved"]
+        unknown |= receipt["nativeActual"] is None
+    for record in ledger.get("workItems", []):
+        for assignment in record["assignments"]:
+            worker = assignment.get("execution")
+            if worker is not None:
+                actual += worker["worker_actual"] or 0
+                reserved += worker["worker_reserved"]
+                unknown |= worker["worker_actual"] is None
     for chain in ledger["chains"]:
         for operation in chain["operations"]:
             actual += sum(operation[key] or 0 for key in ("nativeActual", "workerActual"))
@@ -45,7 +56,13 @@ def render(run, target, before, after, result, packet, started, ended):
         lines.append(f"- Controller error: {text(result['error'])}.")
     if result.get("until"):
         lines.append(f"- Deferred until {text(result['until'])}; reassess fresh evidence then.")
-    if packet:
+    if packet and "normal" in packet:
+        observed = packet["context"]["issue"]
+        lines.append(f"- Normal decision: {text(packet['normal'])}; issue "
+                     f"{text(observed['identity']['repository'])}#{observed['identity']['number']}.")
+        lines.append("- Task/result state comes from canonical work-item receipts. "
+                     "Assessment does not validate a fix or authorize publication.")
+    elif packet:
         observed = packet["observation"]
         descriptor = "head" if observed["kind"] == "pr" else "issue content state"
         lines.append(f"- Decision subject: {observed['kind']} #{observed['number']}, "

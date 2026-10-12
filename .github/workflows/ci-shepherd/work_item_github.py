@@ -258,12 +258,12 @@ class CloudWorkItemGitHub(WorkItemGitHub):
             raise ValueError("canonical cloud send intent mismatch")
         self.guard_work_item(self.control)
         before_send()
-        if isinstance(self.transport, CloudWorkItemTransport):
+        if isinstance(self.transport, pilot_github.PilotTransport):
             self.transport.approved_request = deepcopy(body)
         try:
             response = self.transport("POST", f"agents/repos/{self.repository}/tasks", body)
         finally:
-            if isinstance(self.transport, CloudWorkItemTransport):
+            if isinstance(self.transport, pilot_github.PilotTransport):
                 self.transport.approved_request = None
         if (not isinstance(response, Response) or response.status != 201
                 or not isinstance(response.payload, dict)):

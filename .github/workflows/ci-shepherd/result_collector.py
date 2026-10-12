@@ -5,6 +5,9 @@ import re
 import selectors
 import subprocess
 import time
+import json
+from pathlib import Path
+import tempfile
 from urllib.parse import urlencode
 
 import round as contracts
@@ -190,6 +193,72 @@ class LocalCollector:
         except (CollectionError, OSError, ValueError, KeyError, TypeError, AttributeError):
             # Never publish stderr, arbitrary storage links or guessed identity.
             return None
+
+
+class HostedCollector:
+    """Audited renderer under the host-selected OAuth identity, without keyring."""
+
+    def __init__(self, token, *, command=None, environment=None):
+        self.token = token
+        self.command = command or bounded_command
+        self.environment = dict(os.environ if environment is None else environment)
+
+    def environment_for(self, directory):
+        if not isinstance(self.token, str) or not re.fullmatch(r"gho_[A-Za-z0-9_]+", self.token):
+            raise CollectionError("identity")
+        environment = dict(self.environment)
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+            environment.pop(name, None)
+        environment.update(GH_CONFIG_DIR=str(directory), GH_HOST="github.com", HOME=str(directory),
+                           XDG_STATE_HOME=str(Path(directory) / "state"),
+                           GH_PAGER="cat", GH_PROMPT_DISABLED="1")
+        # gh 2.102.0 requires source oauth_token/keyring AND a gho_ token:
+        # https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/agent-task/agent_task.go
+        # A private temporary config supplies only the already selected host
+        # token. No login, global config changes or local keyring fallback.
+        # JSON is a YAML subset accepted by gh's hosts.yml reader.
+        path = Path(directory) / "hosts.yml"
+        with path.open("x", encoding="utf-8") as stream:
+            path.chmod(0o600)
+            json.dump({"github.com": {"oauth_token": self.token, "user": "radical",
+                                      "git_protocol": "https"}}, stream)
+        code, version, _ = self.command(["gh", "--version"], environment, limit=4096, timeout=10)
+        if code or not version.startswith("gh version 2.102.0 "):
+            raise CollectionError("unsupported")
+        code, token, _ = self.command(["gh", "auth", "token", "--hostname", "github.com"],
+                                      environment, limit=4096, timeout=10)
+        if code or token.strip() != self.token:
+            raise CollectionError("identity")
+        code, user, _ = self.command(["gh", "api", "user", "--method", "GET"],
+                                     environment, limit=4096, timeout=10)
+        if code:
+            raise CollectionError("authentication")
+        identity = contracts.loads(user, max_bytes=4096)
+        if identity.get("id") != 1472 or identity.get("login") != "radical":
+            raise CollectionError("identity")
+        return environment
+
+    @property
+    def capable(self):
+        try:
+            with tempfile.TemporaryDirectory(prefix="ci-shepherd-gh-") as directory:
+                self.environment_for(directory)
+            return True
+        except (CollectionError, OSError, ValueError):
+            return False
+
+    def __call__(self, repository, session):
+        if (repository not in {"radical/aspire", "microsoft/aspire"}
+                or not isinstance(session, str)
+                or not re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}", session)):
+            raise CollectionError("identity")
+        with tempfile.TemporaryDirectory(prefix="ci-shepherd-gh-") as directory:
+            environment = self.environment_for(directory)
+            code, output, _ = self.command(
+                ["gh", "agent-task", "view", session, "-R", repository, "--log"], environment)
+            if code:
+                raise CollectionError("transport")
+            return output
 
 
 def host_evidence(log, session, repository_id):

@@ -154,7 +154,9 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host, re
             raise ValueError("legacy recovery never authorizes the pilot")
         import pilot
         api = pilot.hosted_api(run, os.environ)
-        packet = None if api is None else pilot.prepare(api, run, live.clock())
+        feed = (contracts.loads(os.environ["SHEPHERD_ISSUE_FEED"])
+                if os.environ.get("SHEPHERD_ISSUE_FEED") else None)
+        packet = None if api is None else pilot.prepare(api, run, live.clock(), feed=feed)
         directory = Path(directory)
         (directory / "trusted").mkdir(parents=True, exist_ok=False)
         envelope = {"schemaVersion": 1, "packet": packet, "sessionId": None}

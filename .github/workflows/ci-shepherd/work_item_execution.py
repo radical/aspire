@@ -222,9 +222,13 @@ def execute(api, read_control, read_approval):
         raise ValueError("shared cloud capacity exhausted")
     now = live.clock()
     allowance = state.chain_allowance(api.ledger)
-    lifetime = sum((saved["worker_actual"] or 0) + saved["worker_reserved"]
-                   for owner, _, saved in executions(api.ledger) if owner["id"] == record["id"])
-    hold = min(allowance - lifetime, state.REPOSITORY_ALLOWANCE - state.repository_spend(api.ledger, now))
+    import normal_loop
+    lifetime = normal_loop.item_spend(api.ledger, record["id"])
+    # A crash before sending leaves a known-unsent durable hold. Exclude that
+    # same hold from replacement headroom; it must not exhaust its own budget.
+    previous_hold = value["worker_reserved"]
+    hold = min(allowance - lifetime + previous_hold,
+               state.REPOSITORY_ALLOWANCE - state.repository_spend(api.ledger, now) + previous_hold)
     if hold <= 0:
         raise ValueError("cloud credit allowance exhausted")
     value.update(approval=approval, worker_reserved=hold)
@@ -242,8 +246,7 @@ def execute(api, read_control, read_approval):
         if state.worker_slots(api.ledger) > 2:
             raise ValueError("shared cloud capacity exhausted")
         if (state.repository_spend(api.ledger, live.clock()) > state.REPOSITORY_ALLOWANCE
-                or sum((saved["worker_actual"] or 0) + saved["worker_reserved"]
-                       for owner, _, saved in executions(api.ledger) if owner["id"] == record["id"])
+                or normal_loop.item_spend(api.ledger, record["id"])
                 > state.chain_allowance(api.ledger)):
             raise ValueError("cloud credit allowance exhausted")
         receiver.fresh(api, read_control, control)

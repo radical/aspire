@@ -48,11 +48,16 @@ def validate(ledger):
     keys = {"schemaVersion", "repository", "cursor", "chains"}
     if isinstance(ledger, dict) and "workItems" in ledger:
         keys.add("workItems")
+    if isinstance(ledger, dict) and "normalRuns" in ledger:
+        keys.add("normalRuns")
     contracts.exact(ledger, keys, "pilot ledger")
     if ledger["schemaVersion"] != 1 or ledger["repository"] not in {"radical/aspire", "microsoft/aspire"}:
         raise ValueError("unsupported pilot authority")
     if type(ledger["cursor"]) is not int or ledger["cursor"] < 0 or not isinstance(ledger["chains"], list):
         raise ValueError("invalid pilot cursor/chains")
+    if "normalRuns" in ledger:
+        import normal_loop
+        normal_loop.validate_receipts(ledger["normalRuns"])
     if "workItems" in ledger:
         import work_items
         records = ledger["workItems"]
@@ -287,7 +292,8 @@ def chain_allowance(ledger):
 
 def repository_spend(ledger, now):
     import work_item_execution
-    total = work_item_execution.spend(ledger, now)
+    import normal_loop
+    total = work_item_execution.spend(ledger, now) + normal_loop.native_spend(ledger, now)
     for chain in ledger["chains"]:
         for record in chain.get("reviews", []):
             total += record["reserved"]

@@ -44,7 +44,7 @@ def configuration(environment, *, billing=False):
             "prReminders": pr_reminders, "reminderRepeat": reminder_repeat}
 
 
-def prepare(api, run, now, *, present=True):
+def prepare(api, run, now, *, present=True, feed=None):
     contracts.validate_run(run)
     if run["repository"] != github.REPOSITORY:
         raise ValueError("pilot is fork-only")
@@ -52,6 +52,10 @@ def prepare(api, run, now, *, present=True):
     api.admission_reasons = {}
     observations = api.sweep()
     api.persist()
+    import normal_loop
+    normal = normal_loop.prepare(api, run, now, feed)
+    if normal is not None:
+        return normal
     review_started = False
     for chain in api.ledger["chains"]:
         if handoff.converted(chain):
@@ -156,6 +160,9 @@ def repair_policy():
 
 
 def prompt(packet):
+    if "normal" in packet:
+        return ((Path(__file__).parent / "policies" / "normal.md").read_text()
+                + "\nHost packet JSON:\n" + json.dumps(packet, ensure_ascii=True, allow_nan=False))
     return ((Path(__file__).parent / "policies" / "pilot.md").read_text() + "\n"
             + repair_policy() + "\n"
             + bindings.policy(bindings.select(packet.get("target", "fork"))) + "\nHost packet JSON:\n"
@@ -163,6 +170,9 @@ def prompt(packet):
 
 
 def validate_decision(packet, decision):
+    if "normal" in packet:
+        import normal_loop
+        return normal_loop.validate_decision(packet, decision)
     keys = {"schemaVersion", "packetId", "operation", "action", "replacement", "dispositions"}
     if isinstance(decision, dict) and decision.get("action") == "wait":
         keys.add("wait")
@@ -334,6 +344,9 @@ def dispatch(api, chain, operation, packet, now):
 
 def settle(api, packet, evidence, usage, now, *, billing_only=False):
     """Billing is persisted before, and independent from, decision authorization."""
+    if "normal" in packet:
+        import normal_loop
+        return normal_loop.settle(api, packet, evidence, usage, now, billing_only=billing_only)
     api.read_authority()
     if packet.get("target", "fork") != api.binding.name:
         raise ValueError("packet target binding mismatch")
@@ -361,8 +374,9 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
         if evidence is None:
             raise ValueError("failed/cancelled native execution or missing fresh evidence")
         decision, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
-        if any(other["sessionId"] == evidence["sessionId"] for current in api.ledger["chains"]
-               for other in current["operations"] if other is not operation):
+        if (any(other["sessionId"] == evidence["sessionId"] for current in api.ledger["chains"]
+                for other in current["operations"] if other is not operation)
+                or any(other["sessionId"] == evidence["sessionId"] for other in api.ledger.get("normalRuns", []))):
             raise ValueError("native session reused across operations")
         operation["sessionId"] = evidence["sessionId"]
         if not issue_pr.timestamp(packet["preparedAt"]) <= now < issue_pr.timestamp(packet["preparedAt"]) + timedelta(minutes=10):
@@ -459,6 +473,17 @@ def hosted_api(run, environment, *, billing=False):
     api.pr_reminders = config["prReminders"]
     api.reminder_repeat = config["reminderRepeat"]
     api.pr_handoff = config["prHandoff"]
+    from result_collector import HostedCollector
+    api.token = environment.get("CI_SHEPHERD_USER_TOKEN")
+    api.normal_collector = HostedCollector(api.token, environment=environment)
+    def guard():
+        current = configuration(environment)
+        if current is None or any(current[key] != config[key] for key in ("binding", "tracker", "authority", "node")):
+            raise ValueError("hosted normal policy disabled or changed")
+        require_host(run, allowed_events={"workflow_dispatch", "schedule"})
+    api.normal_guard = guard
+    api.normal_approval = lambda: (contracts.loads(environment["CI_SHEPHERD_WORK_ITEM_APPROVAL"])
+                                  if environment.get("CI_SHEPHERD_WORK_ITEM_APPROVAL") else None)
     return api
 
 
@@ -509,6 +534,8 @@ def main(argv=None):
                     contracts.write_json(args.result.parent / "local-request.json", result)
             else:
                 api.read_authority()
+                if "normal" in packet:
+                    raise ValueError("normal assessments never authorize local publication")
                 chain = next(value for value in api.ledger["chains"] if value["id"] == packet["chain"])
                 handoff.enroll(api, chain, live.clock())
                 operation = next(value for value in chain["operations"] if value["id"] == packet["operation"])
@@ -535,6 +562,9 @@ def main(argv=None):
                             state.finish(operation, "failed" if operation["state"] == "reserved" else "uncertain")
                             api.persist()
                             result = {"outcome": operation["state"], "error": str(error)}
+            if "normal" in packet:
+                contracts.write_json(args.result, result)
+                return 0
             chain = next(value for value in api.ledger["chains"] if value["id"] == packet["chain"])
             # Presentation is not another repair; it remains available to
             # explain exhaustion/expiry while still honoring takeover/head.

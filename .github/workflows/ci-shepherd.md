@@ -26,6 +26,10 @@ on:
           - fork
           - upstream-20722
           - upstream
+      issue_feed:
+        description: Optional minimal issue JSON (reported_kind and canonical issue_url only); no launch permission.
+        type: string
+        default: ""
 
 concurrency:
   group: ci-shepherd-transport-proof
@@ -58,6 +62,7 @@ engine:
     GH_AW_GITHUB_TOKEN: ${{ '' }}
     GH_AW_GITHUB_MCP_SERVER_TOKEN: ${{ '' }}
     CI_SHEPHERD_USER_TOKEN: ${{ '' }}
+    CI_SHEPHERD_WORK_ITEM_APPROVAL: ${{ '' }}
   args:
     - --no-auto-update
     - --disable-builtin-mcps
@@ -113,6 +118,8 @@ jobs:
         id: packet
         env:
           SHEPHERD_MODE: ${{ inputs.mode || 'transport-proof' }}
+          SHEPHERD_ISSUE_FEED: ${{ github.event_name == 'workflow_dispatch' && inputs.issue_feed || '' }}
+          CI_SHEPHERD_WORK_ITEM_APPROVAL: ${{ vars.CI_SHEPHERD_WORK_ITEM_APPROVAL || '' }}
           SHEPHERD_RESUME_PREPARED: ${{ inputs.resume_prepared && 'true' || 'false' }}
           CI_SHEPHERD_USER_TOKEN: ${{ (inputs.mode == 'pilot' || github.event_name == 'schedule') && vars.CI_SHEPHERD_ENABLE == 'true' && secrets.CI_SHEPHERD_USER_TOKEN || (inputs.mode != 'pilot' && github.event_name != 'schedule' && inputs.mode != 'transport-proof' && secrets.CI_SHEPHERD_USER_TOKEN) || '' }}
           CI_SHEPHERD_ENABLE: ${{ vars.CI_SHEPHERD_ENABLE }}
@@ -180,6 +187,7 @@ jobs:
         id: settle
         env:
           CI_SHEPHERD_ENABLE: ${{ vars.CI_SHEPHERD_ENABLE }}
+          CI_SHEPHERD_WORK_ITEM_APPROVAL: ${{ vars.CI_SHEPHERD_WORK_ITEM_APPROVAL || '' }}
           CI_SHEPHERD_PR_HANDOFF: ${{ vars.CI_SHEPHERD_PR_HANDOFF }}
           CI_SHEPHERD_REMINDER_DELAY_SECONDS: ${{ vars.CI_SHEPHERD_REMINDER_DELAY_SECONDS || '60' }}
           CI_SHEPHERD_PR_REMINDERS: ${{ vars.CI_SHEPHERD_PR_REMINDERS || 'false' }}

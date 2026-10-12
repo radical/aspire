@@ -95,6 +95,15 @@ class LocalGitHub(github.PilotGitHub):
         self.reminder_delay = reminders.delay(os.environ.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS") or "60")
         self.pr_reminders, self.reminder_repeat = reminders.configuration(os.environ)
         self.result_collector = result_collector.LocalCollector(token)
+        self.normal_collector = self.result_collector
+        self.normal_feed = None
+        self.normal_approval = lambda: None
+        def normal_guard():
+            require_source(self.revision)
+            require_idle_actions(self.token)
+            if not self.enabled():
+                raise ValueError("Shepherd globally disabled; no new work-item effects")
+        self.normal_guard = normal_guard
 
     def authority_guard(self):
         require_idle_actions(self.token)
@@ -320,7 +329,7 @@ def run_sweep(api, directory, run, context, *, executor):
         api.persist()
         result = {"outcome": "disabled; billing observation only"}
     else:
-        packet = pilot.prepare(api, run, live.clock())
+        packet = pilot.prepare(api, run, live.clock(), feed=getattr(api, "normal_feed", None))
         context["packet"] = packet
         contracts.write_json(directory / "packet.json", packet)
         if packet is None:
@@ -511,7 +520,11 @@ def main(argv=None):
                         help="Operator declares the app's merge_pr action is OFF")
     parser.add_argument("--publish-worker-results", action="store_true",
                         help="Explicit unattended result comments for this selected target; default is preview only")
+    parser.add_argument("--issue-feed", type=Path, help="Minimal issue JSON; run/watch only, no permission grant")
+    parser.add_argument("--cloud-approval", type=Path, help="Exact separate task approval; run/watch only")
     args = parser.parse_args(argv)
+    if (args.issue_feed is not None or args.cloud_approval is not None) and args.mode not in {"run", "watch"}:
+        parser.error("issue feed and cloud approval require normal run/watch mode")
     if args.interval < 30:
         parser.error("interval must be at least 30 seconds")
     if args.mode == "resume" and (not args.operation or not args.expected_head):
@@ -570,6 +583,9 @@ def main(argv=None):
                                   revision=revision, binding=binding)
                 api.pr_handoff = args.pr_handoff
                 api.publish_results = args.publish_worker_results
+                api.normal_feed = contracts.read_json(args.issue_feed) if args.issue_feed is not None else None
+                api.normal_approval = lambda: (contracts.read_json(args.cloud_approval)
+                                              if args.cloud_approval is not None else None)
                 if args.mode == "confirm-handoff":
                     print(json.dumps(confirm_handoff(api, args.pr, args.expected_head, live.clock(),
                                                      app_enabled=args.app_enabled,

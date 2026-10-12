@@ -74,6 +74,7 @@ class PilotTransport(live.HTTPTransport):
         self.binding = binding
         self.task_repository = binding.repository
         self.tracker, self.authority = tracker, authority
+        self.approved_request = None
 
     def is_read(self, method, endpoint, body):
         if method == "POST" and endpoint == "graphql":
@@ -85,6 +86,20 @@ class PilotTransport(live.HTTPTransport):
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
+        if (method == "POST" and endpoint == f"agents/repos/{self.binding.repository}/tasks"
+                and isinstance(body, dict) and isinstance(body.get("prompt"), str)
+                and body["prompt"].startswith("ci-shepherd-work-item: ")):
+            if not self.write or self.approved_request is None or body != self.approved_request:
+                raise ValueError("exact canonical normal task capability required")
+            return
+        if method == "GET" and re.fullmatch(
+                re.escape(f"repos/{self.binding.repository}") +
+                r"/actions/(?:runs/[1-9][0-9]*(?:/attempts/[1-9][0-9]*(?:/jobs)?)?|jobs/[1-9][0-9]*)", path.path):
+            query = parse_qs(path.query, strict_parsing=True)
+            if body is not None or query and (
+                    not path.path.endswith("/jobs") or query != {"per_page": ["100"], "page": ["1"]}):
+                raise ValueError("only bounded primary occurrence reads are allowed")
+            return
         if self.binding == bindings.FORK_MERGE_PROOF and method != "GET" and (
                 "/tasks" in path.path or path.path.endswith("/requested_reviewers")):
             raise ValueError("isolated fork proof cannot dispatch workers or request reviews")
@@ -333,6 +348,47 @@ class PilotGitHub:
 
     def owned(self, comment):
         return comment.get("user", {}).get("id") == self.actor["id"] and comment["user"].get("login") == self.actor["login"]
+
+    def verify_issue(self, identity):
+        import normal_loop
+        observed = normal_loop.source(self, identity["number"])
+        if observed["identity"] != identity or not normal_loop.eligible(observed):
+            raise ValueError("linked issue changed, closed or hands-off")
+        prior = [value for value in self.ledger.get("normalRuns", []) if value["item"] ==
+                 f"issue-{identity['number']}-{identity['node_id']}" and value["phase"] == "issue-intake"
+                 and value["state"] == "settled"]
+        if prior and observed != prior[-1]["context"]["issue"]:
+            raise ValueError("linked source revision changed")
+
+    def guard_work_item(self, control):
+        import work_items
+        work_items.validate_control(control)
+        if not hasattr(self, "normal_guard") or control["issue"]["repository"] != self.repository:
+            raise ValueError("hosted normal work-item capability unavailable")
+        self.normal_guard()
+        self.authority_guard()
+        self.verify_issue(control["issue"])
+        occurrence = control["occurrence"]
+        if occurrence is not None:
+            run = self.api.get(f"{self.prefix}/actions/runs/{occurrence['run_id']}/attempts/{occurrence['run_attempt']}")
+            job = self.api.get(f"{self.prefix}/actions/jobs/{occurrence['job_id']}")
+            if (run.get("id") != occurrence["run_id"] or job.get("id") != occurrence["job_id"]
+                    or job.get("run_id") != occurrence["run_id"]
+                    or any(value.get("run_attempt") != occurrence["run_attempt"]
+                           or value.get("head_sha") != occurrence["head_sha"] for value in (run, job))
+                    or run.get("repository", {}).get("id") != self.repository_id):
+                raise ValueError("selected occurrence changed")
+        # Pin source/control before every canonical work-item write. Existing
+        # local adapters retain their disabled/idle/source guards separately.
+        latest = self.read_authority()
+        record = next((value for value in latest.get("workItems", []) if value["id"] == control["id"]), None)
+        if record is not None and record["control"] != control:
+            raise ValueError("canonical work-item control changed")
+        self.control = deepcopy(control)
+
+    def start_task(self, body, before_send):
+        from work_item_github import CloudWorkItemGitHub
+        return CloudWorkItemGitHub.start_task(self, body, before_send)
 
     def read_authority(self):
         tracker = self.api.get(f"{PREFIX}/issues/{self.tracker}")
