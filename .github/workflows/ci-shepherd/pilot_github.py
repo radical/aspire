@@ -360,8 +360,10 @@ class PilotGitHub:
         prior = [value for value in self.ledger.get("normalRuns", []) if value["item"] ==
                  f"issue-{identity['number']}-{identity['node_id']}" and value["phase"] == "issue-intake"
                  and value["state"] == "settled"]
-        if prior and observed != prior[-1]["context"]["issue"]:
-            raise ValueError("linked source revision changed")
+        if prior:
+            context = prior[-1]["context"]
+            if not normal_loop.context_matches_issue(context, observed):
+                raise ValueError("linked source revision changed")
 
     def guard_work_item(self, control):
         import work_items

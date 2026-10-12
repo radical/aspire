@@ -22,6 +22,7 @@ import work_items as items
 MAX_RUNS = 20
 MAX_CONTEXT = 12000
 MAX_INTAKE_CONTEXT = 32 * 1024
+MAX_INTAKE_ISSUE_BODY = 800
 MAX_RUN_REFERENCES = 100
 MAX_FAILED_OCCURRENCES = 100
 SCOPE = ("Investigate only the linked issue and the host-verified occurrence using the standard "
@@ -117,7 +118,7 @@ def candidates(api, observed):
                 failed.append(followup.safe(step["name"], api.token, 300))
             occurrence = {"repository": api.repository, "run_id": run_id, "run_attempt": attempt,
                           "head_sha": run["head_sha"], "job_id": job["id"], "artifact_id": None}
-            values.append({"id": f"run-{run_id}-attempt-{attempt}-job-{job['id']}",
+            values.append({"id": f"{run_id}:{attempt}:{job['id']}",
                            "occurrence": occurrence, "job": followup.safe(job["name"], api.token, 300),
                            "conclusion": job["conclusion"], "failedSteps": failed})
     return values
@@ -139,6 +140,21 @@ def digest(value):
     # including portions omitted from the model's bounded descriptive view.
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True,
                                      allow_nan=False).encode()).hexdigest()
+
+
+def context_matches_issue(context, observed):
+    if "issueDigest" in context:
+        return digest(observed) == context["issueDigest"]
+    return observed == context["issue"]
+
+
+def intake_context(api, feed, observed, candidates):
+    issue = deepcopy(observed)
+    issue["body"] = followup.safe(issue["body"], api.token, limit=MAX_INTAKE_ISSUE_BODY)
+    candidate_rows = [[candidate["id"], candidate["job"], candidate["conclusion"], candidate["failedSteps"]]
+                      for candidate in candidates]
+    return {"feed": deepcopy(feed), "issue": issue, "issueDigest": digest(observed),
+            "candidates": candidate_rows, "candidateDigest": digest(candidates)}
 
 
 def result_excerpt(value):
@@ -275,7 +291,7 @@ def prepare(api, run, now, feed=None):
         control = record["control"]
         observed = source(api, control["issue"]["number"])
         if (not eligible(observed) or control["action"] == "pause"
-                or observed != prior[-1]["context"]["issue"]):
+                or not context_matches_issue(prior[-1]["context"], observed)):
             continue
         if not record["assignments"]:
             execution.prepare(api, read_control(api, item))
@@ -319,7 +335,7 @@ def prepare(api, run, now, feed=None):
     item = f"issue-{number}-{observed['identity']['node_id']}"
     if any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):
         return None
-    context = {"feed": deepcopy(feed), "issue": observed, "candidates": candidates(api, observed)}
+    context = intake_context(api, feed, observed, candidates(api, observed))
     return reserve(api, run, now, item, "issue-intake", context)
 
 
@@ -335,7 +351,7 @@ def validate_decision(packet, decision):
                 raise ValueError("human decision cannot select work")
         else:
             issue_pr.choice(decision["route"], items.ROUTES, "investigation route")
-            if decision["evidenceId"] not in {value["id"] for value in packet["context"]["candidates"]}:
+            if decision["evidenceId"] not in {value[0] for value in packet["context"]["candidates"]}:
                 raise ValueError("selected occurrence absent from host evidence")
     else:
         contracts.exact(decision, keys | {"assessment"}, "normal assessment decision")
@@ -375,8 +391,7 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             raise ValueError("normal packet expired")
         validate_decision(packet, decision)
         observed = source(api, packet["context"]["issue"]["identity"]["number"])
-        source_matches = (digest(observed) == packet["context"]["issueDigest"]
-                          if packet["normal"] == "issue-assessment" else observed == packet["context"]["issue"])
+        source_matches = context_matches_issue(packet["context"], observed)
         if not source_matches or not eligible(observed):
             raise ValueError("source issue stale, closed or hands-off")
         if packet["normal"] == "issue-assessment":
@@ -400,7 +415,7 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             api.persist()
             return {"outcome": "human", "reason": decision["reason"]}
         fresh = candidates(api, observed)
-        if fresh != packet["context"]["candidates"]:
+        if digest(fresh) != packet["context"]["candidateDigest"]:
             raise ValueError("occurrence evidence changed")
         selected = next(entry for entry in fresh if entry["id"] == decision["evidenceId"])
         control = {"schema_version": 1, "id": value["item"], "revision": 1, "issue": observed["identity"],

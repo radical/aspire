@@ -146,7 +146,7 @@ class NormalLoopTests(unittest.TestCase):
     def intake(self, packet, action="investigate"):
         return {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
                 "action": action, "route": "workflow_failure" if action == "investigate" else None,
-                "evidenceId": packet["context"]["candidates"][0]["id"] if action == "investigate" else None,
+                "evidenceId": packet["context"]["candidates"][0][0] if action == "investigate" else None,
                 "reason": "Investigate the referenced failed occurrence."}
 
     def launch(self):
@@ -284,11 +284,40 @@ class NormalLoopTests(unittest.TestCase):
         packet = self.prepare(FEED)
         self.assertLessEqual(len(json.dumps(packet["context"]).encode()), normal_loop.MAX_INTAKE_CONTEXT)
         self.assertEqual(list(range(100, 111)),
-                         [value["occurrence"]["run_id"] for value in packet["context"]["candidates"]])
+                         [int(value[0].split(":", 1)[0]) for value in packet["context"]["candidates"]])
         with self.assertRaises(ValueError):
             self.prepare(FEED | {"requested_route": "workflow_failure"})
         with self.assertRaises(ValueError):
             self.prepare(FEED | {"issue_url": "https://github.com/radical/aspire/issues/20872"})
+
+    def test_large_intake_context_keeps_full_source_and_occurrence_digests(self):
+        observed = normal_loop.source(SimpleNamespace(
+            api=live.API(self.remote, repository_id=bindings.UPSTREAM.repository_id),
+            prefix=self.prefix, repository="microsoft/aspire", token=self.env["CI_SHEPHERD_USER_TOKEN"]),
+            20872)
+        observed["body"] = "Detailed issue description. " * 100
+        candidates = []
+        for index in range(58):
+            run_id = 38000000000 + index // 7
+            job_id = 2000000000 + index
+            attempt = 1
+            candidates.append({
+                "id": f"{run_id}:{attempt}:{job_id}",
+                "occurrence": {"repository": "microsoft/aspire", "run_id": run_id,
+                               "run_attempt": attempt, "head_sha": "a" * 40,
+                               "job_id": job_id, "artifact_id": None},
+                "job": "Run workflow integration tests - Ubuntu x64 Release",
+                "conclusion": "failure",
+                "failedSteps": ["Run end-to-end test suite for the app host"]})
+
+        context = normal_loop.intake_context(SimpleNamespace(token=self.env["CI_SHEPHERD_USER_TOKEN"]),
+                                             FEED, observed, candidates)
+
+        self.assertEqual(normal_loop.digest(observed), context["issueDigest"])
+        self.assertEqual(normal_loop.digest(candidates), context["candidateDigest"])
+        self.assertLessEqual(len(context["issue"]["body"]), normal_loop.MAX_INTAKE_ISSUE_BODY)
+        self.assertTrue(all(len(candidate) == 4 for candidate in context["candidates"]))
+        self.assertLessEqual(len(json.dumps(context).encode()), normal_loop.MAX_CONTEXT)
 
     def test_more_than_one_hundred_run_references_exceed_the_budget(self):
         self.issue["body"] += "\n" + "\n".join(
@@ -321,8 +350,8 @@ class NormalLoopTests(unittest.TestCase):
 
         packet = self.prepare(FEED)
 
-        self.assertEqual([f"run-100-attempt-1-job-{200 + n}" for n in range(11)],
-                         [value["id"] for value in packet["context"]["candidates"]])
+        self.assertEqual([f"100:1:{200 + n}" for n in range(11)],
+                         [value[0] for value in packet["context"]["candidates"]])
 
     def test_replayed_and_missing_evidence_preserve_billing_and_unknown_holds(self):
         packet = self.prepare(FEED)

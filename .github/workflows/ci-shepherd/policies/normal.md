@@ -6,8 +6,14 @@ using submit_decision and return the same JSON as your entire final answer.
 For normal issue-intake the decision has exactly:
 schemaVersion: 1; packetId and operation copied from the packet;
 action: investigate or human; route: workflow_failure, flaky_test or product_bug
-for investigate, null for human; evidenceId: one candidate.id for investigate,
+for investigate, null for human; evidenceId: the first value of one candidate
+row for investigate,
 null for human; reason: a plain explanation of at most 500 characters.
+
+The issue body may be excerpted in the packet. Each candidate row is
+[evidenceId, job name, conclusion, failed step names]. The host binds the full
+issue and candidate evidence with digests and revalidates both before using a
+selected occurrence.
 
 The reported kind is a hint, not a diagnosis. Select the route from the primary
 issue and failed-job evidence. Candidate runs are individually verified
