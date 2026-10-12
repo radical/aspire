@@ -1,0 +1,1 @@
+Fork-only native handoff fixture. No executable behavior. Do not merge.
