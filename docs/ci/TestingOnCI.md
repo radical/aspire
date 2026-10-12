@@ -410,3 +410,7 @@ pwsh eng/scripts/expand-test-matrix-github.ps1 `
   -CanonicalMatrixFile artifacts/canonical-test-matrix.json `
   -OutputMatrixFile artifacts/github-matrix.json
 ```
+
+## Fork-only native handoff fixture
+
+The text-only [native handoff fixture](../../.fork-merge-proof/native-handoff.txt) supports fork-only native Agent Merge handoff validation. It has no executable behavior and must not be merged into the upstream repository.
