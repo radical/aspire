@@ -97,7 +97,10 @@ class PilotTransport(live.HTTPTransport):
                 r"/actions/(?:runs/[1-9][0-9]*(?:/attempts/[1-9][0-9]*(?:/jobs)?)?|jobs/[1-9][0-9]*)", path.path):
             query = parse_qs(path.query, strict_parsing=True)
             if body is not None or query and (
-                    not path.path.endswith("/jobs") or query != {"per_page": ["100"], "page": ["1"]}):
+                    not path.path.endswith("/jobs") or set(query) != {"per_page", "page"}
+                    or query["per_page"] != ["100"] or len(query["page"]) != 1
+                    or not re.fullmatch(r"[1-9][0-9]*", query["page"][0])
+                    or int(query["page"][0]) > live.MAX_PAGES):
                 raise ValueError("only bounded primary occurrence reads are allowed")
             return
         if self.binding == bindings.FORK_MERGE_PROOF and method != "GET" and (

@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from github import LostResponse, Response
 from helpers import FakeClock, reconciliation_evidence
 import hosted
 import live
+import normal_loop
 import pilot
 import pilot_binding as bindings
 import pilot_state as state
@@ -48,10 +50,10 @@ class NormalLoopTests(unittest.TestCase):
                       "repository_url": "https://api.github.com/" + self.prefix, "labels": [],
                       "title": "Main CI failure", "updated_at": "2026-10-04T00:00:00Z",
                       "body": "\n".join(f"https://github.com/microsoft/aspire/actions/runs/{n}"
-                                       for n in range(100, 104))}
+                                       for n in range(100, 111))}
         self.remote.values.update({self.prefix: dict(self.repo, default_branch="main"),
                                    self.prefix + "/issues/20872": self.issue})
-        for n in range(100, 104):
+        for n in range(100, 111):
             run = {"id": n, "run_attempt": 1, "head_sha": "a" * 40,
                    "repository": self.repo, "status": "completed", "conclusion": "failure"}
             job = {"id": n + 100, "run_id": n, "run_attempt": 1, "head_sha": "a" * 40,
@@ -278,14 +280,49 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual("pilot-decision-verified", contracts.read_json(self.root / "receipt.json")["outcome"])
         self.assertEqual([], self.posts)
 
-    def test_all_four_references_are_primary_candidates_and_extra_feed_fields_are_denied(self):
+    def test_more_than_ten_references_are_primary_candidates_and_extra_feed_fields_are_denied(self):
         packet = self.prepare(FEED)
-        self.assertEqual([100, 101, 102, 103],
+        self.assertLessEqual(len(json.dumps(packet["context"]).encode()), normal_loop.MAX_INTAKE_CONTEXT)
+        self.assertEqual(list(range(100, 111)),
                          [value["occurrence"]["run_id"] for value in packet["context"]["candidates"]])
         with self.assertRaises(ValueError):
             self.prepare(FEED | {"requested_route": "workflow_failure"})
         with self.assertRaises(ValueError):
             self.prepare(FEED | {"issue_url": "https://github.com/radical/aspire/issues/20872"})
+
+    def test_more_than_one_hundred_run_references_exceed_the_budget(self):
+        self.issue["body"] += "\n" + "\n".join(
+            f"https://github.com/microsoft/aspire/actions/runs/{n}"
+            for n in range(1, normal_loop.MAX_RUN_REFERENCES - 10 + 1))
+        with self.assertRaisesRegex(ValueError, "issue run reference budget exhausted"):
+            normal_loop.source(SimpleNamespace(
+                api=live.API(self.remote, repository_id=bindings.UPSTREAM.repository_id),
+                prefix=self.prefix, repository="microsoft/aspire", token=self.env["CI_SHEPHERD_USER_TOKEN"]),
+                20872)
+
+    def test_paginated_job_inventory_finds_failed_occurrence_on_later_page(self):
+        path = self.prefix + "/actions/runs/100/attempts/1/jobs"
+        self.issue["body"] = "https://github.com/microsoft/aspire/actions/runs/100"
+        successful_jobs = [
+            {"id": 1000 + n, "run_id": 100, "run_attempt": 1, "head_sha": "a" * 40,
+             "status": "completed", "conclusion": "success", "name": f"Successful job {n}", "steps": []}
+            for n in range(100)
+        ]
+        failed_jobs = [
+            {"id": 200 + n, "run_id": 100, "run_attempt": 1, "head_sha": "a" * 40,
+             "status": "completed", "conclusion": "failure", "name": f"Failed job {n}", "steps": []}
+            for n in range(11)
+        ]
+        self.remote.paged_responses[path + "?per_page=100&page=1"] = Response(
+            {"total_count": 111, "jobs": successful_jobs},
+            {"Link": f'<https://api.github.com/{path}?per_page=100&page=2>; rel="next"'})
+        self.remote.paged_responses[path + "?per_page=100&page=2"] = Response(
+            {"total_count": 111, "jobs": failed_jobs}, {})
+
+        packet = self.prepare(FEED)
+
+        self.assertEqual([f"run-100-attempt-1-job-{200 + n}" for n in range(11)],
+                         [value["id"] for value in packet["context"]["candidates"]])
 
     def test_replayed_and_missing_evidence_preserve_billing_and_unknown_holds(self):
         packet = self.prepare(FEED)
@@ -496,7 +533,7 @@ class NormalLoopTests(unittest.TestCase):
         self.logs = "CSWORKITEMBEGIN" + base64.b64encode(json.dumps(claimed).encode()).decode() + "CSWORKITEMEND"
         packet = self.prepare()
         self.assertEqual("issue-assessment", packet["normal"])
-        self.assertLessEqual(len(json.dumps(packet["context"]).encode()), 12000)
+        self.assertLessEqual(len(json.dumps(packet["context"]).encode()), normal_loop.MAX_CONTEXT)
         self.assertTrue(packet["context"]["excerpted"])
         self.assertEqual(18, packet["context"]["resultCounts"]["evidence"])
         self.assertEqual(claimed, self.saved()["workItems"][0]["assignments"][0]["result"])

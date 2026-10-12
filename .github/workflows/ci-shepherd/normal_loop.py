@@ -21,6 +21,9 @@ import work_items as items
 
 MAX_RUNS = 20
 MAX_CONTEXT = 12000
+MAX_INTAKE_CONTEXT = 32 * 1024
+MAX_RUN_REFERENCES = 100
+MAX_FAILED_OCCURRENCES = 100
 SCOPE = ("Investigate only the linked issue and the host-verified occurrence using the standard "
          "repository investigation instructions. Establish the cause before changing code. "
          "Do not rerun CI, change credentials or permissions, publish comments/issues, "
@@ -61,7 +64,7 @@ def source(api, number):
                          r"([1-9][0-9]*)(?:/attempts/([1-9][0-9]*))?(?![0-9])", value["body"])
     references = sorted({(int(run), int(attempt) if attempt else None) for run, attempt in matches},
                         key=lambda pair: (pair[0], pair[1] or 0))
-    if len(references) > 4:
+    if len(references) > MAX_RUN_REFERENCES:
         raise ValueError("issue run reference budget exhausted")
     return {"identity": {"repository": api.repository, "number": number, "node_id": value["node_id"]},
             "state": value["state"], "labels": sorted(names), "updatedAt": value["updated_at"],
@@ -86,10 +89,9 @@ def candidates(api, observed):
         if attempt is not None and run["run_attempt"] != attempt:
             raise ValueError("referenced attempt mismatch")
         attempt = run["run_attempt"]
-        inventory = api.api.get(path + f"/attempts/{attempt}/jobs?per_page=100&page=1")
-        jobs, total = inventory.get("jobs"), inventory.get("total_count")
-        if (type(total) is not int or not 0 <= total <= 20 or not isinstance(jobs, list) or len(jobs) != total):
-            raise ValueError("complete bounded attempt jobs unavailable")
+        jobs = api.api.pages(path + f"/attempts/{attempt}/jobs", key="jobs",
+                             require_total_count=True, max_pages=live.MAX_PAGES,
+                             max_bytes=live.MAX_API_JSON_BYTES)
         seen = set()
         for job in jobs:
             issue_pr.positive(job.get("id"), "job ID")
@@ -101,7 +103,7 @@ def candidates(api, observed):
                 raise ValueError("job occurrence mismatch")
             if job.get("status") != "completed" or job.get("conclusion") not in {"failure", "timed_out"}:
                 continue
-            if len(values) >= 10:
+            if len(values) >= MAX_FAILED_OCCURRENCES:
                 raise ValueError("failed occurrence budget exhausted")
             items.text(job.get("name"), "job name", 300)
             steps = job.get("steps")
@@ -198,7 +200,8 @@ def validate_receipts(values):
             if value["sessionId"] in sessions:
                 raise ValueError("normal session replay")
             sessions.add(value["sessionId"])
-        if not isinstance(value["context"], dict) or len(json.dumps(value["context"]).encode()) > MAX_CONTEXT:
+        context_limit = MAX_INTAKE_CONTEXT if value["phase"] == "issue-intake" else MAX_CONTEXT
+        if not isinstance(value["context"], dict) or len(json.dumps(value["context"]).encode()) > context_limit:
             raise ValueError("normal context exceeds bound")
         if value["decision"] is not None and not isinstance(value["decision"], dict):
             raise ValueError("invalid normal decision receipt")
@@ -212,7 +215,8 @@ def reserve(api, run, now, item, phase, context):
             return None
     if any(value["item"] == item and value["state"] == "reserved" for value in receipts):
         return None
-    if len(receipts) >= MAX_RUNS or len(json.dumps(context).encode()) > MAX_CONTEXT:
+    context_limit = MAX_INTAKE_CONTEXT if phase == "issue-intake" else MAX_CONTEXT
+    if len(receipts) >= MAX_RUNS or len(json.dumps(context).encode()) > context_limit:
         raise ValueError("normal inference/context bound exhausted")
     if (item_spend(api.ledger, item) + state.NATIVE_RESERVE > state.chain_allowance(api.ledger)
             or state.repository_spend(api.ledger, now) + state.NATIVE_RESERVE > state.REPOSITORY_ALLOWANCE):

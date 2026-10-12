@@ -74,9 +74,11 @@ matching authority target (`upstream` for a `microsoft/aspire` issue); the
 ```
 
 The issue is prospective input, not approval to dispatch. The host independently
-reads issue identity/state and at most four referenced run-attempts with complete
-bounded job inventories. The standard normal prompt selects a host-issued failed
-occurrence and route, or records the missing evidence for human attention.
+reads issue identity/state and up to 100 referenced run-attempts with complete
+bounded job inventories. Intake accepts up to 100 completed failed or timed-out
+job occurrences and keeps the resulting context below 32 KiB. The standard
+normal prompt selects a host-issued failed occurrence and route, or records the
+missing evidence for human attention.
 No caller-authored diagnosis, run selection or investigation instructions are
 accepted. Models never grant capabilities.
 

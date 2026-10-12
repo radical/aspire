@@ -31,6 +31,7 @@ class Transport:
             "repos/radical/aspire/issues/99": {"id": 999, "number": 99, "node_id": "TRACKER99", "state": "open", "labels": []},
             "repos/radical/aspire/issues/99/comments": self.comments,
         }
+        self.paged_responses = {}
         self.writes = []
         self.reads = []
         self.history = []
@@ -79,6 +80,9 @@ class Transport:
                     {"id": 175728472, "login": "Copilot", "type": "Bot"})
                 return Response(deepcopy(value), {}, 201)
             raise LostResponse("unknown write")
+        if endpoint in self.paged_responses:
+            self.reads.append((method, endpoint, body))
+            return deepcopy(self.paged_responses[endpoint])
         path = endpoint.split("?")[0]
         self.reads.append((method, endpoint, body))
         if path in self.values:

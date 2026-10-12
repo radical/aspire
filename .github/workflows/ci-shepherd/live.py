@@ -32,6 +32,7 @@ CREATED_AT = "2026-10-04T02:21:41Z"
 WORKFLOW = ".github/workflows/ci-shepherd.lock.yml"
 WORKFLOW_ID = 374305545
 TRANSPORT_RUN_FENCE = 2
+MAX_PAGES = 10
 FIXTURE_WORKFLOW = ".github/workflows/ci-shepherd-fixture.yml"
 JOB = "Check Shepherd fixture"
 TASK_STATES = {"queued", "in_progress", "idle", "waiting_for_user", "completed",
@@ -251,7 +252,7 @@ class HTTPTransport:
 
 
 class API:
-    def __init__(self, transport, *, max_pages=10, repository_id=None):
+    def __init__(self, transport, *, max_pages=MAX_PAGES, repository_id=None):
         if repository_id is not None:
             issue_pr.positive(repository_id, "repository id")
         self.transport, self.max_pages = transport, max_pages
