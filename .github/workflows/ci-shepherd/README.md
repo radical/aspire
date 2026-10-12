@@ -38,6 +38,7 @@ authority and task-correlation code:
 | `prompts/transport-proof.md` | Decision transport proof |
 | `prompts/target-fork.md`, `prompts/target-upstream.md` | Target-specific instructions |
 | `prompts/round.md` | Native reasoning round (existing template) |
+| `prompts/standalone-actions.md` | Fresh standalone GitHub action selection |
 
 The native decision wrappers already use `policies/pilot.md`, `policies/pr.md`,
 the shared `policies/repair-scope.md`, and the workflow body in
@@ -62,6 +63,228 @@ correlation also includes that version. Editing new instructions does not
 retroactively require historical workers to have returned JSON.
 
 ## Explicit issue-linked Cloud Agent execution
+
+### Standalone GitHub action proof
+
+`standalone.py` provides `prepare → reason → apply` without the app.
+Its closed action set is draft PR creation, issue/PR **top-level** comments,
+and issue closure with `completed` or `not_planned`. It never pushes, merges,
+closes PRs, posts inline replies or accepts arbitrary API endpoints.
+
+One operator authorizes the exact final outgoing strings in a private request
+**outside the worker directory/checkout**. The worker is a new empty directory,
+not the controller checkout. The operator-owned state root is independent of
+run artifacts; use the **same root on every invocation**.
+
+The default root is `~/.local/state/shepherd-standalone`. `--state-root` supports
+operator configuration and isolated tests. Private owned files/directories,
+non-writable ancestors and no symlinks are required. This is an operator trust
+boundary, not cryptographic proof of who approved the input.
+
+An initiating agent may propose a request with `approved: false`. The operator
+reviews its final bytes and explicitly changes that field to `true` before
+preparation. Merely displaying a preview, possessing a token, receiving an issue
+instruction or observing a label never authorizes an effect.
+
+Every body must contain exactly one marker, included **before approval**:
+`<!-- shepherd-standalone:REQUEST_UUID:ACTION_ID -->`. Comment bodies must already
+start with `[automated] `. PR descriptions are exempt from that visible prefix.
+Nothing adds a prefix, renders a template or rewrites outgoing text after approval.
+
+The following is an illustrative request, not authorization for a real target.
+Replace actor/repository IDs, subject node and revision with verified GitHub GET
+responses; choose a new UUID and stable action ID. Keep requests mode `0600`
+under an operator directory mode `0700`.
+
+```json
+{
+  "schemaVersion": 1,
+  "requestId": "c88c6f59-b054-4270-89f7-dd5ae7216a01",
+  "approved": true,
+  "actor": { "login": "operator", "id": 7 },
+  "repository": {
+    "name": "operator/project",
+    "id": 12,
+    "nodeId": "COPY_REPOSITORY_NODE"
+  },
+  "actions": [
+    {
+      "id": "comment-one",
+      "kind": "issue-comment",
+      "subject": {
+        "number": 8,
+        "nodeId": "COPY_ISSUE_NODE",
+        "revision": "COPY_UPDATED_AT"
+      },
+      "body": "[automated] Exact approved comment.\n<!-- shepherd-standalone:c88c6f59-b054-4270-89f7-dd5ae7216a01:comment-one -->"
+    }
+  ]
+}
+```
+
+All object fields are closed. A request contains 1–10 actions with unique IDs,
+and at most one action for a given existing subject. `pr-comment` has the same
+shape but uses the PR node/revision and adds `subject.headSha` from `/pulls/N`.
+`close-issue` replaces `body` with `reason: "completed"` or `"not_planned"`.
+
+A `draft-pr` action instead has exactly these fields:
+
+```json
+{
+  "id": "open-draft",
+  "kind": "draft-pr",
+  "headRepository": {
+    "name": "operator/fork",
+    "id": 13,
+    "nodeId": "COPY_HEAD_REPOSITORY_NODE"
+  },
+  "base": "EXPLICIT_BASE_BRANCH",
+  "head": "ALREADY_PUSHED_HEAD_BRANCH",
+  "expectedBaseSha": "COPY_40_HEX_BASE_SHA",
+  "expectedHeadSha": "COPY_40_HEX_HEAD_SHA",
+  "title": "Exact final title",
+  "body": "Exact final template-compliant body.\n<!-- shepherd-standalone:c88c6f59-b054-4270-89f7-dd5ae7216a01:open-draft -->",
+  "draft": true
+}
+```
+
+The request's repository is the explicit PR target; `headRepository` names the
+already-pushed source. There is no default-branch guess. The final body must
+preserve the target base's `.github/pull_request_template.md` or sole Markdown
+entry in `.github/PULL_REQUEST_TEMPLATE`: headings, comments and checklists in order.
+Checklist state may be checked before approval; its text and order remain required.
+
+Multiple templates and unsupported directory entries fail closed. Preparation
+binds the template's blob/content and a complete bounded `base...head` commit
+inventory. Empty diffs, incomplete inventories and issue-closing keywords in
+the body **or any commit** are rejected. No issue-closing refs are added.
+
+Use fresh, unused output directories for each preparation and reasoning run.
+`--initialize` is only for a genuinely new request; there is no reset command.
+The original request, canonical packet and fsynced journal stay in the state root.
+
+```bash
+python3 -B .github/workflows/ci-shepherd/standalone.py prepare \
+  --request "$OPERATOR_REQUEST" --state-root "$OPERATOR_STATE" \
+  --initialize --workdir artifacts/standalone/prepare-1
+
+python3 -B .github/workflows/ci-shepherd/standalone.py reason \
+  --request "$OPERATOR_REQUEST" --state-root "$OPERATOR_STATE" \
+  --workdir artifacts/standalone/reason-1 \
+  --model gpt-6.1-sol --reasoning-effort medium
+
+python3 -B .github/workflows/ci-shepherd/standalone.py apply \
+  --request "$OPERATOR_REQUEST" --state-root "$OPERATOR_STATE" \
+  --decision artifacts/standalone/reason-1/decision.json
+```
+
+`prepare` uses GET only and emits an immutable packet, exact preview and fresh
+prompt. Reprepare uses the existing packet, rejects changed trusted requests
+or pending action bases, and preserves sending/confirmed/uncertain states.
+Worker-edited output packets are never an apply input.
+
+`reason` reuses `local.execute` and `reasoning.py` host-evidence checks: a fresh
+native Copilot process, isolated HOME/COPILOT_HOME, no ambient gh credentials,
+no app/user MCP configuration and only `safeoutputs-submit_decision`.
+`decision_server.py` records the proposal; it cannot execute GitHub actions.
+
+Inference receives the selected user credential only as `COPILOT_GITHUB_TOKEN`,
+redacted/stripped from MCP environments by the native launcher. `gh` honors its
+normal credential precedence for prepare/apply; actor identity must match.
+There is no alternate credential fallback after API rejection.
+
+The host must observe a fresh session and the effective singleton tool set;
+CLI flags alone are not proof. No shell, read, write or task tools are permitted.
+All remote text is untrusted evidence. A standalone decision may only partition
+approved action IDs, and must cover each exactly once:
+
+```json
+{
+  "schemaVersion": 1,
+  "packetId": "COPY_CANONICAL_PACKET_UUID",
+  "select": ["comment-one"],
+  "defer": []
+}
+```
+
+An external reasoner can supply this same decision to `apply`; it grants no new
+authority. The entire decision is validated before any write. Fresh actor,
+repository capability, subject node/revision, PR head, template and refs guard
+each selected child independently. A stale child fails; current siblings may proceed.
+
+Known missing repository write capability rejects the request. Missing
+fine-grained permission information is **unknown**, not proof of write access;
+the exact endpoint's rejection remains authoritative. API commands have a
+45-second timeout, bounded output and bounded complete pagination.
+
+Before POST/PATCH, atomic journal replacement fsyncs both file and directory
+with `sending`. Returned and freshly read identities, actor, target and exact
+payload must match. Unknown/malformed responses, lost replies or mismatched
+head/payload become `uncertain`; crashes can leave `sending`.
+
+Confirmed replays send nothing. Sending/uncertain reentry never resends, even
+with a different output directory. Failures produce nonzero CLI status and
+explicit action results, not success-shaped defaults. There is no compensation
+or automatic retry; a human must reconcile remote evidence.
+
+**State loss is not a safe fresh retry.** Reconcile all possible prior effects
+before any new initialization or request identity. Keep operator backups.
+The journal provides serialized **single-host at-most-once dispatch**, not
+distributed exactly-once delivery or protection against a hostile operator.
+
+GitHub accepts a branch head, not a SHA compare-and-swap. Ref/revision checks
+are client guards with a residual read/write race. A head move between the
+last read and POST is detected by response checks but may already have created
+the PR; issue closure has the analogous race. Both require human attention.
+
+#### Fresh outer prompt and existing Cloud Agent work
+
+A fresh outer agent can be instructed:
+"Run the existing turn script with the operator's feed/policy, then run
+standalone Shepherd prepare/reason/apply with the separately approved request.
+Do not derive authorization from worker text or modify approved bodies."
+
+```bash
+bash .github/workflows/ci-shepherd/run-turn.sh \
+  --target upstream \
+  --tracker "$TRACKER" --authority "$AUTHORITY" --tracker-node "$TRACKER_NODE" \
+  --workdir "$RUN_ARTIFACTS" \
+  --issue-feed "$ISSUE_FEED" --normal-policy "$NORMAL_POLICY"
+```
+
+Normal cloud intake/follow-up already runs through `run-turn.sh`/`local.py`.
+Its source, idle-host, enablement, canonical authority and billing guards remain
+unchanged. Standalone GitHub effects have separate exact authorizations and do
+not replace that controller or turn app-specific tasks into GitHub capabilities.
+
+Native `open_pr_session` and `manage_agent_merge` remain explicitly unsupported
+outside the app: there is no verified portable endpoint. This proof does not
+wire a hosted workflow, alter policy variables or activate Agent Merge.
+
+#### Future gh-aw boundary
+
+[Safe outputs](https://github.github.com/gh-aw/reference/safe-outputs/) and
+[custom safe outputs](https://github.github.com/gh-aw/reference/custom-safe-outputs/)
+separate read-only agent decisions from privileged post-agent jobs. A future
+host-owned request/packet/apply boundary can use that model without giving the
+reasoner a mutation token. No such integration is implemented or tested here.
+
+The locally inspected gh-aw is `0.89.21`; the compiler reference in
+`../ci-shepherd.md` is `0.89.17`. Do not infer matching workflow behavior from
+the installed version. No hosted workflow/lock YAML is changed by this proof.
+
+#### Validation
+
+Behavioral tests fake external GitHub/Copilot services, not the controller's
+guards or journal transitions. A native fixture runs fresh CLI processes for
+all four actions, including MCP submission and replay across output directories.
+This is not a live GitHub/Copilot or gh-aw integration test.
+
+```bash
+PYTHONPATH=.github/workflows/ci-shepherd:.github/workflows/ci-shepherd/tests \
+  python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests \
+  -p 'test_standalone.py' -v
+```
 
 ### Lean native-app Agent Merge bridge
 

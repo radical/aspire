@@ -1,7 +1,7 @@
 """Explicit operator-authenticated local execution of the shared closed pilot."""
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 import json
 import os
@@ -74,11 +74,11 @@ def require_idle_actions(token, *, reader=metadata):
         raise ValueError("hosted run inventory incomplete")
 
 
-def selected_token():
+def selected_token(*, actor="radical"):
     # Credentials for the same actor can expose different Copilot API schemas.
     # Honor the supplied credential; never retry with another after a failure.
     return (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-            or command(["gh", "auth", "token", "--hostname", "github.com", "--user", "radical"]))
+            or command(["gh", "auth", "token", "--hostname", "github.com", "--user", actor]))
 
 
 class LocalGitHub(github.PilotGitHub):
@@ -185,20 +185,27 @@ def checkpoint_usage(events):
     return previous
 
 
-def execute(directory, packet, token, *, process=subprocess.run, executable="copilot"):
+def execute(directory, packet, token, *, process=subprocess.run, executable="copilot",
+            prompt_text=None, model=None, effort=None, isolation_root=None):
     executable = reasoning.native_executable(executable)
     directory = Path(directory).resolve()
     directory.mkdir(mode=0o700)
     session_id = str(uuid.uuid4())
-    text = prompt(packet)
+    text = prompt(packet) if prompt_text is None else prompt_text
     (directory / "prompt.txt").write_text(text, encoding="utf-8")
     contracts.write_json(directory / "launch.json", {"sessionId": session_id, "resumed": False})
     # Outside the checkout, with a new HOME: no repository/user instructions,
     # memory, MCP configuration, plugins or prior session can become input.
-    with tempfile.TemporaryDirectory(prefix="ci-shepherd-native-") as temporary:
+    if isolation_root is not None:
+        Path(isolation_root).mkdir(mode=0o700)
+    isolation = (tempfile.TemporaryDirectory(prefix="ci-shepherd-native-") if isolation_root is None
+                 else nullcontext(isolation_root))
+    with isolation as temporary:
         isolated = Path(temporary)
         environment = reasoning.child_environment(isolated, {})
         environment["COPILOT_GITHUB_TOKEN"] = token
+        if isolation_root is not None:
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
         config = isolated / "mcp.json"
         contracts.write_json(config, {"mcpServers": {"safeoutputs": {
             "command": sys.executable,
@@ -219,6 +226,12 @@ def execute(directory, packet, token, *, process=subprocess.run, executable="cop
             "--secret-env-vars", "COPILOT_GITHUB_TOKEN",
             "--silent", "--output-format", "json", "--prompt", text,
         ]
+        if model is not None:
+            argv += ["--model", model]
+        if effort is not None:
+            argv += ["--reasoning-effort", effort]
+        if isolation_root is not None:
+            argv += ["--disallow-temp-dir", "--deny-tool", "view"]
         failure = None
         try:
             result = process(argv, cwd=isolated, env=environment, stdin=subprocess.DEVNULL,
