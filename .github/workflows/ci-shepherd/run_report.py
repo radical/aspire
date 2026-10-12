@@ -57,9 +57,16 @@ def render(run, target, before, after, result, packet, started, ended):
     if result.get("until"):
         lines.append(f"- Deferred until {text(result['until'])}; reassess fresh evidence then.")
     if packet and "normal" in packet:
-        observed = packet["context"]["issue"]
-        lines.append(f"- Normal decision: {text(packet['normal'])}; issue "
-                     f"{text(observed['identity']['repository'])}#{observed['identity']['number']}.")
+        if packet["normal"] == "worklist":
+            lines.append(f"- Refreshed worklist: {len(packet['worklist'])} items; "
+                         f"{len(packet['packets'])} decisions in one fresh session.")
+            for receipt in result.get("items", []):
+                lines.append(f"- Item `{text(receipt['item'])}`: {text(receipt['outcome'])}.")
+            lines.append("- This turn exits without waiting for cloud completion.")
+        else:
+            observed = packet["context"]["issue"]
+            lines.append(f"- Normal decision: {text(packet['normal'])}; issue "
+                         f"{text(observed['identity']['repository'])}#{observed['identity']['number']}.")
         lines.append("- Task/result state comes from canonical work-item receipts. "
                      "Assessment does not validate a fix or authorize publication.")
     elif packet:

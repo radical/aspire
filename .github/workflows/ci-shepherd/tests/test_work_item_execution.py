@@ -74,6 +74,56 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(1, state.worker_slots(restarted.saved))
         self.assertGreater(state.repository_spend(restarted.saved, execution.live.clock()), 0)
 
+    def test_known_unsent_crash_hold_survives_reentry_with_queued_assignments(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        for number in (901, 902):
+            queued = deepcopy(self.control)
+            queued.update(id=f"queued-{number}")
+            queued["issue"].update(number=number, node_id=f"ISSUE{number}")
+            execution.prepare(self.api, lambda: queued)
+        with patch.object(execution, "refresh_capacity", side_effect=[None, OSError("crash before sending")]):
+            with self.assertRaisesRegex(OSError, "crash before sending"):
+                execution.execute(self.api, self.read, lambda: approval)
+        saved = deepcopy(self.api.saved)
+        reserved = saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("reserved", reserved["state"])
+        self.assertGreater(reserved["worker_reserved"], 0)
+        self.assertEqual(3, state.worker_slots(saved))
+        self.assertEqual(0, state.worker_slots(saved, include_reserved_work_items=False))
+        self.assertEqual([], self.api.posts)
+
+        restarted = CloudAuthority(saved)
+        self.assertEqual("sent", execution.execute(restarted, self.read, lambda: approval)["outcome"])
+        at_send = restarted.posts[0][1]["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual(reserved["worker_reserved"], at_send["worker_reserved"])
+        self.assertEqual(state.repository_spend(saved, execution.live.clock()),
+                         state.repository_spend(restarted.saved, execution.live.clock()))
+        execution.execute(restarted, self.read, lambda: approval)
+        self.assertEqual(1, len(restarted.posts))
+        self.assertEqual(saved["workItems"][1:], restarted.saved["workItems"][1:])
+
+    def test_unknown_sends_and_unverified_tasks_still_block_queued_admission(self):
+        for status in ("sending", "uncertain", "sent"):
+            with self.subTest(status=status):
+                api = CloudAuthority()
+                approval = execution.prepare(api, self.read)["approval_template"]
+                for number in (901, 902):
+                    other = deepcopy(self.control)
+                    other.update(id=f"other-{number}")
+                    other["issue"].update(number=number, node_id=f"ISSUE{number}")
+                    prepared = execution.prepare(api, lambda: other)
+                    value = api.ledger["workItems"][-1]["assignments"][0]["execution"]
+                    value.update(state=status, approval=prepared["approval_template"], worker_reserved=10,
+                                 task_id=f"TASK{number}" if status == "sent" else None)
+                    api.persist()
+                before = deepcopy(api.saved)
+                self.assertEqual(3, state.worker_slots(before))
+                self.assertEqual(2, state.worker_slots(before, include_reserved_work_items=False))
+                with self.assertRaises(execution.AdmissionDeferred):
+                    execution.execute(api, self.read, lambda: approval)
+                self.assertEqual([], api.posts)
+                self.assertEqual(before, api.saved)
+
     def test_wrong_or_incomplete_approval_never_sends(self):
         prepared = execution.prepare(self.api, self.read)
         for key in prepared["approval_template"]:

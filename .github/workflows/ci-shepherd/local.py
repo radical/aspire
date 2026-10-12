@@ -529,9 +529,9 @@ def main(argv=None):
                         help="Operator declares the app's merge_pr action is OFF")
     parser.add_argument("--publish-worker-results", action="store_true",
                         help="Explicit unattended result comments for this selected target; default is preview only")
-    parser.add_argument("--issue-feed", type=Path, help="Minimal issue JSON; run/watch only, no permission grant")
+    parser.add_argument("--issue-feed", type=Path, help="Minimal issue JSON object or array; run/watch only, no permission grant")
     parser.add_argument("--cloud-approval", type=Path, help="Exact separate task approval; run/watch only")
-    parser.add_argument("--normal-policy", type=Path, help="Trusted issue-bound permissions; run/watch only")
+    parser.add_argument("--normal-policy", type=Path, help="Trusted issue-bound policy object or array; run/watch only")
     args = parser.parse_args(argv)
     if (args.issue_feed is not None or args.cloud_approval is not None
             or args.normal_policy is not None) and args.mode not in {"run", "watch"}:

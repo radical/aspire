@@ -82,6 +82,19 @@ def policy_for(api, issue):
     value = api.normal_policy() if hasattr(api, "normal_policy") else None
     if value is None:
         return None
+    if isinstance(value, list):
+        matches = []
+        for entry in value:
+            policy = validate_policy(entry, issue)
+            if policy is not None:
+                matches.append(policy)
+        if len(matches) > 1:
+            raise ValueError("duplicate issue policy")
+        return matches[0] if matches else None
+    return validate_policy(value, issue)
+
+
+def validate_policy(value, issue):
     contracts.exact(value, {"schema_version", "issue", "allow_cloud_task", "allow_branch_writes",
                             "allow_draft_pr", "track_linked_pr", "issue_comment"}, "normal policy")
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
@@ -230,10 +243,14 @@ def assessment_context(observed, control, assignment, task, mapping):
 def validate_receipts(values):
     if not isinstance(values, list) or len(values) > MAX_RUNS:
         raise ValueError("normal inference history bound exhausted")
-    ids, packets, sessions = set(), set(), set()
+    ids, packets, sessions = set(), set(), {}
     for value in values:
-        contracts.exact(value, {"id", "packetId", "item", "phase", "at", "nativeActual", "nativeReserved",
-                               "sessionId", "state", "context", "decision"}, "normal receipt")
+        keys = {"id", "packetId", "item", "phase", "at", "nativeActual", "nativeReserved",
+                "sessionId", "state", "context", "decision"}
+        if "turnId" in value:
+            keys.add("turnId")
+            items.identifier(value["turnId"], "normal turn")
+        contracts.exact(value, keys, "normal receipt")
         for key, seen in (("id", ids), ("packetId", packets)):
             items.identifier(value[key], key)
             if value[key] in seen:
@@ -248,9 +265,10 @@ def validate_receipts(values):
             state.amount(value["nativeActual"])
         if value["sessionId"] is not None:
             items.identifier(value["sessionId"], "native session")
-            if value["sessionId"] in sessions:
+            if (value["sessionId"] in sessions
+                    and (value.get("turnId") is None or sessions[value["sessionId"]] != value["turnId"])):
                 raise ValueError("normal session replay")
-            sessions.add(value["sessionId"])
+            sessions[value["sessionId"]] = value.get("turnId")
         context_limit = MAX_INTAKE_CONTEXT if value["phase"] == "issue-intake" else MAX_CONTEXT
         if not isinstance(value["context"], dict) or len(json.dumps(value["context"]).encode()) > context_limit:
             raise ValueError("normal context exceeds bound")
@@ -346,7 +364,15 @@ def dispatch_reserved(api, item):
     if approval is None:
         return {"outcome": "approval-required", "approval_template": execution.approval_template(record, assignment),
                 "request": execution.request(api, record, assignment), "control": deepcopy(control)}
-    return execution.execute(api, read, read_approval)
+    try:
+        return execution.execute(api, read, read_approval)
+    except execution.AdmissionDeferred as error:
+        if assignment["execution"]["state"] != "reserved":
+            raise
+        reason = followup.safe(error, api.token, 500)
+        assignment["execution"]["attention"] = reason
+        api.persist()
+        return {"outcome": "deferred", "reason": reason}
 
 
 def prepare(api, run, now, feed=None):
@@ -354,6 +380,64 @@ def prepare(api, run, now, feed=None):
         if feed is not None:
             raise ValueError("normal hosted work-item adapter unavailable")
         return None
+    feeds = [] if feed is None else feed if isinstance(feed, list) else [feed]
+    incoming = {}
+    for entry in feeds:
+        number = validate_feed(entry, api.repository)
+        if number in incoming:
+            raise ValueError("duplicate incoming issue")
+        observed = source(api, number)
+        incoming[number] = (entry, observed, candidates(api, observed) if eligible(observed) else [])
+    # Refresh the complete worklist before dispatch/import/report actions. Active
+    # tasks are observations, not a reason to stop intake or wait in this turn.
+    observed_items = {}
+    worklist = []
+    for record in api.ledger.get("workItems", []):
+        item = record["id"]
+        observed_items[item] = source(api, record["control"]["issue"]["number"])
+        saved = record["assignments"][-1].get("execution") if record["assignments"] else None
+        row = {"item": item, "issue": deepcopy(record["control"]["issue"]),
+               "control": record["control"]["action"], "state": saved["state"] if saved else "unassigned"}
+        if saved and saved["state"] == "sent":
+            try:
+                task = execution.refresh(api, record, record["assignments"][-1])
+                row["taskState"] = task["state"]
+            except (ValueError, KeyError, TypeError, AttributeError) as error:
+                row["attention"] = followup.safe(error, api.token, 500)
+        if saved and saved["imported_chain_id"]:
+            row["chain"] = saved["imported_chain_id"]
+        worklist.append(row)
+    api.persist()
+    packets = []
+    for _, observed, _ in incoming.values():
+        if not any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):
+            worklist.append({"item": f"issue-{observed['identity']['number']}-{observed['identity']['node_id']}",
+                             "issue": observed["identity"], "state": "incoming" if eligible(observed) else "ineligible"})
+
+    def reserve_packet(item, phase, context):
+        # The transport bounds the complete turn, not each child separately.
+        # Leave room for the wrapper and refreshed task/handoff status fields.
+        size = len(json.dumps({"packets": packets, "worklist": worklist, "context": context}).encode())
+        reason = None
+        if len(api.ledger.get("normalRuns", [])) >= MAX_RUNS:
+            reason = "Normal inference history bound exhausted."
+        elif size + 4096 + 1024 * len(worklist) > contracts.MAX_JSON_BYTES:
+            reason = "Decision packet capacity exhausted."
+        if reason is not None:
+            row = next(row for row in worklist if row["item"] == item)
+            row["attention"] = reason + " No inference reserved for this item."
+            return None
+        try:
+            return reserve(api, run, now, item, phase, context)
+        except ValueError as error:
+            import pilot_github
+            if (isinstance(error, pilot_github.AuthorityUncertain)
+                    or str(error) not in {"normal settlement capacity exhausted", "normal inference credit allowance exhausted"}):
+                raise
+            row = next(row for row in worklist if row["item"] == item)
+            row["attention"] = str(error) + "; no inference reserved for this item."
+            return None
+
     # Tasks are discovered from the canonical ledger, never from feed or previews.
     for record in list(api.ledger.get("workItems", [])):
         item = record["id"]
@@ -362,7 +446,7 @@ def prepare(api, run, now, feed=None):
         if not prior:
             continue
         control = record["control"]
-        observed = source(api, control["issue"]["number"])
+        observed = observed_items[item]
         if (not eligible(observed) or control["action"] == "pause"
                 or not context_matches_issue(prior[-1]["context"], observed)):
             continue
@@ -375,6 +459,8 @@ def prepare(api, run, now, feed=None):
             continue
         if saved["state"] == "reserved":
             receipt = dispatch_reserved(api, item)
+            if receipt["outcome"] == "deferred":
+                next(row for row in worklist if row["item"] == item)["attention"] = receipt["reason"]
             print("CI Shepherd normal execution: " + json.dumps(followup.redact_fields(receipt, api.token)),
                   file=sys.stderr)
             continue
@@ -425,23 +511,54 @@ def prepare(api, run, now, feed=None):
         if task["state"] not in state.TERMINAL:
             continue
         context = assessment_context(observed, control, assignment, task, mapping)
-        packet = reserve(api, run, now, item, "issue-assessment", context)
+        packet = reserve_packet(item, "issue-assessment", context)
         if packet is not None:
-            return packet
-    if feed is None:
+            packets.append(packet)
+    for number, (entry, observed, occurrences) in incoming.items():
+        if not eligible(observed):
+            continue
+        item = f"issue-{number}-{observed['identity']['node_id']}"
+        if any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):
+            continue
+        context = intake_context(api, entry, observed, occurrences)
+        packet = reserve_packet(item, "issue-intake", context)
+        if packet is not None:
+            packets.append(packet)
+    if not packets:
         return None
-    number = validate_feed(feed, api.repository)
-    observed = source(api, number)
-    if not eligible(observed):
-        return None
-    item = f"issue-{number}-{observed['identity']['node_id']}"
-    if any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):
-        return None
-    context = intake_context(api, feed, observed, candidates(api, observed))
-    return reserve(api, run, now, item, "issue-intake", context)
+    if len(worklist) == 1:
+        return packets[0]
+    for row in worklist:
+        record = next((record for record in api.ledger.get("workItems", []) if record["id"] == row["item"]), None)
+        if record and record["assignments"]:
+            saved = record["assignments"][-1].get("execution")
+            if saved:
+                row.update(state=saved["state"], taskState=saved["task_state"])
+                if saved["imported_chain_id"]:
+                    chain = next(chain for chain in api.ledger["chains"] if chain["id"] == saved["imported_chain_id"])
+                    row.update(chain=chain["id"], handoff=chain["handoff"]["phase"])
+    turn_id = str(uuid.uuid4())
+    operations = {packet["operation"] for packet in packets}
+    for receipt in api.ledger["normalRuns"]:
+        if receipt["id"] in operations:
+            receipt["turnId"] = turn_id
+    api.persist()
+    return {"schemaVersion": 1, "kind": "pilot", "normal": "worklist", "packetId": turn_id,
+            "operation": turn_id, "target": api.binding.name, "run": deepcopy(run),
+            "preparedAt": issue_pr.stamp(now), "worklist": worklist, "packets": packets}
 
 
 def validate_decision(packet, decision):
+    if packet["normal"] == "worklist":
+        contracts.exact(decision, {"schemaVersion", "packetId", "operation", "decisions"}, "worklist decision")
+        if (type(decision["schemaVersion"]) is not int or decision["schemaVersion"] != 1
+                or decision["packetId"] != packet["packetId"] or decision["operation"] != packet["operation"]
+                or not isinstance(decision["decisions"], list)
+                or len(decision["decisions"]) != len(packet["packets"])):
+            raise ValueError("worklist decision binding mismatch")
+        for child, answer in zip(packet["packets"], decision["decisions"]):
+            validate_decision(child, answer)
+        return
     keys = {"schemaVersion", "packetId", "operation", "action"}
     if packet["normal"] == "issue-intake":
         contracts.exact(decision, keys | {"route", "evidenceId", "reason"}, "normal intake decision")
@@ -467,16 +584,63 @@ def validate_decision(packet, decision):
         raise ValueError("normal decision packet binding mismatch")
 
 
-def settle(api, packet, evidence, usage, now, *, billing_only=False):
-    # Billing is independent of issue eligibility, packet expiry and model output.
-    api.read_authority()
-    value = next(value for value in api.ledger.get("normalRuns", []) if value["id"] == packet["operation"])
+def check_reservation(api, packet, value):
     if (packet["target"] != api.binding.name or packet["packetId"] != value["packetId"]
             or packet["item"] != value["item"] or packet["normal"] != value["phase"]
             or (digest(packet["context"]) != value["context"]["contextDigest"]
                 if "contextDigest" in value["context"] else packet["context"] != value["context"])
             or packet["preparedAt"] != value["at"]):
         raise ValueError("normal packet differs from canonical reservation")
+
+
+def settle_turn(api, packet, evidence, usage, now, *, billing_only=False):
+    import reasoning
+    api.read_authority()
+    children = packet["packets"]
+    if not children or len({child["operation"] for child in children}) != len(children):
+        raise ValueError("invalid worklist operations")
+    for child in children:
+        receipt = next(value for value in api.ledger["normalRuns"] if value["id"] == child["operation"])
+        if receipt.get("turnId") != packet["packetId"] or child["target"] != packet["target"]:
+            raise ValueError("worklist reservation mismatch")
+        check_reservation(api, child, receipt)
+    decision = None
+    try:
+        if not billing_only and evidence is not None:
+            decision, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
+            validate_decision(packet, decision)
+    except (ValueError, KeyError, TypeError):
+        decision = None
+    # One fresh session serves the turn. Split its measured usage exactly once
+    # across the per-item holds; unknown billing retains every outstanding hold.
+    shares = [None] * len(children)
+    if usage is not None:
+        state.amount(usage)
+        shares = [usage / len(children)] * len(children)
+        shares[-1] = usage - sum(shares[:-1])
+    # Settle all measured inference before any child effect. An uncertain send
+    # must stop mutations without losing the known usage of later children.
+    for child, share in zip(children, shares):
+        receipt = next(value for value in api.ledger["normalRuns"] if value["id"] == child["operation"])
+        if share is not None or receipt["nativeActual"] is None:
+            state.settle_native(receipt, share)
+    api.persist()
+    results = []
+    for index, child in enumerate(children):
+        results.append({"item": child["item"], **settle(
+            api, child, evidence, shares[index], now, billing_only=billing_only or decision is None,
+            _turn_decision=None if decision is None else decision["decisions"][index],
+            _turn_id=packet["packetId"])})
+    return {"outcome": "processed", "items": results, "waitingForCloud": False}
+
+
+def settle(api, packet, evidence, usage, now, *, billing_only=False, _turn_decision=None, _turn_id=None):
+    if packet["normal"] == "worklist":
+        return settle_turn(api, packet, evidence, usage, now, billing_only=billing_only)
+    # Billing is independent of issue eligibility, packet expiry and model output.
+    api.read_authority()
+    value = next(value for value in api.ledger.get("normalRuns", []) if value["id"] == packet["operation"])
+    check_reservation(api, packet, value)
     if usage is not None or value["nativeActual"] is None:
         state.settle_native(value, usage)
     api.persist()
@@ -487,8 +651,11 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             raise ValueError("disabled or missing native decision evidence")
         import reasoning
         decision, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
+        if _turn_decision is not None:
+            decision = _turn_decision
         if any(other.get("sessionId") == evidence["sessionId"] for other in api.ledger.get("normalRuns", [])
-               if other is not value) or any(operation["sessionId"] == evidence["sessionId"]
+               if other is not value and not (_turn_id is not None and other.get("turnId") == _turn_id
+                                             and value.get("turnId") == _turn_id)) or any(operation["sessionId"] == evidence["sessionId"]
                for chain in api.ledger["chains"] for operation in chain["operations"]):
             raise ValueError("native session reused")
         value["sessionId"] = evidence["sessionId"]

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from helpers import FakeClock
 import pilot_state as state
@@ -63,6 +64,7 @@ class PilotStateTests(unittest.TestCase):
         self.assertEqual(30, state.chain_spend(self.chain))
         self.assertIsNone(operation["nativeActual"])
 
+    @patch.object(state, "REPOSITORY_ALLOWANCE", 1000)
     def test_shared_rolling_budget_keeps_outstanding_reservations(self):
         first = self.start("one", local=False)
         state.settle_native(first, 10)

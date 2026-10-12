@@ -13,6 +13,7 @@ import prompt_templates
 import issue_pr
 import live
 import local
+from pilot_github import AuthorityUncertain
 import pilot_state as state
 import pilot_handoff as handoff
 import round as contracts
@@ -22,6 +23,10 @@ import work_items as items
 
 CORRELATION = "ci-shepherd-work-item: "
 STATES = {"reserved", "sending", "sent", "uncertain", "no_send"}
+
+
+class AdmissionDeferred(ValueError):
+    """Known capacity or budget exhaustion before a task can be admitted."""
 
 
 def approval_template(record, assignment):
@@ -116,10 +121,14 @@ def executions(ledger):
                 yield record, assignment, assignment["execution"]
 
 
-def slots(ledger):
+def slots(ledger, *, include_reserved=True):
     return sum(value["state"] != "no_send" and (
         value["state"] in {"reserved", "sending", "uncertain"}
-        or value["task_state"] not in state.TERMINAL) for _, _, value in executions(ledger))
+        or value["task_state"] not in state.TERMINAL)
+        for _, _, value in executions(ledger)
+        if include_reserved or not (
+            value["state"] == "reserved" and value["task_id"] is None
+            and value["session_id"] is None and value["task_state"] is None))
 
 
 def spend(ledger, now):
@@ -218,8 +227,10 @@ def execute(api, read_control, read_approval):
         raise ValueError("stale or revoked execution control")
     available(api, record)
     refresh_capacity(api)
-    if state.worker_slots(api.ledger) > 2:
-        raise ValueError("shared cloud capacity exhausted")
+    # Queued known-unsent work is not an admitted worker. Keep its credit hold
+    # and retain conservative prepared-slot accounting for other admission paths.
+    if state.worker_slots(api.ledger, include_reserved_work_items=False) >= 2:
+        raise AdmissionDeferred("shared cloud capacity exhausted")
     now = live.clock()
     allowance = state.chain_allowance(api.ledger)
     import normal_loop
@@ -230,12 +241,12 @@ def execute(api, read_control, read_approval):
     hold = min(allowance - lifetime + previous_hold,
                state.REPOSITORY_ALLOWANCE - state.repository_spend(api.ledger, now) + previous_hold)
     if hold <= 0:
-        raise ValueError("cloud credit allowance exhausted")
-    value.update(approval=approval, worker_reserved=hold)
+        raise AdmissionDeferred("cloud credit allowance exhausted")
+    value.update(approval=approval, worker_reserved=hold, attention=None)
     body = request(api, record, assignment)
     # Reserve room for bounded mapping/import settlement before any remote effect.
     if len(state.render(api.ledger).encode()) + 8000 > state.MAX_BODY:
-        raise ValueError("cloud settlement capacity exhausted")
+        raise AdmissionDeferred("cloud settlement capacity exhausted")
     api.persist()
 
     def fresh():
@@ -243,12 +254,14 @@ def execute(api, read_control, read_approval):
         if read_approval() != approval:
             raise ValueError("cloud approval changed")
         refresh_capacity(api)
-        if state.worker_slots(api.ledger) > 2:
-            raise ValueError("shared cloud capacity exhausted")
+        # Once sending is durable, this candidate already occupies one slot.
+        limit = 3 if value["state"] == "sending" else 2
+        if state.worker_slots(api.ledger, include_reserved_work_items=False) >= limit:
+            raise AdmissionDeferred("shared cloud capacity exhausted")
         if (state.repository_spend(api.ledger, live.clock()) > state.REPOSITORY_ALLOWANCE
                 or normal_loop.item_spend(api.ledger, record["id"])
                 > state.chain_allowance(api.ledger)):
-            raise ValueError("cloud credit allowance exhausted")
+            raise AdmissionDeferred("cloud credit allowance exhausted")
         receiver.fresh(api, read_control, control)
 
     fresh()
@@ -258,6 +271,10 @@ def execute(api, read_control, read_approval):
     try:
         task_id = api.start_task(body, fresh)
         items.identifier(task_id, "returned task ID")
+    except AuthorityUncertain:
+        # The last pre-POST guard can lose authority. Preserve durable intent
+        # and stop the batch; compensation cannot write through uncertain authority.
+        raise
     except RejectedEffect:
         value.update(state="no_send", worker_reserved=0)
         api.persist()

@@ -678,8 +678,9 @@ class UpstreamTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(["fix-7", "fix-8"], [body["head_ref"] for body in bodies])
         ledger = state.parse(self.transport.comments[0]["body"])
         self.assertEqual([7, 8], [chain["origin"] for chain in ledger["chains"]])
-        self.assertLessEqual(state.repository_spend(ledger, self.clock()), 1000)
+        self.assertLessEqual(state.repository_spend(ledger, self.clock()), state.REPOSITORY_ALLOWANCE)
 
+    @patch.object(state, "REPOSITORY_ALLOWANCE", 1000)
     def test_infeasible_worker_headroom_spends_no_native_round(self):
         self.transport.values[self.transport.target + "/issues/7/comments"][0]["body"] = (
             "Reassess at 2026-10-04T01:00:00Z")
@@ -692,6 +693,7 @@ class UpstreamTests(WorkspaceTest, unittest.TestCase):
                          [chain["operations"] for chain in after["chains"]])
         self.assertEqual([1, 0], [chain["rounds"] for chain in after["chains"]])
 
+    @patch.object(state, "REPOSITORY_ALLOWANCE", 1000)
     def test_unknown_worker_historical_hold_is_not_shrunk_to_admit_another_chain(self):
         first = self.prepare()
         self.assertEqual("waiting", self.settle(first)["outcome"])

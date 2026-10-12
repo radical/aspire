@@ -64,7 +64,8 @@ retroactively require historical workers to have returned JSON.
 
 ### Normal minimal-feed lifecycle
 
-The normal pilot host accepts one explicit minimal issue feed. It does not
+The normal pilot host accepts an explicit minimal issue object or an array of
+such objects. It does not
 discover upstream issues from labels. Select manual `pilot` mode and the
 matching authority target (`upstream` for a `microsoft/aspire` issue); the
 `issue_feed` input is exactly:
@@ -93,8 +94,8 @@ with the same authority target consumes it using the existing durable
 receipt is redispatched. The existing task contract allows a branch and draft PR
 even for diagnosis-only work; these effects require explicit approval.
 
-An operator may instead preapprove one exact issue through the host-owned
-`CI_SHEPHERD_NORMAL_POLICY` configuration, or the local runner's
+An operator may instead preapprove exact issues through the trusted repository
+variable `CI_SHEPHERD_NORMAL_POLICY`, or the local runner's
 `--normal-policy /absolute/policy.json`. This is separate from the issue feed:
 
 ```json
@@ -117,10 +118,76 @@ Issue identity must match exactly. All four cloud permissions must be true
 before policy can supply the assignment-bound approval. `issue_comment`
 separately grants controller follow-up reporting for newly admitted items;
 it does not authorize worker comments or change existing item permissions.
+
+For multiple issues, configure a JSON array of these policy objects, each with
+its own exact repository, issue number and node ID. The hosted preparation and
+settlement stages read the same repository variable; neither the issue feed nor
+the model supplies policy. An unset variable requires separate assignment-bound
+approval and grants no issue-comment permission.
+
+Known cloud capacity or admission-budget exhaustion defers only the unsent item.
+Its durable reservation remains available for a later turn while other issues
+continue through intake. Unknown sends and billing holds retain capacity;
+authority uncertainty stops the turn rather than being treated as a deferral.
 With policy configured before intake, the first reasoning invocation can
 persist the assignment and launch its task without a second approval turn.
 Absent policy retains the separate explicit approval gate. Dispatch does not
 prevent the host from processing other work items.
+
+For multiple issues, supply an array of these exact issue-bound policy objects.
+Each issue still requires its own grant; the feed and model cannot grant
+permissions. Duplicate feed issues and duplicate matching policies are rejected.
+
+### One multi-item turn
+
+The host prefetches every incoming source and its failed-job candidates, plus
+every canonical tracked work item and saved task/session, before immediate
+dispatch, import or follow-up reporting. One fresh decision session sees the
+worklist and all admitted intake/assessment packets. Running tasks are status
+rows, not blockers. Verified substantive PRs are imported through the existing
+handoff mechanism; empty drafts and no-PR/failed tasks use session inspection.
+Unavailable PR metadata is not evidence of zero changes.
+
+The batch decision contains the outer `schemaVersion`, `packetId`, `operation`
+and an ordered `decisions` array. Each child uses the existing intake or
+assessment contract, with its own packet and operation IDs. The host validates
+the complete decision shape before acting, then revalidates each source,
+assignment and occurrence independently. A stale child does not invalidate
+other current children. Existing single-item packets remain supported.
+The complete worklist respects the transport's 256 KiB JSON ceiling in
+`round.py`; children deferred for packet capacity receive no native reservation.
+Keep deferred incoming issues in the next invocation's feed.
+
+Each action uses the same canonical intent/receipt checkpoints and uncertainty
+rules as single-item execution. Native usage is split across the admitted items
+once, with one shared fresh-session identity bound to that turn. Unknown usage
+retains all reserved holds. Re-entry refreshes status; it does not replay sends,
+imports, accepted assessments or deduplicated source-issue comments. A turn with
+no admitted decision exits without inference. No turn waits for cloud completion.
+
+The reusable repository runner invokes one turn using the local host contract:
+
+```bash
+bash .github/workflows/ci-shepherd/run-turn.sh \
+  --target upstream \
+  --tracker "$TRACKER" --authority "$AUTHORITY" --tracker-node "$TRACKER_NODE" \
+  --workdir "$RUN_ARTIFACTS" \
+  --issue-feed "$ISSUE_FEED" --normal-policy "$NORMAL_POLICY"
+```
+
+The feed/policy paths contain operator-supplied JSON. Later turns may omit the
+feed; tracked tasks come from canonical authority. `CI_SHEPHERD_ENABLE=true`
+and the existing local host credentials/authorization remain required.
+Run artifacts are not reusable orchestration inputs or Git-tracked state.
+The prompt remains in `policies/normal.md` on this branch.
+
+Budget values in `pilot_state.py` are **30 credits per native reservation**,
+**1,000 credits per upstream item/chain lifetime**, **500 per fork chain
+lifetime**, and **3,000 repository credits per rolling 24 hours**. This admits
+two concurrent upstream lifetime allowances plus decision headroom without
+shrinking unknown worker holds or aging them out. Actual usage can exceed an
+admission estimate; these are not hard spending caps. The existing two-worker
+capacity and lifetime bounds remain unchanged.
 
 Later normal runs need neither the feed nor a local preview. They rediscover
 task and session IDs exclusively from canonical `workItems`, refresh platform
@@ -181,6 +248,14 @@ Behavioral fresh-client and fresh-process coverage:
 ```shell
 PYTHONPATH=.github/workflows/ci-shepherd:.github/workflows/ci-shepherd/tests \
 python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p 'test_normal_loop.py' -v
+```
+
+Multi-item turns and the full controller suite:
+
+```shell
+cd .github/workflows/ci-shepherd
+PYTHONPATH=.:tests python3 -m unittest test_shepherd_turn test_normal_loop
+PYTHONPATH=.:tests python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 `work_item_execution.py` adds a separate, **default-off manual cloud lane**.
@@ -1231,9 +1306,9 @@ No live paid review request is part of the deterministic validation.
   Failed inference/validation counts. Fresh runs, new heads and verified child
   PRs never reset counters. Unsupported local scope escalates immediately;
   cloud escalation is sticky.
-- Native admission reserves30 credits. Fork chain allowance is500 credits;
-  the fixed upstream trial's allowance is1,000. The repository allowance is
-  1,000 in a rolling24-hour window. Cloud admission
+- Native admission reserves 30 credits. Fork chain allowance is 500 credits;
+  the fixed upstream trial's allowance is 1,000. The repository allowance is
+  3,000 in a rolling 24-hour window. Cloud admission
   reserves the remaining chain allowance. Actual native `ai_credits` and
   terminal task-session `ai_credits` nano units settle separately, including
   failed native runs. Missing/premium-request billing is unknown, not zero:
@@ -1249,6 +1324,13 @@ No live paid review request is part of the deterministic validation.
   session usage is cumulative and never overwrites billing with a smaller total.
 - At most two tracked in-flight cloud workers per tracking authority, including
   unknown send outcomes. Foreign tasks are neither inspected nor counted.
+  Work-item candidate admission excludes queued, known-unsent `reserved`
+  assignments from worker slots, but retains their credit holds. A durable
+  `sending` intent occupies a slot before POST; uncertain sends and unverified
+  tasks continue to occupy slots. Other admission paths retain conservative
+  prepared-reservation accounting. If the final pre-POST guard loses authority,
+  execution preserves the durable intent and holds, aborts remaining batch
+  effects, and makes no compensating authority write.
   One chain cannot begin another
   action while its mutation is reserved, waiting or uncertain. Polls, CI waits
   and human waits do not consume rounds or native inference.
@@ -1463,8 +1545,8 @@ repoints or resets an authority:
 `CI_SHEPHERD_UPSTREAM_AUTHORITY_COMMENT=<verified new radical-owned comment ID>`.
 The ledger's target namespace must match the fixed binding while its tracker
 and writer remain in the controller fork. Existing fork/legacy authority is
-never repointed. Native admission is still30 credits, upstream chain allowance1,000 and
-rolling authority allowance1,000; these are independent authority namespaces,
+never repointed. Native admission is 30 credits, upstream chain allowance 1,000 and
+rolling authority allowance 3,000; these are independent authority namespaces,
 not a promise of a combined cross-authority billing cap.
 
 New cloud reservations fit both remaining chain allowance and rolling
