@@ -25,6 +25,7 @@ MAX_INTAKE_CONTEXT = 32 * 1024
 MAX_INTAKE_ISSUE_BODY = 800
 MAX_RUN_REFERENCES = 100
 MAX_FAILED_OCCURRENCES = 100
+MAX_ASSESSMENT_BYTES = 2500
 SCOPE = ("Investigate only the linked issue and the host-verified occurrence using the standard "
          "repository investigation instructions. Establish the cause before changing code. "
          "Do not rerun CI, change credentials or permissions, publish comments/issues, "
@@ -75,6 +76,25 @@ def source(api, number):
 
 def eligible(observed):
     return observed["state"] == "open" and "shepherd-hands-off" not in observed["labels"]
+
+
+def policy_for(api, issue):
+    value = api.normal_policy() if hasattr(api, "normal_policy") else None
+    if value is None:
+        return None
+    contracts.exact(value, {"schema_version", "issue", "allow_cloud_task", "allow_branch_writes",
+                            "allow_draft_pr", "track_linked_pr", "issue_comment"}, "normal policy")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise ValueError("unsupported normal policy")
+    contracts.exact(value["issue"], {"repository", "number", "node_id"}, "normal policy issue")
+    items.repository(value["issue"]["repository"])
+    issue_pr.positive(value["issue"]["number"], "normal policy issue number")
+    items.identifier(value["issue"]["node_id"], "normal policy issue node")
+    for key in ("allow_cloud_task", "allow_branch_writes", "allow_draft_pr", "track_linked_pr", "issue_comment"):
+        items.boolean(value[key], "normal policy " + key)
+    if value["issue"] != issue:
+        return None
+    return value
 
 
 def candidates(api, observed):
@@ -167,20 +187,35 @@ def result_excerpt(value):
     return deepcopy(value)
 
 
+def pr_observation(api, task):
+    pr = execution.task_pr(api, task)
+    return {"number": pr["number"], "head": pr["head"]["sha"], "changedFiles": pr["changed_files"],
+            "title": followup.safe(pr["title"], api.token, limit=200),
+            "body": followup.safe(pr["body"], api.token, limit=800), "bodyDigest": digest(pr["body"])}
+
+
+def assessment_version(task_version, mapping, result_digest):
+    return digest({"task": task_version, "mapping": mapping, "result": result_digest})
+
+
 def assessment_context(observed, control, assignment, task, mapping):
     saved = assignment["execution"]
-    context = {"issue": deepcopy(observed), "issueDigest": digest(observed), "control": deepcopy(control),
+    issue = deepcopy(observed)
+    issue["body"] = followup.safe(issue["body"], limit=MAX_INTAKE_ISSUE_BODY)
+    followup_data = deepcopy(saved["followup"])
+    followup_data["assessment"] = None
+    context = {"issue": issue, "issueDigest": digest(observed), "control": deepcopy(control),
                "assignment": assignment["id"], "taskVersion": followup.version(task),
                "result": deepcopy(assignment["result"]), "resultDigest": digest(assignment["result"]),
-               "followup": deepcopy(saved["followup"]), "mapping": mapping, "excerpted": False}
-    context["followup"]["assessment"] = None
+               "followup": followup_data, "mapping": mapping,
+               "excerpted": issue["body"] != observed["body"]}
     if len(json.dumps(context).encode()) > MAX_CONTEXT:
         context["result"] = result_excerpt(assignment["result"])
         context["resultCounts"] = {key: len(value) for key, value in (assignment["result"] or {}).items()
                                    if isinstance(value, list)}
         context["followup"]["log_excerpt"] = followup.safe(context["followup"]["log_excerpt"], limit=200)
         context["followup"]["pinned_evidence"] = result_excerpt(context["followup"]["pinned_evidence"])
-        context["issue"]["body"] = followup.safe(context["issue"]["body"], limit=1000)
+        context["issue"]["body"] = followup.safe(context["issue"]["body"], limit=MAX_INTAKE_ISSUE_BODY)
         context["excerpted"] = True
         if len(json.dumps(context).encode()) > MAX_CONTEXT:
             context["result"] = {key: result_excerpt(value) for key, value in (assignment["result"] or {}).items()
@@ -219,6 +254,15 @@ def validate_receipts(values):
         context_limit = MAX_INTAKE_CONTEXT if value["phase"] == "issue-intake" else MAX_CONTEXT
         if not isinstance(value["context"], dict) or len(json.dumps(value["context"]).encode()) > context_limit:
             raise ValueError("normal context exceeds bound")
+        if "contextDigest" in value["context"]:
+            keys = {"contextDigest", "issueDigest", "issue"}
+            if value["phase"] == "issue-assessment":
+                keys.add("assessmentDigest")
+            contracts.exact(value["context"], keys, "normal context receipt")
+            for key in keys - {"issue"}:
+                if not isinstance(value["context"][key], str) or not re.fullmatch(
+                        r"[0-9a-f]{64}", value["context"][key]):
+                    raise ValueError("invalid normal context digest")
         if value["decision"] is not None and not isinstance(value["decision"], dict):
             raise ValueError("invalid normal decision receipt")
 
@@ -226,7 +270,9 @@ def validate_receipts(values):
 def reserve(api, run, now, item, phase, context):
     receipts = api.ledger.setdefault("normalRuns", [])
     for value in receipts:
-        if value["item"] == item and value["phase"] == phase and value["context"] == context:
+        same_context = (value["context"]["contextDigest"] == digest(context)
+                        if "contextDigest" in value["context"] else value["context"] == context)
+        if value["item"] == item and value["phase"] == phase and same_context:
             # Failed, expired or unknown inference is never silently retried.
             return None
     if any(value["item"] == item and value["state"] == "reserved" for value in receipts):
@@ -240,8 +286,23 @@ def reserve(api, run, now, item, phase, context):
     value = {"id": str(uuid.uuid4()), "packetId": str(uuid.uuid4()), "item": item, "phase": phase,
              "at": issue_pr.stamp(now), "nativeActual": None, "nativeReserved": state.NATIVE_RESERVE,
              "sessionId": None, "state": "reserved", "context": deepcopy(context), "decision": None}
+    # The full packet lives in the host's run artifacts. Keep its digest in
+    # authority instead of duplicating issue bodies, transcripts and inventory.
+    value["context"] = {"contextDigest": digest(context), "issueDigest": context["issueDigest"],
+                        "issue": {"identity": deepcopy(context["issue"]["identity"])}}
+    if phase == "issue-assessment":
+        value["context"]["assessmentDigest"] = assessment_version(
+            context["taskVersion"], context["mapping"], context["resultDigest"])
     receipts.append(value)
-    if len(state.render(api.ledger).encode()) + 16000 > state.MAX_BODY:
+    # Assessment is stored both in the decision receipt and in follow-up.
+    # Leave room for both bounded copies, a report and settlement metadata.
+    settlement_reserve = 10000 if phase == "issue-assessment" else 16000
+    try:
+        admitted = len(state.render(api.ledger).encode()) + settlement_reserve <= state.MAX_BODY
+    except ValueError:
+        receipts.remove(value)
+        raise
+    if not admitted:
         receipts.remove(value)
         raise ValueError("normal settlement capacity exhausted")
     api.persist()
@@ -269,11 +330,23 @@ def dispatch_reserved(api, item):
     assignment = record["assignments"][-1]
     if assignment["execution"]["state"] != "reserved":
         return {"outcome": assignment["execution"]["state"]}
-    approval = api.normal_approval()
+    def read_approval():
+        approval = api.normal_approval()
+        if approval is not None:
+            return approval
+        policy = policy_for(api, control["issue"])
+        if policy is not None and all(policy[key] for key in (
+                "allow_cloud_task", "allow_branch_writes", "allow_draft_pr", "track_linked_pr")):
+            # Only host-owned policy can preapprove an issue. The model's route
+            # and occurrence selection never supply or expand capabilities.
+            return execution.approval_template(record, assignment)
+        return None
+
+    approval = read_approval()
     if approval is None:
         return {"outcome": "approval-required", "approval_template": execution.approval_template(record, assignment),
                 "request": execution.request(api, record, assignment), "control": deepcopy(control)}
-    return execution.execute(api, read, api.normal_approval)
+    return execution.execute(api, read, read_approval)
 
 
 def prepare(api, run, now, feed=None):
@@ -304,24 +377,53 @@ def prepare(api, run, now, feed=None):
             receipt = dispatch_reserved(api, item)
             print("CI Shepherd normal execution: " + json.dumps(followup.redact_fields(receipt, api.token)),
                   file=sys.stderr)
-            return None
-        if saved["state"] != "sent" or saved["task_state"] not in state.TERMINAL:
             continue
+        if saved["state"] != "sent":
+            continue
+        try:
+            task = execution.refresh(api, record, assignment)
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            api.persist()
+            print("CI Shepherd normal task refresh unavailable: " + followup.safe(error, api.token, 500),
+                  file=sys.stderr)
+            continue
+        api.persist()
+        if task["state"] not in state.TERMINAL:
+            continue
+
         read = read_control(api, item)
-        followup.collect(api, read, api.normal_collector)
-        record = next(value for value in api.ledger["workItems"] if value["id"] == item)
-        assignment = record["assignments"][-1]
-        saved = assignment["execution"]
-        if saved["task_state"] not in state.TERMINAL:
-            continue
-        task = execution.refresh(api, record, assignment)
         mapping = {"pr": None, "reason": "No platform PR artifact."}
         if any(artifact.get("type") == "pull" for artifact in task["artifacts"]):
             try:
-                mapping = {"pr": execution.mapped_pr(api, record, assignment, task),
-                           "reason": "Exact platform mapping; not independent fix validation."}
+                mapping["observation"] = pr_observation(api, task)
+                candidate = execution.mapped_pr(api, record, assignment, task)
             except (ValueError, KeyError, TypeError, AttributeError, IncompleteInventory, LostResponse) as error:
                 mapping["reason"] = "PR mapping denied: " + followup.safe(error, api.token, 500)
+            else:
+                imported = execution.import_pr(api, read)
+                if imported["outcome"] != "tracked":
+                    raise ValueError("normal PR import failed: " + imported["reason"])
+                continue
+
+        previous = saved.get("followup")
+        assessments = [entry for entry in api.ledger.get("normalRuns", [])
+                       if entry["item"] == item and entry["phase"] == "issue-assessment"
+                       and entry["state"] == "settled"]
+        current_version = assessment_version(followup.version(task), mapping, digest(assignment["result"]))
+        if (previous is not None and previous["assessment"] is not None
+                and previous["task_version"] == followup.version(task) and assessments
+                and assessments[-1]["context"].get("assessmentDigest") == current_version):
+            receipt = followup.report(api, read, publish=True, compact=True)
+            print("CI Shepherd normal follow-up report: " + json.dumps(followup.redact_fields(receipt, api.token)),
+                  file=sys.stderr)
+            continue
+
+        followup.collect(api, read, api.normal_collector)
+        record = next(value for value in api.ledger["workItems"] if value["id"] == item)
+        assignment = record["assignments"][-1]
+        task = execution.refresh(api, record, assignment)
+        if task["state"] not in state.TERMINAL:
+            continue
         context = assessment_context(observed, control, assignment, task, mapping)
         packet = reserve(api, run, now, item, "issue-assessment", context)
         if packet is not None:
@@ -358,6 +460,8 @@ def validate_decision(packet, decision):
         if decision["action"] != "assess":
             raise ValueError("only nonauthorizing assessment is supported")
         followup.validate_assessment(decision["assessment"])
+        if len(json.dumps(decision["assessment"], separators=(",", ":")).encode()) > MAX_ASSESSMENT_BYTES:
+            raise ValueError("normal assessment exceeds storage bound")
     if (type(decision["schemaVersion"]) is not int or decision["schemaVersion"] != 1
             or decision["packetId"] != packet["packetId"] or decision["operation"] != packet["operation"]):
         raise ValueError("normal decision packet binding mismatch")
@@ -369,7 +473,9 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
     value = next(value for value in api.ledger.get("normalRuns", []) if value["id"] == packet["operation"])
     if (packet["target"] != api.binding.name or packet["packetId"] != value["packetId"]
             or packet["item"] != value["item"] or packet["normal"] != value["phase"]
-            or packet["context"] != value["context"] or packet["preparedAt"] != value["at"]):
+            or (digest(packet["context"]) != value["context"]["contextDigest"]
+                if "contextDigest" in value["context"] else packet["context"] != value["context"])
+            or packet["preparedAt"] != value["at"]):
         raise ValueError("normal packet differs from canonical reservation")
     if usage is not None or value["nativeActual"] is None:
         state.settle_native(value, usage)
@@ -399,7 +505,10 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             control, record, assignment = followup.owned(api, read)
             if control != packet["context"]["control"] or assignment["id"] != packet["context"]["assignment"]:
                 raise ValueError("assessment control or assignment changed")
-            followup.stable(api, read, control, record, assignment, packet["context"]["taskVersion"])
+            task = followup.stable(api, read, control, record, assignment, packet["context"]["taskVersion"])
+            if ("observation" in packet["context"]["mapping"]
+                    and pr_observation(api, task) != packet["context"]["mapping"]["observation"]):
+                raise ValueError("assessment PR evidence changed")
             if (digest(assignment["result"]) != packet["context"]["resultDigest"]
                     or assignment["execution"]["followup"]["task_version"] != packet["context"]["taskVersion"]):
                 raise ValueError("assessment result version changed")
@@ -409,7 +518,8 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
             value = next(entry for entry in api.ledger["normalRuns"] if entry["id"] == packet["operation"])
             value.update(state="settled", decision=followup.redact_fields(deepcopy(decision), api.token))
             api.persist()
-            return {"outcome": "assessed", "publications": [], "fixValidated": False}
+            report = followup.report(api, read, publish=True, compact=True)
+            return {"outcome": "assessed", "report": report, "fixValidated": False}
         if decision["action"] == "human":
             value.update(state="settled", decision=followup.redact_fields(deepcopy(decision), api.token))
             api.persist()
@@ -418,10 +528,12 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
         if digest(fresh) != packet["context"]["candidateDigest"]:
             raise ValueError("occurrence evidence changed")
         selected = next(entry for entry in fresh if entry["id"] == decision["evidenceId"])
+        policy = policy_for(api, observed["identity"])
         control = {"schema_version": 1, "id": value["item"], "revision": 1, "issue": observed["identity"],
                    "reported_kind": packet["context"]["feed"]["reported_kind"], "requested_route": decision["route"],
                    "action": "run", "occurrence": selected["occurrence"], "scope": SCOPE,
-                   "authority": {"local_edits": False, "issue_comment": False, "draft_pr": False,
+                   "authority": {"local_edits": False, "issue_comment": bool(policy and policy["issue_comment"]),
+                                 "draft_pr": False,
                                  "issue_create": False, "destination": None}, "pr_review": None}
         api.guard_work_item(control)
         receiver.record_for(api, control)

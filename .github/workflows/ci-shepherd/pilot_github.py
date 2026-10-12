@@ -75,6 +75,7 @@ class PilotTransport(live.HTTPTransport):
         self.task_repository = binding.repository
         self.tracker, self.authority = tracker, authority
         self.approved_request = None
+        self.approved_report = None
 
     def is_read(self, method, endpoint, body):
         if method == "POST" and endpoint == "graphql":
@@ -91,6 +92,12 @@ class PilotTransport(live.HTTPTransport):
                 and body["prompt"].startswith("ci-shepherd-work-item: ")):
             if not self.write or self.approved_request is None or body != self.approved_request:
                 raise ValueError("exact canonical normal task capability required")
+            return
+        if (method == "POST" and isinstance(body, dict)
+                and isinstance(body.get("body"), str)
+                and body["body"].startswith("[automated] CI Shepherd work-item result; human direction required.")):
+            if not self.write or self.approved_report != {"endpoint": endpoint, "body": body}:
+                raise ValueError("exact canonical normal report capability required")
             return
         if method == "GET" and re.fullmatch(
                 re.escape(f"repos/{self.binding.repository}") +
@@ -394,6 +401,19 @@ class PilotGitHub:
     def start_task(self, body, before_send):
         from work_item_github import CloudWorkItemGitHub
         return CloudWorkItemGitHub.start_task(self, body, before_send)
+
+    def issue_comments(self, issue):
+        from work_item_github import WorkItemGitHub
+        return WorkItemGitHub.issue_comments(self, issue)
+
+    def post_comment(self, issue, body, before_send):
+        from work_item_github import WorkItemGitHub
+        endpoint = f"repos/{issue['repository']}/issues/{issue['number']}/comments"
+        self.transport.approved_report = {"endpoint": endpoint, "body": {"body": body}}
+        try:
+            return WorkItemGitHub.post_comment(self, issue, body, before_send)
+        finally:
+            self.transport.approved_report = None
 
     def read_authority(self):
         tracker = self.api.get(f"{PREFIX}/issues/{self.tracker}")

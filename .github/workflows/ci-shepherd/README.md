@@ -93,18 +93,68 @@ with the same authority target consumes it using the existing durable
 receipt is redispatched. The existing task contract allows a branch and draft PR
 even for diagnosis-only work; these effects require explicit approval.
 
-Later normal runs need neither the feed nor a local preview. They rediscover
-task/session IDs exclusively from canonical `workItems`, refresh platform state
-and billing, and collect a terminal result through the existing three-attempt
-bounded collector. Active/resumed tasks wait; closed, paused, hands-off or
-source-revision-changed items retain history without new effects. Imported
-tasks remain chain-owned. Historical requests retain their existing contracts.
+An operator may instead preapprove one exact issue through the host-owned
+`CI_SHEPHERD_NORMAL_POLICY` configuration, or the local runner's
+`--normal-policy /absolute/policy.json`. This is separate from the issue feed:
 
-Exact no-PR/no-fix and missing/malformed results produce normal assessment
-packets. PR artifacts use the existing exact mapping checks; mapping denial is
-assessment evidence, not a reason to discard an exact result. Assessment records
-worker claims, platform facts and unknowns separately, and cannot validate a fix,
-import a PR, publish a proposal, enable Agent Merge, rerun CI, merge or close.
+```json
+{
+  "schema_version": 1,
+  "issue": {
+    "repository": "microsoft/aspire",
+    "number": 20872,
+    "node_id": "I_kwDOKYQzfc8AAAABWPG-Xg"
+  },
+  "allow_cloud_task": true,
+  "allow_branch_writes": true,
+  "allow_draft_pr": true,
+  "track_linked_pr": true,
+  "issue_comment": true
+}
+```
+
+Issue identity must match exactly. All four cloud permissions must be true
+before policy can supply the assignment-bound approval. `issue_comment`
+separately grants controller follow-up reporting for newly admitted items;
+it does not authorize worker comments or change existing item permissions.
+With policy configured before intake, the first reasoning invocation can
+persist the assignment and launch its task without a second approval turn.
+Absent policy retains the separate explicit approval gate. Dispatch does not
+prevent the host from processing other work items.
+
+Later normal runs need neither the feed nor a local preview. They rediscover
+task and session IDs exclusively from canonical `workItems`, refresh platform
+state, and wait while a task remains active. Closed, paused, hands-off, or
+source-revision-changed items retain history without new effects.
+
+When a completed task produces a substantive pull request with changed files,
+the normal loop validates issue-to-PR timeline association and imports the PR
+via `work_item_execution.import_pr` before transcript collection. Imported tasks
+transition into chain tracking. Pull requests with zero changes or missing issue
+references reject mapping and proceed to terminal session inspection.
+
+For tasks with no pull request, empty drafts, or mapping denial, the loop
+collects bounded session transcripts through the three-attempt collector and
+assembles an assessment packet. Malformed or missing worker JSON produces an
+inconclusive assessment with operator attribution rather than halting.
+Settled assessments generate deduplicated follow-up reports without repeating
+sends, imports, or comments on subsequent runs. Publication still requires
+the work item's explicit `issue_comment` permission; otherwise the report is
+saved as a preview.
+
+Imported PRs enter `handoff_needed`, not an automatic approval or merge.
+Enabling app-native Agent Merge remains an external handoff step. An imported
+PR must not be described as Agent Merge enabled until that step is confirmed.
+
+Full reasoning packets are stored in host run artifacts. Canonical receipts
+retain packet and source digests instead of duplicating issue bodies and
+transcripts. Historical full-context receipts remain supported.
+Normal assessments are bounded to 2,500 bytes of serialized JSON, and their
+compact follow-up reports to 4,000 bytes of JSON-encoded text. Admission leaves
+10,000 bytes for assessment settlement and reporting; intake retains its
+16,000-byte settlement reservation. The authority ceiling remains 60,000 bytes
+without removing unrelated history.
+
 `normalRuns` adds bounded native inference receipts to the same canonical
 authority; native holds and actuals count toward both item lifetime and repository
 rolling budgets. Billing settles before disabled/stale/expired decision rejection.

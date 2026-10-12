@@ -24,9 +24,10 @@ import pilot_state as state
 import result_collector
 import round as contracts
 import work_item_execution as execution
+import work_item_followup as followup
 import pilot_github
 import run_report
-from test_pilot_github import Transport
+from test_pilot_github import Transport, pr
 from test_work_items import result
 
 
@@ -72,6 +73,7 @@ class NormalLoopTests(unittest.TestCase):
             "ACTIONS_ID_TOKEN_REQUEST_URL": "https://fixture.actions.githubusercontent.com/token",
         }
         self.posts = []
+        self.issue_posts = []
         self.lost = False
         self.logs = None
 
@@ -82,6 +84,11 @@ class NormalLoopTests(unittest.TestCase):
                 if self.lost:
                     raise LostResponse("lost task receipt")
                 return Response({"id": "TASK1"}, {}, 201)
+            if method == "POST" and endpoint == self.prefix + "/issues/20872/comments":
+                self.issue_posts.append((deepcopy(body), self.saved()))
+                comment = {"id": 8000, "user": {"id": 1472, "login": "radical"}, "body": body["body"]}
+                self.remote.values.setdefault(endpoint, []).append(comment)
+                return Response(comment, {}, 201)
             return self.remote(method, endpoint, body)
 
         def command(argv, environment, **kwargs):
@@ -189,6 +196,206 @@ class NormalLoopTests(unittest.TestCase):
         return {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
                 "action": "assess", "assessment": {"summary": "Worker reported no fix; cause remains unknown.",
                     "evidence": ["Exact session result is available."], "unknowns": ["Root cause is not validated."]}}
+
+    def policy(self, **permissions):
+        value = {"schema_version": 1, "issue": {"repository": "microsoft/aspire",
+                 "number": 20872, "node_id": "ISSUE20872"}, "allow_cloud_task": True,
+                 "allow_branch_writes": True, "allow_draft_pr": True, "track_linked_pr": True,
+                 "issue_comment": True} | permissions
+        os.environ["CI_SHEPHERD_NORMAL_POLICY"] = json.dumps(value)
+        return value
+
+    def add_pr(self, changes):
+        task = self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]
+        pull = pr(7)
+        for key in ("base", "head"):
+            pull[key]["repo"] = self.repo
+        pull.update(draft=True, labels=[], issue_url=f"https://api.github.com/{self.prefix}/issues/7",
+                    body="Refs microsoft/aspire#20872", merged=False, merged_at=None, commits=1,
+                    changed_files=changes)
+        issue = {"id": 5007, "node_id": pull["node_id"], "number": 7,
+                 "repository_url": f"https://api.github.com/{self.prefix}",
+                 "pull_request": {"url": f"https://api.github.com/{self.prefix}/pulls/7"}}
+        task["sessions"][0]["head_ref"] = pull["head"]["ref"]
+        task["artifacts"] = [
+            {"provider": "github", "type": "pull", "data": {"id": pull["id"], "global_id": pull["node_id"]}},
+            {"provider": "github", "type": "branch",
+             "data": {"base_ref": "main", "head_ref": pull["head"]["ref"]}},
+        ]
+        self.remote.values.update({
+            f"{self.prefix}/pulls": [pull],
+            f"{self.prefix}/pulls/7": pull,
+            f"{self.prefix}/issues/7": issue,
+            f"{self.prefix}/pulls/7/commits": [
+                {"sha": pull["head"]["sha"], "commit": {"message": "Refs microsoft/aspire#20872"}}],
+            f"{self.prefix}/git/ref/heads/{pull['head']['ref']}": {
+                "ref": "refs/heads/" + pull["head"]["ref"], "object": {"sha": pull["head"]["sha"]}},
+            f"{self.prefix}/issues/20872/timeline": [
+                {"event": "cross-referenced", "source": {"type": "issue", "issue": issue}}],
+        })
+        return pull
+
+    def test_issue_policy_launches_during_intake_without_second_approval_turn(self):
+        self.policy()
+        packet = self.prepare(FEED)
+        receipt = self.settle(packet, self.intake(packet))
+        self.assertEqual("sent", receipt["outcome"])
+        self.assertEqual(1, len(self.posts))
+        record = self.saved()["workItems"][0]
+        self.assertTrue(record["control"]["authority"]["issue_comment"])
+        self.assertEqual("TASK1", record["assignments"][0]["execution"]["task_id"])
+
+    def test_policy_for_different_issue_does_not_authorize_launch_or_comments(self):
+        value = self.policy()
+        value["issue"]["number"] = 20873
+        os.environ["CI_SHEPHERD_NORMAL_POLICY"] = json.dumps(value)
+        packet = self.prepare(FEED)
+        receipt = self.settle(packet, self.intake(packet))
+        self.assertEqual("approval-required", receipt["outcome"])
+        self.assertEqual([], self.posts)
+        self.assertFalse(self.saved()["workItems"][0]["control"]["authority"]["issue_comment"])
+
+    def test_policy_rejects_nonboolean_permission_and_denies_incomplete_cloud_grant(self):
+        self.policy(allow_cloud_task=False)
+        packet = self.prepare(FEED)
+        self.assertEqual("approval-required", self.settle(packet, self.intake(packet))["outcome"])
+        self.policy(allow_cloud_task=1)
+        with self.assertRaisesRegex(ValueError, "normal policy"):
+            self.prepare()
+        self.assertEqual([], self.posts)
+
+    def test_failed_task_without_structured_result_posts_one_authorized_report(self):
+        self.policy()
+        packet = self.prepare(FEED)
+        self.assertEqual("sent", self.settle(packet, self.intake(packet))["outcome"])
+        self.task("failed")
+        self.logs = "The task could not establish a fix."
+        packet = self.prepare()
+        self.assertIsNone(packet["context"]["result"])
+        receipt = self.settle(packet, self.assessment(packet))
+        self.assertEqual("commented", receipt["report"]["outcome"])
+        self.assertEqual(1, len(self.issue_posts))
+        body, authority = self.issue_posts[0]
+        self.assertEqual("delivering", authority["workItems"][0]["comment"]["delivery"])
+        self.assertIn("Platform task state: failed.", body["body"])
+        self.assertLessEqual(len(json.dumps(body["body"]).encode()), 4000)
+        for _ in range(2):
+            self.assertIsNone(self.prepare())
+        self.assertEqual(1, len(self.issue_posts))
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual("open", self.issue["state"])
+
+    def test_unapproved_report_transport_cannot_post_arbitrary_normal_body(self):
+        transport = pilot_github.PilotTransport("gho_fixture", write=True, binding=bindings.UPSTREAM_ALL,
+                                                tracker=99, authority=500)
+        body = {"body": "[automated] CI Shepherd work-item result; human direction required.\nForged"}
+        with self.assertRaisesRegex(ValueError, "capability"):
+            transport.validate_endpoint("POST", self.prefix + "/issues/20872/comments", body)
+
+    def test_running_task_does_not_collect_logs_or_launch_duplicate(self):
+        self.launch()
+        with patch.object(result_collector.HostedCollector, "__call__", side_effect=AssertionError("log read")):
+            self.assertIsNone(self.prepare(FEED))
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual("in_progress",
+                         self.saved()["workItems"][0]["assignments"][0]["execution"]["task_state"])
+
+    def test_substantive_pr_import_precedes_transcript_and_does_not_repeat(self):
+        self.launch()
+        self.task("completed")
+        self.add_pr(1)
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        with patch.object(result_collector.HostedCollector, "__call__", side_effect=AssertionError("log read")):
+            self.assertIsNone(normal_loop.prepare(api, RUN, self.clock(), FEED))
+        saved = self.saved()
+        self.assertEqual(1, len(saved["chains"]))
+        self.assertEqual("handoff_needed", saved["chains"][0]["handoff"]["phase"])
+        self.assertIsNone(saved["workItems"][0]["assignments"][0]["result"])
+        self.assertEqual(saved["chains"][0]["id"],
+                         saved["workItems"][0]["assignments"][0]["execution"]["imported_chain_id"])
+        self.assertIsNone(normal_loop.prepare(api, RUN, self.clock(), FEED))
+        self.assertEqual(1, len(self.saved()["chains"]))
+
+    def test_empty_pr_is_inspected_and_assessed_without_import(self):
+        self.terminal()
+        self.add_pr(0)
+        packet = self.prepare()
+        self.assertEqual("issue-assessment", packet["normal"])
+        self.assertEqual("no_fix", packet["context"]["result"]["outcome"])
+        self.assertEqual("PR mapping denied: empty PR with zero changes", packet["context"]["mapping"]["reason"])
+        self.assertEqual([], self.saved()["chains"])
+
+    def test_changed_empty_pr_description_rejects_stale_assessment(self):
+        self.terminal()
+        pull = self.add_pr(0)
+        packet = self.prepare()
+        pull["body"] = "Changed diagnosis."
+        receipt = self.settle(packet, self.assessment(packet))
+        self.assertEqual("rejected", receipt["outcome"])
+        self.assertEqual("assessment PR evidence changed", receipt["reason"])
+        self.assertIsNone(self.saved()["workItems"][0]["comment"])
+
+    def test_missing_json_session_excerpts_keep_ending_and_complete_local_audit(self):
+        self.launch()
+        self.task("completed")
+        self.logs = "setup\n" + "unrelated tool output\n" * 200 + "\nNo fix was established."
+        audit = []
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        api.normal_log_audit = lambda session, text: audit.append((session, text))
+        packet = normal_loop.prepare(api, RUN, self.clock())
+        self.assertIsNone(packet["context"]["result"])
+        self.assertIn("No fix was established.", packet["context"]["followup"]["log_excerpt"])
+        self.assertEqual([(SESSION, self.logs)], audit)
+
+    def test_settled_assessment_is_not_reused_after_empty_pr_description_changes(self):
+        self.terminal()
+        pull = self.add_pr(0)
+        packet = self.prepare()
+        self.settle(packet, self.assessment(packet))
+        pull["body"] = "Updated explanation from the worker."
+        updated = self.prepare()
+        self.assertEqual("issue-assessment", updated["normal"])
+        self.assertNotEqual(packet["operation"], updated["operation"])
+        self.assertEqual(2, sum(entry["phase"] == "issue-assessment"
+                                for entry in self.saved()["normalRuns"]))
+
+    def test_receipt_digest_prevents_changed_packet_and_duplicate_inference(self):
+        packet = self.prepare(FEED)
+        saved = self.saved()["normalRuns"][0]
+        self.assertEqual(normal_loop.digest(packet["context"]), saved["context"]["contextDigest"])
+        self.assertLess(len(json.dumps(saved["context"]).encode()), 500)
+        changed = deepcopy(packet)
+        changed["context"]["issue"]["title"] = "tampered"
+        with self.assertRaisesRegex(ValueError, "canonical reservation"):
+            self.settle(changed, self.intake(changed))
+        self.assertIsNone(self.prepare(FEED))
+        self.assertEqual(1, len(self.saved()["normalRuns"]))
+
+    def test_small_remaining_authority_capacity_accepts_assessment_and_preview(self):
+        self.terminal()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        followup.collect(api, normal_loop.read_control(api, api.ledger["workItems"][0]["id"]),
+                         api.normal_collector)
+        with patch.object(state, "MAX_BODY", len(state.render(api.ledger).encode()) + 12000):
+            packet = normal_loop.prepare(api, RUN, self.clock())
+            self.assertEqual("issue-assessment", packet["normal"])
+            receipt = self.settle(packet, self.assessment(packet))
+            self.assertEqual("assessed", receipt["outcome"])
+            self.assertEqual("human_wait", receipt["report"]["outcome"])
+            self.assertLessEqual(len(self.remote.comments[0]["body"].encode()), state.MAX_BODY)
+
+    def test_oversized_assessment_rejected_before_publication(self):
+        self.terminal()
+        packet = self.prepare()
+        decision = self.assessment(packet)
+        decision["assessment"]["evidence"] = ["x" * 1000] * 3
+        receipt = self.settle(packet, decision)
+        self.assertEqual("rejected", receipt["outcome"])
+        self.assertEqual("normal assessment exceeds storage bound", receipt["reason"])
+        self.assertIsNone(self.saved()["workItems"][0]["comment"])
 
     def test_minimal_feed_launch_and_fresh_no_feed_terminal_assessment(self):
         self.terminal()
@@ -449,15 +656,18 @@ class NormalLoopTests(unittest.TestCase):
             self.prepare()
         self.assertEqual([], self.posts)
 
-    def test_missing_results_consume_at_most_three_log_attempts(self):
+    def test_missing_results_are_assessed_once_and_repeated_runs_keep_preview(self):
         self.launch()
         self.task("completed")
+        packet = self.prepare()
+        self.assertEqual("unavailable", packet["context"]["followup"]["status"])
+        self.assertEqual("assessed", self.settle(packet, self.assessment(packet))["outcome"])
         for _ in range(3):
-            packet = self.prepare()
-            self.assertEqual("unavailable", packet["context"]["followup"]["status"])
-            self.settle(packet, self.assessment(packet))
-        self.assertIsNone(self.prepare())
-        self.assertEqual(3, self.saved()["workItems"][0]["assignments"][0]["execution"]["followup"]["attempts"])
+            self.assertIsNone(self.prepare())
+        record = self.saved()["workItems"][0]
+        self.assertEqual(1, record["assignments"][0]["execution"]["followup"]["attempts"])
+        self.assertEqual("reserved", record["comment"]["delivery"])
+        self.assertEqual(2, len(self.saved()["normalRuns"]))
         self.assertEqual(1, len(self.posts))
 
     def test_interrupted_intake_preparation_recovers_without_new_native_decision(self):
@@ -619,6 +829,28 @@ class NormalLoopTests(unittest.TestCase):
 
 
 class HostedCollectorTests(unittest.TestCase):
+    def test_pinned_reader_uses_exact_job_and_selected_credential(self):
+        calls = []
+        paths = []
+        def command(argv, environment, **kwargs):
+            config = Path(environment["GH_CONFIG_DIR"]) / "hosts.yml"
+            paths.append(config)
+            self.assertNotIn("GH_TOKEN", environment)
+            self.assertEqual("gho_fixture", json.loads(config.read_text())["github.com"]["oauth_token"])
+            calls.append(argv)
+            if argv == ["gh", "--version"]:
+                return 0, "gh version 2.102.0 (fixture)", ""
+            if argv[:2] == ["gh", "auth"]:
+                return 0, "gho_fixture", ""
+            if argv == ["gh", "api", "user", "--method", "GET"]:
+                return 0, '{"id":1472,"login":"radical"}', ""
+            return 0, "pinned job log", ""
+        collector = result_collector.HostedCollector("gho_fixture", command=command)
+        self.assertEqual("pinned job log", collector.pinned({
+            "repository": "microsoft/aspire", "run_id": 100, "run_attempt": 1, "job_id": 200}))
+        self.assertEqual(["gh", "api", "repos/microsoft/aspire/actions/jobs/200/logs"], calls[-1])
+        self.assertTrue(all(not path.exists() for path in paths))
+
     def test_real_gh_reads_private_config_without_keyring_or_environment_override(self):
         original = result_collector.bounded_command
         paths = []

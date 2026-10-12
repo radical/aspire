@@ -260,6 +260,21 @@ class HostedCollector:
                 raise CollectionError("transport")
             return output
 
+    def pinned(self, occurrence):
+        """Read only the already host-verified pinned job, never the latest run."""
+        import work_items
+        work_items.repository(occurrence["repository"])
+        for key in ("run_id", "run_attempt", "job_id"):
+            if type(occurrence[key]) is not int or occurrence[key] <= 0:
+                raise CollectionError("identity")
+        with tempfile.TemporaryDirectory(prefix="ci-shepherd-gh-") as directory:
+            environment = self.environment_for(directory)
+            path = f"repos/{occurrence['repository']}/actions/jobs/{occurrence['job_id']}/logs"
+            code, output, _ = self.command(["gh", "api", path], environment)
+            if code:
+                raise CollectionError("transport")
+            return output
+
 
 def host_evidence(log, session, repository_id):
     """Parse platform host labels, not arbitrary worker transcript substrings."""

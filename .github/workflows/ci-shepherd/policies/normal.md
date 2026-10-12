@@ -27,7 +27,9 @@ For normal issue-assessment the decision has exactly:
 schemaVersion: 1; packetId and operation copied from the packet;
 action: assess; assessment: an object with exactly summary (at most 1500
 characters), evidence and unknowns (lists of at most ten strings, each at most
-1000 characters).
+1000 characters). The complete assessment object must fit within 2500 UTF-8
+bytes of compact JSON with non-ASCII characters escaped. Keep evidence and
+unknowns concise so both the durable decision and follow-up report fit.
 
 Separate authenticated platform facts, worker claims and independent fix
 validation. No-PR/no-fix is a valid result. Missing or malformed result JSON

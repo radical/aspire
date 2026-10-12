@@ -218,7 +218,8 @@ class MappingTests(unittest.TestCase):
         for key in ("base", "head"):
             self.pull[key]["repo"] = repository
         self.pull.update(draft=True, labels=[], issue_url=f"https://api.github.com/{self.prefix}/issues/7",
-                         body=f"Refs {self.repository}#900", merged=False, merged_at=None, commits=1)
+                         body=f"Refs {self.repository}#900", merged=False, merged_at=None, commits=1,
+                         changed_files=1)
         # The issue representation and pull resource have DIFFERENT numeric IDs.
         self.issue = {"id": 5007, "node_id": self.pull["node_id"], "number": 7,
                       "repository_url": f"https://api.github.com/{self.prefix}",
@@ -261,6 +262,15 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([], chain["operations"])
         self.assertEqual(self.issue["id"], self.api.ledger["workItems"][0]["assignments"][0]["execution"]["pr"]["issue_id"])
         self.assertTrue(all(method == "PATCH" for method, _, _ in self.transport.writes))
+
+    def test_import_rejects_empty_or_unknown_change_inventory(self):
+        for count in (0, None, False, -1, "1"):
+            with self.subTest(changed_files=count):
+                self.pull["changed_files"] = count
+                receipt = execution.import_pr(self.api, self.read)
+                self.assertEqual("needs_human", receipt["outcome"])
+                self.assertEqual([], self.api.ledger["chains"])
+                self.assertIsNone(self.assignment["execution"]["pr"])
 
     def test_import_only_reads_exact_head_inventory_even_when_broad_inventory_exceeds_bound(self):
         original = Transport.__call__

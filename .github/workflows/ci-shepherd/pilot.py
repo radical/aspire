@@ -484,6 +484,8 @@ def hosted_api(run, environment, *, billing=False):
     api.normal_guard = guard
     api.normal_approval = lambda: (contracts.loads(environment["CI_SHEPHERD_WORK_ITEM_APPROVAL"])
                                   if environment.get("CI_SHEPHERD_WORK_ITEM_APPROVAL") else None)
+    api.normal_policy = lambda: (contracts.loads(environment["CI_SHEPHERD_NORMAL_POLICY"])
+                                if environment.get("CI_SHEPHERD_NORMAL_POLICY") else None)
     return api
 
 

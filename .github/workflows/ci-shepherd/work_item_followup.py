@@ -230,7 +230,13 @@ def collect(api, read_control, collector, *, assessment=None):
         text = collector(api.repository, saved["session_id"])
         if not isinstance(text, str) or len(text.encode()) > MAX_LOG:
             raise ValueError("bounded task log unavailable")
-        value["log_excerpt"] = safe(text, api.token) or "Empty exact-session transcript."
+        if hasattr(api, "normal_log_audit"):
+            api.normal_log_audit(saved["session_id"], redact(text, api.token))
+        # Rendered logs begin with setup/tool activity. Include the end as well
+        # so a missing structured envelope does not hide the worker's ending.
+        excerpt = text if len(text) <= 1500 else (
+            text[:500] + "\n[Middle of session excerpt omitted]\n" + text[-1000:])
+        value["log_excerpt"] = safe(excerpt, api.token) or "Empty exact-session transcript."
         parsed = parse_result(text, record, assignment, saved["session_id"])
         parsed = redact_fields(parsed, api.token)
         items.validate_result(parsed)
@@ -333,14 +339,48 @@ def comment_body(control, assignment):
     return body
 
 
-def report(api, read_control, *, publish=False):
+def normal_comment_body(control, assignment):
+    value = assignment["execution"]["followup"]
+    lines = [
+        "[automated] CI Shepherd work-item result; human direction required.",
+        f"<!-- ci-shepherd:work-item:{control['id']}:{assignment['id']} -->",
+        f"Owned task `{value['task_id']}`; verified session `{value['session_id']}`.",
+        f"Platform task state: {assignment['execution']['task_state']}. "
+        "No usable PR was imported; task completion and empty drafts do not establish a fix.",
+    ]
+    assessment = value["assessment"]
+    details = ["Result collection: " + safe(value["reason"], limit=400)]
+    if assessment is not None:
+        details.append("Shepherd assessment (not independent fix validation): "
+                       + safe(assessment["summary"], limit=800))
+        details.extend("Evidence: " + safe(entry, limit=250) for entry in assessment["evidence"])
+        details.extend("Unknown: " + safe(entry, limit=250) for entry in assessment["unknowns"])
+    details.extend(safe(entry, limit=250) for entry in value["pinned_evidence"])
+    details.append("Session excerpt (untrusted): " + safe(value["log_excerpt"], limit=500))
+    footer = "The source issue stays open. No merge or issue resolution is implied."
+    omitted = 0
+    for detail in details:
+        # Authority stores the body as JSON, where escapes can expand Unicode.
+        # Keep report capacity bounded in the same representation as admission.
+        candidate = "\n\n".join([*lines, detail, "Some descriptive excerpts omitted.", footer])
+        if len(json.dumps(candidate).encode()) <= 4000:
+            lines.append(detail)
+        else:
+            omitted += 1
+    if omitted:
+        lines.append("Some descriptive excerpts omitted.")
+    return "\n\n".join([*lines, footer])
+
+
+def report(api, read_control, *, publish=False, compact=False):
     control, record, assignment = owned(api, read_control)
     value = assignment["execution"].get("followup")
     if value is None or value["status"] == "collecting":
         raise ValueError("complete attributed collection required for follow-up")
     stable(api, read_control, control, record, assignment, value["task_version"])
     return receiver.report(
-        api, read_control, control, record, render_body=comment_body, publish=publish,
+        api, read_control, control, record,
+        render_body=normal_comment_body if compact else comment_body, publish=publish,
         before_send=lambda: stable(api, read_control, control, record, assignment, value["task_version"]))
 
 

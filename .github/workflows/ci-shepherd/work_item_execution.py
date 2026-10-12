@@ -347,7 +347,7 @@ def refresh(api, record, assignment):
     return observed
 
 
-def mapped_pr(api, record, assignment, observed):
+def task_pr(api, observed):
     artifacts = observed["artifacts"]
     pulls = [entry["data"] for entry in artifacts if entry.get("provider") == "github" and entry.get("type") == "pull"]
     branches = [entry["data"] for entry in artifacts if entry.get("provider") == "github" and entry.get("type") == "branch"]
@@ -375,9 +375,20 @@ def mapped_pr(api, record, assignment, observed):
             or observed["sessions"][0]["head_ref"] != pr["head"]["ref"]
             or any(label.get("name") == "shepherd-hands-off" for label in pr.get("labels", []))):
         raise ValueError("task PR/ref/draft identity mismatch")
+    if type(pr.get("changed_files")) is not int or pr["changed_files"] < 0:
+        raise ValueError("PR change inventory unavailable")
     ref = api.api.get(prefix + "/git/ref/heads/" + pr["head"]["ref"])
     if ref.get("ref") != "refs/heads/" + pr["head"]["ref"] or ref.get("object", {}).get("sha") != pr["head"]["sha"]:
         raise ValueError("independent PR branch head mismatch")
+    return pr
+
+
+def mapped_pr(api, record, assignment, observed):
+    pr = task_pr(api, observed)
+    if pr["changed_files"] == 0:
+        raise ValueError("empty PR with zero changes")
+    number = pr["number"]
+    prefix = f"repos/{api.repository}"
     # /pulls/7.id and /issues/7.id are different numeric resource identities.
     # Timeline source.issue is the latter; node_id and number identify the same PR.
     issue_url = f"https://api.github.com/{prefix}/issues/{number}"

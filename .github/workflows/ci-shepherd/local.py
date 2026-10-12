@@ -94,10 +94,14 @@ class LocalGitHub(github.PilotGitHub):
             tracker, authority, node, write=write, binding=binding)
         self.reminder_delay = reminders.delay(os.environ.get("CI_SHEPHERD_REMINDER_DELAY_SECONDS") or "60")
         self.pr_reminders, self.reminder_repeat = reminders.configuration(os.environ)
-        self.result_collector = result_collector.LocalCollector(token)
+        if token.startswith("gho_"):
+            self.result_collector = result_collector.HostedCollector(token)
+        else:
+            self.result_collector = result_collector.LocalCollector(token)
         self.normal_collector = self.result_collector
         self.normal_feed = None
         self.normal_approval = lambda: None
+        self.normal_policy = lambda: None
         def normal_guard():
             require_source(self.revision)
             require_idle_actions(self.token)
@@ -297,6 +301,11 @@ def sweep(api, directory, revision, *, executor=execute):
     def audit(operation, version, value):
         write_result_audit(directory, operation, version, value)
     api.result_audit = audit
+    def log_audit(session, text):
+        import work_items
+        work_items.identifier(session, "session audit ID")
+        (directory / f"session-{session}.txt").write_text(text, encoding="utf-8")
+    api.normal_log_audit = log_audit
     started = issue_pr.stamp(live.clock())
     before = state.new_ledger(api.repository)
     result = {"outcome": "failed"}
@@ -522,9 +531,11 @@ def main(argv=None):
                         help="Explicit unattended result comments for this selected target; default is preview only")
     parser.add_argument("--issue-feed", type=Path, help="Minimal issue JSON; run/watch only, no permission grant")
     parser.add_argument("--cloud-approval", type=Path, help="Exact separate task approval; run/watch only")
+    parser.add_argument("--normal-policy", type=Path, help="Trusted issue-bound permissions; run/watch only")
     args = parser.parse_args(argv)
-    if (args.issue_feed is not None or args.cloud_approval is not None) and args.mode not in {"run", "watch"}:
-        parser.error("issue feed and cloud approval require normal run/watch mode")
+    if (args.issue_feed is not None or args.cloud_approval is not None
+            or args.normal_policy is not None) and args.mode not in {"run", "watch"}:
+        parser.error("issue feed, cloud approval and normal policy require normal run/watch mode")
     if args.interval < 30:
         parser.error("interval must be at least 30 seconds")
     if args.mode == "resume" and (not args.operation or not args.expected_head):
@@ -586,6 +597,8 @@ def main(argv=None):
                 api.normal_feed = contracts.read_json(args.issue_feed) if args.issue_feed is not None else None
                 api.normal_approval = lambda: (contracts.read_json(args.cloud_approval)
                                               if args.cloud_approval is not None else None)
+                api.normal_policy = lambda: (contracts.read_json(args.normal_policy)
+                                            if args.normal_policy is not None else None)
                 if args.mode == "confirm-handoff":
                     print(json.dumps(confirm_handoff(api, args.pr, args.expected_head, live.clock(),
                                                      app_enabled=args.app_enabled,
