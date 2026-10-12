@@ -56,6 +56,23 @@ pre-agent-steps:
     cp .github/workflows/auto-sec/auto-sec.js "${RUNNER_TEMP}/auto-sec-gate/auto-sec.js"
 
     '
+- name: Precreate runner-owned safe output file
+  env:
+    GH_AW_SAFE_OUTPUTS: ${{ steps.set-runtime-paths.outputs.GH_AW_SAFE_OUTPUTS }}
+  run: |
+    set -euo pipefail
+    node - <<'JS'
+    const fs = require('node:fs');
+    const path = process.env.GH_AW_SAFE_OUTPUTS;
+    if (!path) throw new Error('Missing safe output path');
+    const fd = fs.openSync(path, 'wx', 0o600);
+    fs.closeSync(fd);
+    const stat = fs.statSync(path);
+    if (stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600) {
+      throw new Error('Unexpected safe output ownership or mode');
+    }
+    console.log('Safe output file precreated: runner-owned, mode=0600.');
+    JS
 - name: Load synthetic refusal fixtures
   run: 'set -euo pipefail
 
