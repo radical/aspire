@@ -1,4 +1,4 @@
-"""Manual PR ownership transfer within the existing serialized Shepherd core."""
+"""Sticky PR ownership transfer within the existing serialized Shepherd core."""
 
 from copy import deepcopy
 from datetime import timedelta
@@ -14,12 +14,61 @@ import round as contracts
 
 PHASES = {"initial", "handoff_pending", "handoff_needed", "watching", "merged", "closed"}
 SENDS = {"idle", "prepared", "sent", "known", "uncertain", "human"}
+APP_STAGES = ("intent", "session-bound", "activation-requested")
+APP_ACTIONS = {"address_reviews": True, "fix_ci": True, "resolve_conflicts": True, "merge_pr": False}
+
+
+def app_settings(value, *, enabled=False):
+    contracts.exact(value, {"enabled", "actions"}, "current app settings")
+    contracts.exact(value["actions"], set(APP_ACTIONS), "current app actions")
+    if (type(value["enabled"]) is not bool
+            or any(type(action) is not bool for action in value["actions"].values())
+            or value["actions"]["merge_pr"] is not False):
+        raise ValueError("Current app settings require exact booleans and merging OFF.")
+    if enabled and (value["enabled"] is not True or value["actions"] != APP_ACTIONS):
+        raise ValueError("Current Agent Merge must be enabled with all three repair actions ON and merging OFF.")
+    return value
+
+
+def app_identifier(value, label):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", value):
+        raise ValueError(f"invalid {label}")
+
+
+def app_head(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise ValueError("invalid app head")
+
+
+def validate_app(value):
+    contracts.exact(value, {"attemptId", "intentHead", "stage", "sessionId", "activationSettings",
+                            "confirmedHead", "settings"}, "app transfer")
+    if (not isinstance(value["attemptId"], str) or str(uuid.UUID(value["attemptId"])) != value["attemptId"]
+            or value["stage"] not in APP_STAGES):
+        raise ValueError("invalid app attempt/stage")
+    app_head(value["intentHead"])
+    if value["sessionId"] is not None:
+        app_identifier(value["sessionId"], "native app session")
+    if (value["stage"] == "intent") != (value["sessionId"] is None):
+        raise ValueError("app stage/session binding mismatch")
+    if value["stage"] == "activation-requested":
+        app_settings(value["activationSettings"])
+    elif value["activationSettings"] is not None:
+        raise ValueError("app activation settings before activation boundary")
+    if value["confirmedHead"] is not None:
+        app_head(value["confirmedHead"])
+        if value["stage"] != "activation-requested":
+            raise ValueError("app confirmation before activation boundary")
+        app_settings(value["settings"], enabled=True)
+    elif value["settings"] is not None:
+        raise ValueError("app settings without confirmation")
 
 
 def validate(value):
     contracts.exact(value, {"id", "phase", "responsible", "head", "progressAt", "confirmedAt",
                            "sendState", "taskId", "attention", "mergeLabel"}
-                    | ({"taskTerminal"} if "taskTerminal" in value else set()), "manual handoff")
+                    | ({"taskTerminal"} if "taskTerminal" in value else set())
+                    | ({"appTransfer"} if "appTransfer" in value else set()), "manual handoff")
     if str(uuid.UUID(value["id"])) != value["id"] or value["phase"] not in PHASES:
         raise ValueError("invalid handoff identity/phase")
     if value["responsible"] != "radical" or value["sendState"] not in SENDS:
@@ -40,6 +89,10 @@ def validate(value):
         raise ValueError("invalid merge-label receipt")
     if value["phase"] == "watching" and value["confirmedAt"] is None:
         raise ValueError("watching requires explicit operator confirmation")
+    if "appTransfer" in value:
+        validate_app(value["appTransfer"])
+        if value["appTransfer"]["confirmedHead"] is not None and value["confirmedAt"] is None:
+            raise ValueError("app confirmation requires handoff confirmation")
 
 
 def converted(chain):
@@ -408,6 +461,183 @@ def monitor_guard(api, chain, observation):
     return fresh
 
 
+def app_identity(api, chain, attempt_id, intent_head):
+    # Repository, PR, handoff and source assignment stay in their canonical
+    # outer records. The bridge never creates a second ownership ledger.
+    return {"repository": api.repository, "pr": chain["child"] or chain["origin"],
+            "node": chain["childNode"] or chain["node"], "chainId": chain["id"],
+            "handoffId": chain["handoff"]["id"], "sourceWorkItem": chain.get("sourceWorkItem"),
+            "attemptId": attempt_id, "intentHead": intent_head}
+
+
+def app_basis(api, chain, head=None, *, effect=False):
+    """Probe a copy: task refresh/observe must not write failure compensation."""
+    if effect:
+        if not api.write:
+            raise ValueError("App checkpoints require the authorized local writer.")
+        api.adoption_effect_guard()
+    if chain["state"] != "open" or chain["handoff"]["phase"] not in {
+            "handoff_pending", "handoff_needed", "watching"}:
+        raise ValueError("Transferred chain is not open for app ownership.")
+    ledger, write = api.ledger, api.write
+    try:
+        api.ledger, api.write = deepcopy(ledger), False
+        import pilot_state as state
+        probe = state.find_chain(api.ledger, chain["origin"])
+        quiescent(api, probe)
+        if (any(op["nativeReserved"] or op["workerReserved"] for op in probe["operations"])
+                or any(review["reserved"] for review in probe.get("reviews", []))):
+            raise ValueError("Owned credit/admission holds unresolved; reconciliation required.")
+        if "sourceWorkItem" in probe:
+            import work_item_execution
+            record, assignment, saved = work_item_execution.source_guard(api, probe)
+            if (record["assignments"][-1]["id"] != assignment["id"]
+                    or assignment["revision"] != record["control"]["revision"]):
+                raise ValueError("Imported source assignment/revision changed; reconciliation required.")
+            if saved["worker_reserved"]:
+                raise ValueError("Imported worker billing hold unresolved; reconciliation required.")
+            if any(receipt["item"] == record["id"]
+                   and (receipt["nativeReserved"] or receipt["state"] == "reserved")
+                   for receipt in api.ledger.get("normalRuns", [])):
+                raise ValueError("Imported source native hold unresolved; reconciliation required.")
+        observed = observe(api, probe)
+        if (observed["attention"] or not observed["managed"] or observed["state"] != "open"
+                or observed["kind"] != "pr" or observed["merged"]
+                or head is not None and observed["head"] != head):
+            raise ValueError("App handoff PR/head/source/management/quiescence changed.")
+        # Re-read both mapping and authority after the task/source inventory.
+        monitor_guard(api, probe, observed)
+        return observed
+    finally:
+        api.ledger, api.write = ledger, write
+
+
+def pending_handoffs(api, number=None):
+    """Enumerate only canonical transferred chains; never discover or enroll."""
+    api.read_authority()
+    entries = []
+    for chain in api.ledger["chains"]:
+        if not converted(chain) or number is not None and number not in {chain["origin"], chain["child"]}:
+            continue
+        transfer = chain["handoff"].get("appTransfer")
+        entry = {"identity": app_identity(api, chain, transfer["attemptId"] if transfer else None,
+                                         transfer["intentHead"] if transfer else None),
+                 "head": None, "stage": transfer["stage"] if transfer else None,
+                 "sessionId": transfer["sessionId"] if transfer else None,
+                 "confirmedHead": transfer["confirmedHead"] if transfer else None,
+                 "disposition": "reconciliation" if transfer else "actionable", "reason": None}
+        try:
+            observed = app_basis(api, chain)
+            entry["head"] = observed["head"]
+            if transfer and transfer["confirmedHead"] == observed["head"]:
+                entry["reason"] = "Confirmed receipt; read native current settings, never replay activation."
+            elif transfer:
+                entry["reason"] = "Resume this attempt through native inventory/settings; never blindly reopen or re-enable."
+        except (ValueError, KeyError, TypeError, IncompleteInventory) as error:
+            entry.update(disposition="attention", reason=str(error)[:1000])
+        entries.append(entry)
+    api.authority_guard()
+    return {"outcome": "canonical handoffs; read-only", "entries": entries}
+
+
+def app_input(api, value, *, stage=None):
+    keys = {"identity", "head"}
+    if stage != "intent":
+        keys.add("session")
+    if stage in {None, "activation-requested"}:
+        keys.add("settings")
+    contracts.exact(value, keys, "app bridge input")
+    identity = contracts.exact(value["identity"], {
+        "repository", "pr", "node", "chainId", "handoffId", "sourceWorkItem", "attemptId", "intentHead"},
+        "app immutable intent identity")
+    if not isinstance(identity["attemptId"], str) or str(uuid.UUID(identity["attemptId"])) != identity["attemptId"]:
+        raise ValueError("invalid app attempt identity")
+    app_head(identity["intentHead"])
+    app_head(value["head"])
+    issue_pr.positive(identity["pr"], "app PR")
+    import pilot_state as state
+    api.read_authority()
+    chain = state.find_chain(api.ledger, identity["pr"])
+    if (chain is None or not converted(chain)
+            or identity != app_identity(api, chain, identity["attemptId"], identity["intentHead"])):
+        raise ValueError("App intent canonical repository/PR/node/handoff/source binding mismatch.")
+    transfer = chain["handoff"].get("appTransfer")
+    if transfer is not None and (
+            transfer["attemptId"] != identity["attemptId"] or transfer["intentHead"] != identity["intentHead"]):
+        raise ValueError("Conflicting immutable app attempt; reconcile without new effects.")
+    if stage != "intent":
+        session = contracts.exact(value["session"], {"sessionId", "repository", "pr", "activity"},
+                                  "native session association attestation")
+        app_identifier(session["sessionId"], "native app session")
+        if (session["repository"] != api.repository or session["pr"] != identity["pr"]
+                or type(session["pr"]) is not int
+                or not isinstance(session["activity"], str)
+                or session["activity"] not in ({"idle", "busy"} if stage is None else {"idle"})):
+            raise ValueError("Exact safe native PR session association/activity required.")
+        if transfer is None or transfer["sessionId"] not in {None, session["sessionId"]}:
+            raise ValueError("Missing intent or conflicting native app session; reconcile without effects.")
+        for other in api.ledger["chains"]:
+            saved = other.get("handoff", {}).get("appTransfer")
+            if other is not chain and saved and saved["sessionId"] == session["sessionId"]:
+                raise ValueError("Native app session already belongs to another handoff.")
+    if "settings" in value:
+        app_settings(value["settings"], enabled=stage is None)
+    if stage is not None and value["head"] != identity["intentHead"]:
+        raise ValueError("Head changed before activation; reconcile this attempt, do not reopen.")
+    return chain, transfer
+
+
+def app_checkpoint(api, stage, value):
+    if stage not in APP_STAGES:
+        raise ValueError("Unsupported fixed app checkpoint stage.")
+    chain, transfer = app_input(api, value, stage=stage)
+    app_basis(api, chain, value["head"], effect=True)
+    before = deepcopy(chain["handoff"].get("appTransfer"))
+    if stage == "intent":
+        if transfer is None:
+            if any(other.get("handoff", {}).get("appTransfer", {}).get("attemptId")
+                   == value["identity"]["attemptId"] for other in api.ledger["chains"]):
+                raise ValueError("App attempt already belongs to another handoff.")
+            chain["handoff"]["appTransfer"] = {
+                "attemptId": value["identity"]["attemptId"], "intentHead": value["head"],
+                "stage": "intent", "sessionId": None, "activationSettings": None,
+                "confirmedHead": None, "settings": None}
+    elif stage == "session-bound":
+        if transfer["stage"] == "intent":
+            transfer.update(stage=stage, sessionId=value["session"]["sessionId"])
+    elif transfer["stage"] == "session-bound":
+        transfer.update(stage=stage, activationSettings=deepcopy(value["settings"]))
+    elif transfer["stage"] != "activation-requested":
+        raise ValueError("Bind the native session before the activation boundary.")
+    api.persist()
+    return {"outcome": "app checkpoint persisted; no native effects",
+            "stage": chain["handoff"]["appTransfer"]["stage"],
+            "replay": before == chain["handoff"]["appTransfer"]}
+
+
+def confirm_app_handoff(api, value, now):
+    chain, transfer = app_input(api, value)
+    if transfer is None or transfer["stage"] != "activation-requested":
+        raise ValueError("Durable activation boundary required before receipt confirmation.")
+    app_basis(api, chain, value["head"], effect=True)
+    record = chain["handoff"]
+    if now < issue_pr.timestamp(record["progressAt"]):
+        raise ValueError("App confirmation clock rolled backwards; progress retained.")
+    # A tick can edit the head. Bind that fresh head to this same attempt/session,
+    # not a new activation. Same-head replay preserves all reminder/time state.
+    if transfer["confirmedHead"] != value["head"]:
+        transfer.update(confirmedHead=value["head"], settings=deepcopy(value["settings"]))
+        if record["confirmedAt"] is None or record["head"] != value["head"]:
+            record.update(progressAt=issue_pr.stamp(now))
+            chain.pop("reminder", None)
+        if record["confirmedAt"] is None:
+            record.update(confirmedAt=issue_pr.stamp(now))
+        record.update(phase="watching", head=value["head"], attention=None)
+    api.persist()
+    return {"outcome": "authorized native bridge attestation confirmed; not independently app-authenticated",
+            "pr": value["identity"]["pr"], "head": value["head"], "sessionId": transfer["sessionId"]}
+
+
 def confirm(api, number, head, now, *, app_enabled, address_reviews, fix_ci, resolve_conflicts, merge_disabled):
     if (app_enabled is not True or address_reviews is not True or fix_ci is not True
             or resolve_conflicts is not True or merge_disabled is not True
@@ -419,6 +649,8 @@ def confirm(api, number, head, now, *, app_enabled, address_reviews, fix_ci, res
     if chain is None or not converted(chain) or number != (chain["child"] or chain["origin"]):
         raise ValueError("Exact transferred PR required.")
     value = chain["handoff"]
+    if "appTransfer" in value:
+        raise ValueError("Native app transfer cannot be mixed with legacy manual confirmation.")
     if value["phase"] not in {"handoff_needed", "watching"}:
         raise ValueError("Manual handoff is not ready for app ownership confirmation.")
     api.adoption_effect_guard()

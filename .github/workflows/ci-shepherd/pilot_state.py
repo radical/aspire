@@ -70,6 +70,7 @@ def validate(ledger):
                 raise ValueError("duplicate work-item ID")
             identities.add(record["id"])
     nodes, subjects, operations, chains = set(), set(), set(), set()
+    app_attempts, app_sessions = set(), set()
     for chain in ledger["chains"]:
         contracts.exact(chain, {"id", "origin", "kind", "node", "child", "childNode", "state", "localAttempts",
                                 "rounds", "escalated", "operations", "dispositions", "statusId", "statusPending",
@@ -79,6 +80,14 @@ def validate(ledger):
                         | ({"sourceWorkItem"} if "sourceWorkItem" in chain else set()), "chain")
         if "handoff" in chain:
             handoff.validate(chain["handoff"])
+            transfer = chain["handoff"].get("appTransfer")
+            if transfer is not None:
+                if (transfer["attemptId"] in app_attempts
+                        or transfer["sessionId"] is not None and transfer["sessionId"] in app_sessions):
+                    raise ValueError("duplicate app attempt/session identity")
+                app_attempts.add(transfer["attemptId"])
+                if transfer["sessionId"] is not None:
+                    app_sessions.add(transfer["sessionId"])
             if ledger["repository"] == "microsoft/aspire" and chain["kind"] != "pr":
                 raise ValueError("upstream manual handoff supports direct PRs only")
         if "reminder" in chain:

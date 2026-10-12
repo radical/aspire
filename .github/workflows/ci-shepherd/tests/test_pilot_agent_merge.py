@@ -7,6 +7,7 @@ from datetime import timedelta
 import io
 import base64
 import unittest
+import uuid
 from unittest.mock import patch
 
 from github import IncompleteInventory, LostResponse
@@ -1195,6 +1196,356 @@ class AgentMergeTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual("watching", self.chain()["handoff"]["phase"])
         self.assertNotEqual(previous, self.chain()["reminder"]["id"])
         self.assertEqual("observed", self.chain()["reminder"]["sendState"])
+
+    def app_value(self, api=None):
+        api = api or self.fresh()
+        api.read_authority()
+        chain = api.ledger["chains"][0]
+        transfer = chain["handoff"].get("appTransfer")
+        return {"identity": handoff.app_identity(
+            api, chain, transfer["attemptId"] if transfer else str(uuid.uuid4()),
+            transfer["intentHead"] if transfer else self.pull["head"]["sha"]),
+            "head": self.pull["head"]["sha"]}
+
+    def app_bound(self):
+        self.prepare()
+        value = self.app_value()
+        local.app_checkpoint(self.fresh(), "intent", value)
+        value["session"] = {"sessionId": "NATIVE1", "repository": "radical/aspire", "pr": 7, "activity": "idle"}
+        local.app_checkpoint(self.fresh(), "session-bound", value)
+        return value
+
+    def app_ready(self):
+        value = self.app_bound()
+        value["settings"] = {"enabled": False, "actions": deepcopy(handoff.APP_ACTIONS)}
+        local.app_checkpoint(self.fresh(), "activation-requested", value)
+        value["settings"]["enabled"] = True
+        return value
+
+    def test_app_enumeration_reads_only_canonical_transfers_and_preserves_ledger(self):
+        self.prepare()
+        before = deepcopy(self.transport.comments)
+        writes = deepcopy(self.transport.writes)
+        api = self.fresh()
+        api.write = False
+        with patch.object(api, "sweep", side_effect=AssertionError("discovery prohibited")), \
+                patch.object(handoff, "enroll", side_effect=AssertionError("enrollment prohibited")):
+            result = local.pending_handoffs(api)
+        self.assertEqual(["actionable"], [entry["disposition"] for entry in result["entries"]])
+        self.assertEqual("a" * 40, result["entries"][0]["head"])
+        self.assertEqual((before, writes), (self.transport.comments, self.transport.writes))
+        # A labeled but untracked candidate cannot enter the drain.
+        self.transport.values[PREFIX + "/issues"].append(dict(pr(11), pull_request={}))
+        self.assertEqual(1, len(local.pending_handoffs(self.fresh())["entries"]))
+        api.write = True
+        api.read_authority()
+        api.ledger["chains"][0].pop("handoff")
+        api.persist()
+        self.assertEqual([], local.pending_handoffs(self.fresh())["entries"])
+
+    def test_app_fixed_boundaries_receipt_head_drift_and_replay_keep_one_attempt(self):
+        value = self.app_ready()
+        before = self.chain()
+        self.assertEqual("activation-requested", before["handoff"]["appTransfer"]["stage"])
+        self.assertIsNone(before["handoff"]["appTransfer"]["confirmedHead"])
+        local.confirm_app_handoff(self.fresh(), value, self.clock())
+        self.prepare(present=True)
+        self.clock.advance(seconds=61)
+        self.prepare(present=True)
+        confirmed = self.chain()
+        writes = len(self.transport.writes)
+        local.confirm_app_handoff(self.fresh(), value, self.clock())
+        self.assertEqual(confirmed, self.chain())
+        self.assertEqual(writes, len(self.transport.writes))
+        self.pull["head"]["sha"] = "b" * 40
+        value["head"] = "b" * 40
+        value["session"]["activity"] = "busy"
+        local.confirm_app_handoff(self.fresh(), value, self.clock())
+        current = self.chain()
+        self.assertEqual("a" * 40, current["handoff"]["appTransfer"]["intentHead"])
+        self.assertEqual("b" * 40, current["handoff"]["appTransfer"]["confirmedHead"])
+        self.assertEqual(confirmed["handoff"]["appTransfer"]["attemptId"],
+                         current["handoff"]["appTransfer"]["attemptId"])
+        self.assertEqual(confirmed["handoff"]["appTransfer"]["sessionId"],
+                         current["handoff"]["appTransfer"]["sessionId"])
+        self.assertEqual(confirmed["handoff"]["confirmedAt"], current["handoff"]["confirmedAt"])
+        self.assertEqual(self.clock().isoformat().replace("+00:00", "Z"), current["handoff"]["progressAt"])
+        self.assertNotIn("reminder", current)
+        self.assertEqual(confirmed["operations"], current["operations"])
+        pings = [write for write in self.transport.writes
+                 if write[0] == "POST" and "human-reminder" in write[2].get("body", "")]
+        self.assertEqual(1, len(pings))
+        self.prepare(present=True)
+        episode = self.chain()["reminder"]
+        self.assertNotEqual(confirmed["reminder"]["id"], episode["id"])
+        self.assertEqual("observed", episode["sendState"])
+        self.clock.advance(seconds=59)
+        replay = self.chain()
+        writes = len(self.transport.writes)
+        local.confirm_app_handoff(self.fresh(), value, self.clock())
+        self.assertEqual(replay, self.chain())
+        self.assertEqual(writes, len(self.transport.writes))
+        self.prepare(present=True)
+        self.assertEqual(episode, self.chain()["reminder"])
+        self.clock.advance(seconds=1)
+        self.prepare(present=True)
+        self.assertEqual(episode["id"], self.chain()["reminder"]["id"])
+        self.assertEqual("confirmed", self.chain()["reminder"]["sendState"])
+        pings = [write for write in self.transport.writes
+                 if write[0] == "POST" and "human-reminder" in write[2].get("body", "")]
+        self.assertEqual(2, len(pings))
+        self.assertEqual([], self.task_writes())
+
+    def test_app_malformed_and_wrong_receipts_do_not_change_durable_boundary(self):
+        good = self.app_ready()
+        bad = [None, {}, {"unexpected": True}]
+        for key in good["identity"]:
+            value = deepcopy(good)
+            value["identity"][key] = "wrong"
+            bad.append(value)
+        for key in ("enabled", "actions"):
+            value = deepcopy(good)
+            del value["settings"][key]
+            bad.append(value)
+        for key in handoff.APP_ACTIONS:
+            for replacement in (None, 1, "true", not handoff.APP_ACTIONS[key]):
+                value = deepcopy(good)
+                value["settings"]["actions"][key] = replacement
+                bad.append(value)
+            value = deepcopy(good)
+            del value["settings"]["actions"][key]
+            bad.append(value)
+        for key, replacement in (("head", "b" * 40), ("head", "not-head")):
+            value = deepcopy(good)
+            value[key] = replacement
+            bad.append(value)
+        for key in good["session"]:
+            value = deepcopy(good)
+            value["session"][key] = "wrong"
+            bad.append(value)
+        value = deepcopy(good)
+        value["settings"].update(enabled=False, applied_enabled=True)
+        bad.append(value)
+        value = deepcopy(good)
+        value["settings"]["enabled"] = False
+        bad.append(value)
+        before, writes = self.chain(), deepcopy(self.transport.writes)
+        for value in bad:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                local.confirm_app_handoff(self.fresh(), value, self.clock())
+            self.assertEqual(before, self.chain())
+            self.assertEqual(writes, self.transport.writes)
+
+    def test_app_intent_and_session_conflicts_never_reset_or_skip_boundaries(self):
+        self.prepare()
+        value = self.app_value()
+        local.app_checkpoint(self.fresh(), "intent", value)
+        saved = self.chain()
+        writes = len(self.transport.writes)
+        local.app_checkpoint(self.fresh(), "intent", value)
+        self.assertEqual(writes, len(self.transport.writes))
+        conflict = deepcopy(value)
+        conflict["identity"]["attemptId"] = str(uuid.uuid4())
+        with self.assertRaisesRegex(ValueError, "Conflicting immutable"):
+            local.app_checkpoint(self.fresh(), "intent", conflict)
+        self.assertEqual(saved, self.chain())
+        value["session"] = {"sessionId": "NATIVE1", "repository": "radical/aspire", "pr": 7, "activity": "idle"}
+        skipped = {**value, "settings": {"enabled": True, "actions": deepcopy(handoff.APP_ACTIONS)}}
+        with self.assertRaisesRegex(ValueError, "Bind the native"):
+            local.app_checkpoint(self.fresh(), "activation-requested", skipped)
+        local.app_checkpoint(self.fresh(), "session-bound", value)
+        saved = self.chain()
+        conflict = deepcopy(value)
+        conflict["session"]["sessionId"] = "OTHER"
+        with self.assertRaisesRegex(ValueError, "conflicting native"):
+            local.app_checkpoint(self.fresh(), "session-bound", conflict)
+        self.assertEqual(saved, self.chain())
+        self.assertEqual("reconciliation", local.pending_handoffs(self.fresh())["entries"][0]["disposition"])
+        self.assertEqual([], self.task_writes())
+
+    def test_app_each_checkpoint_revalidates_management_authority_and_head_without_compensation(self):
+        value = self.app_ready()
+        for changes in ({"labels": []}, {"labels": [{"name": "shepherd-hands-off"}]},
+                        {"state": "closed"}, {"merged": True}, {"head": {**self.pull["head"], "sha": "b" * 40}}):
+            original = deepcopy(self.pull)
+            self.pull.update(changes)
+            before, writes = self.chain(), deepcopy(self.transport.writes)
+            for action in (
+                    lambda: local.confirm_app_handoff(self.fresh(), value, self.clock()),
+                    lambda: local.app_checkpoint(self.fresh(), "activation-requested", value)):
+                with self.assertRaises(ValueError):
+                    action()
+                self.assertEqual((before, writes), (self.chain(), self.transport.writes))
+            self.pull.clear()
+            self.pull.update(original)
+        stale = self.fresh()
+        stale.read_authority()
+        writer = self.fresh()
+        writer.read_authority()
+        writer.ledger["cursor"] += 1
+        writer.persist()
+        before, writes = self.chain(), deepcopy(self.transport.writes)
+        with self.assertRaisesRegex(ValueError, "authority changed"):
+            local.confirm_app_handoff(stale, value, self.clock())
+        self.assertEqual((before, writes), (self.chain(), self.transport.writes))
+
+    def test_app_failure_and_flag_removal_keep_transfer_sticky_and_manual_inputs_separate(self):
+        value = self.app_ready()
+        with self.assertRaisesRegex(ValueError, "cannot be mixed"):
+            local.confirm_handoff(self.fresh(), 7, "a" * 40, self.clock(), app_enabled=True,
+                                  address_reviews=True, fix_ci=True, resolve_conflicts=True, merge_disabled=True)
+        value["settings"]["enabled"] = False
+        with self.assertRaises(ValueError):
+            local.confirm_app_handoff(self.fresh(), value, self.clock())
+        frozen = self.chain()["handoff"]["appTransfer"]
+        for _ in range(2):
+            _, packet = self.prepare(self.fresh(manual=False))
+            self.assertIsNone(packet)
+        self.assertEqual(frozen, self.chain()["handoff"]["appTransfer"])
+        self.assertEqual([], self.task_writes())
+
+    def test_app_running_unknown_tasks_and_holds_block_without_mutating_legacy_history(self):
+        api, packet = self.prepare(self.fresh(manual=False, collector=True))
+        pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        self.prepare()
+        value = self.app_value()
+        before, writes = self.chain(), deepcopy(self.transport.writes)
+        for missing in (False, True):
+            if missing:
+                self.transport.values.pop(TASKS + "/TASK1")
+            with self.assertRaises((ValueError, KeyError)):
+                local.app_checkpoint(self.fresh(), "intent", value)
+            self.assertEqual((before, writes), (self.chain(), self.transport.writes))
+        self.assertEqual("attention", local.pending_handoffs(self.fresh())["entries"][0]["disposition"])
+
+    def test_app_imported_source_revocation_running_task_and_unknown_billing_hold_fail_closed(self):
+        from test_work_item_execution import MappingTests
+        import work_item_execution as execution
+        fixture = MappingTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        execution.import_pr(fixture.api, fixture.read)
+        value = self.app_value(fixture.api)
+        local.app_checkpoint(fixture.api, "intent", value)
+        value["session"] = {"sessionId": "NATIVE1", "repository": "radical/aspire", "pr": 7, "activity": "idle"}
+        original_task = deepcopy(fixture.task)
+        original_issue = deepcopy(fixture.transport.values[fixture.prefix + "/issues/900"])
+        for mutation in ("running", "billing", "source", "pause", "assignment", "revocation", "native_hold"):
+            before = deepcopy(fixture.transport.comments)
+            writes = deepcopy(fixture.transport.writes)
+            if mutation == "running":
+                fixture.task["state"] = fixture.task["sessions"][0]["state"] = "in_progress"
+            elif mutation == "billing":
+                fixture.task["sessions"][0].pop("usage")
+            elif mutation == "source":
+                fixture.transport.values[fixture.prefix + "/issues/900"]["state"] = "closed"
+            else:
+                record = fixture.api.ledger["workItems"][0]
+                if mutation == "pause":
+                    record["control"]["action"] = "pause"
+                elif mutation == "revocation":
+                    record["control"]["authority"]["local_edits"] = False
+                elif mutation == "native_hold":
+                    fixture.api.ledger["normalRuns"] = [{
+                        "id": str(uuid.uuid4()), "packetId": str(uuid.uuid4()), "item": record["id"],
+                        "phase": "issue-assessment", "at": "2026-10-04T00:00:00Z", "nativeActual": None,
+                        "nativeReserved": 30, "sessionId": None, "state": "reserved", "context": {},
+                        "decision": None}]
+                else:
+                    record["control"]["revision"] += 1
+                fixture.api.persist()
+                before = deepcopy(fixture.transport.comments)
+                writes = deepcopy(fixture.transport.writes)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                local.app_checkpoint(fixture.api, "session-bound", value)
+            self.assertEqual(before, fixture.transport.comments)
+            self.assertEqual(writes, fixture.transport.writes)
+            fixture.task.clear()
+            fixture.task.update(deepcopy(original_task))
+            fixture.transport.values[fixture.prefix + "/issues/900"] = deepcopy(original_issue)
+            if mutation in {"pause", "assignment", "revocation"}:
+                fixture.api.ledger["workItems"][0]["control"] = deepcopy(fixture.control)
+                fixture.api.persist()
+
+    def test_app_ledger_extension_is_bounded_strict_and_does_not_change_legacy_ledger(self):
+        self.prepare()
+        api = self.fresh()
+        api.read_authority()
+        old = deepcopy(api.ledger)
+        self.assertEqual(old, state.parse(state.render(old)))
+        value = self.app_ready()
+        api = self.fresh()
+        api.read_authority()
+        good = deepcopy(api.ledger)
+        bad = []
+        for key in good["chains"][0]["handoff"]["appTransfer"]:
+            changed = deepcopy(good)
+            changed["chains"][0]["handoff"]["appTransfer"].pop(key)
+            bad.append(changed)
+        for key, replacement in (("stage", "arbitrary"), ("sessionId", "x" * 257),
+                                 ("intentHead", "wrong"), ("attemptId", "not-uuid"),
+                                 ("confirmedHead", "b" * 40), ("settings", value["settings"])):
+            changed = deepcopy(good)
+            changed["chains"][0]["handoff"]["appTransfer"][key] = replacement
+            bad.append(changed)
+        changed = deepcopy(good)
+        changed["chains"][0]["handoff"]["appTransfer"]["extra"] = "unbounded narrative"
+        bad.append(changed)
+        duplicate = deepcopy(good)
+        other = deepcopy(duplicate["chains"][0])
+        other.update(id="another-chain", origin=9, node="NODE9")
+        duplicate["chains"].append(other)
+        bad.append(duplicate)
+        for ledger in bad:
+            with self.subTest(ledger=ledger), self.assertRaises(ValueError):
+                state.validate(ledger)
+        self.assertEqual(good, state.parse(state.render(good)))
+
+    def test_app_completed_legacy_task_with_unknown_credit_hold_is_not_actionable(self):
+        api, packet = self.prepare(self.fresh(manual=False, collector=True))
+        pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, self.clock())
+        task = self.transport.values[TASKS + "/TASK1"]
+        task["state"] = task["sessions"][0]["state"] = "completed"
+        self.prepare()
+        value = self.app_value()
+        before, writes = self.chain(), deepcopy(self.transport.writes)
+        self.assertGreater(before["operations"][0]["workerReserved"], 0)
+        with self.assertRaisesRegex(ValueError, "holds unresolved"):
+            local.app_checkpoint(self.fresh(), "intent", value)
+        self.assertEqual((before, writes), (self.chain(), self.transport.writes))
+        self.assertEqual("attention", local.pending_handoffs(self.fresh())["entries"][0]["disposition"])
+
+    def test_app_lost_session_or_activation_outcomes_remain_reconciliation_not_new_attempts(self):
+        self.prepare()
+        value = self.app_value()
+        local.app_checkpoint(self.fresh(), "intent", value)
+        # A lost session-open response cannot be represented by a guessed ID.
+        before = self.chain()
+        missing = {**value, "session": None}
+        with self.assertRaises(ValueError):
+            local.app_checkpoint(self.fresh(), "session-bound", missing)
+        self.assertEqual(before, self.chain())
+        entry = local.pending_handoffs(self.fresh())["entries"][0]
+        self.assertEqual(("reconciliation", None, "intent"),
+                         (entry["disposition"], entry["sessionId"], entry["stage"]))
+        value["session"] = {"sessionId": "RECOVERED_NATIVE", "repository": "radical/aspire",
+                            "pr": 7, "activity": "idle"}
+        local.app_checkpoint(self.fresh(), "session-bound", value)
+        value["settings"] = {"enabled": False, "actions": deepcopy(handoff.APP_ACTIONS)}
+        local.app_checkpoint(self.fresh(), "activation-requested", value)
+        entry = local.pending_handoffs(self.fresh())["entries"][0]
+        self.assertEqual(("reconciliation", "RECOVERED_NATIVE", "activation-requested"),
+                         (entry["disposition"], entry["sessionId"], entry["stage"]))
+        before, writes = self.chain(), len(self.transport.writes)
+        replay = local.app_checkpoint(self.fresh(), "activation-requested", value)
+        self.assertTrue(replay["replay"])
+        self.assertEqual((before, writes), (self.chain(), len(self.transport.writes)))
+        # Only fresh current-enabled evidence can finish the same attempt.
+        with self.assertRaises(ValueError):
+            local.confirm_app_handoff(self.fresh(), value, self.clock())
+        value["settings"]["enabled"] = True
+        local.confirm_app_handoff(self.fresh(), value, self.clock())
+        self.assertEqual("RECOVERED_NATIVE", self.chain()["handoff"]["appTransfer"]["sessionId"])
 
 
 if __name__ == "__main__":

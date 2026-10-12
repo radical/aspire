@@ -485,6 +485,70 @@ def confirm_handoff(api, number, head, now, *, app_enabled, address_reviews, fix
                                  resolve_conflicts=resolve_conflicts, merge_disabled=merge_disabled)
 
 
+def pending_handoffs(api):
+    import pilot_handoff
+    return pilot_handoff.pending_handoffs(api)
+
+
+def enroll_handoff(api, url, now):
+    """Transfer exactly one managed draft without running discovery or repairs."""
+    import pilot_handoff
+    import work_item_execution
+    match = re.fullmatch(r"https://github\.com/radical/aspire/pull/([1-9][0-9]*)", url)
+    if api.binding != bindings.FORK or match is None:
+        raise ValueError("targeted enrollment requires an exact canonical fork PR URL and main binding")
+    number = int(match[1])
+    if number in {121, api.tracker}:
+        raise ValueError("targeted enrollment excludes legacy root and tracker")
+    if not api.write:
+        raise ValueError("targeted enrollment requires the authorized local writer")
+    api.adoption_effect_guard()
+    api.read_authority()
+    pr = api.mapping(number)
+    if (not github.managed(pr) or pr.get("draft") is not True
+            or pr.get("merged") is not False or pr.get("html_url") != url):
+        raise ValueError("targeted enrollment requires an open managed unmerged draft")
+    previous = state.find_chain(api.ledger, number)
+    if previous is not None and (
+            previous["origin"] != number or previous["kind"] != "pr"
+            or previous["node"] != pr["node_id"] or previous["state"] != "open"):
+        raise ValueError("targeted PR already mapped to a conflicting chain")
+    for record, assignment, saved in work_item_execution.executions(api.ledger):
+        if saved["pr"] is not None and saved["pr"]["number"] == number and (
+                previous is None or previous.get("sourceWorkItem") != {
+                    "item_id": record["id"], "assignment_id": assignment["id"]}
+                or saved["imported_chain_id"] != previous["id"]):
+            raise ValueError("targeted PR has a conflicting source binding")
+    original, mode = deepcopy(api.ledger), api.pr_handoff
+    try:
+        chain = state.adopt(api.ledger, number, "pr", pr["node_id"])
+        api.pr_handoff = "manual"
+        pilot_handoff.enroll(api, chain, now)
+        # Probe existing task/source/billing admission on a copy; never reconcile
+        # other chains or persist compensation when admission is blocked.
+        pilot_handoff.app_basis(api, chain, pr["head"]["sha"], effect=True)
+        if api.mapping(number) != pr:
+            raise ValueError("targeted PR mapping/management changed before enrollment")
+        api.adoption_effect_guard()
+        api.persist()
+    except Exception:
+        api.ledger = original
+        raise
+    finally:
+        api.pr_handoff = mode
+    return pilot_handoff.pending_handoffs(api, number)
+
+
+def app_checkpoint(api, stage, value):
+    import pilot_handoff
+    return pilot_handoff.app_checkpoint(api, stage, value)
+
+
+def confirm_app_handoff(api, value, now):
+    import pilot_handoff
+    return pilot_handoff.confirm_app_handoff(api, value, now)
+
+
 def check_api(api, number):
     value = api.mapping(number)
     comments = api.api.pages(f"{api.prefix}/pulls/{number}/comments")
@@ -504,7 +568,9 @@ def check_api(api, number):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume", "confirm-handoff"])
+    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume", "confirm-handoff",
+                                        "pending-handoffs", "app-checkpoint", "confirm-app-handoff",
+                                        "enroll-handoff"])
     parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name,
                                             bindings.FORK_MERGE_PROOF.name],
                         default=bindings.UPSTREAM.name)
@@ -515,8 +581,12 @@ def main(argv=None):
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--operation")
     parser.add_argument("--expected-head")
-    parser.add_argument("--pr", type=int)
-    parser.add_argument("--pr-handoff", choices=["manual"], default=os.environ.get("CI_SHEPHERD_PR_HANDOFF") or None)
+    parser.add_argument("--pr", help="PR number, or exact canonical fork PR URL for enroll-handoff")
+    parser.add_argument("--pr-handoff", choices=["manual"])
+    parser.add_argument("--stage", choices=["intent", "session-bound", "activation-requested"],
+                        help="Fixed app-checkpoint stage; never invokes native tools")
+    parser.add_argument("--app-input", type=Path,
+                        help="Strict bridge identity/session/current-settings attestation JSON; app modes only")
     parser.add_argument("--app-enabled", action="store_true",
                         help="Operator declares app-native Agent Merge is enabled; not an API verification")
     parser.add_argument("--address-reviews", action="store_true",
@@ -533,6 +603,35 @@ def main(argv=None):
     parser.add_argument("--cloud-approval", type=Path, help="Exact separate task approval; run/watch only")
     parser.add_argument("--normal-policy", type=Path, help="Trusted issue-bound policy object or array; run/watch only")
     args = parser.parse_args(argv)
+    if args.mode == "enroll-handoff":
+        if (args.target != bindings.FORK.name or args.pr is None
+                or re.fullmatch(r"https://github\.com/radical/aspire/pull/[1-9][0-9]*", args.pr) is None):
+            parser.error("enroll-handoff requires --target fork and an exact canonical --pr URL")
+        if (args.operation is not None or args.expected_head is not None or args.pr_handoff is not None
+                or args.publish_worker_results):
+            parser.error("enroll-handoff rejects mixed legacy/manual/run inputs")
+    elif args.pr is not None:
+        try:
+            args.pr = int(args.pr)
+        except ValueError:
+            parser.error("--pr requires a PR number for this mode")
+    app_modes = {"pending-handoffs", "app-checkpoint", "confirm-app-handoff"}
+    if args.mode in app_modes:
+        if (args.operation is not None or args.expected_head is not None or args.pr is not None
+                or args.pr_handoff is not None or args.publish_worker_results
+                or args.app_enabled or args.address_reviews or args.fix_ci
+                or args.resolve_conflicts or args.merge_disabled):
+            parser.error("native app modes reject mixed legacy/manual/run inputs")
+        if args.mode == "pending-handoffs" and (args.app_input is not None or args.stage is not None):
+            parser.error("pending-handoffs is read-only and takes no app input/stage")
+        if args.mode != "pending-handoffs" and args.app_input is None:
+            parser.error("app checkpoint/confirmation requires --app-input")
+        if (args.mode == "app-checkpoint") != (args.stage is not None):
+            parser.error("--stage is required only for app-checkpoint")
+    elif args.app_input is not None or args.stage is not None:
+        parser.error("--app-input/--stage require native app modes")
+    if args.mode not in {*app_modes, "enroll-handoff"} and args.pr_handoff is None:
+        args.pr_handoff = os.environ.get("CI_SHEPHERD_PR_HANDOFF") or None
     if (args.issue_feed is not None or args.cloud_approval is not None
             or args.normal_policy is not None) and args.mode not in {"run", "watch"}:
         parser.error("issue feed, cloud approval and normal policy require normal run/watch mode")
@@ -543,8 +642,9 @@ def main(argv=None):
     if args.mode == "resume" and args.target == bindings.FORK.name:
         parser.error("resume requires an upstream target")
     binding = bindings.FORK_MERGE_PROOF if args.target == bindings.FORK_MERGE_PROOF.name else bindings.select(args.target)
-    if binding == bindings.FORK_MERGE_PROOF and args.mode not in {"observe", "check-api", "confirm-handoff"}:
-        parser.error("isolated fork proof supports only observation and manual handoff confirmation")
+    if binding == bindings.FORK_MERGE_PROOF and args.mode not in {
+            "observe", "check-api", "confirm-handoff", *app_modes}:
+        parser.error("isolated fork proof supports only observation and guarded handoff interfaces")
     if args.pr_handoff not in {None, "manual"}:
         parser.error("unsupported manual PR handoff mode")
     if args.mode == "confirm-handoff" and (
@@ -558,8 +658,8 @@ def main(argv=None):
         if (args.pr is None or args.pr <= 0 or args.pr == 121
                 or binding.subject is not None and args.pr != binding.subject):
             parser.error("this mode requires an explicit supported --pr")
-    elif args.pr is not None:
-        parser.error("--pr is only supported by check-api or confirm-handoff")
+    elif args.pr is not None and args.mode != "enroll-handoff":
+        parser.error("--pr is only supported by check-api, confirm-handoff or enroll-handoff")
     if args.mode != "confirm-handoff" and (
             args.app_enabled or args.address_reviews or args.fix_ci
             or args.resolve_conflicts or args.merge_disabled):
@@ -567,14 +667,17 @@ def main(argv=None):
     try:
         token = selected_token()
         revision = command(["git", "--no-pager", "-C", str(ROOT), "rev-parse", "HEAD"])
-        if args.mode not in {"observe", "check-api"} and command(
+        if args.mode not in {"observe", "check-api", "pending-handoffs"} and command(
                 ["git", "--no-pager", "-C", str(ROOT), "status", "--porcelain"]):
             raise ValueError("commit the reviewed controller source before local effects")
-        if args.mode in {"observe", "check-api"}:
+        if args.mode in {"observe", "check-api", "pending-handoffs"}:
             api = LocalGitHub(token, args.tracker, args.authority, args.tracker_node, write=False,
                               revision=revision, binding=binding)
             api.pr_handoff = args.pr_handoff
             api.read_authority()
+            if args.mode == "pending-handoffs":
+                print(json.dumps(pending_handoffs(api)), flush=True)
+                return 0
             if args.mode == "check-api":
                 print(json.dumps(check_api(api, args.pr)), flush=True)
                 return 0
@@ -582,7 +685,7 @@ def main(argv=None):
             for chain in api.ledger["chains"]:
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())
             return 0
-        if args.mode not in {"resume", "confirm-handoff"} and not reasoning.copilot_version_supported(
+        if args.mode not in {"resume", "confirm-handoff", "enroll-handoff", *app_modes} and not reasoning.copilot_version_supported(
                 command([reasoning.native_executable("copilot"), "--no-auto-update", "--version"])):
             raise ValueError("local decision engine requires Copilot CLI 1.0.92-3 or newer")
         lock_root = Path.home() / ".copilot" / "ci-shepherd" / "locks"
@@ -599,6 +702,15 @@ def main(argv=None):
                                               if args.cloud_approval is not None else None)
                 api.normal_policy = lambda: (contracts.read_json(args.normal_policy)
                                             if args.normal_policy is not None else None)
+                if args.mode == "enroll-handoff":
+                    print(json.dumps(enroll_handoff(api, args.pr, live.clock())), flush=True)
+                    return 0
+                if args.mode in {"app-checkpoint", "confirm-app-handoff"}:
+                    value = contracts.read_json(args.app_input)
+                    result = (app_checkpoint(api, args.stage, value) if args.mode == "app-checkpoint"
+                              else confirm_app_handoff(api, value, live.clock()))
+                    print(json.dumps(result), flush=True)
+                    return 0
                 if args.mode == "confirm-handoff":
                     print(json.dumps(confirm_handoff(api, args.pr, args.expected_head, live.clock(),
                                                      app_enabled=args.app_enabled,

@@ -49,6 +49,19 @@ def rendered_prompts():
 
 
 class PromptTemplateTests(unittest.TestCase):
+    def test_native_app_parent_prompt_is_checked_in_and_requires_real_native_reconciliation(self):
+        import prompt_templates
+        text = prompt_templates.load("app-handoff")
+        for contract in ("pending-handoffs", "app-checkpoint", "confirm-app-handoff",
+                         "without kickoff", "get_session", "native session inventory",
+                         "applied_enabled", "**current**", "intentHead", "confirmedHead",
+                         "merge_pr:false", "authorized parent attestation",
+                         "Do not assume", "never repeat enable", "without compensating writes"):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, text)
+        self.assertLess(text.index("`app-checkpoint --stage intent`"), text.index("Call `open_pr_session`"))
+        self.assertLess(text.index("Persist `activation-requested`"), text.index("call `manage_agent_merge"))
+
     def test_launch_builders_render_reviewable_files_without_interpreting_quoted_data(self):
         import prompt_templates
         originals = rendered_prompts()

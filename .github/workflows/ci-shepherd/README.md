@@ -33,6 +33,7 @@ authority and task-correlation code:
 | `prompts/route-*.md` | Workflow failure, flaky test and product bug specialists |
 | `prompts/repair-worker.md` | Existing PR/issue repair worker |
 | `prompts/initial-handoff.md` | Initial issue task with manual PR handoff |
+| `prompts/app-handoff.md` | Authorized native-app parent drain; no hosted activation |
 | `prompts/fork-fixture-worker.md` | Bounded legacy fork fixture worker |
 | `prompts/transport-proof.md` | Decision transport proof |
 | `prompts/target-fork.md`, `prompts/target-upstream.md` | Target-specific instructions |
@@ -61,6 +62,138 @@ correlation also includes that version. Editing new instructions does not
 retroactively require historical workers to have returned JSON.
 
 ## Explicit issue-linked Cloud Agent execution
+
+### Lean native-app Agent Merge bridge
+
+The authorized app parent can drain existing transferred chains using exactly
+three local interfaces: `pending-handoffs`, `app-checkpoint`, and
+`confirm-app-handoff`. Follow `prompts/app-handoff.md` sequentially. Python and
+gh-aw have no verified app endpoint and cannot activate Agent Merge; this
+adds no service, workflow permission or remote backend.
+
+Enumeration reads only the canonical authority, never the discovery/enrollment
+sweep. Entries are `actionable` (no attempt), `reconciliation` (saved attempt),
+or `attention` (failed fresh guards). Legacy ledgers remain valid. A bounded
+optional `handoff.appTransfer` stores one UUID, immutable `intentHead`, native
+session ID, fixed stage, activation settings, and final settings/`confirmedHead`.
+Repository, chain, PR node, handoff and source-assignment identities remain
+in their existing canonical records and must match every input.
+
+Checkpoint order is `intent → session-bound → activation-requested`; the last
+boundary precedes enable. The parent opens the exact PR session without kickoff,
+verifies association/activity, binds it, reads settings, checkpoints, enables
+only when needed, then reads **current** settings and confirms. All four actions
+are mandatory: review/CI/conflict repair true, merge false, and current enabled
+true. `applied_enabled=true` alone is insufficient. Already-correct settings
+are never toggled. Native response field availability is inspected by the
+parent, not assumed by Python.
+
+Settings/session JSON is an authorized bridge attestation, not independently
+Python-authenticated app evidence. GitHub mapping independently checks PR node
+and head; `get_session` is not assumed to return them. Fresh local source,
+disabled hosted workflow/all completed runs, canonical authority, source
+management, owned-task quiescence and billing holds guard every mutation.
+Failures do not write compensation or restore Shepherd repair ownership.
+
+Lost session-open/activation effects require native inventory/settings
+reconciliation or attention, not blind reopening or re-enabling. A post-tick
+head change confirms the same attempt/session with a fresh `confirmedHead`;
+immutable `intentHead` remains unchanged. Same-head replay leaves progress,
+confirmation timestamps and reminders untouched. One serialized parent is
+required; this is not a cross-writer redesign. Legacy `confirm-handoff`
+remains available but cannot be mixed with a native app attempt.
+
+Read-only fixture discovery (no app activation or GitHub writes):
+
+```bash
+python3 .github/workflows/ci-shepherd/local.py --help
+python3 .github/workflows/ci-shepherd/local.py pending-handoffs \
+  --target fork-merge-proof --tracker 138 --authority 6066457421 \
+  --tracker-node TRACKER138 --workdir artifacts/app-handoff
+```
+
+The isolated target's PR/base identity is fixed in `pilot_binding.py`.
+Use the output only if it proves a current actionable canonical PR; a fixture
+may now be closed, revoked, or absent. Never enroll/create a replacement as
+part of this read. Reviewed controller source must be committed before
+mutation commands can pass the existing clean-source guard.
+
+To enroll one existing adopted draft on the fork's `main` base, use its exact
+canonical URL (not a PR number or an issue URL):
+
+```bash
+python3 .github/workflows/ci-shepherd/local.py enroll-handoff \
+  --pr "$PR_URL" \
+  --target fork --tracker 138 --authority 6066457421 \
+  --tracker-node TRACKER138 --workdir artifacts/app-handoff
+```
+
+Set `PR_URL` to the verified canonical `https://github.com/radical/aspire/pull/N`
+URL and replace the authority arguments with the verified current identities.
+This guarded writer reuses production PR mapping, adoption and sticky handoff
+enrollment. It requires `shepherd-adopted`, rejects `shepherd-hands-off`,
+closed/non-draft PRs, conflicting chain/source bindings, active owned tasks
+and unresolved billing/admission holds. Clean reviewed source, the disabled
+hosted workflow with all runs completed, global enablement and the existing
+local authority lock remain mandatory. It does not sweep adopted issues,
+dispatch coding workers, open native sessions or activate Agent Merge.
+Its result uses `pending-handoffs`' canonical entry contract, restricted to
+the selected PR; unrelated chains are neither enrolled nor probed.
+
+For a selected entry, write an intent input with exactly `identity` and `head`.
+Copy the enumerated identity, fill a new UUID `attemptId`, and set `intentHead`
+and `head` to the enumerated SHA. Session binding additionally requires `session`.
+Activation and confirmation additionally require `settings`:
+
+```json
+{
+  "identity": {
+    "repository": "radical/aspire",
+    "pr": 139,
+    "node": "COPY_CANONICAL_PR_NODE",
+    "chainId": "COPY_CANONICAL_CHAIN",
+    "handoffId": "COPY_CANONICAL_HANDOFF_UUID",
+    "sourceWorkItem": null,
+    "attemptId": "COPY_NEW_ATTEMPT_UUID",
+    "intentHead": "COPY_INITIAL_40_HEX_HEAD"
+  },
+  "head": "COPY_FRESH_40_HEX_HEAD",
+  "session": {
+    "sessionId": "COPY_EXACT_NATIVE_SESSION_ID",
+    "repository": "radical/aspire",
+    "pr": 139,
+    "activity": "idle"
+  },
+  "settings": {
+    "enabled": true,
+    "actions": {
+      "address_reviews": true,
+      "fix_ci": true,
+      "resolve_conflicts": true,
+      "merge_pr": false
+    }
+  }
+}
+```
+
+Copy `sourceWorkItem` exactly (including item/assignment IDs when present);
+these placeholders are not valid receipts. Pre-activation settings must be
+exact booleans with merging off, even when disabled or repair actions are off.
+Confirmation accepts `idle` or the same bound session's post-activation `busy`;
+earlier checkpoints require idle. Do not fabricate absent native fields.
+
+```bash
+python3 .github/workflows/ci-shepherd/local.py app-checkpoint \
+  --target fork-merge-proof --tracker 138 --authority 6066457421 \
+  --tracker-node TRACKER138 --workdir artifacts/app-handoff \
+  --stage intent --app-input artifacts/app-handoff/intent.json
+# Then --stage session-bound with session.json, and activation-requested
+# with activation.json, around the parent native-tool steps.
+python3 .github/workflows/ci-shepherd/local.py confirm-app-handoff \
+  --target fork-merge-proof --tracker 138 --authority 6066457421 \
+  --tracker-node TRACKER138 --workdir artifacts/app-handoff \
+  --app-input artifacts/app-handoff/receipt.json
+```
 
 ### Normal minimal-feed lifecycle
 

@@ -1,5 +1,6 @@
 import base64
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from copy import deepcopy
 import io
 import json
 import os
@@ -881,6 +882,263 @@ class LocalTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual([task_path], sorted({endpoint for _, endpoint, _ in fixture.transport.reads
                                              if "/tasks" in endpoint}))
         self.assertEqual(fresh.ledger, state.parse(fixture.transport.comments[0]["body"]))
+
+
+    def enrollment_fixture(self):
+        from test_pilot_agent_merge import AgentMergeTests
+        fixture = AgentMergeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.pull["draft"] = True
+        return fixture
+
+    def test_targeted_enrollment_is_sticky_and_never_sweeps_or_dispatches_other_issue(self):
+        fixture = self.enrollment_fixture()
+        ledger = state.parse(fixture.transport.comments[0]["body"])
+        other = state.adopt(ledger, 135, "issue", "NODE135")
+        fixture.transport.comments[0]["body"] = state.render(ledger)
+        api = fixture.fresh(manual=False)
+        api.read_authority()
+        with patch.object(api, "sweep", side_effect=AssertionError("no inventory sweep")), \
+                patch.object(api, "start_task", side_effect=AssertionError("no task dispatch")):
+            result = local.enroll_handoff(api, fixture.pull["html_url"], fixture.clock())
+            persisted = deepcopy(api.ledger)
+            again = local.enroll_handoff(api, fixture.pull["html_url"], fixture.clock())
+        self.assertEqual(result, again)
+        self.assertEqual(persisted, api.ledger)
+        self.assertEqual(other, state.find_chain(api.ledger, 135))
+        self.assertEqual([7], [entry["identity"]["pr"] for entry in result["entries"]])
+        self.assertEqual("actionable", result["entries"][0]["disposition"])
+        chain = state.find_chain(api.ledger, 7)
+        self.assertEqual("handoff_pending", chain["handoff"]["phase"])
+        self.assertEqual((0, []), (chain["rounds"], chain["operations"]))
+        self.assertIsNone(api.pr_handoff)
+        self.assertEqual([], fixture.task_writes())
+        self.assertEqual([("PATCH", "repos/radical/aspire/issues/comments/500")],
+                         [(method, endpoint) for method, endpoint, _ in fixture.transport.writes])
+        self.assertFalse(any(endpoint.split("?")[0] in {
+            "repos/radical/aspire/issues", "repos/radical/aspire/issues/135"}
+            for _, endpoint, _ in fixture.transport.reads))
+
+    def test_targeted_enrollment_rejects_wrong_namespace_lifecycle_and_management_without_writes(self):
+        cases = [
+            {"state": "closed"}, {"draft": False}, {"merged": True}, {"labels": []},
+            {"labels": [{"name": "shepherd-adopted"}, {"name": "shepherd-hands-off"}]},
+            {"base": {"repo": {"id": 746880239, "full_name": "radical/aspire"}, "ref": "release"}},
+            {"head": {"repo": {"id": 696529789, "full_name": "microsoft/aspire"},
+                      "ref": "fix-7", "sha": "a" * 40}},
+        ]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                fixture = self.enrollment_fixture()
+                fixture.pull.update(changes)
+                before = deepcopy(fixture.transport.comments)
+                with self.assertRaises(ValueError):
+                    local.enroll_handoff(fixture.fresh(), fixture.pull["html_url"], fixture.clock())
+                self.assertEqual(before, fixture.transport.comments)
+                self.assertEqual([], fixture.transport.writes)
+
+    def test_targeted_enrollment_rejects_duplicate_source_binding_and_active_holds(self):
+        import work_item_execution
+        for conflict in ("child", "source", "hold"):
+            with self.subTest(conflict=conflict):
+                fixture = self.enrollment_fixture()
+                ledger = state.parse(fixture.transport.comments[0]["body"])
+                if conflict == "child":
+                    chain = state.adopt(ledger, 8, "issue", "NODE8")
+                    state.bind_child(ledger, chain, 7, "NODE7")
+                elif conflict == "hold":
+                    chain = state.adopt(ledger, 7, "pr", "NODE7")
+                    state.reserve(ledger, chain, "active", fixture.clock(), local=True)
+                fixture.transport.comments[0]["body"] = state.render(ledger)
+                before = deepcopy(fixture.transport.comments)
+                source = [({"id": "source"}, {"id": "assignment"},
+                           {"pr": {"number": 7}, "imported_chain_id": None, "task_id": None})]
+                with (patch.object(work_item_execution, "executions", return_value=source)
+                      if conflict == "source" else nullcontext()), self.assertRaises(ValueError):
+                    local.enroll_handoff(fixture.fresh(), fixture.pull["html_url"], fixture.clock())
+                self.assertEqual(before, fixture.transport.comments)
+                self.assertEqual([], fixture.transport.writes)
+
+    def test_targeted_enrollment_rejects_active_owned_task_without_reconciliation_writes(self):
+        fixture = self.enrollment_fixture()
+        api, packet = fixture.prepare(fixture.fresh(manual=False, collector=True))
+        from test_pilot_lifecycle import decision
+        from helpers import reconciliation_evidence
+        pilot.settle(api, packet, reconciliation_evidence(decision(packet)), 2, fixture.clock())
+        before = deepcopy(fixture.transport.comments)
+        writes = deepcopy(fixture.transport.writes)
+        with self.assertRaisesRegex(ValueError, "still active"):
+            local.enroll_handoff(fixture.fresh(), fixture.pull["html_url"], fixture.clock())
+        self.assertEqual(before, fixture.transport.comments)
+        self.assertEqual(writes, fixture.transport.writes)
+
+    def test_targeted_enrollment_does_not_probe_unrelated_existing_handoff(self):
+        fixture = self.enrollment_fixture()
+        api = fixture.fresh()
+        api.read_authority()
+        chain = state.adopt(api.ledger, 135, "issue", "NODE135")
+        import pilot_handoff
+        pilot_handoff.enroll(api, chain, fixture.clock())
+        api.persist()
+        before = deepcopy(chain)
+        result = local.enroll_handoff(api, fixture.pull["html_url"], fixture.clock())
+        self.assertEqual(before, state.find_chain(api.ledger, 135))
+        self.assertEqual([7], [entry["identity"]["pr"] for entry in result["entries"]])
+        self.assertFalse(any("/135" in endpoint for _, endpoint, _ in fixture.transport.reads))
+
+    def test_targeted_enrollment_cli_uses_serialized_local_guards_not_reasoning(self):
+        fixture = self.enrollment_fixture()
+        args = ["enroll-handoff", "--pr", fixture.pull["html_url"], "--target", "fork",
+                "--tracker", "99", "--authority", "500", "--tracker-node", "TRACKER99",
+                "--workdir", str(self.work)]
+        with patch.object(local, "command", side_effect=self.command), \
+                patch.object(local.github, "PilotTransport", return_value=fixture.transport), \
+                patch.object(local, "authority_lock", return_value=nullcontext()) as lock, \
+                patch.object(local, "require_source") as source, \
+                patch.object(local, "require_idle_actions") as idle, \
+                patch.object(local, "sweep", side_effect=AssertionError("no sweep")), \
+                patch.object(local.reasoning, "native_executable", side_effect=AssertionError("no reasoner")), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(0, local.main(args))
+        lock.assert_called_once()
+        self.assertGreaterEqual(source.call_count, 2)
+        self.assertGreaterEqual(idle.call_count, 2)
+        self.assertEqual("actionable", json.loads(output.getvalue())["entries"][0]["disposition"])
+        self.assertEqual([], fixture.task_writes())
+        for guard in ("require_source", "require_idle_actions"):
+            with patch.object(local, "command", side_effect=self.command), \
+                    patch.object(local, "authority_lock", return_value=nullcontext()), \
+                    patch.object(local, guard, side_effect=ValueError("blocked")), \
+                    patch.object(local, "LocalGitHub") as api, redirect_stderr(io.StringIO()):
+                self.assertEqual(1, local.main(args))
+            api.assert_not_called()
+        with patch.object(local.github, "PilotTransport", return_value=fixture.transport):
+            api = local.LocalGitHub("fixture", 99, 500, "TRACKER99", write=True,
+                                    revision="b" * 40, binding=bindings.FORK)
+        before = deepcopy(fixture.transport.comments)
+        with patch.object(local, "require_source"), patch.object(local, "require_idle_actions"), \
+                patch.object(api, "enabled", return_value=False), \
+                self.assertRaisesRegex(ValueError, "globally disabled"):
+            local.enroll_handoff(api, fixture.pull["html_url"], fixture.clock())
+        self.assertEqual(before, fixture.transport.comments)
+
+    def test_targeted_enrollment_cli_rejects_noncanonical_urls_and_mixed_inputs_before_credentials(self):
+        common = ["--target", "fork", "--tracker", "99", "--authority", "500",
+                  "--tracker-node", "TRACKER99", "--workdir", str(self.work)]
+        cases = [["enroll-handoff"], *[
+            ["enroll-handoff", "--pr", url] for url in (
+                "7", "https://github.com/microsoft/aspire/pull/7",
+                "https://github.com/radical/aspire/issues/7",
+                "https://github.com/radical/aspire/pull/07",
+                "https://github.com/radical/aspire/pull/7?x=1")]]
+        for flag, value in (("--pr-handoff", "manual"), ("--operation", "unused"),
+                            ("--expected-head", "a" * 40), ("--app-input", "unused.json"),
+                            ("--issue-feed", "unused.json"), ("--target", "upstream")):
+            cases.append(["enroll-handoff", "--pr", "https://github.com/radical/aspire/pull/7",
+                          flag, value])
+        for args in cases:
+            with self.subTest(args=args), patch.object(local, "selected_token") as token, \
+                    redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                local.main(common + args)
+            token.assert_not_called()
+
+    def test_app_cli_rejects_mixed_missing_and_wrong_stage_inputs_before_credentials(self):
+        common = ["--target", "fork", "--tracker", "99", "--authority", "500",
+                  "--tracker-node", "TRACKER99", "--workdir", str(self.work)]
+        cases = [
+            ["pending-handoffs", "--stage", "intent"],
+            ["pending-handoffs", "--app-input", "unused.json"],
+            ["app-checkpoint"],
+            ["app-checkpoint", "--app-input", "unused.json"],
+            ["app-checkpoint", "--stage", "other", "--app-input", "unused.json"],
+            ["confirm-app-handoff"],
+            ["confirm-app-handoff", "--app-input", "unused.json", "--stage", "intent"],
+            ["observe", "--app-input", "unused.json"],
+        ]
+        for flag in ("--app-enabled", "--address-reviews", "--fix-ci", "--resolve-conflicts",
+                     "--merge-disabled", "--publish-worker-results"):
+            cases.append(["pending-handoffs", flag])
+        for flag, value in (("--pr", "7"), ("--expected-head", "a" * 40),
+                            ("--operation", "unused"), ("--pr-handoff", "manual"),
+                            ("--issue-feed", "unused.json"), ("--cloud-approval", "unused.json"),
+                            ("--normal-policy", "unused.json")):
+            cases.append(["pending-handoffs", flag, value])
+        for args in cases:
+            with self.subTest(args=args), patch.object(local, "selected_token") as token, \
+                    redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                local.main(args + common)
+            token.assert_not_called()
+
+    def test_app_cli_runs_three_interfaces_without_reasoning_or_sweep(self):
+        from test_pilot_agent_merge import AgentMergeTests
+        fixture = AgentMergeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.prepare()
+        common = ["--target", "fork", "--tracker", "99", "--authority", "500",
+                  "--tracker-node", "TRACKER99", "--workdir", str(self.work)]
+        value = fixture.app_value()
+        receipt = self.work / "receipt.json"
+        seen_write = []
+        def api_factory(*args, **kwargs):
+            api = fixture.fresh()
+            api.write = kwargs["write"]
+            seen_write.append(api.write)
+            return api
+        with patch.object(local, "command", side_effect=self.command), \
+                patch.object(local, "LocalGitHub", side_effect=api_factory), \
+                patch.object(local, "authority_lock", return_value=nullcontext()), \
+                patch.object(local, "require_source"), patch.object(local, "require_idle_actions"), \
+                patch.object(local.reasoning, "native_executable", side_effect=AssertionError("no reasoner")), \
+                patch.object(local, "sweep", side_effect=AssertionError("no sweep")), \
+                redirect_stdout(io.StringIO()):
+            with patch.dict(os.environ, {"CI_SHEPHERD_PR_HANDOFF": "manual"}):
+                self.assertEqual(0, local.main(["pending-handoffs"] + common))
+            for stage in ("intent", "session-bound", "activation-requested"):
+                if stage == "session-bound":
+                    value["session"] = {"sessionId": "NATIVE1", "repository": "radical/aspire",
+                                        "pr": 7, "activity": "idle"}
+                if stage == "activation-requested":
+                    value["settings"] = {"enabled": True, "actions": {
+                        "address_reviews": True, "fix_ci": True, "resolve_conflicts": True, "merge_pr": False}}
+                receipt.write_text(json.dumps(value))
+                self.assertEqual(0, local.main(["app-checkpoint", "--stage", stage,
+                                               "--app-input", str(receipt)] + common))
+            self.assertEqual(0, local.main(["confirm-app-handoff", "--app-input", str(receipt)] + common))
+        self.assertEqual([False, True, True, True, True], seen_write)
+        self.assertEqual("watching", fixture.chain()["handoff"]["phase"])
+        self.assertEqual([], fixture.task_writes())
+
+    def test_app_mutations_keep_local_source_disabled_hosted_and_complete_run_guards(self):
+        from test_pilot_agent_merge import AgentMergeTests
+        fixture = AgentMergeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.prepare()
+        value = fixture.app_value()
+        receipt = self.work / "intent.json"
+        receipt.write_text(json.dumps(value))
+        argv = ["app-checkpoint", "--stage", "intent", "--app-input", str(receipt),
+                "--target", "fork", "--tracker", "99", "--authority", "500",
+                "--tracker-node", "TRACKER99", "--workdir", str(self.work)]
+        before = deepcopy(fixture.transport.comments)
+        for guard, message in (("require_source", "source changed"), ("require_idle_actions", "hosted overlap")):
+            with patch.object(local, "command", side_effect=self.command), \
+                    patch.object(local, "authority_lock", return_value=nullcontext()), \
+                    patch.object(local, guard, side_effect=ValueError(message)), \
+                    patch.object(local, "LocalGitHub") as api, redirect_stderr(io.StringIO()):
+                self.assertEqual(1, local.main(argv))
+            api.assert_not_called()
+            self.assertEqual(before, fixture.transport.comments)
+        # The real adapter repeats these guards at the checkpoint boundary.
+        with patch.object(local.github, "PilotTransport", return_value=fixture.transport):
+            api = local.LocalGitHub("fixture", 99, 500, "TRACKER99", write=True,
+                                    revision="b" * 40, binding=bindings.FORK)
+        with patch.object(local, "require_source"), patch.object(local, "require_idle_actions"), \
+                patch.object(api, "enabled", return_value=False), self.assertRaisesRegex(ValueError, "globally disabled"):
+            local.app_checkpoint(api, "intent", value)
+        self.assertEqual(before, fixture.transport.comments)
 
 
 if __name__ == "__main__":
