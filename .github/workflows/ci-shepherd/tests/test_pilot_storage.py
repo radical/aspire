@@ -4,9 +4,9 @@ import os
 import unittest
 from unittest.mock import patch
 
+from helpers import WorkspaceTest
 import branch_memory as memory
 from github import LostResponse
-from helpers import WorkspaceTest
 import live
 import local
 import normal_loop
