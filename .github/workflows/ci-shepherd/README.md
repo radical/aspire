@@ -945,6 +945,72 @@ unknown billing, hands-off labels or multiple previous attempts block retry.
 This narrow retry does not reset attempt records or authorize another worker
 after an ambiguous send.
 
+### Candidate fix PRs: observation without branch ownership
+
+`candidate_fixes.py` checks for existing fixes before every new work-item task
+dispatch, including the final transport callback. A candidate holds new repair
+work without granting any permission to edit its branch, adopt it into a managed
+chain, request reviews, or merge it. A worker already sent is **not cancelled**
+when another fix appears. The normal loop observes both its independently mapped
+task PR and every external candidate, including after its own PR was imported.
+The hosted loop observes newly imported chains before status reporting; the
+initial sweep does not yet contain a PR imported later in the same run.
+
+Discovery uses same-repository issue timeline cross-references and GitHub's native
+`closingIssuesReferences` relationship, not keyword guesses in PR prose. It
+follows one hop through a failing-test tracker with the
+`<!-- failing-test-signature: v1:... -->` convention and an explicit incident
+backlink, or through a previously verified `tracker_followup.linked_issue`
+receipt. Thus a PR fixing a test tracker can cover a broader CI incident without
+directly naming that incident in its closing clause. Fork-headed PRs are valid
+observation candidates; no managed-PR eligibility checks or write rights are
+inferred from their author, branch name, or link.
+
+The persisted `candidate_fixes` inventory retains closed, merged and unlinked
+candidates. Those states require reassessment, not an automatic new paid retry.
+A merge is a candidate state, **not** proof that the incident is resolved.
+Discovery bounds are two pages per timeline, five related trackers, ten retained
+PR identities, twenty closing references per PR, and 400 KB aggregate evidence
+per scan. Incomplete reads retain prior observations, expose an attention reason,
+and defer new dispatch while existing tasks continue to be observed and billed.
+History-bound exhaustion also defers; identities are never silently evicted.
+The final discovery read and task POST cannot be atomic: a PR appearing in that
+remaining gap is handled by dual tracking on a later run, never cancellation.
+
+Known-unsent candidate holds release worker credit reservations and do not occupy
+worker slots. They preserve the assignment and suppress duplicate launches.
+Escaped or uncertain task sends keep their existing conservative accounting.
+Candidate tracking never changes the local packet authority or the approval for
+an existing cloud task.
+
+With current explicit issue-comment permission, the normal loop posts a concise
+notice on the **source issue** listing all tracked PRs and their ownership/state.
+The notice has its own canonical send intent, independent of worker results and
+original intake freshness; it does not rewrite assignment evidence or relax
+repair/import guards. Identical relationships and states do not post again
+(head-only pushes are not notification-worthy). Lost receipts are reconciled
+against exact, operator-owned comment bodies before any new version is sent.
+Zero or ambiguous matches require human attention rather than blindly replaying
+a POST. Notice history is bounded to ten versions. A notice-induced issue
+timestamp change does not authorize bypassing existing source-freshness checks.
+
+Manual cloud work items without a settled normal intake are observed in normal
+sweeps, including candidate notices when authorized, but never dispatched or
+imported automatically. Legacy packet-only items remain status-only. Explicitly
+refresh a manual item's candidates using a new exclusive output directory:
+
+```shell
+python3 -B .github/workflows/ci-shepherd/work_item_execution.py candidates \
+  --item /absolute/operator/item.json \
+  --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --workdir /absolute/operator/new-candidates
+```
+
+This command does not launch, cancel, close, merge, or grant branch-write access
+to any PR. Ordinary enable, source-cleanliness, hosted-idleness, control and
+authority guards still apply. If comment permission is absent, tracking remains
+persisted without publication.
+
 The API chooses the new head branch. It does not offer a fresh-branch naming
 guarantee, `draft` request field, runtime limit or hard credit cap. The prompt
 requests draft status; import independently verifies it. Shared reservation/

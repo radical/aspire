@@ -579,10 +579,20 @@ def prepare(api, run, now, feed=None):
         if record["control"]["issue"]["repository"] != api.repository:
             row["statusOnly"] = "Issue is outside the authority namespace."
         elif not prior:
-            row["statusOnly"] = "No settled normal intake receipt."
-        if "statusOnly" in row:
+            row["statusOnly"] = ("No normal intake; cloud work is observation-only." if saved
+                                 else "No settled normal intake receipt.")
+        if "statusOnly" in row and (saved is None or record["control"]["issue"]["repository"] != api.repository):
             worklist.append(row)
             continue
+        observed_items[item] = source(api, record["control"]["issue"]["number"])
+        import candidate_fixes
+        tracking = candidate_fixes.refresh(api, record)
+        row["candidateFixes"] = deepcopy(tracking["pulls"])
+        if tracking["attention"] is not None:
+            row["candidateAttention"] = tracking["attention"]
+        api.persist()
+        if eligible(observed_items[item]):
+            candidate_fixes.publish(api, record)
         observed_items[item] = source(api, record["control"]["issue"]["number"])
         if saved and saved["state"] == "sent":
             try:

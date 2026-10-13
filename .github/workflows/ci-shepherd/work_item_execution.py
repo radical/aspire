@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 from github import LostResponse, RejectedEffect
+import candidate_fixes
 import prompt_templates
 import issue_pr
 import live
@@ -126,10 +127,13 @@ def slots(ledger, *, include_reserved=True):
     return sum(value["state"] != "no_send" and (
         value["state"] in {"reserved", "sending", "uncertain"}
         or value["task_state"] not in state.TERMINAL)
-        for _, _, value in executions(ledger)
-        if include_reserved or not (
+        for record, _, value in executions(ledger)
+        if not (value["state"] == "reserved" and value["worker_reserved"] == 0
+                and "candidate_fixes" in record
+                and candidate_fixes.blocks(record["candidate_fixes"]))
+        and (include_reserved or not (
             value["state"] == "reserved" and value["task_id"] is None
-            and value["session_id"] is None and value["task_state"] is None))
+            and value["session_id"] is None and value["task_state"] is None)))
 
 
 def spend(ledger, now):
@@ -266,6 +270,7 @@ def execute(api, read_control, read_approval):
             or control["revision"] != assignment["revision"] or assignment["result"] is not None):
         raise ValueError("stale or revoked execution control")
     available(api, record)
+    candidate_fixes.guard_launch(api, record)
     refresh_capacity(api)
     # Queued known-unsent work is not an admitted worker. Keep its credit hold
     # and retain conservative prepared-slot accounting for other admission paths.
@@ -294,6 +299,7 @@ def execute(api, read_control, read_approval):
         if read_approval() != approval:
             raise ValueError("cloud approval changed")
         available(api, record)
+        candidate_fixes.guard_launch(api, record)
         refresh_capacity(api)
         # Once sending is durable, this candidate already occupies one slot.
         limit = 3 if value["state"] == "sending" else 2
@@ -629,7 +635,7 @@ def refresh_all(api):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["prepare", "prepare-retry", "execute", "observe", "import", "checkpoint"])
+    parser.add_argument("mode", choices=["prepare", "prepare-retry", "execute", "observe", "candidates", "import", "checkpoint"])
     parser.add_argument("--expected-task", help="Exact old terminal task; prepare-retry only")
     parser.add_argument("--item", type=Path, required=True, help="Trusted operator-owned control JSON")
     parser.add_argument("--approval", type=Path, help="Exact trusted cloud approval; execute only")
@@ -666,6 +672,13 @@ def main(argv=None):
                 receipt = prepare_retry(api, read_control, args.expected_task)
             elif args.mode == "execute":
                 receipt = execute(api, read_control, lambda: contracts.read_json(args.approval))
+            elif args.mode == "candidates":
+                import candidate_fixes
+                _, record = locate(api, read_control)
+                receipt = candidate_fixes.refresh(api, record)
+                api.persist()
+                candidate_fixes.publish(api, record)
+                receipt = deepcopy(record["candidate_fixes"])
             elif args.mode in {"observe", "import"}:
                 receipt = observe(api, read_control, adopt=args.mode == "import")
             else:

@@ -289,6 +289,122 @@ class NormalLoopTests(unittest.TestCase):
         })
         return pull
 
+    def external_candidate(self):
+        pull = pr(8)
+        pull["base"].update(ref="main", repo=self.repo)
+        pull.update(state="open", merged=False, body="Fixes #20872")
+        pull["head"]["repo"] = {"full_name": "another/aspire"}
+        self.remote.values[f"{self.prefix}/pulls/8"] = pull
+        self.remote.values[f"{self.prefix}/pulls/8/closing-issues"] = [
+            {"number": 20872, "repository": {"nameWithOwner": "microsoft/aspire"}}]
+        self.remote.values.setdefault(f"{self.prefix}/issues/20872/timeline", []).append(
+            {"event": "cross-referenced", "source": {"issue": {
+                "number": 8, "node_id": pull["node_id"],
+                "url": f"https://api.github.com/{self.prefix}/issues/8", "pull_request": {}}}})
+        return pull
+
+    def test_existing_candidate_suppresses_launch_and_reports_once_across_fresh_clients(self):
+        self.policy()
+        self.external_candidate()
+        packet = self.prepare(FEED)
+        receipt = self.settle(packet, self.intake(packet))
+        self.assertEqual("deferred", receipt["outcome"])
+        self.assertEqual([], self.posts)
+        self.prepare()
+        self.prepare()
+        self.assertEqual([], self.posts)
+        self.assertEqual(1, len(self.issue_posts))
+        self.assertIn("/pull/8", self.issue_posts[0][0]["body"])
+        self.assertEqual([], self.saved()["chains"])
+        self.assertEqual(0, state.worker_slots(self.saved()))
+
+    def test_late_candidate_tracks_both_without_cancelling_or_adopting_external_pr(self):
+        self.launch()
+        self.policy()
+        self.add_pr(0)
+        self.external_candidate()
+        self.prepare()
+        self.prepare()
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(1, len(self.issue_posts))
+        record = self.saved()["workItems"][0]
+        self.assertEqual([(7, True), (8, False)],
+                         [(pull["number"], pull["own"]) for pull in record["candidate_fixes"]["pulls"]])
+        self.assertEqual("sent", record["assignments"][0]["execution"]["state"])
+        self.assertEqual("in_progress", record["assignments"][0]["execution"]["task_state"])
+        self.assertEqual([], self.saved()["chains"])
+        self.assertEqual([], [write for write in self.remote.writes if write[1].endswith("/labels")])
+        self.assertIn("/pull/7", self.issue_posts[0][0]["body"])
+        self.assertIn("/pull/8", self.issue_posts[0][0]["body"])
+
+    def test_incomplete_candidate_inventory_does_not_stop_existing_task_observation(self):
+        self.launch()
+        self.external_candidate()
+        self.remote.paged_responses[f"{self.prefix}/issues/20872/timeline?per_page=100&page=1"] = Response(
+            [], {"Link": "<https://untrusted.example/timeline?page=2>; rel=\"next\""})
+        self.prepare()
+        record = self.saved()["workItems"][0]
+        self.assertFalse(record["candidate_fixes"]["complete"])
+        self.assertEqual("in_progress", record["assignments"][0]["execution"]["task_state"])
+        self.assertEqual(1, len(self.posts))
+
+    def test_external_candidate_is_observed_after_our_pr_is_imported(self):
+        self.launch()
+        self.task("completed")
+        self.add_pr(1)
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        normal_loop.prepare(api, RUN, self.clock())
+        self.assertEqual(1, len(self.saved()["chains"]))
+        imported = deepcopy(self.saved()["chains"])
+        self.policy()
+        self.external_candidate()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        normal_loop.prepare(api, RUN, self.clock())
+        record = self.saved()["workItems"][0]
+        self.assertEqual([(7, True), (8, False)],
+                         [(pull["number"], pull["own"]) for pull in record["candidate_fixes"]["pulls"]])
+        self.assertEqual(imported, self.saved()["chains"])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(1, len(self.issue_posts))
+
+    def test_manual_cloud_item_is_observed_without_normal_intake_or_automatic_dispatch(self):
+        self.launch()
+        manual = self.saved()
+        manual.pop("normalRuns")
+        self.remote.comments[0]["body"] = state.render(manual)
+        self.policy()
+        self.add_pr(0)
+        self.external_candidate()
+        self.prepare()
+        self.prepare()
+        record = self.saved()["workItems"][0]
+        self.assertEqual([(7, True), (8, False)],
+                         [(pull["number"], pull["own"]) for pull in record["candidate_fixes"]["pulls"]])
+        self.assertEqual("in_progress", record["assignments"][0]["execution"]["task_state"])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual([], self.saved()["chains"])
+        self.assertEqual(1, len(self.issue_posts))
+
+    def test_hosted_import_and_candidate_rerun_have_fresh_chain_observations(self):
+        self.launch()
+        self.task("completed")
+        self.add_pr(1)
+        self.prepare()
+        self.assertEqual(1, len(self.saved()["chains"]))
+        imported = self.saved()["chains"][0]["id"]
+        self.policy()
+        self.external_candidate()
+        self.prepare()
+        self.prepare()
+        saved = self.saved()
+        self.assertEqual([imported], [chain["id"] for chain in saved["chains"]])
+        self.assertEqual([(7, True), (8, False)],
+                         [(pull["number"], pull["own"]) for pull in saved["workItems"][0]["candidate_fixes"]["pulls"]])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(1, len(self.issue_posts))
+
     def test_issue_policy_launches_during_intake_without_second_approval_turn(self):
         self.policy()
         packet = self.prepare(FEED)

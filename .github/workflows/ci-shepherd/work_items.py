@@ -246,7 +246,11 @@ def new_record(control):
 
 def validate_record(record):
     contracts.exact(record, {"id", "control", "assignments", "preview", "publication", "comment"}
-                    | ({"retry_of"} if "retry_of" in record else set()), "work-item record")
+                    | ({"retry_of"} if "retry_of" in record else set())
+                    | ({"candidate_fixes"} if "candidate_fixes" in record else set()), "work-item record")
+    if "candidate_fixes" in record:
+        import candidate_fixes
+        candidate_fixes.validate(record["candidate_fixes"])
     if "retry_of" in record:
         receipt = record["retry_of"]
         contracts.exact(receipt, {"item_id", "assignment_id", "task_id"}, "explicit retry")

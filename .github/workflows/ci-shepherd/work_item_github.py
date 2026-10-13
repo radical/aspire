@@ -29,6 +29,9 @@ class WorkItemTransport(pilot_github.PilotTransport):
             raise ValueError("invalid work-item endpoint")
         if self.memory_capability(method, endpoint, body):
             return
+        import candidate_fixes
+        if candidate_fixes.capability(self, method, endpoint, body):
+            return
         issue = self.control["issue"]
         issue_path = f"repos/{issue['repository']}/issues/{issue['number']}"
         prefix = "repos/radical/aspire"
@@ -74,6 +77,17 @@ class WorkItemGitHub(pilot_github.PilotGitHub):
     def authority_guard(self):
         local.require_idle_actions(self.token)
         super().authority_guard()
+
+    def guard_candidates(self, control):
+        local.require_source(self.revision)
+        if not self.enabled():
+            raise ValueError("Shepherd disabled")
+        self.authority_guard()
+        self.verify_issue(control["issue"])
+        latest = self.read_authority()
+        record = next(entry for entry in latest["workItems"] if entry["id"] == control["id"])
+        if record["control"] != control:
+            raise ValueError("candidate control changed")
 
     def verify_issue(self, issue):
         if issue != self.control["issue"]:
@@ -180,6 +194,9 @@ class CloudWorkItemTransport(pilot_github.PilotTransport):
 
     def validate_endpoint(self, method, endpoint, body):
         if self.memory_capability(method, endpoint, body):
+            return
+        import candidate_fixes
+        if candidate_fixes.capability(self, method, endpoint, body):
             return
         target = self.binding.repository
         if method == "POST" and endpoint == f"agents/repos/{target}/tasks":

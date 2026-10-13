@@ -44,6 +44,14 @@ class Transport:
             variables = body["variables"]
             repository = variables["owner"] + "/" + variables["name"]
             value = self.values[f"repos/{repository}/pulls/{variables['number']}"]
+            import candidate_fixes
+            if body["query"] == candidate_fixes.QUERY:
+                nodes = self.values.get(f"repos/{repository}/pulls/{variables['number']}/closing-issues", [])
+                return Response({"data": {"repository": {
+                    "nameWithOwner": repository, "pullRequest": {
+                        "id": value["node_id"], "number": value["number"],
+                        "closingIssuesReferences": {"nodes": deepcopy(nodes),
+                                                   "pageInfo": {"hasNextPage": False}}}}}}, {})
             if body["query"] == feedback.QUERY:
                 comments = self.values.get(f"repos/{repository}/pulls/{variables['number']}/comments", [])
                 start = 0 if variables["after"] is None else int(variables["after"].removeprefix("threads:"))

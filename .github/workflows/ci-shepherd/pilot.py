@@ -58,6 +58,11 @@ def prepare(api, run, now, *, present=True, feed=None):
     normal = normal_loop.prepare(api, run, now, feed)
     if normal is not None:
         return normal
+    # Normal intake can import a verified task PR after the initial chain sweep.
+    for chain in api.ledger["chains"]:
+        number = chain["child"] or chain["origin"]
+        if number not in observations:
+            observations[number] = api.observe(chain)
     review_started = False
     for chain in api.ledger["chains"]:
         if handoff.converted(chain):

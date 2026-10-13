@@ -123,6 +123,10 @@ class PilotTransport(live.HTTPTransport):
     def is_read(self, method, endpoint, body):
         if self.memory_capability(method, endpoint, body):
             return method == "GET" or body.get("query") == memory.AVAILABILITY
+        import candidate_fixes
+        if (method == "POST" and endpoint == "graphql"
+                and candidate_fixes.capability(self, method, endpoint, body)):
+            return True
         if method == "POST" and endpoint == "graphql":
             validate_graphql(body, self.binding)
             return True
@@ -133,6 +137,9 @@ class PilotTransport(live.HTTPTransport):
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
         if self.memory_capability(method, endpoint, body):
+            return
+        import candidate_fixes
+        if candidate_fixes.capability(self, method, endpoint, body):
             return
         if (method == "POST" and endpoint == f"agents/repos/{self.binding.repository}/tasks"
                 and isinstance(body, dict) and isinstance(body.get("prompt"), str)
@@ -354,6 +361,27 @@ class PilotGitHub:
     inline_repairs = True
     result_collector = None
     publish_results = False
+
+    def observe_candidates(self, record):
+        import candidate_fixes
+        self.transport.candidate_repository = record["control"]["issue"]["repository"]
+        try:
+            return candidate_fixes.scan(self, record)
+        finally:
+            self.transport.candidate_repository = None
+
+    def guard_candidates(self, control):
+        """Observation/publication guard independent of original intake freshness."""
+        self.normal_guard()
+        self.authority_guard()
+        value = self.api.get(f"repos/{control['issue']['repository']}/issues/{control['issue']['number']}")
+        if (value.get("node_id") != control["issue"]["node_id"] or value.get("state") != "open"
+                or any(label.get("name") == "shepherd-hands-off" for label in value.get("labels", []))):
+            raise ValueError("candidate root identity or management changed")
+        latest = self.read_authority()
+        record = next(entry for entry in latest["workItems"] if entry["id"] == control["id"])
+        if record["control"] != control:
+            raise ValueError("candidate control changed")
 
     @property
     def result_capable(self):
