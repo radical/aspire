@@ -6,6 +6,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -27,8 +28,10 @@ import work_item_execution as execution
 import work_item_followup as followup
 import pilot_github
 import run_report
+import work_item_receiver as receiver
 from test_pilot_github import Transport, pr
-from test_work_items import result
+from test_work_item_receiver import Authority
+from test_work_items import control, result
 
 
 RUN = {"repository": "radical/aspire", "runId": "41", "runAttempt": "1", "workflowSha": "b" * 40}
@@ -496,6 +499,58 @@ class NormalLoopTests(unittest.TestCase):
             self.prepare(FEED | {"requested_route": "workflow_failure"})
         with self.assertRaises(ValueError):
             self.prepare(FEED | {"issue_url": "https://github.com/radical/aspire/issues/20872"})
+
+    def test_persisted_manual_items_are_status_only_during_fork_intake(self):
+        os.environ.update(SHEPHERD_TARGET="fork", CI_SHEPHERD_TRACKER="99",
+                          CI_SHEPHERD_AUTHORITY_COMMENT="500", CI_SHEPHERD_TRACKER_NODE="TRACKER99")
+        self.prefix = "repos/radical/aspire"
+        self.repo = {"id": bindings.FORK.repository_id, "full_name": "radical/aspire"}
+        self.remote.values[self.prefix] = dict(self.repo, default_branch="main")
+        self.remote.values[self.prefix + "/issues/20872"] = dict(
+            self.issue, repository_url="https://api.github.com/" + self.prefix,
+            body="https://github.com/radical/aspire/actions/runs/100")
+        run = deepcopy(self.remote.values["repos/microsoft/aspire/actions/runs/100"])
+        run["repository"] = self.repo
+        self.remote.values[self.prefix + "/actions/runs/100"] = run
+        self.remote.values[self.prefix + "/actions/runs/100/attempts/1/jobs"] = deepcopy(
+            self.remote.values["repos/microsoft/aspire/actions/runs/100/attempts/1/jobs"])
+        feed = {"reported_kind": "workflow_failure",
+                "issue_url": "https://github.com/radical/aspire/issues/20872"}
+        for repository in ("microsoft/aspire", "radical/aspire"):
+            with self.subTest(repository=repository):
+                manual = control()
+                manual["issue"]["repository"] = repository
+                manual["occurrence"]["repository"] = repository
+                authority = Authority()
+                receiver.receive(authority, lambda: deepcopy(manual), lambda packet: None)
+                before = deepcopy(authority.saved["workItems"])
+                self.remote.comments[0]["body"] = state.render(authority.saved)
+                self.remote.reads.clear()
+                packet = self.prepare(feed)
+                self.assertEqual("worklist", packet["normal"])
+                self.assertEqual("issue-intake", packet["packets"][0]["normal"])
+                row = packet["worklist"][0]
+                self.assertEqual(manual["issue"], row["issue"])
+                self.assertEqual("delivered", row["state"])
+                self.assertEqual(
+                    "Issue is outside the authority namespace." if repository != "radical/aspire"
+                    else "No settled normal intake receipt.",
+                    row["statusOnly"])
+                issue_reads = [endpoint.split("?")[0] for method, endpoint, _ in self.remote.reads
+                               if method == "GET" and re.fullmatch(r"repos/[^/]+/[^/]+/issues/900", endpoint)]
+                self.assertEqual([], issue_reads)
+                self.assertEqual(before, self.saved()["workItems"])
+
+    def test_owned_normal_item_source_failure_still_aborts_prepare(self):
+        packet = self.prepare(FEED)
+        self.assertEqual("approval-required", self.settle(packet, self.intake(packet))["outcome"])
+        before = self.saved()
+        self.remote.values[self.prefix + "/issues/20872"]["repository_url"] = (
+            "https://api.github.com/repos/radical/aspire")
+        with self.assertRaisesRegex(ValueError, "exact source issue identity unavailable"):
+            self.prepare()
+        self.assertEqual(before, self.saved())
+        self.assertEqual([], self.posts)
 
     def test_large_intake_context_keeps_full_source_and_occurrence_digests(self):
         observed = normal_loop.source(SimpleNamespace(

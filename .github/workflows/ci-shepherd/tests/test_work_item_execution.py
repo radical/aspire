@@ -24,6 +24,7 @@ from test_pilot_github import Transport, pr
 from test_work_item_receiver import Authority
 from test_work_items import control, result, validation
 import work_item_execution as execution
+import normal_loop
 
 
 class CloudAuthority(Authority):
@@ -123,6 +124,69 @@ class ExecutionTests(unittest.TestCase):
                     execution.execute(api, self.read, lambda: approval)
                 self.assertEqual([], api.posts)
                 self.assertEqual(before, api.saved)
+
+    def test_final_adapter_admission_guard_restores_canonical_reservation(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        self.api.normal_approval = lambda: deepcopy(approval)
+        self.api.token = "fixture"
+        with patch.object(state, "worker_slots", side_effect=[0, 0, 1, 3]):
+            receipt = normal_loop.dispatch_reserved(self.api, self.control["id"])
+        self.assertEqual("deferred", receipt["outcome"])
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("reserved", saved["state"])
+        self.assertIsNone(saved["task_id"])
+        self.assertGreater(saved["worker_reserved"], 0)
+        self.assertEqual("shared cloud capacity exhausted", saved["attention"])
+        self.assertEqual([], self.api.posts)
+        self.assertEqual("sent", normal_loop.dispatch_reserved(self.api, self.control["id"])["outcome"])
+        normal_loop.dispatch_reserved(self.api, self.control["id"])
+        self.assertEqual(1, len(self.api.posts))
+
+    def test_deferred_checkpoint_uncertainty_propagates_without_further_writes(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        self.api.normal_approval = lambda: deepcopy(approval)
+        self.api.token = "fixture"
+        original = self.api.persist
+        writes = []
+
+        def fail_retry_checkpoint():
+            value = self.api.ledger["workItems"][0]["assignments"][0]["execution"]
+            writes.append(deepcopy(value))
+            if len(writes) == 3:
+                raise pilot_github.AuthorityUncertain("retry checkpoint unavailable")
+            original()
+
+        with patch.object(state, "worker_slots", side_effect=[0, 0, 1, 3]), \
+                patch.object(self.api, "persist", side_effect=fail_retry_checkpoint):
+            with self.assertRaisesRegex(pilot_github.AuthorityUncertain, "retry checkpoint unavailable"):
+                normal_loop.dispatch_reserved(self.api, self.control["id"])
+        self.assertEqual(3, len(writes))
+        self.assertEqual("reserved", writes[-1]["state"])
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("sending", saved["state"])
+        self.assertGreater(saved["worker_reserved"], 0)
+        self.assertEqual(saved["worker_reserved"], writes[-1]["worker_reserved"])
+        self.assertEqual([], self.api.posts)
+
+    def test_admission_error_outside_pre_post_callback_never_resets_send_intent(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        self.api.normal_approval = lambda: deepcopy(approval)
+        self.api.token = "fixture"
+
+        def remote_failure(body, before_send):
+            before_send()
+            self.api.posts.append((deepcopy(body), deepcopy(self.api.saved)))
+            raise execution.AdmissionDeferred("adapter error after remote effect")
+
+        with patch.object(self.api, "start_task", side_effect=remote_failure):
+            with self.assertRaisesRegex(execution.AdmissionDeferred, "after remote effect"):
+                normal_loop.dispatch_reserved(self.api, self.control["id"])
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("sending", saved["state"])
+        self.assertIsNone(saved["task_id"])
+        self.assertGreater(saved["worker_reserved"], 0)
+        self.assertEqual("sending", normal_loop.dispatch_reserved(self.api, self.control["id"])["outcome"])
+        self.assertEqual(1, len(self.api.posts))
 
     def test_wrong_or_incomplete_approval_never_sends(self):
         prepared = execution.prepare(self.api, self.read)
@@ -528,7 +592,12 @@ class MappingTests(unittest.TestCase):
                     remote["state"] = remote["sessions"][0]["state"] = "in_progress"
                 return original(body, before_send)
             with patch.object(self.api, "start_task", side_effect=resumed):
-                self.assertEqual("uncertain", execution.execute(self.api, read, lambda: approval)["outcome"])
+                with self.assertRaisesRegex(execution.AdmissionDeferred, "capacity exhausted"):
+                    execution.execute(self.api, read, lambda: approval)
+            candidate = state.parse(self.transport.comments[0]["body"])["workItems"][2]["assignments"][0]["execution"]
+            self.assertEqual("reserved", candidate["state"])
+            self.assertIsNone(candidate["task_id"])
+            self.assertGreater(candidate["worker_reserved"], 0)
         else:
             with self.assertRaisesRegex(ValueError, "capacity exhausted"):
                 execution.execute(self.api, read, lambda: approval)

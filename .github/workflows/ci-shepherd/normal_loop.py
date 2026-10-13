@@ -364,9 +364,13 @@ def dispatch_reserved(api, item):
     if approval is None:
         return {"outcome": "approval-required", "approval_template": execution.approval_template(record, assignment),
                 "request": execution.request(api, record, assignment), "control": deepcopy(control)}
+    assignment_id = assignment["id"]
     try:
         return execution.execute(api, read, read_approval)
     except execution.AdmissionDeferred as error:
+        # execute reloads authority, replacing the original assignment object.
+        current = next(value for value in api.ledger["workItems"] if value["id"] == item)
+        assignment = next(value for value in current["assignments"] if value["id"] == assignment_id)
         if assignment["execution"]["state"] != "reserved":
             raise
         reason = followup.safe(error, api.token, 500)
@@ -394,10 +398,23 @@ def prepare(api, run, now, feed=None):
     worklist = []
     for record in api.ledger.get("workItems", []):
         item = record["id"]
-        observed_items[item] = source(api, record["control"]["issue"]["number"])
+        prior = [value for value in api.ledger.get("normalRuns", [])
+                 if value["item"] == item and value["phase"] == "issue-intake" and value["state"] == "settled"]
         saved = record["assignments"][-1].get("execution") if record["assignments"] else None
         row = {"item": item, "issue": deepcopy(record["control"]["issue"]),
-               "control": record["control"]["action"], "state": saved["state"] if saved else "unassigned"}
+               "control": record["control"]["action"],
+               "state": saved["state"] if saved else (
+                   record["assignments"][-1]["delivery"] if record["assignments"] else "unassigned")}
+        # Legacy packet assignments are not normal-loop ownership. In particular,
+        # their issue numbers cannot be resolved against the authority repository.
+        if record["control"]["issue"]["repository"] != api.repository:
+            row["statusOnly"] = "Issue is outside the authority namespace."
+        elif not prior:
+            row["statusOnly"] = "No settled normal intake receipt."
+        if "statusOnly" in row:
+            worklist.append(row)
+            continue
+        observed_items[item] = source(api, record["control"]["issue"]["number"])
         if saved and saved["state"] == "sent":
             try:
                 task = execution.refresh(api, record, record["assignments"][-1])
@@ -443,7 +460,7 @@ def prepare(api, run, now, feed=None):
         item = record["id"]
         prior = [value for value in api.ledger.get("normalRuns", [])
                  if value["item"] == item and value["phase"] == "issue-intake" and value["state"] == "settled"]
-        if not prior:
+        if not prior or item not in observed_items:
             continue
         control = record["control"]
         observed = observed_items[item]

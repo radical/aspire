@@ -550,6 +550,18 @@ task and session IDs exclusively from canonical `workItems`, refresh platform
 state, and wait while a task remains active. Closed, paused, hands-off, or
 source-revision-changed items retain history without new effects.
 
+Legacy manual assignments without settled normal intake receipts and items
+outside the authority repository remain status-only worklist rows, with a
+`statusOnly` reason. Their stored issue identities and assignments are preserved;
+the normal loop does not look up their issue numbers in the authority repository.
+Source refresh failures for owned, in-namespace normal items still abort the turn.
+
+If cloud capacity or credit admission fails before the task POST, the assignment
+returns to a durable `reserved` checkpoint with its credit hold intact. A later
+turn can dispatch that same assignment once admission succeeds. Only the
+pre-POST guards may restore this retryable state; unknown send outcomes or
+uncertain authority publication never authorize a retry.
+
 When a completed task produces a substantive pull request with changed files,
 the normal loop validates issue-to-PR timeline association and imports the PR
 via `work_item_execution.import_pr` before transcript collection. Imported tasks

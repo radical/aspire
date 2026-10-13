@@ -267,13 +267,28 @@ def execute(api, read_control, read_approval):
     fresh()
     value["state"] = "sending"
     api.persist()
-    fresh()
+
+    def before_send():
+        try:
+            fresh()
+        except AdmissionDeferred:
+            # Both this guard and the adapter callback run before the task POST.
+            # Only definite admission denial is retryable; retain the credit hold.
+            value["state"] = "reserved"
+            api.persist()
+            raise
+
+    before_send()
     try:
-        task_id = api.start_task(body, fresh)
+        task_id = api.start_task(body, before_send)
         items.identifier(task_id, "returned task ID")
     except AuthorityUncertain:
         # The last pre-POST guard can lose authority. Preserve durable intent
         # and stop the batch; compensation cannot write through uncertain authority.
+        raise
+    except AdmissionDeferred:
+        # The callback checkpoints known-unsent intent. Do not reset here: an
+        # adapter failure outside that callback may follow a remote effect.
         raise
     except RejectedEffect:
         value.update(state="no_send", worker_reserved=0)

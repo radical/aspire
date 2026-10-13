@@ -489,6 +489,52 @@ class ShepherdMultiItemTurnTests(unittest.TestCase):
         self.assertGreater(first["worker_reserved"], 0)
         self.assertIsNone(first["task_id"])
 
+    def test_resumed_workers_after_sending_checkpoint_leave_candidate_retryable(self):
+        self.launch_both()
+        self.task("TASK1", "completed", SESSION1, 0)
+        self.task("TASK2", "completed", SESSION2, 1)
+        self.remote.values[f"{self.prefix}/issues/20874"] = dict(
+            self.issue1, number=20874, node_id="ISSUE20874")
+        policies = [self.policy(number) for number in (20872, 20873, 20874)]
+        os.environ["CI_SHEPHERD_NORMAL_POLICY"] = json.dumps(policies)
+        packet = self.prepare({"reported_kind": "workflow_failure",
+                               "issue_url": "https://github.com/microsoft/aspire/issues/20874"})
+        original = pilot_github.PilotGitHub.persist
+        checkpoints = []
+
+        def resume_at_sending(api):
+            original(api)
+            records = api.ledger.get("workItems", [])
+            if (len(records) == 3 and records[2]["assignments"]
+                    and records[2]["assignments"][-1]["execution"]["state"] == "sending"):
+                checkpoints.append(deepcopy(self.saved()))
+                self.task("TASK1", "in_progress", SESSION1, 0)
+                self.task("TASK2", "in_progress", SESSION2, 1)
+
+        with patch.object(pilot_github.PilotGitHub, "persist", autospec=True, side_effect=resume_at_sending):
+            receipt = self.settle(packet, self.turn_decision(packet))
+        self.assertEqual("deferred", receipt["items"][-1]["outcome"])
+        candidate = self.saved()["workItems"][2]["assignments"][-1]
+        self.assertEqual("reserved", candidate["execution"]["state"])
+        self.assertEqual("shared cloud capacity exhausted", candidate["execution"]["attention"])
+        self.assertIsNone(candidate["execution"]["task_id"])
+        self.assertEqual(checkpoints[0]["workItems"][2]["assignments"][-1]["execution"]["worker_reserved"],
+                         candidate["execution"]["worker_reserved"])
+        self.assertGreater(candidate["execution"]["worker_reserved"], 0)
+        self.assertEqual(2, len(self.posts))
+        self.assertEqual(["in_progress", "in_progress"],
+                         [row["assignments"][-1]["execution"]["task_state"]
+                          for row in self.saved()["workItems"][:2]])
+
+        self.task("TASK1", "completed", SESSION1, 0)
+        self.task("TASK2", "completed", SESSION2, 1)
+        self.prepare()
+        self.assertEqual(3, len(self.posts))
+        self.assertEqual(candidate["id"], self.saved()["workItems"][2]["assignments"][-1]["id"])
+        self.task("TASK3", "in_progress", "33333333-3333-4333-8333-333333333333", 2)
+        self.prepare()
+        self.assertEqual(3, len(self.posts))
+
     def test_batch_refresh_rejects_cross_item_session_correlation(self):
         self.launch_both()
         first = self.task("TASK1", "in_progress", SESSION1, 0)
