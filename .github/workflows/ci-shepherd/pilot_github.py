@@ -22,6 +22,8 @@ import pilot_feedback as review_feedback
 import pilot_authors as authors
 import pilot_reviews as copilot_reviews
 import pilot_handoff as handoff
+import branch_memory as memory
+import pilot_storage as storage
 
 REPOSITORY = live.REPOSITORY
 PREFIX = "repos/" + REPOSITORY
@@ -77,8 +79,50 @@ class PilotTransport(live.HTTPTransport):
         self.tracker, self.authority = tracker, authority
         self.approved_request = None
         self.approved_report = None
+        self.memory_request = None
+        self.memory_migration_document = None
+
+    def memory_capability(self, method, endpoint, body):
+        if self.memory_request is None or (method, endpoint, body) != self.memory_request:
+            return False
+        read = method == "GET" or method == "POST" and endpoint == "graphql" and body.get("query") == memory.AVAILABILITY
+        if not read and (not self.write or getattr(self, "read_only", False)):
+            raise ValueError("read-only transport cannot write memory")
+        memory.validate_request(method, endpoint, body, REPOSITORY, live.REPOSITORY_ID,
+                                self.tracker, self.authority, self.binding.name)
+        if method == "POST" and endpoint == "graphql" and body["query"] == memory.APPEND:
+            storage.validate_transport_document(
+                self, memory.mutation_bytes(body["variables"]["input"]["fileChanges"]["additions"][0]["contents"]))
+        elif method == "POST" and endpoint == PREFIX + "/git/blobs":
+            storage.validate_transport_document(self, memory.mutation_bytes(body["content"]))
+        if method == "PATCH":
+            descriptor = storage.parse_pointer(body["body"], storage.contracts.loads(
+                body["body"][len(storage.HEADER):], max_bytes=storage.MAX_POINTER)["authority"])
+            authority = descriptor["authority"]
+            if (authority["controllerRepository"] != REPOSITORY
+                    or authority["controllerRepositoryId"] != live.REPOSITORY_ID
+                    or authority["trackerId"] != self.tracker or authority["commentId"] != self.authority
+                    or authority["binding"] != self.binding.name
+                    or authority["targetRepository"] != self.binding.repository
+                    or authority["targetRepositoryId"] != self.binding.repository_id
+                    or authority["actorId"] != 1472 or authority["actorLogin"] != "radical"):
+                raise ValueError("memory pointer capability identity mismatch")
+        return True
+
+    def response_limit(self, method, endpoint, body):
+        if self.memory_capability(method, endpoint, body):
+            return memory.MAX_WIRE_BYTES
+        return super().response_limit(method, endpoint, body)
+
+    def missing_response(self, method, endpoint, status):
+        if (status == 404 and method == "GET" and self.memory_request == (method, endpoint, None)
+                and endpoint == PREFIX + "/git/ref/heads/" + memory.BRANCH):
+            return memory.MemoryRefMissing(endpoint)
+        return super().missing_response(method, endpoint, status)
 
     def is_read(self, method, endpoint, body):
+        if self.memory_capability(method, endpoint, body):
+            return method == "GET" or body.get("query") == memory.AVAILABILITY
         if method == "POST" and endpoint == "graphql":
             validate_graphql(body, self.binding)
             return True
@@ -88,6 +132,8 @@ class PilotTransport(live.HTTPTransport):
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid pilot endpoint")
+        if self.memory_capability(method, endpoint, body):
+            return
         if (method == "POST" and endpoint == f"agents/repos/{self.binding.repository}/tasks"
                 and isinstance(body, dict) and isinstance(body.get("prompt"), str)
                 and body["prompt"].startswith("ci-shepherd-work-item: ")):
@@ -344,6 +390,9 @@ class PilotGitHub:
                 raise ValueError("upstream requires separate controller authority")
         self.ledger = None
         self.expected = None
+        self.controller_repository, self.controller_repository_id = REPOSITORY, live.REPOSITORY_ID
+        self.storage_revision = self.observed_revision = None
+        self.memory_authorized = False
         self.packet_time = None
         self.high_water = None
         self.clock = live.clock
@@ -394,6 +443,8 @@ class PilotGitHub:
     @contextmanager
     def followup_scope(self, control, assignment, observed):
         import normal_loop
+        if self.memory_authorized and self.storage_revision is None:
+            raise ValueError("initialize memory before capturing follow-up references")
         if getattr(self, "_normal_followup", None) is not None:
             raise ValueError("nested normal follow-up forbidden")
         pins = self.followup_pins({"id": control["id"], "control": control, "assignments": [assignment]})
@@ -489,7 +540,7 @@ class PilotGitHub:
         finally:
             self.transport.approved_report = None
 
-    def read_authority(self):
+    def authority_body(self):
         tracker = self.api.get(f"{PREFIX}/issues/{self.tracker}")
         if (tracker["number"] != self.tracker or tracker["node_id"] != self.tracker_node
                 or tracker["state"] != "open" or "pull_request" in tracker):
@@ -498,7 +549,17 @@ class PilotGitHub:
         candidates = [comment for comment in comments if self.owned(comment) and state.MARKER in comment.get("body", "")]
         if len(candidates) != 1 or candidates[0]["id"] != self.authority_id:
             raise ValueError("pilot authority missing/ambiguous/replaced; no initialization")
-        observed = state.parse(candidates[0]["body"])
+        return candidates[0]["body"]
+
+    def read_authority(self):
+        body = self.authority_body()
+        if storage.is_pointer(body):
+            observed, revision = storage.read(self, body)
+            if self.authority_body() != body:
+                raise ValueError("authority pointer changed during read")
+        else:
+            observed, revision = state.parse(body), None
+        self.observed_revision = revision
         if observed["repository"] != self.repository:
             raise ValueError("authority target namespace mismatch")
         if self.binding in {bindings.UPSTREAM, bindings.FORK_MERGE_PROOF} and any(
@@ -507,10 +568,23 @@ class PilotGitHub:
         if self.expected is None:
             self.expected = deepcopy(observed)
             self.ledger = deepcopy(observed)
+            self.storage_revision = revision
         return observed
 
+    def initialize_authority(self):
+        self.read_authority()
+        if self.memory_authorized and self.storage_revision is None:
+            try:
+                storage.activate(self)
+            except memory.MemoryUncertain as error:
+                raise AuthorityUncertain(str(error)) from error
+
+    def adopt_authority(self, observed):
+        self.expected, self.ledger = deepcopy(observed), deepcopy(observed)
+        self.storage_revision = self.observed_revision
+
     def authority_guard(self):
-        if self.read_authority() != self.expected:
+        if self.read_authority() != self.expected or self.observed_revision != self.storage_revision:
             raise ValueError("repository authority changed")
 
     def adoption_effect_guard(self):
@@ -520,9 +594,19 @@ class PilotGitHub:
     def persist(self):
         if not self.write or self.ledger is None:
             raise ValueError("authenticated hosted writer required")
-        body = state.render(self.ledger)
         if self.ledger == self.expected:
+            if self.storage_revision is not None:
+                self.authority_guard()
             return
+        if self.storage_revision is not None:
+            try:
+                storage.persist(self)
+            except memory.MemoryUncertain as error:
+                # Business handlers already propagate this type instead of
+                # compensating a possibly successful authority publication.
+                raise AuthorityUncertain(str(error)) from error
+            return
+        body = state.render(self.ledger)
         self.authority_guard()
         try:
             response = self.transport("PATCH", f"{PREFIX}/issues/comments/{self.authority_id}", {"body": body})

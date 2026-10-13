@@ -12,6 +12,7 @@ from github import IncompleteInventory, LostResponse
 import issue_pr
 import live
 import pilot_state as state
+import pilot_storage as storage
 import round as contracts
 import work_item_execution as execution
 import work_item_followup as followup
@@ -426,7 +427,7 @@ def reserve(api, run, now, item, phase, context):
     # Leave room for both bounded copies, a report and settlement metadata.
     settlement_reserve = 10000 if phase == "issue-assessment" else 16000
     try:
-        admitted = len(state.render(api.ledger).encode()) + settlement_reserve <= state.MAX_BODY
+        admitted = storage.size(api, api.ledger) + settlement_reserve <= storage.limit(api)
     except ValueError:
         receipts.remove(value)
         raise
@@ -490,6 +491,7 @@ def dispatch_reserved(api, item):
 
 
 def prepare(api, run, now, feed=None):
+    storage.initialize(api)
     if not hasattr(api, "normal_approval"):
         if feed is not None:
             raise ValueError("normal hosted work-item adapter unavailable")

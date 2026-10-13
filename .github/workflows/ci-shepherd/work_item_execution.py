@@ -15,6 +15,7 @@ import live
 import local
 from pilot_github import AuthorityUncertain
 import pilot_state as state
+import pilot_storage as storage
 import pilot_handoff as handoff
 import round as contracts
 import work_item_receiver as receiver
@@ -245,7 +246,7 @@ def execute(api, read_control, read_approval):
     value.update(approval=approval, worker_reserved=hold, attention=None)
     body = request(api, record, assignment)
     # Reserve room for bounded mapping/import settlement before any remote effect.
-    if len(state.render(api.ledger).encode()) + 8000 > state.MAX_BODY:
+    if storage.size(api, api.ledger) + 8000 > storage.limit(api):
         raise AdmissionDeferred("cloud settlement capacity exhausted")
     api.persist()
 

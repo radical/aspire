@@ -20,6 +20,7 @@ import pilot_binding as bindings
 import pilot_github as github
 import pilot_feedback as review_feedback
 import pilot_state as state
+import pilot_storage as storage
 import pilot_reminders as reminders
 import reasoning
 import round as contracts
@@ -108,6 +109,7 @@ class LocalGitHub(github.PilotGitHub):
             if not self.enabled():
                 raise ValueError("Shepherd globally disabled; no new work-item effects")
         self.normal_guard = normal_guard
+        self.memory_authorized = os.environ.get("CI_SHEPHERD_MEMORY_WRITE") == "true"
 
     def authority_guard(self):
         require_idle_actions(self.token)
@@ -715,6 +717,8 @@ def main(argv=None):
                                               if args.cloud_approval is not None else None)
                 api.normal_policy = lambda: (contracts.read_json(args.normal_policy)
                                             if args.normal_policy is not None else None)
+                if api.memory_authorized and api.enabled():
+                    storage.initialize(api)
                 if args.mode == "enroll-handoff":
                     print(json.dumps(enroll_handoff(api, args.pr, live.clock())), flush=True)
                     return 0

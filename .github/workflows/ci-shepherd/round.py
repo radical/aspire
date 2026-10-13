@@ -59,6 +59,21 @@ def write_json(path, value):
         stream.write("\n")
 
 
+def read_envelope(path):
+    import pilot_storage
+    return pilot_storage.read_host_json(path, max_bytes=pilot_storage.MAX_ENVELOPE)
+
+
+def write_envelope(path, value):
+    import pilot_storage
+    pilot_storage.write_host_json(path, value, max_bytes=pilot_storage.MAX_ENVELOPE)
+
+
+def write_packet(path, value):
+    import pilot_storage
+    pilot_storage.write_host_json(path, value, max_bytes=MAX_JSON_BYTES)
+
+
 def validate_run(run):
     exact(run, RUN_KEYS, "run identity")
     for key, value in run.items():
@@ -93,8 +108,8 @@ def prepare(directory, run, *, native_session=False):
         "nonce": secrets.token_hex(16), "kind": "transport-proof",
     }
     envelope = {"schemaVersion": 1, "packet": packet, "sessionId": None if native_session else str(uuid.uuid4())}
-    write_json(trusted / "packet.json", packet)
-    write_json(trusted / "envelope.json", envelope)
+    write_packet(trusted / "packet.json", packet)
+    write_envelope(trusted / "envelope.json", envelope)
     return packet, envelope
 
 
@@ -484,7 +499,7 @@ def smoke(directory, run, executable, *, process=None, provider_env=None):
     try:
         decision, report = reasoning.execute(directory / "agent", packet, envelope["sessionId"],
                                              executable, process=process, provider_env=provider_env)
-        trusted = read_json(directory / "trusted" / "envelope.json")
+        trusted = read_envelope(directory / "trusted" / "envelope.json")
         validate_decision(trusted, decision, run)
         write_json(directory / "reasoning-report.json", report)
         write_json(directory / "decision.json", decision)
@@ -538,7 +553,7 @@ def main(argv=None):
                 output.write(f"packet={json.dumps(packet, separators=(',', ':'))}\n")
         elif args.command == "collect":
             import reasoning
-            envelope = read_json(args.trusted / "envelope.json")
+            envelope = read_envelope(args.trusted / "envelope.json")
             if envelope["packet"]["run"] != host_run():
                 raise ValueError("prepare envelope belongs to another run")
             evidence = reasoning.collect(args.session_root, args.logs, args.outcome, args.out)
@@ -552,7 +567,7 @@ def main(argv=None):
                 validate_decision({**envelope, "sessionId": evidence["sessionId"]}, observed, host_run())
         else:
             import reasoning
-            envelope = read_json(args.trusted / "envelope.json")
+            envelope = read_envelope(args.trusted / "envelope.json")
             if read_json(args.trusted / "packet.json") != envelope["packet"]:
                 raise ValueError("trusted prepare artifact packet substitution")
             decision = safe_output(read_json(args.decision))

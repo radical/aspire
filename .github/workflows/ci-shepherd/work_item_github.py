@@ -10,15 +10,16 @@ import local
 import pilot_binding as bindings
 import pilot_github
 import pilot_state as state
+import pilot_storage as storage
 import work_items as items
 
 
 REPOSITORY_IDS = {"radical/aspire": live.REPOSITORY_ID, "microsoft/aspire": bindings.UPSTREAM.repository_id}
 
 
-class WorkItemTransport(live.HTTPTransport):
-    def __init__(self, token, tracker, authority, control):
-        super().__init__(token, write=True)
+class WorkItemTransport(pilot_github.PilotTransport):
+    def __init__(self, token, tracker, authority, control, *, binding=bindings.FORK):
+        super().__init__(token, write=True, tracker=tracker, authority=authority, binding=binding)
         self.tracker, self.authority = tracker, authority
         self.control = deepcopy(items.validate_control(control))
 
@@ -26,6 +27,8 @@ class WorkItemTransport(live.HTTPTransport):
         path = urlparse(endpoint)
         if path.scheme or path.netloc or path.fragment or any(part in {".", ".."} for part in path.path.split("/")):
             raise ValueError("invalid work-item endpoint")
+        if self.memory_capability(method, endpoint, body):
+            return
         issue = self.control["issue"]
         issue_path = f"repos/{issue['repository']}/issues/{issue['number']}"
         prefix = "repos/radical/aspire"
@@ -60,6 +63,7 @@ class WorkItemGitHub(pilot_github.PilotGitHub):
         self.control = deepcopy(items.validate_control(control))
         transport = transport if transport is not None else WorkItemTransport(token, tracker, authority, control)
         super().__init__(transport, tracker, authority, node, write=True, binding=bindings.FORK)
+        storage.install_local_policy(self)
 
     def enabled(self):
         value = local.metadata("repos/radical/aspire/actions/variables/CI_SHEPHERD_ENABLE", self.token)
@@ -144,6 +148,8 @@ class CloudWorkItemTransport(pilot_github.PilotTransport):
         self.task_repository = binding.repository
 
     def validate_endpoint(self, method, endpoint, body):
+        if self.memory_capability(method, endpoint, body):
+            return
         target = self.binding.repository
         if method == "POST" and endpoint == f"agents/repos/{target}/tasks":
             if self.approved_request is None or body != self.approved_request:
@@ -159,7 +165,8 @@ class FollowupTransport(WorkItemTransport):
     """Exact saved-PR reads only; no task POST, PR import or general reads."""
 
     def __init__(self, token, tracker, authority, control):
-        super().__init__(token, tracker, authority, control)
+        binding = bindings.FORK if control["issue"]["repository"] == "radical/aspire" else bindings.UPSTREAM_ALL
+        super().__init__(token, tracker, authority, control, binding=binding)
         self.task_id = None
         self.saved_pull = None
         self.tracker_search = None
@@ -168,6 +175,8 @@ class FollowupTransport(WorkItemTransport):
         self.read_only = False
 
     def validate_endpoint(self, method, endpoint, body):
+        if self.memory_capability(method, endpoint, body):
+            return
         if self.read_only and method != "GET":
             raise ValueError("read-only follow-up transport prohibits every GitHub mutation")
         if method == "PATCH":
@@ -212,6 +221,7 @@ class FollowupGitHub(WorkItemGitHub):
         self.control = deepcopy(items.validate_control(control))
         pilot_github.PilotGitHub.__init__(
             self, transport, tracker, authority, node, write=True, binding=binding)
+        storage.install_local_policy(self)
 
 
 class ReadOnlyFollowupGitHub(FollowupGitHub):
@@ -223,6 +233,7 @@ class ReadOnlyFollowupGitHub(FollowupGitHub):
         self.remote_expected = None
         self.simulated = None
         self.write = False
+        self.memory_authorized = False
 
     def read_authority(self):
         observed = super().read_authority()
@@ -234,11 +245,12 @@ class ReadOnlyFollowupGitHub(FollowupGitHub):
 
     def authority_guard(self):
         local.require_idle_actions(self.token)
-        if super().read_authority() != self.remote_expected:
+        if super().read_authority() != self.remote_expected or self.observed_revision != self.storage_revision:
             raise ValueError("repository authority changed during read-only collection")
 
     def persist(self):
-        state.render(self.ledger)
+        storage.size(self, self.ledger)
+        storage.validate_candidate(self, self.ledger)
         self.authority_guard()
         self.simulated = deepcopy(self.ledger)
         self.expected = deepcopy(self.ledger)
@@ -252,6 +264,7 @@ class CloudWorkItemGitHub(WorkItemGitHub):
         transport = transport if transport is not None else CloudWorkItemTransport(token, tracker, authority, control)
         pilot_github.PilotGitHub.__init__(
             self, transport, tracker, authority, node, write=True, binding=binding)
+        storage.install_local_policy(self)
 
     def start_task(self, body, before_send):
         import work_item_execution as execution

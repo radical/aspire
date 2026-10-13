@@ -9,6 +9,9 @@ from unittest.mock import patch
 
 from test_normal_loop import NormalLoopTests, FEED, SESSION
 import pilot_github
+import pilot
+from test_normal_loop import RUN
+from memory_fixture import enable, seed_full_context
 import pilot_state as state
 import work_item_execution as execution
 from test_work_items import result
@@ -33,10 +36,26 @@ def main():
                 os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = saved["approval"]
             if saved.get("policy"):
                 os.environ["CI_SHEPHERD_NORMAL_POLICY"] = saved["policy"]
+            if saved.get("memory"):
+                enable(fixture)
+                fixture.remote.objects = saved["memory"]["objects"]
+                fixture.remote.head = saved["memory"]["head"]
+                fixture.remote.calls = saved["memory"]["calls"]
         packet = saved.get("packet")
         with redirect_stdout(sys.stderr):
-            if command in {"prepare", "prepare-feed"}:
+            if command == "activate-memory":
+                original = seed_full_context(fixture, original_context=saved["intake_context"])
+                enable(fixture)
+                api = pilot.hosted_api(RUN, os.environ)
+                api.initialize_authority()
+                if api.ledger != original:
+                    raise AssertionError("migration altered full ledger")
+                value = {"outcome": "activated", "legacyBytes": len(state.render(original).encode()),
+                         "memoryBytes": len(api.storage_revision.snapshot.document)}
+            elif command in {"prepare", "prepare-feed"}:
                 packet = fixture.prepare(FEED if command == "prepare-feed" else None)
+                if packet is not None and packet.get("normal") == "issue-intake":
+                    saved["intake_context"] = packet["context"]
                 value = packet
             elif command == "settle-intake":
                 value = fixture.settle(packet, fixture.intake(packet))
@@ -86,6 +105,9 @@ def main():
                      policy=os.environ.get("CI_SHEPHERD_NORMAL_POLICY"),
                      scratch={"tmpdir": os.environ["TMPDIR"], "root": str(fixture.root.resolve())},
                      approval=os.environ.get("CI_SHEPHERD_WORK_ITEM_APPROVAL") or saved.get("approval"))
+        if hasattr(fixture.remote, "objects"):
+            saved["memory"] = {"objects": fixture.remote.objects, "head": fixture.remote.head,
+                               "calls": fixture.remote.calls}
         path.write_text(json.dumps(saved))
         print(json.dumps(value))
     finally:

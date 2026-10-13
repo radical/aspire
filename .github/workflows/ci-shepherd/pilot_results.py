@@ -10,6 +10,7 @@ from copy import deepcopy
 
 import issue_pr
 import pilot_state as state
+import pilot_storage as storage
 import round as contracts
 
 BEGIN, END = "CSRESULTBEGIN", "CSRESULTEND"
@@ -203,7 +204,7 @@ def settle(api, chain, operation, task):
                                                 for error in errors), 500) if errors else None
     operation["result"] = compact(record)
     try:
-        state.render(api.ledger)
+        storage.size(api, api.ledger)
     except ValueError:
         # Old ledgers did not reserve settlement room. The saved attempt itself
         # still holds matching work; do not prevent independent billing writes.
@@ -217,7 +218,7 @@ def settle(api, chain, operation, task):
         if previous is None:
             operation["result"] = {"status": "incomplete"}
             try:
-                state.render(api.ledger)
+                storage.size(api, api.ledger)
             except ValueError:
                 operation.pop("result")
                 print("CI Shepherd authority has no room for a result receipt; saved attempt still holds matching work.")
@@ -236,8 +237,8 @@ def settle(api, chain, operation, task):
         return
     # Legacy operations may fit a pending receipt but not the acquired claim,
     # audit intent and host evidence. Do not read data that cannot be settled.
-    if (len(state.render(api.ledger).encode())
-            + 3000 - len(json.dumps(record, separators=(",", ":")).encode()) > state.MAX_BODY):
+    if (storage.size(api, api.ledger)
+            + 3000 - len(json.dumps(record, separators=(",", ":")).encode()) > storage.limit(api)):
         record.update(status="incomplete", reason="Full result settlement capacity unavailable; human verification required.")
         return
     if recovery:

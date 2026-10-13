@@ -632,6 +632,91 @@ PR must not be described as Agent Merge enabled until that step is confirmed.
 Full reasoning packets are stored in host run artifacts. Canonical receipts
 retain packet and source digests instead of duplicating issue bodies and
 transcripts. Historical full-context receipts remain supported.
+
+### Branch-backed repository authority
+
+The host supports the repository's isolated memory-branch pattern, used in
+`.github/workflows/analyze-ci-failure.md` and
+`.github/workflows/milestone-changelog.md`. `branch_memory.py` implements bounded
+Git-object reads and strict expected-head publication; `pilot_storage.py` binds
+that store to the original owned tracker comment.
+
+The destination is the **verified controller repository**, currently
+`radical/aspire`, even when an issue or task belongs to `microsoft/aspire`.
+It is not derived from an issue link, packet, target binding or arbitrary URL.
+The fixed branch is `memory/ci-shepherd`; each authority has a separate file:
+
+```text
+authorities/<controllerRepositoryId>/<trackerId>-<commentId>-<binding>.json
+```
+
+The JSON stores the complete validated ledger, including historical full contexts,
+approvals, assignments, counters, actual usage, unknown holds and report intents.
+Migration changes none of those values. New receipts retain their existing
+digest-based representation; storage does not reconstruct or compact history.
+
+**Initial activation requires explicit host authorization**
+(`CI_SHEPHERD_MEMORY_WRITE=true`), installed source/global-enable/host guards and
+exclusive-writer operation. Local commands must hold the existing authority lock;
+competing hosted runs must remain inactive. Construction and ordinary reads never
+migrate. Activation occurs before work-item references or follow-up scopes are
+captured; a dirty ledger, pinned scope or changed authority fails closed.
+Read-only and disabled-billing paths never initiate activation.
+
+Using the selected credential, the host verifies GraphQL availability, viewer and
+controller identity, and write-permission metadata. Those reads are **not mutation
+proof**: an authorized fixed append and exact readback must succeed before the
+comment is changed. The observed fork viewer/ADMIN read probe does not establish
+production SSO, branch-rule bypass rights or successful publication. No credential
+switching or alternate storage backend is attempted.
+
+Before activation, the original comment remains authoritative and any staged
+branch file is inert. The host publishes the complete generation-zero document,
+then replaces that same actor-owned comment with a small immutable activation
+pointer. A new branch uses an orphan root, followed by an expected-head append to
+confirm the write contract. An existing branch preserves all other authority files.
+A crash before the pointer can reuse only a document matching the exact original
+comment and ledger; a stale candidate requires operator reconciliation.
+The captured comment's parsed ledger must match the initialized authority before
+any staging. Migration copies that unchanged ledger, even when a receiver's new
+or revised item control is not yet present. Item reconciliation follows activation;
+subsequent writes retain the exact work-item control and identity guards.
+
+After activation, **the current branch-head JSON is the only mutable ledger**.
+The pointer's commit identifies initial activation, not current state, and is not
+PATCHed on subsequent updates. Every write uses fixed GraphQL
+`createCommitOnBranch(expectedHeadOid)` and verifies the exact document, ref and
+single expected parent. Ordinary non-force push and REST `force=false` are not
+equivalent expected-head checks after ref deletion or rewind.
+
+Lost, malformed, oversized or HTTP-200-error mutation replies are never retried.
+Only exact commit-bound readback can establish success. A conflicting or
+unreadable result stops downstream effects; it never permits compensation,
+inference replay or another report/task send. Receivers adopt the ledger and its
+revision together only after validating saved ownership pins. Identical contents
+at a changed commit still invalidate an in-process freshness anchor.
+
+The full branch document has a **1 MiB** application ceiling; memory API responses
+have a separate **2 MiB wire cap before parsing**. REST blobs accept strict
+60-character LF-wrapped base64; mutation contents are unwrapped. Legacy comments
+remain capped at 60,000 bytes, pointers at 4,096 bytes, general API responses at
+8 MiB and model packets/evidence at 256 KiB. Host-only envelopes may use 512 KiB;
+compact host-only authority previews may use 1 MiB. These files are private
+bounded outputs, not agent input or restart authority. Credit and settlement
+reserves are unchanged.
+
+Old comment-only controllers cannot operate after activation. Review ledger
+redaction and repository access before publishing: memory history is persistent,
+with no automatic deletion or pruning. The 1 MiB ceiling still requires human
+intervention when exhausted; it is not an unlimited-history promise.
+
+Comment activation remains a guarded GET/PATCH, not atomic cross-host CAS.
+Branch publication and later task/report POSTs are also not one transaction.
+Protect the memory branch against force rewinds and deletion, including bypass,
+or explicitly trust administrators: a fresh process cannot prove anti-rollback
+from a rewindable branch alone. Microsoft production activation requires separate
+controller, credential/SSO and branch-policy authorization.
+
 Normal assessments are bounded to 2,500 bytes of serialized JSON, and their
 compact follow-up reports to 4,000 bytes of JSON-encoded text. Admission leaves
 10,000 bytes for assessment settlement and reporting; intake retains its

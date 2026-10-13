@@ -160,8 +160,8 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host, re
         directory = Path(directory)
         (directory / "trusted").mkdir(parents=True, exist_ok=False)
         envelope = {"schemaVersion": 1, "packet": packet, "sessionId": None}
-        contracts.write_json(directory / "trusted" / "packet.json", packet)
-        contracts.write_json(directory / "trusted" / "envelope.json", envelope)
+        contracts.write_packet(directory / "trusted" / "packet.json", packet)
+        contracts.write_envelope(directory / "trusted" / "envelope.json", envelope)
         return packet, envelope, "" if packet is None else pilot.prompt(packet)
     if mode not in {"transport-proof", "observe", "live"}:
         raise ValueError("unknown mode")
@@ -187,14 +187,12 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host, re
             scope = receipts.TrialScope(live.ROOT, github.history.trial)
             packet = contracts.prepare_reconciliation(github, live.ROOT, live.ROOT, run, live.clock, scope)
             context = deepcopy(github.context)
-            contracts.write_json(trusted / "packet.json", packet)
+            contracts.write_packet(trusted / "packet.json", packet)
             envelope = {"schemaVersion": 1, "packet": packet, "sessionId": None,
                         "mode": mode, "scope": {"root": scope.root, "trial": scope.trial}, "context": context}
             if recovery is not None:
                 envelope["recovery"] = recovery.descriptor()
-            if len(json.dumps(envelope, allow_nan=False).encode()) > contracts.MAX_JSON_BYTES:
-                raise ValueError("host envelope/context exceeds bounded artifact")
-            contracts.write_json(trusted / "envelope.json", envelope)
+            contracts.write_envelope(trusted / "envelope.json", envelope)
             audit.record(packet["record"]["value"], packet["record"]["commentId"])
             # This advisory describes the exact freshly witnessed prepared intent;
             # it grants nothing. Apply obtains its own independent capability.
@@ -217,7 +215,7 @@ def prepare(directory, mode, run, *, transport=None, host_check=require_host, re
 
 def apply(directory, evidence_path, decision_path, receipt_path, run, *, transport=None, host_check=require_host, recovery=None):
     trusted = Path(directory)
-    envelope = contracts.read_json(trusted / "envelope.json")
+    envelope = contracts.read_envelope(trusted / "envelope.json")
     packet = contracts.read_json(trusted / "packet.json")
     if packet is not None and packet.get("kind") == "pilot":
         import pilot

@@ -23,6 +23,7 @@ import pilot_reminders as reminders
 import pilot_reviews as reviews
 import pilot_results as results
 import pilot_handoff as handoff
+import pilot_storage as storage
 
 
 def configuration(environment, *, billing=False):
@@ -48,6 +49,7 @@ def prepare(api, run, now, *, present=True, feed=None):
     contracts.validate_run(run)
     if run["repository"] != github.REPOSITORY:
         raise ValueError("pilot is fork-only")
+    storage.initialize(api)
     api.read_authority()
     api.admission_reasons = {}
     observations = api.sweep()
@@ -132,7 +134,7 @@ def prepare(api, run, now, *, present=True, feed=None):
                                       operation_id=operation_id)
             operation["attemptEvidence"] = attempt_evidence
             try:
-                if len(state.render(api.ledger).encode()) + results.reserved_capacity(api.ledger) > state.MAX_BODY:
+                if storage.size(api, api.ledger) + results.reserved_capacity(api.ledger) > storage.limit(api):
                     raise ValueError("authority settlement capacity exhausted")
             except ValueError:
                 chain["operations"].remove(operation)
@@ -293,7 +295,7 @@ def dispatch(api, chain, operation, packet, now):
         raise ValueError("approved result collector unavailable; no worker admission")
     api.reconcile_workers()
     api.persist()
-    if len(state.render(api.ledger).encode()) + results.reserved_capacity(api.ledger) > state.MAX_BODY:
+    if storage.size(api, api.ledger) + results.reserved_capacity(api.ledger) > storage.limit(api):
         raise ValueError("authority settlement capacity exhausted; no worker admission")
     if any(other is not operation and other["state"] in {"reserved", "sent", "waiting", "uncertain"}
            for other in chain["operations"]):
@@ -344,6 +346,8 @@ def dispatch(api, chain, operation, packet, now):
 
 def settle(api, packet, evidence, usage, now, *, billing_only=False):
     """Billing is persisted before, and independent from, decision authorization."""
+    if not billing_only:
+        storage.initialize(api)
     if "normal" in packet:
         import normal_loop
         return normal_loop.settle(api, packet, evidence, usage, now, billing_only=billing_only)
@@ -482,6 +486,7 @@ def hosted_api(run, environment, *, billing=False):
             raise ValueError("hosted normal policy disabled or changed")
         require_host(run, allowed_events={"workflow_dispatch", "schedule"})
     api.normal_guard = guard
+    api.memory_authorized = not billing and environment.get("CI_SHEPHERD_MEMORY_WRITE") == "true"
     api.normal_approval = lambda: (contracts.loads(environment["CI_SHEPHERD_WORK_ITEM_APPROVAL"])
                                   if environment.get("CI_SHEPHERD_WORK_ITEM_APPROVAL") else None)
     api.normal_policy = lambda: (contracts.loads(environment["CI_SHEPHERD_NORMAL_POLICY"])
@@ -535,6 +540,7 @@ def main(argv=None):
                 if result["outcome"] == "validate":
                     contracts.write_json(args.result.parent / "local-request.json", result)
             else:
+                storage.initialize(api)
                 api.read_authority()
                 if "normal" in packet:
                     raise ValueError("normal assessments never authorize local publication")

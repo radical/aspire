@@ -442,6 +442,8 @@ def main(argv=None):
             cls = ReadOnlyFollowupGitHub if args.read_only else FollowupGitHub
             api = cls(token, args.tracker, args.authority, args.tracker_node,
                       revision=revision, control=control)
+            import pilot_storage
+            pilot_storage.initialize(api)
             if args.mode == "collect":
                 receipt = collect(api, read_control, LocalCollector(token),
                                   assessment=contracts.read_json(args.assessment) if args.assessment else None)
@@ -451,7 +453,8 @@ def main(argv=None):
             else:
                 receipt = report(api, read_control, publish=args.mode == "report")
             if args.read_only:
-                contracts.write_json(args.workdir / "authority-preview.json", api.ledger)
+                pilot_storage.write_host_json(args.workdir / "authority-preview.json", api.ledger,
+                                              max_bytes=pilot_storage.memory.MAX_BYTES)
             contracts.write_json(args.workdir / "receipt.json", receipt)
             print(json.dumps(receipt, allow_nan=False))
             return 0

@@ -9,18 +9,23 @@ import sys
 from github import LostResponse
 import local
 import pilot_state as state
+import pilot_storage as storage
 import pilot_results
 import round as contracts
 import work_items as items
 
 
 def load(api, read_control):
+    storage.initialize(api)
     control = items.validate_control(read_control())
     latest = api.read_authority()
-    api.expected, api.ledger = deepcopy(latest), deepcopy(latest)
     validator = getattr(api, "validate_followup_pins", None)
     if validator is not None:
         validator(latest)
+    if hasattr(api, "adopt_authority"):
+        api.adopt_authority(latest)
+    else:
+        api.expected, api.ledger = deepcopy(latest), deepcopy(latest)
     api.verify_issue(control["issue"])
     return control
 

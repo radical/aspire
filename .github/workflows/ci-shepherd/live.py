@@ -187,6 +187,12 @@ class HTTPTransport:
     def is_read(self, method, endpoint, body):
         return method == "GET"
 
+    def response_limit(self, method, endpoint, body):
+        return MAX_API_JSON_BYTES
+
+    def missing_response(self, method, endpoint, status):
+        return None
+
     def request(self, method, endpoint, body):
         for attempt in range(1, 4):
             try:
@@ -212,6 +218,10 @@ class HTTPTransport:
             response = self.opener.open(request, timeout=30)
         except HTTPError as error:
             error.close()
+            missing = self.missing_response(method, endpoint, error.code)
+            if missing is not None:
+                self._observe_quota(error.headers)
+                raise missing
             if method == "GET" and error.code == 302:
                 return self._download(error.headers.get("Location"))
             # Only documented rejections establish that no task was created.
@@ -231,10 +241,11 @@ class HTTPTransport:
             raise exception(f"{method} {self._safe_path(path.path)} response unavailable; no retry") from None
         try:
             with response:
-                raw = response.read(MAX_API_JSON_BYTES + 1)
-                if len(raw) > MAX_API_JSON_BYTES:
+                limit = self.response_limit(method, endpoint, body)
+                raw = response.read(limit + 1)
+                if len(raw) > limit:
                     raise (IncompleteInventory if read else LostResponse)(
-                        f"API JSON response exceeds {MAX_API_JSON_BYTES}-byte limit; " +
+                        f"API JSON response exceeds {limit}-byte limit; " +
                         self._diagnostic(method, path.path, response.status, response.headers))
                 self._observe_quota(response.headers)
                 length = response.headers.get("Content-Length")
@@ -260,7 +271,7 @@ class HTTPTransport:
                     raise (IncompleteInventory if read else LostResponse)(
                         "API JSON response empty; no retry; " + diagnostic)
                 try:
-                    payload = contracts.loads(raw.decode("utf-8"), max_bytes=MAX_API_JSON_BYTES)
+                    payload = contracts.loads(raw.decode("utf-8"), max_bytes=limit)
                 except (ValueError, UnicodeError) as error:
                     cause = error.__cause__
                     detail = (f"malformed JSON; offset={cause.pos}"

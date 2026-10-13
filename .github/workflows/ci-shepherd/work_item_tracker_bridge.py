@@ -181,6 +181,8 @@ def main(argv=None):
             args.workdir.mkdir(mode=0o700, parents=True, exist_ok=False)
             cls = ReadOnlyFollowupGitHub if args.read_only else FollowupGitHub
             api = cls(token, args.tracker, args.authority, args.tracker_node, revision=revision, control=control)
+            import pilot_storage
+            pilot_storage.initialize(api)
             # Historical tasks have no worker proposal; the explicit operator
             # basis is separate, and collection never fabricates worker JSON.
             followup.collect(api, read_control, LocalCollector(token))
@@ -189,7 +191,8 @@ def main(argv=None):
             receipt["read_only"] = args.read_only
             contracts.write_json(args.workdir / "receipt.json", receipt)
             if args.read_only:
-                contracts.write_json(args.workdir / "authority-preview.json", api.ledger)
+                pilot_storage.write_host_json(args.workdir / "authority-preview.json", api.ledger,
+                                              max_bytes=pilot_storage.memory.MAX_BYTES)
             print(json.dumps(receipt, allow_nan=False))
             return 0
     except (ValueError, OSError, KeyError, TypeError) as error:
