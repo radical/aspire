@@ -1,6 +1,7 @@
 """Fork-only pilot adapter using the legacy transport, identity and paging core."""
 
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import timedelta
 import json
 import hashlib
@@ -359,11 +360,80 @@ class PilotGitHub:
     def owned(self, comment):
         return comment.get("user", {}).get("id") == self.actor["id"] and comment["user"].get("login") == self.actor["login"]
 
+    @staticmethod
+    def followup_pins(record):
+        import work_item_execution as execution
+        control = record["control"]
+        assignment = record["assignments"][-1]
+        saved = assignment["execution"]
+        if (control["action"] == "pause" or control["revision"] != assignment["revision"]
+                or saved["state"] != "sent" or saved["imported_chain_id"] is not None
+                or saved["task_id"] is None or saved["session_id"] is None):
+            raise ValueError("exact sent unimported assignment required")
+        execution.validate_approval(saved["approval"], record, assignment)
+        return deepcopy({"control": control,
+                         "assignment": {key: assignment[key] for key in ("id", "revision", "basis", "delivery", "route")},
+                         "execution": {key: saved.get(key) for key in (
+                             "state", "approval", "at", "request_version", "task_id", "session_id",
+                             "imported_chain_id")}})
+
+    def validate_followup_pins(self, ledger):
+        scope = getattr(self, "_normal_followup", None)
+        if scope is None:
+            return
+        records = [record for record in ledger.get("workItems", [])
+                   if record["id"] == scope["pins"]["control"]["id"]]
+        if len(records) != 1 or self.followup_pins(records[0]) != scope["pins"]:
+            raise ValueError("existing follow-up ownership changed")
+        intake = [value for value in ledger.get("normalRuns", [])
+                  if value["item"] == records[0]["id"] and value["phase"] == "issue-intake"
+                  and value["state"] == "settled"]
+        if not intake or intake[-1]["context"] != scope["intake"]:
+            raise ValueError("settled normal intake changed")
+
+    @contextmanager
+    def followup_scope(self, control, assignment, observed):
+        import normal_loop
+        if getattr(self, "_normal_followup", None) is not None:
+            raise ValueError("nested normal follow-up forbidden")
+        pins = self.followup_pins({"id": control["id"], "control": control, "assignments": [assignment]})
+        latest = self.read_authority()
+        prior = [value for value in latest.get("normalRuns", []) if value["item"] == control["id"]
+                 and value["phase"] == "issue-intake" and value["state"] == "settled"]
+        if (not prior or observed["identity"] != control["issue"] or not normal_loop.eligible(observed)
+                or prior[-1]["context"]["issue"]["identity"] != control["issue"]):
+            raise ValueError("settled exact normal intake required")
+        self._normal_followup = {"pins": pins, "issue": deepcopy(observed),
+                                 "intake": deepcopy(prior[-1]["context"])}
+        try:
+            self.validate_followup_pins(latest)
+            self.validate_followup_pins(self.ledger)
+            self.guard_work_item(control)
+            yield
+        finally:
+            self._normal_followup = None
+
+    def work_item_report_authorized(self, control):
+        import normal_loop
+        if getattr(self, "_normal_followup", None) is None:
+            return control["action"] != "pause" and control["authority"]["issue_comment"]
+        self.validate_followup_pins(self.ledger)
+        self.validate_followup_pins(self.read_authority())
+        if control != self._normal_followup["pins"]["control"]:
+            raise ValueError("report control changed")
+        return normal_loop.report_authorized(self, control)
+
     def verify_issue(self, identity):
         import normal_loop
         observed = normal_loop.source(self, identity["number"])
         if observed["identity"] != identity or not normal_loop.eligible(observed):
             raise ValueError("linked issue changed, closed or hands-off")
+        scope = getattr(self, "_normal_followup", None)
+        if scope is not None:
+            self.validate_followup_pins(self.ledger)
+            if observed != scope["issue"]:
+                raise ValueError("current follow-up source changed")
+            return
         prior = [value for value in self.ledger.get("normalRuns", []) if value["item"] ==
                  f"issue-{identity['number']}-{identity['node_id']}" and value["phase"] == "issue-intake"
                  and value["state"] == "settled"]
@@ -393,12 +463,16 @@ class PilotGitHub:
         # Pin source/control before every canonical work-item write. Existing
         # local adapters retain their disabled/idle/source guards separately.
         latest = self.read_authority()
+        self.validate_followup_pins(latest)
+        self.validate_followup_pins(self.ledger)
         record = next((value for value in latest.get("workItems", []) if value["id"] == control["id"]), None)
         if record is not None and record["control"] != control:
             raise ValueError("canonical work-item control changed")
         self.control = deepcopy(control)
 
     def start_task(self, body, before_send):
+        if getattr(self, "_normal_followup", None) is not None:
+            raise ValueError("observational follow-up cannot dispatch")
         from work_item_github import CloudWorkItemGitHub
         return CloudWorkItemGitHub.start_task(self, body, before_send)
 

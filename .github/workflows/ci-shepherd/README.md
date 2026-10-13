@@ -472,8 +472,11 @@ variable `CI_SHEPHERD_NORMAL_POLICY`, or the local runner's
 
 Issue identity must match exactly. All four cloud permissions must be true
 before policy can supply the assignment-bound approval. `issue_comment`
-separately grants controller follow-up reporting for newly admitted items;
-it does not authorize worker comments or change existing item permissions.
+separately grants controller follow-up reporting, including for an existing
+sent assignment. A late exact grant does not rewrite the saved control, worker
+permissions, assignment basis or cloud approval. A current false permission or
+supplied policy for a different issue denies reporting. Without a current policy,
+the existing explicit saved reporting permission remains effective.
 
 For multiple issues, configure a JSON array of these policy objects, each with
 its own exact repository, issue number and node ID. The hosted preparation and
@@ -558,8 +561,11 @@ capacity and lifetime bounds remain unchanged.
 
 Later normal runs need neither the feed nor a local preview. They rediscover
 task and session IDs exclusively from canonical `workItems`, refresh platform
-state, and wait while a task remains active. Closed, paused, hands-off, or
-source-revision-changed items retain history without new effects.
+state, and wait while a task remains active. Closed, paused, hands-off or replaced
+items retain history without new effects. Source edits still block new dispatch
+and strict PR import, but do not hide an existing exact sent task's follow-up.
+That observational path binds collection and assessment to the current issue
+snapshot and keeps the original assignment's authority immutable.
 
 A repeated feed for an exactly matching canonical issue refreshes its source
 and follows existing ownership without rebuilding intake job candidates.
@@ -583,15 +589,41 @@ the normal loop validates issue-to-PR timeline association and imports the PR
 via `work_item_execution.import_pr` before transcript collection. Imported tasks
 transition into chain tracking. Pull requests with zero changes or missing issue
 references reject mapping and proceed to terminal session inspection.
+This import lane requires the original issue snapshot. With edited source, a
+substantive PR is only an observation requiring human reconciliation. Closed
+empty drafts can be observed even after branch deletion; their state, draft,
+merge status and change count are descriptive facts, never fix validation.
 
 For tasks with no pull request, empty drafts, or mapping denial, the loop
 collects bounded session transcripts through the three-attempt collector and
 assembles an assessment packet. Malformed or missing worker JSON produces an
 inconclusive assessment with operator attribution rather than halting.
 Settled assessments generate deduplicated follow-up reports without repeating
-sends, imports, or comments on subsequent runs. Publication still requires
-the work item's explicit `issue_comment` permission; otherwise the report is
-saved as a preview.
+sends, imports, or comments on subsequent runs. Reuse requires matching current
+issue, task, result and PR evidence, plus the accepted decision receipt.
+Publication requires separately authorized controller `issue_comment` policy;
+otherwise the report is saved as a preview.
+
+An interrupted inference reservation is not permission to rerun it. When there
+is no current reusable assessment, an unresolved reservation can instead produce
+one bounded host-observation report with assessment outcome explicitly unknown.
+An earlier accepted assessment made stale by a source edit remains in history
+but is not presented as the current diagnosis. Exact-session excerpts and valid
+worker JSON remain attributed, untrusted claims about the original assignment.
+
+`pilot_github.py` pins control, latest assignment, basis, approval, send receipt
+and task/session identities independently of receiver reloads. The observation
+scope cannot dispatch or adopt a PR, even through direct execution entrypoints.
+`normal_loop.py` and `work_item_followup.py` compose source and descriptive PR
+freshness with exact task metadata at the final comment-send callback. Policy
+is checked again at the adapter's POST boundary.
+
+`work_item_receiver.py` retains the escaped exact body and per-assignment marker.
+After a lost receipt, one owned exact-body match recovers the existing comment
+ID; missing, foreign, modified or ambiguous matches remain uncertain, with no
+blind resend or replacement inference. Recovery runs before transcript
+collection. Delivered comments are not edited or sent again after later source
+changes. No report authorizes merge, closure or Agent Merge.
 
 Imported PRs enter `handoff_needed`, not an automatic approval or merge.
 Enabling app-native Agent Merge remains an external handoff step. An imported

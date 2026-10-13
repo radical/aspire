@@ -110,6 +110,15 @@ def validate_policy(value, issue):
     return value
 
 
+def report_authorized(api, control):
+    # A supplied unmatched policy is a denial, not absence of operator input.
+    supplied = api.normal_policy() if hasattr(api, "normal_policy") else None
+    if supplied is None:
+        return control["authority"]["issue_comment"]
+    policy = policy_for(api, control["issue"])
+    return bool(policy and policy["issue_comment"])
+
+
 def candidates(api, observed):
     values = []
     for run_id, attempt in observed["references"]:
@@ -201,8 +210,9 @@ def result_excerpt(value):
 
 
 def pr_observation(api, task):
-    pr = execution.task_pr(api, task)
+    pr = execution.observe_task_pr(api, task)
     return {"number": pr["number"], "head": pr["head"]["sha"], "changedFiles": pr["changed_files"],
+            "state": pr["state"], "draft": pr["draft"], "merged": pr["merged"],
             "title": followup.safe(pr["title"], api.token, limit=200),
             "body": followup.safe(pr["body"], api.token, limit=800), "bodyDigest": digest(pr["body"])}
 
@@ -211,7 +221,7 @@ def assessment_version(task_version, mapping, result_digest):
     return digest({"task": task_version, "mapping": mapping, "result": result_digest})
 
 
-def assessment_context(observed, control, assignment, task, mapping):
+def assessment_context(observed, control, assignment, task, mapping, *, assignment_source, ownership):
     saved = assignment["execution"]
     issue = deepcopy(observed)
     issue["body"] = followup.safe(issue["body"], limit=MAX_INTAKE_ISSUE_BODY)
@@ -222,6 +232,9 @@ def assessment_context(observed, control, assignment, task, mapping):
                "result": deepcopy(assignment["result"]), "resultDigest": digest(assignment["result"]),
                "followup": followup_data, "mapping": mapping,
                "excerpted": issue["body"] != observed["body"]}
+    context.update(assignmentSourceDigest=assignment_source,
+                   sourceChangedSinceDispatch=assignment_source != digest(observed),
+                   ownershipDigest=ownership)
     if len(json.dumps(context).encode()) > MAX_CONTEXT:
         context["result"] = result_excerpt(assignment["result"])
         context["resultCounts"] = {key: len(value) for key, value in (assignment["result"] or {}).items()
@@ -238,6 +251,99 @@ def assessment_context(observed, control, assignment, task, mapping):
             context["issue"]["labels"] = context["issue"]["labels"][:10]
             context["followup"]["pinned_evidence"] = []
     return context
+
+
+def task_mapping(api, record, assignment, task):
+    mapping = {"pr": None, "reason": "No platform PR artifact."}
+    if any(artifact.get("type") == "pull" for artifact in task["artifacts"]):
+        try:
+            mapping["observation"] = pr_observation(api, task)
+            execution.mapped_pr(api, record, assignment, task)
+        except (ValueError, KeyError, TypeError, AttributeError, IncompleteInventory, LostResponse) as error:
+            mapping["reason"] = "PR mapping denied: " + followup.safe(error, api.token, 500)
+        else:
+            mapping["reason"] = "Substantive PR requires human reconciliation."
+    return mapping
+
+
+def current_reusable_assessment(api, record, assignment, task, mapping, observed):
+    previous = assignment["execution"].get("followup")
+    receipts = [entry for entry in api.ledger.get("normalRuns", [])
+                if entry["item"] == record["id"] and entry["phase"] == "issue-assessment"
+                and entry["state"] == "settled"]
+    if not previous or previous["assessment"] is None or not receipts:
+        return False
+    receipt = receipts[-1]
+    context = receipt["context"]
+    decision = receipt["decision"]
+    current = assessment_version(followup.version(task), mapping, digest(assignment["result"]))
+    bound = (context.get("assessmentDigest") == current if "contextDigest" in context else
+             context.get("control") == record["control"] and context.get("assignment") == assignment["id"]
+             and assessment_version(context["taskVersion"], context["mapping"], context["resultDigest"]) == current)
+    return (bound and context_matches_issue(context, observed)
+            and ("ownershipDigest" not in context
+                 or context["ownershipDigest"] == digest(api.followup_pins(record)))
+            and previous["task_version"] == followup.version(task)
+            and decision is not None and decision.get("action") == "assess"
+            and decision.get("packetId") == receipt["packetId"] and decision.get("operation") == receipt["id"]
+            and decision.get("assessment") == previous["assessment"])
+
+
+def report_current(api, read, context, *, reusable):
+    def render(control, assignment):
+        view = deepcopy(assignment)
+        if not reusable:
+            view["execution"]["followup"]["assessment"] = None
+        return followup.normal_comment_body(control, view, context=context)
+
+    def freshness(task):
+        api.validate_followup_pins(api.read_authority())
+        api.verify_issue(context["issue"]["identity"])
+        record = next(value for value in api.ledger["workItems"] if value["id"] == context["control"]["id"])
+        if task_mapping(api, record, record["assignments"][-1], task) != context["mapping"]:
+            raise ValueError("assessment PR evidence changed")
+
+    return followup.report(api, read, publish=True, compact=True, render_body=render,
+                           freshness=freshness)
+
+
+def prepare_followup(api, record, assignment, task, observed, prior, reserve_packet):
+    item, control = record["id"], record["control"]
+    read = read_control(api, item)
+    with api.followup_scope(control, assignment, observed):
+        recovered = receiver.recover_comment(api, read, control, record)
+        if recovered is not None:
+            return None
+        mapping = task_mapping(api, record, assignment, task)
+        if current_reusable_assessment(api, record, assignment, task, mapping, observed):
+            context = assessment_context(observed, control, assignment, task, mapping,
+                assignment_source=prior["context"].get("issueDigest", digest(prior["context"]["issue"])),
+                ownership=digest(api.followup_pins(record)))
+            report_current(api, read, context, reusable=True)
+            return None
+        followup.collect(api, read, api.normal_collector)
+        record = next(value for value in api.ledger["workItems"] if value["id"] == item)
+        assignment = record["assignments"][-1]
+        task = execution.refresh(api, record, assignment)
+        if task["state"] not in state.TERMINAL:
+            return None
+        mapping = task_mapping(api, record, assignment, task)
+        context = assessment_context(observed, control, assignment, task, mapping,
+            assignment_source=prior["context"].get("issueDigest", digest(prior["context"]["issue"])),
+            ownership=digest(api.followup_pins(record)))
+        receiver.fresh(api, read, control)
+        packet = reserve_packet(item, "issue-assessment", context)
+        interrupted = any(entry["item"] == item and entry["phase"] == "issue-assessment"
+                          and (entry["state"] == "reserved" or entry["state"] == "rejected"
+                               and (entry["context"].get("contextDigest") == digest(context)
+                                    if "contextDigest" in entry["context"] else entry["context"] == context))
+                          for entry in api.ledger.get("normalRuns", []))
+        if (packet is None and interrupted
+                and not current_reusable_assessment(api, record, assignment, task, mapping, observed)):
+            # An unresolved native receipt is not retry permission. Report only
+            # observations; never borrow an earlier accepted but stale diagnosis.
+            report_current(api, read, context, reusable=False)
+        return packet
 
 
 def validate_receipts(values):
@@ -276,6 +382,8 @@ def validate_receipts(values):
             keys = {"contextDigest", "issueDigest", "issue"}
             if value["phase"] == "issue-assessment":
                 keys.add("assessmentDigest")
+                if "ownershipDigest" in value["context"]:
+                    keys.add("ownershipDigest")
             contracts.exact(value["context"], keys, "normal context receipt")
             for key in keys - {"issue"}:
                 if not isinstance(value["context"][key], str) or not re.fullmatch(
@@ -311,6 +419,8 @@ def reserve(api, run, now, item, phase, context):
     if phase == "issue-assessment":
         value["context"]["assessmentDigest"] = assessment_version(
             context["taskVersion"], context["mapping"], context["resultDigest"])
+        if "ownershipDigest" in context:
+            value["context"]["ownershipDigest"] = context["ownershipDigest"]
     receipts.append(value)
     # Assessment is stored both in the decision receipt and in follow-up.
     # Leave room for both bounded copies, a report and settlement metadata.
@@ -470,9 +580,12 @@ def prepare(api, run, now, feed=None):
         control = record["control"]
         observed = observed_items[item]
         if (not eligible(observed) or control["action"] == "pause"
-                or not context_matches_issue(prior[-1]["context"], observed)):
+                or control["issue"] != observed["identity"]):
             continue
+        original_source = context_matches_issue(prior[-1]["context"], observed)
         if not record["assignments"]:
+            if not original_source:
+                continue
             execution.prepare(api, read_control(api, item))
             record = next(value for value in api.ledger["workItems"] if value["id"] == item)
         assignment = record["assignments"][-1]
@@ -480,6 +593,8 @@ def prepare(api, run, now, feed=None):
         if saved is None or saved["imported_chain_id"] is not None or control["revision"] != assignment["revision"]:
             continue
         if saved["state"] == "reserved":
+            if not original_source:
+                continue
             receipt = dispatch_reserved(api, item)
             if receipt["outcome"] == "deferred":
                 next(row for row in worklist if row["item"] == item)["attention"] = receipt["reason"]
@@ -500,40 +615,18 @@ def prepare(api, run, now, feed=None):
             continue
 
         read = read_control(api, item)
-        mapping = {"pr": None, "reason": "No platform PR artifact."}
-        if any(artifact.get("type") == "pull" for artifact in task["artifacts"]):
+        if original_source and any(artifact.get("type") == "pull" for artifact in task["artifacts"]):
             try:
-                mapping["observation"] = pr_observation(api, task)
                 candidate = execution.mapped_pr(api, record, assignment, task)
             except (ValueError, KeyError, TypeError, AttributeError, IncompleteInventory, LostResponse) as error:
-                mapping["reason"] = "PR mapping denied: " + followup.safe(error, api.token, 500)
+                pass
             else:
                 imported = execution.import_pr(api, read)
                 if imported["outcome"] != "tracked":
                     raise ValueError("normal PR import failed: " + imported["reason"])
                 continue
 
-        previous = saved.get("followup")
-        assessments = [entry for entry in api.ledger.get("normalRuns", [])
-                       if entry["item"] == item and entry["phase"] == "issue-assessment"
-                       and entry["state"] == "settled"]
-        current_version = assessment_version(followup.version(task), mapping, digest(assignment["result"]))
-        if (previous is not None and previous["assessment"] is not None
-                and previous["task_version"] == followup.version(task) and assessments
-                and assessments[-1]["context"].get("assessmentDigest") == current_version):
-            receipt = followup.report(api, read, publish=True, compact=True)
-            print("CI Shepherd normal follow-up report: " + json.dumps(followup.redact_fields(receipt, api.token)),
-                  file=sys.stderr)
-            continue
-
-        followup.collect(api, read, api.normal_collector)
-        record = next(value for value in api.ledger["workItems"] if value["id"] == item)
-        assignment = record["assignments"][-1]
-        task = execution.refresh(api, record, assignment)
-        if task["state"] not in state.TERMINAL:
-            continue
-        context = assessment_context(observed, control, assignment, task, mapping)
-        packet = reserve_packet(item, "issue-assessment", context)
+        packet = prepare_followup(api, record, assignment, task, observed, prior[-1], reserve_packet)
         if packet is not None:
             packets.append(packet)
     for number, (entry, observed, occurrences) in incoming.items():
@@ -690,25 +783,7 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False, _turn_decis
         if not source_matches or not eligible(observed):
             raise ValueError("source issue stale, closed or hands-off")
         if packet["normal"] == "issue-assessment":
-            read = read_control(api, value["item"])
-            control, record, assignment = followup.owned(api, read)
-            if control != packet["context"]["control"] or assignment["id"] != packet["context"]["assignment"]:
-                raise ValueError("assessment control or assignment changed")
-            task = followup.stable(api, read, control, record, assignment, packet["context"]["taskVersion"])
-            if ("observation" in packet["context"]["mapping"]
-                    and pr_observation(api, task) != packet["context"]["mapping"]["observation"]):
-                raise ValueError("assessment PR evidence changed")
-            if (digest(assignment["result"]) != packet["context"]["resultDigest"]
-                    or assignment["execution"]["followup"]["task_version"] != packet["context"]["taskVersion"]):
-                raise ValueError("assessment result version changed")
-            assignment["execution"]["followup"]["assessment"] = followup.redact_fields(
-                deepcopy(decision["assessment"]), api.token)
-            receiver.fresh(api, read, control)
-            value = next(entry for entry in api.ledger["normalRuns"] if entry["id"] == packet["operation"])
-            value.update(state="settled", decision=followup.redact_fields(deepcopy(decision), api.token))
-            api.persist()
-            report = followup.report(api, read, publish=True, compact=True)
-            return {"outcome": "assessed", "report": report, "fixValidated": False}
+            return settle_assessment(api, packet, decision, observed)
         if decision["action"] == "human":
             value.update(state="settled", decision=followup.redact_fields(deepcopy(decision), api.token))
             api.persist()
@@ -742,3 +817,30 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False, _turn_decis
             value["state"] = "rejected"
         api.persist()
         return {"outcome": "rejected", "reason": followup.safe(error, api.token, 500)}
+
+
+def settle_assessment(api, packet, decision, observed):
+    context = packet["context"]
+    record = next(record for record in api.ledger["workItems"] if record["id"] == packet["item"])
+    control, assignment = record["control"], record["assignments"][-1]
+    if (control != context["control"] or assignment["id"] != context["assignment"]
+            or "ownershipDigest" in context and digest(api.followup_pins(record)) != context["ownershipDigest"]):
+        raise ValueError("assessment control or assignment changed")
+    read = read_control(api, packet["item"])
+    with api.followup_scope(control, assignment, observed):
+        control, record, assignment = followup.owned(api, read)
+        task = followup.stable(api, read, control, record, assignment, context["taskVersion"])
+        if task_mapping(api, record, assignment, task) != context["mapping"]:
+            raise ValueError("assessment PR evidence changed")
+        if (digest(assignment["result"]) != context["resultDigest"]
+                or assignment["execution"]["followup"]["task_version"] != context["taskVersion"]):
+            raise ValueError("assessment result version changed")
+        receiver.fresh(api, read, control)
+        assignment["execution"]["followup"]["assessment"] = followup.redact_fields(
+            deepcopy(decision["assessment"]), api.token)
+        value = next(entry for entry in api.ledger["normalRuns"] if entry["id"] == packet["operation"])
+        value.update(state="settled", decision=followup.redact_fields(deepcopy(decision), api.token))
+        receiver.fresh(api, read, control)
+        api.persist()
+        report = report_current(api, read, context, reusable=True)
+        return {"outcome": "assessed", "report": report, "fixValidated": False}

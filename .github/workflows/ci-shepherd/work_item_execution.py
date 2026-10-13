@@ -379,7 +379,7 @@ def refresh(api, record, assignment):
     return observed
 
 
-def task_pr(api, observed):
+def observe_task_pr(api, observed):
     artifacts = observed["artifacts"]
     pulls = [entry["data"] for entry in artifacts if entry.get("provider") == "github" and entry.get("type") == "pull"]
     branches = [entry["data"] for entry in artifacts if entry.get("provider") == "github" and entry.get("type") == "branch"]
@@ -401,14 +401,24 @@ def task_pr(api, observed):
     number = matches[0]["number"]
     issue_pr.positive(number, "candidate PR")
     pr = api.mapping(number)
-    if (pr.get("id") != pulls[0].get("id") or pr.get("state") != "open" or pr.get("draft") is not True
+    items.identifier(pr.get("node_id"), "task PR node")
+    if (pr.get("id") != pulls[0].get("id") or pr.get("state") not in {"open", "closed"}
+            or type(pr.get("draft")) is not bool or type(pr.get("merged")) is not bool
             or pulls[0].get("global_id") not in {None, "", pr["node_id"]}
             or branches[0] != {"base_ref": "main", "head_ref": pr["head"]["ref"]}
-            or observed["sessions"][0]["head_ref"] != pr["head"]["ref"]
-            or any(label.get("name") == "shepherd-hands-off" for label in pr.get("labels", []))):
+            or observed["sessions"][0]["head_ref"] != pr["head"]["ref"]):
         raise ValueError("task PR/ref/draft identity mismatch")
     if type(pr.get("changed_files")) is not int or pr["changed_files"] < 0:
         raise ValueError("PR change inventory unavailable")
+    return pr
+
+
+def task_pr(api, observed):
+    pr = observe_task_pr(api, observed)
+    if (pr["state"] != "open" or not pr["draft"] or pr["merged"]
+            or any(label.get("name") == "shepherd-hands-off" for label in pr.get("labels", []))):
+        raise ValueError("task PR/ref/draft identity mismatch")
+    prefix = f"repos/{api.repository}"
     ref = api.api.get(prefix + "/git/ref/heads/" + pr["head"]["ref"])
     if ref.get("ref") != "refs/heads/" + pr["head"]["ref"] or ref.get("object", {}).get("sha") != pr["head"]["sha"]:
         raise ValueError("independent PR branch head mismatch")
@@ -460,6 +470,8 @@ def mapped_pr(api, record, assignment, observed):
 
 
 def observe(api, read_control, *, adopt=False):
+    if adopt and getattr(api, "_normal_followup", None) is not None:
+        raise ValueError("observational follow-up cannot import")
     control, record = locate(api, read_control)
     assignment = record["assignments"][-1] if record["assignments"] else None
     if assignment is None or "execution" not in assignment:
@@ -480,6 +492,8 @@ def observe(api, read_control, *, adopt=False):
                 existing = state.find_chain(api.ledger, candidate["number"])
                 if existing is not None:
                     raise ValueError("candidate PR already tracked by another chain")
+                if getattr(api, "_normal_followup", None) is not None:
+                    raise ValueError("observational follow-up cannot import")
                 chain = state.adopt(api.ledger, candidate["number"], "pr", candidate["node_id"])
                 value["imported_chain_id"] = chain["id"]
                 chain["sourceWorkItem"] = {"item_id": record["id"], "assignment_id": assignment["id"]}

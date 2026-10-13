@@ -18,6 +18,9 @@ def load(api, read_control):
     control = items.validate_control(read_control())
     latest = api.read_authority()
     api.expected, api.ledger = deepcopy(latest), deepcopy(latest)
+    validator = getattr(api, "validate_followup_pins", None)
+    if validator is not None:
+        validator(latest)
     api.verify_issue(control["issue"])
     return control
 
@@ -94,7 +97,14 @@ def comment_body(control, assignment):
     return body
 
 
-def report(api, read_control, control, record, *, render_body=comment_body, before_send=None, publish=True):
+def comment_authorized(api, control):
+    if control["action"] == "pause":
+        return False
+    check = getattr(api, "work_item_report_authorized", None)
+    return check(control) if check is not None else control["authority"]["issue_comment"]
+
+
+def recover_comment(api, read_control, control, record):
     assignment = record["assignments"][-1]
     comment = record["comment"]
     if comment is not None and comment["assignment_id"] == assignment["id"]:
@@ -103,12 +113,23 @@ def report(api, read_control, control, record, *, render_body=comment_body, befo
             matches = [entry for entry in api.issue_comments(control["issue"])
                        if entry["body"] == comment["body"] and entry["owned"]]
             if len(matches) == 1:
+                fresh(api, read_control, control)
                 comment.update(delivery="delivered", comment_id=matches[0]["id"])
                 api.persist()
             else:
                 return {"outcome": "comment_uncertain"}
         if comment["delivery"] == "delivered":
             return {"outcome": "human_wait"}
+    return None
+
+
+def report(api, read_control, control, record, *, render_body=comment_body, before_send=None, publish=True):
+    recovered = recover_comment(api, read_control, control, record)
+    if recovered is not None:
+        return recovered
+    assignment = record["assignments"][-1]
+    comment = record["comment"]
+    if comment is not None and comment["assignment_id"] == assignment["id"]:
         if comment["delivery"] == "reserved":
             comment["body"] = render_body(control, assignment)
     else:
@@ -116,7 +137,7 @@ def report(api, read_control, control, record, *, render_body=comment_body, befo
                    "delivery": "reserved", "comment_id": None}
         record["comment"] = comment
     api.persist()
-    if not publish or not control["authority"]["issue_comment"] or control["action"] == "pause":
+    if not publish or not comment_authorized(api, control):
         return {"outcome": "human_wait", "comment_preview": comment["body"]}
     fresh(api, read_control, control)
     comment["delivery"] = "delivering"
@@ -127,6 +148,8 @@ def report(api, read_control, control, record, *, render_body=comment_body, befo
             unchanged(read_control, control)
             if before_send is not None:
                 before_send()
+            if not comment_authorized(api, control):
+                raise ValueError("issue-comment permission revoked")
         identity = api.post_comment(control["issue"], comment["body"], final_guard)
     except LostResponse:
         comment["delivery"] = "uncertain"

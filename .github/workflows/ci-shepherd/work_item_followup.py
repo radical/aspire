@@ -339,7 +339,7 @@ def comment_body(control, assignment):
     return body
 
 
-def normal_comment_body(control, assignment):
+def normal_comment_body(control, assignment, *, context=None):
     value = assignment["execution"]["followup"]
     lines = [
         "[automated] CI Shepherd work-item result; human direction required.",
@@ -348,8 +348,30 @@ def normal_comment_body(control, assignment):
         f"Platform task state: {assignment['execution']['task_state']}. "
         "No usable PR was imported; task completion and empty drafts do not establish a fix.",
     ]
+    if context is not None:
+        mapping = context["mapping"]
+        observed = mapping.get("observation")
+        if observed is not None:
+            lines.append(f"Observed PR #{observed['number']}: state {observed['state']}; "
+                         f"draft {str(observed['draft']).lower()}; merged {str(observed['merged']).lower()}; "
+                         f"changed files {observed['changedFiles']}.")
+            if observed["changedFiles"] > 0:
+                lines.append("Substantive PR observation requires human reconciliation; not import authorization.")
+        else:
+            lines.append("No PR artifact observed." if mapping["reason"] == "No platform PR artifact."
+                         else "PR observation unavailable.")
+        if context.get("sourceChangedSinceDispatch"):
+            lines.append("The issue changed since this assignment was dispatched. Session claims describe "
+                         "the original assignment, not validation of the current issue.")
     assessment = value["assessment"]
     details = ["Result collection: " + safe(value["reason"], limit=400)]
+    if assessment is None:
+        lines.append("Assessment outcome unrecorded/unknown; no replacement inference was started.")
+        lines.append("Unknown: root cause and transience are not independently established.")
+    result = assignment["result"]
+    if result is not None:
+        details.append(f"Worker-reported outcome (original assignment; untrusted): {result['outcome']}. "
+                       + safe(result["summary"], limit=350))
     if assessment is not None:
         details.append("Shepherd assessment (not independent fix validation): "
                        + safe(assessment["summary"], limit=800))
@@ -372,16 +394,21 @@ def normal_comment_body(control, assignment):
     return "\n\n".join([*lines, footer])
 
 
-def report(api, read_control, *, publish=False, compact=False):
+def report(api, read_control, *, publish=False, compact=False, render_body=None, freshness=None):
     control, record, assignment = owned(api, read_control)
     value = assignment["execution"].get("followup")
     if value is None or value["status"] == "collecting":
         raise ValueError("complete attributed collection required for follow-up")
     stable(api, read_control, control, record, assignment, value["task_version"])
+    def before_send():
+        observed = stable(api, read_control, control, record, assignment, value["task_version"])
+        if freshness is not None:
+            freshness(observed)
+
     return receiver.report(
         api, read_control, control, record,
-        render_body=normal_comment_body if compact else comment_body, publish=publish,
-        before_send=lambda: stable(api, read_control, control, record, assignment, value["task_version"]))
+        render_body=render_body or (normal_comment_body if compact else comment_body), publish=publish,
+        before_send=before_send)
 
 
 def main(argv=None):

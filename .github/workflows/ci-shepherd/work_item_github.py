@@ -108,15 +108,22 @@ class WorkItemGitHub(pilot_github.PilotGitHub):
                 for comment in comments]
 
     def post_comment(self, issue, body, before_send):
-        if not self.control["authority"]["issue_comment"] or self.control["action"] == "pause":
+        import work_item_receiver as receiver
+        if issue != self.control["issue"]:
+            raise ValueError("exact linked issue required for reporting")
+        if not receiver.comment_authorized(self, self.control):
             raise ValueError("explicit issue-comment permission required")
         latest = self.read_authority()
         record = next((entry for entry in latest.get("workItems", []) if entry["id"] == self.control["id"]), None)
         if (record is None or record["control"] != self.control or record["comment"] is None
+                or not record["assignments"]
+                or record["comment"]["assignment_id"] != record["assignments"][-1]["id"]
                 or record["comment"]["delivery"] != "delivering" or record["comment"]["body"] != body):
             raise ValueError("canonical exact comment send intent required")
         self.guard_work_item(self.control)
         before_send()
+        if not receiver.comment_authorized(self, self.control):
+            raise ValueError("explicit issue-comment permission revoked")
         response = self.transport("POST", f"repos/{issue['repository']}/issues/{issue['number']}/comments",
                                   {"body": body})
         if (not isinstance(response, Response) or response.status != 201 or not isinstance(response.payload, dict)
