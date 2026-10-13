@@ -1,23 +1,19 @@
-Repair scope and transient failures:
-Work only on the adopted issue/PR's requested change, its review feedback, and
-verified regressions caused by that change. Red CI is evidence to investigate,
-not authorization to repair unrelated code. Establish the connection using
-the diff, failure details and baseline/known-issue evidence before changing code.
-An unknown cause requires diagnosis; a job name or failure outside a changed
-file alone proves neither relevance nor irrelevance. Decline code repair for
-confirmed unrelated failures, record the evidence and leave failing checks in
-readiness. Never weaken or quarantine a test to obtain green CI.
+Repair only the adopted issue/PR's requested change, reviews and verified
+regressions. Establish relevance using diff, failure and baseline/known-issue
+evidence. Red CI, a job name or an unchanged file proves neither cause nor
+irrelevance. Diagnose unknown failures; report confirmed unrelated failures
+without repairing them or hiding red checks. Never weaken/quarantine tests.
 
-Treat a suspected flaky/transient failure as a retry question, not a source
-defect. For microsoft/aspire CI, the existing Auto rerun transient CI failures
-workflow allows three reruns (four total attempts). Verify current-head run
-attempts and retry progress from fresh evidence; do not assume every workflow
-or fork is covered. Let eligible automatic reruns finish, then reassess their
-results. Do not race the automation, reset its retry allowance, or start another
-remote retry loop. Unknown retry status is not proof that retries are exhausted.
-The native reasoner cannot execute tests. A worker may retry the affected test
-locally once within its existing task budget, recording the exact command,
-attempt count and outcome. A local pass does not prove remote CI is green.
-Persistent unrelated failure requires an evidence-backed report, not a repair
-of that unrelated defect. Remote workflow reruns remain outside this host's
-capabilities; report a remaining rerun requirement without performing it.
+Suspected flakiness is a hypothesis, not proof of a defect or irrelevance.
+Repair verified in-scope test defects using fix-flaky-test.
+Aspire's Auto rerun transient CI failures allows three reruns (four total
+attempts); verify current-head coverage, attempts and progress. Let eligible
+automatic reruns finish. Never race/reset that allowance or start a retry loop;
+unknown retry status does not mean exhausted retries.
+
+Native reasoners cannot test. Cloud workers may repeat focused tests within
+their budget, recording commands, counts and outcomes. Authorized focused
+reproduction dispatches stay on the assigned branch with temporary settings
+restored in the final diff; they are not reruns of existing CI. Local passes
+do not prove remote CI green. Host workflow reruns remain unsupported:
+report their necessity without executing them.

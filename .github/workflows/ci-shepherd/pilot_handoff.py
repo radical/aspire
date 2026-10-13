@@ -387,8 +387,10 @@ def worker_request(api, chain, packet):
     # Use plain, nonclosing references even for mitigation PRs; the controller
     # verifies platform artifacts, not a worker's narrative linking claim.
     correlation = {"chain": chain["id"], "operation": chain["handoff"]["id"], "origin": chain["origin"]}
-    prompt = CORRELATION + json.dumps(correlation, separators=(",", ":")) + "\n" + prompt_templates.load(
+    prompt = prompt_templates.load(
         "initial-handoff",
+        correlation=CORRELATION + json.dumps(correlation, separators=(",", ":")),
+        diagnose_repair=prompt_templates.load("diagnose-repair"),
         repository=str(api.repository),
         issue=str(chain['origin']),
         authority_repository=str(api.repository),

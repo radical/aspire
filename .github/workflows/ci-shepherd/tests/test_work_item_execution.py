@@ -1,6 +1,7 @@
 from copy import deepcopy
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 import io
+import json
 from pathlib import Path
 import tempfile
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -74,6 +75,43 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual([], restarted.posts)
         self.assertEqual(1, state.worker_slots(restarted.saved))
         self.assertGreater(state.repository_spend(restarted.saved, execution.live.clock()), 0)
+
+    def test_cloud_approval_is_independent_of_packet_only_publication_permissions(self):
+        self.control["authority"].update(local_edits=False, draft_pr=False, destination=None)
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        self.assertEqual("sent", execution.execute(self.api, self.read, lambda: approval)["outcome"])
+        body, ledger = self.api.posts[0]
+        record = ledger["workItems"][0]
+        assignment = record["assignments"][0]
+        correlation = json.loads(next(line.removeprefix(execution.CORRELATION)
+                                      for line in body["prompt"].splitlines()
+                                      if line.startswith(execution.CORRELATION)))
+        self.assertEqual(approval, correlation["approval"])
+        self.assertEqual(self.control["authority"], assignment["basis"]["authority"])
+        self.assertTrue(correlation["approval"]["allow_branch_writes"])
+        self.assertFalse(assignment["basis"]["authority"]["local_edits"])
+        self.assertEqual("main", body["base_ref"])
+        self.assertEqual(1, len(self.api.posts))
+
+    def test_every_cloud_route_receives_shared_repair_and_failure_investigation(self):
+        import prompt_templates
+        original = prompt_templates.load
+        for route in sorted(work_items.ROUTES):
+            with self.subTest(route=route):
+                api = CloudAuthority()
+                value = deepcopy(self.control)
+                value["requested_route"] = route
+                approval = execution.prepare(api, lambda: value)["approval_template"]
+                def annotated(name, **values):
+                    if name in {"diagnose-repair", "failure-investigation"}:
+                        return f"fixture instruction {name}"
+                    return original(name, **values)
+                with patch.object(prompt_templates, "load", side_effect=annotated):
+                    execution.execute(api, lambda: value, lambda: approval)
+                body = api.posts[0][0]
+                self.assertEqual(1, body["prompt"].count("fixture instruction diagnose-repair"))
+                self.assertEqual(1, body["prompt"].count("fixture instruction failure-investigation"))
+                self.assertLessEqual(len(json.dumps(body).encode()), 20000)
 
     def test_known_unsent_crash_hold_survives_reentry_with_queued_assignments(self):
         approval = execution.prepare(self.api, self.read)["approval_template"]
@@ -362,6 +400,105 @@ class MappingTests(unittest.TestCase):
             f"{self.prefix}/issues/900/timeline": [
                 {"event": "cross-referenced", "source": {"type": "issue", "issue": self.issue}}],
         })
+
+    def test_task_correlation_accepts_historical_first_line_and_new_suffix_but_not_duplicates(self):
+        session = self.task["sessions"][0]
+        prompt = session["prompt"]
+        correlation = next(line for line in prompt.splitlines() if line.startswith(execution.CORRELATION))
+        prose = "\n".join(line for line in prompt.splitlines() if not line.startswith(execution.CORRELATION))
+        for rendered in (prompt, correlation + "\n" + prose):
+            with self.subTest(correlation_first=rendered.startswith(execution.CORRELATION)):
+                session["prompt"] = rendered
+                observed = execution.task(self.api, self.api.ledger["workItems"][0], self.assignment)
+                self.assertEqual("TASK1", observed["id"])
+        session["prompt"] = prompt + "\n" + correlation
+        with self.assertRaisesRegex(ValueError, "correlation mismatch"):
+            execution.task(self.api, self.api.ledger["workItems"][0], self.assignment)
+
+    def test_explicit_retry_preserves_old_attempt_and_preparation_is_idempotent(self):
+        self.pull.update(state="closed", changed_files=0)
+        value = deepcopy(self.control)
+        value.update(id="retry-item", scope=normal_loop.SCOPE)
+        api = CloudAuthority(self.api.ledger)
+        api.repository = self.repository
+        api.api, api.mapping = self.api.api, self.api.mapping
+        api.actor, api.repository_id = self.api.actor, self.api.repository_id
+        first = execution.prepare_retry(api, lambda: value, "TASK1")
+        original = deepcopy(api.saved["workItems"][0])
+        second = execution.prepare_retry(api, lambda: value, "TASK1")
+        self.assertEqual(first, second)
+        self.assertEqual(original, api.saved["workItems"][0])
+        self.assertEqual(1, len(api.saved["workItems"][1]["assignments"]))
+        self.assertEqual("TASK1", api.saved["workItems"][1]["retry_of"]["task_id"])
+        self.assertEqual([], api.posts)
+        approval = first["approval_template"]
+        start = api.start_task
+        def retry_task(body, before_send):
+            start(body, before_send)
+            return "TASK2"
+        with patch.object(api, "start_task", side_effect=retry_task):
+            execution.execute(api, lambda: value, lambda: approval)
+            execution.execute(api, lambda: value, lambda: approval)
+        self.assertEqual(1, len(api.posts))
+        self.assertEqual(original, api.saved["workItems"][0])
+
+    def test_retry_rechecks_previous_task_and_pr_before_launch(self):
+        self.pull.update(state="closed", changed_files=0)
+        value = deepcopy(self.control)
+        value.update(id="retry-item", scope=normal_loop.SCOPE)
+        api = CloudAuthority(self.api.ledger)
+        api.repository = self.repository
+        api.api, api.mapping = self.api.api, self.api.mapping
+        api.actor, api.repository_id = self.api.actor, self.api.repository_id
+        prepared = execution.prepare_retry(api, lambda: value, "TASK1")
+        for changed in ({"state": "open"}, {"changed_files": 1}, {"merged": True}):
+            self.pull.update(state="closed", changed_files=0, merged=False)
+            self.pull.update(changed)
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "zero-change PR"):
+                execution.execute(api, lambda: value, lambda: prepared["approval_template"])
+            self.assertEqual([], api.posts)
+        self.pull.update(state="closed", changed_files=0, merged=False)
+        self.task.update(state="in_progress")
+        self.task["sessions"][0].update(state="in_progress")
+        with self.assertRaisesRegex(ValueError, "terminal task"):
+            execution.execute(api, lambda: value, lambda: prepared["approval_template"])
+        self.assertEqual([], api.posts)
+
+    def test_retry_rejects_wrong_old_task_and_unknown_billing(self):
+        self.pull.update(state="closed", changed_files=0)
+        value = deepcopy(self.control)
+        value.update(id="retry-item", scope=normal_loop.SCOPE)
+        api = CloudAuthority(self.api.ledger)
+        api.repository = self.repository
+        api.api, api.mapping = self.api.api, self.api.mapping
+        api.actor, api.repository_id = self.api.actor, self.api.repository_id
+        with self.assertRaisesRegex(ValueError, "exact previous task"):
+            execution.prepare_retry(api, lambda: value, "wrong-task")
+        self.task["sessions"][0]["usage"] = None
+        with self.assertRaisesRegex(ValueError, "known billing"):
+            execution.prepare_retry(api, lambda: value, "TASK1")
+
+    def test_retry_blocks_pr_reopened_at_final_transport_guard(self):
+        self.pull.update(state="closed", changed_files=0)
+        value = deepcopy(self.control)
+        value.update(id="retry-item", scope=normal_loop.SCOPE)
+        api = CloudAuthority(self.api.ledger)
+        api.repository = self.repository
+        api.api, api.mapping = self.api.api, self.api.mapping
+        api.actor, api.repository_id = self.api.actor, self.api.repository_id
+        prepared = execution.prepare_retry(api, lambda: value, "TASK1")
+        def reopen_before_post(body, before_send):
+            self.pull["state"] = "open"
+            before_send()
+            self.fail("must not send after the predecessor PR reopens")
+        with patch.object(api, "start_task", side_effect=reopen_before_post):
+            receipt = execution.execute(api, lambda: value, lambda: prepared["approval_template"])
+        self.assertEqual("uncertain", receipt["outcome"])
+        self.assertEqual([], api.posts)
+        self.pull["state"] = "closed"
+        again = execution.execute(api, lambda: value, lambda: prepared["approval_template"])
+        self.assertEqual("uncertain", again["outcome"])
+        self.assertEqual([], api.posts)
 
     def test_import_uses_issue_identity_not_pull_identity_and_is_idempotent(self):
         first = execution.import_pr(self.api, self.read)

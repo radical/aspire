@@ -187,7 +187,9 @@ class LifecycleTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual(("POST", TASKS, False, "fix-7", "main"),
                          (method, endpoint, body["create_pull_request"], body["head_ref"], body["base_ref"]))
         self.assertEqual({"chain": chain["id"], "operation": operation["id"], "origin": 7},
-                         json.loads(body["prompt"].splitlines()[0].removeprefix(github.CORRELATION)))
+                         json.loads(next(line.removeprefix(github.CORRELATION)
+                                         for line in body["prompt"].splitlines()
+                                         if line.startswith(github.CORRELATION))))
         boundary = self.transport.send_ledgers[0]["chains"][0]["operations"][0]
         self.assertEqual(("sent", None, 2, 498),
                          (boundary["state"], boundary["taskId"], boundary["nativeActual"], boundary["workerReserved"]))

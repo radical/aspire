@@ -49,6 +49,68 @@ def rendered_prompts():
 
 
 class PromptTemplateTests(unittest.TestCase):
+    def test_cloud_prefix_is_identical_across_assignments_and_routes(self):
+        import prompt_templates
+        boundary = "\n## Route instructions\n"
+        for version in (None, 2):
+            prefixes = []
+            for index, route in enumerate(sorted(work_items.ROUTES)):
+                api = SimpleNamespace(repository="radical/aspire", tracker=99 + index,
+                                      authority_id=500 + index, tracker_node=f"TRACKER{index}")
+                value = control()
+                value.update(id=f"item-{index}", requested_route=route)
+                value["issue"].update(number=7 + index, node_id=f"ISSUE{index}")
+                value["scope"] = f"scope {index}"
+                record = work_items.new_record(value)
+                assignment = work_items.claim(record, value)
+                assignment["id"] = f"assignment-{index}"
+                assignment["execution"] = {"approval": None}
+                if version is not None:
+                    assignment["execution"]["request_version"] = version
+                assignment["execution"]["approval"] = work_item_execution.approval_template(record, assignment)
+                body = work_item_execution.request(api, record, assignment)
+                prefix, suffix = body["prompt"].split(boundary, 1)
+                prefixes.append(prefix)
+                self.assertTrue(prefix.startswith(prompt_templates.load("diagnose-repair")))
+                self.assertEqual(1, body["prompt"].count(work_item_execution.CORRELATION))
+                correlation = next(line for line in suffix.splitlines()
+                                   if line.startswith(work_item_execution.CORRELATION))
+                import json
+                self.assertEqual(assignment["id"], json.loads(
+                    correlation.removeprefix(work_item_execution.CORRELATION))["assignment_id"])
+                self.assertLessEqual(len(json.dumps(body).encode()), 20000)
+            self.assertEqual([prefixes[0]] * len(prefixes), prefixes)
+
+    def test_repair_and_handoff_prefixes_are_identical_across_dynamic_contexts(self):
+        import json
+        boundary = "\n## Assignment context\n"
+        prefixes = {"repair": [], "handoff": []}
+        for index in (1, 2):
+            api = SimpleNamespace(repository="radical/aspire", tracker=99 + index,
+                                  authority_id=500 + index, tracker_node=f"TRACKER{index}", binding=bindings.FORK)
+            observed = {
+                "number": index, "node": f"NODE{index}", "head": str(index) * 40,
+                "headRef": f"branch-{index}", "kind": "pr",
+                "ciEvidence": [], "feedbackEvidence": [], "workerEvidence": [],
+                "description": f"changed evidence {index}", "feedback": [
+                    {"id": f"comment:{index}", "body": f"feedback {index}"}],
+            }
+            chain = {"id": f"chain-{index}", "origin": index, "handoff": {"id": f"handoff-{index}"}}
+            operation = {"id": f"operation-{index}", "identity": pilot_github.fingerprint(observed) + ":round:1"}
+            packet = {"observation": observed}
+            for name, body in (
+                    ("repair", pilot.worker_request(api, chain, operation, packet)),
+                    ("handoff", pilot_handoff.worker_request(api, chain, packet))):
+                prefix, suffix = body["prompt"].split(boundary, 1)
+                prefixes[name].append(prefix)
+                self.assertEqual(1, body["prompt"].count(pilot_github.CORRELATION))
+                self.assertIn(pilot_github.CORRELATION, suffix)
+                self.assertIn(observed["description"], suffix)
+                self.assertLessEqual(len(json.dumps(body).encode()), 20000)
+        for name, values in prefixes.items():
+            with self.subTest(name=name):
+                self.assertEqual(values[0], values[1])
+
     def test_native_app_parent_prompt_is_checked_in_and_requires_real_native_reconciliation(self):
         import prompt_templates
         text = prompt_templates.load("app-handoff")
@@ -84,7 +146,7 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertEqual({
             "cloud-work-item.md", "local-work-item.md", "repair-worker.md", "initial-handoff.md",
             "fork-fixture-worker.md", "transport-proof.md", "target-fork.md", "target-upstream.md",
-            "failure-investigation.md"}, seen)
+            "failure-investigation.md", "diagnose-repair.md"}, seen)
 
     def test_missing_invalid_and_extra_template_bindings_fail_closed(self):
         import prompt_templates

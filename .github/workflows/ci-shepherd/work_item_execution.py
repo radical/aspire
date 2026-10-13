@@ -149,11 +149,48 @@ def locate(api, read_control):
 
 def available(api, record):
     issue = record["control"]["issue"]
-    for other, _, saved in executions(api.ledger):
+    for other, assignment, saved in executions(api.ledger):
         if other is record or other["control"]["issue"] != issue:
             continue
         if saved["state"] != "no_send":
-            raise ValueError("issue already has cloud execution; human reconciliation required")
+            expected = {"item_id": other["id"], "assignment_id": assignment["id"], "task_id": saved["task_id"]}
+            if record.get("retry_of") != expected:
+                raise ValueError("issue already has cloud execution; human reconciliation required")
+            retryable(api, other, assignment)
+
+
+def retryable(api, record, assignment):
+    saved = assignment["execution"]
+    if saved["state"] != "sent" or saved["task_id"] is None or saved["imported_chain_id"] is not None:
+        raise ValueError("retry requires an exact sent, unimported task")
+    observed = refresh(api, record, assignment)
+    if observed["state"] not in state.TERMINAL or saved["worker_reserved"] or saved["worker_actual"] is None:
+        raise ValueError("retry requires terminal task and known billing")
+    pr = observe_task_pr(api, observed)
+    if pr["state"] != "closed" or pr["merged"] or pr["changed_files"] != 0:
+        raise ValueError("retry requires closed unmerged zero-change PR")
+    if any(label.get("name") == "shepherd-hands-off" for label in pr.get("labels", [])):
+        raise ValueError("retry PR is hands-off")
+
+
+def prepare_retry(api, read_control, expected_task):
+    """Explicit operator retry; retain every old receipt and recheck before dispatch."""
+    items.identifier(expected_task, "expected retry task")
+    control, record = locate(api, read_control)
+    previous = [(other, assignment) for other, assignment, saved in executions(api.ledger)
+                if other is not record and other["control"]["issue"] == control["issue"]
+                and saved["state"] != "no_send"]
+    if len(previous) != 1 or previous[0][1]["execution"]["task_id"] != expected_task:
+        raise ValueError("retry requires one exact previous task")
+    old, assignment = previous[0]
+    retryable(api, old, assignment)
+    receipt = {"item_id": old["id"], "assignment_id": assignment["id"], "task_id": expected_task}
+    if record.get("retry_of", receipt) != receipt or record["assignments"] and "retry_of" not in record:
+        raise ValueError("retry identity changed")
+    record["retry_of"] = receipt
+    receiver.fresh(api, read_control, control)
+    api.persist()
+    return prepare(api, read_control)
 
 
 def prepare(api, read_control):
@@ -192,14 +229,16 @@ def request(api, record, assignment):
     if "request_version" in value:
         identity["request_version"] = value["request_version"]
     specialist = items.SPECIALISTS[assignment["route"]][1]
-    if value.get("request_version") == 2 and assignment["route"] in {"workflow_failure", "flaky_test"}:
+    if value.get("request_version") == 2:
         specialist += "\n" + prompt_templates.load("failure-investigation")
-    prompt = CORRELATION + json.dumps(identity, separators=(",", ":"), sort_keys=True) + "\n" + prompt_templates.load(
+    prompt = prompt_templates.load(
         "cloud-work-item-result" if value.get("request_version") == 2 else "cloud-work-item",
         specialist=specialist,
+        correlation=CORRELATION + json.dumps(identity, separators=(",", ":"), sort_keys=True),
         tracker=str(api.tracker),
         authority=str(api.authority_id),
         evidence_json=json.dumps(assignment["basis"], sort_keys=True),
+        diagnose_repair=prompt_templates.load("diagnose-repair"),
         **({"result_json": json.dumps({
             "schema_version": 1, "item_id": record["id"], "assignment_id": assignment["id"],
             "evaluated_revision": assignment["revision"], "worker_id": "HOST_VERIFIED_SESSION_ID",
@@ -254,6 +293,7 @@ def execute(api, read_control, read_approval):
         receiver.fresh(api, read_control, control)
         if read_approval() != approval:
             raise ValueError("cloud approval changed")
+        available(api, record)
         refresh_capacity(api)
         # Once sending is durable, this candidate already occupies one slot.
         limit = 3 if value["state"] == "sending" else 2
@@ -319,7 +359,8 @@ def task(api, record, assignment):
             or not isinstance(observed.get("artifacts"), list)):
         raise ValueError("task/session identity unavailable")
     session = sessions[0]
-    expected = request(api, record, assignment)["prompt"].splitlines()[0]
+    expected = next(line for line in request(api, record, assignment)["prompt"].splitlines()
+                    if line.startswith(CORRELATION))
     prompt = session.get("prompt")
     if (session.get("task_id") != value["task_id"]
             or session.get("repository", {}).get("id") != api.repository_id
@@ -588,7 +629,8 @@ def refresh_all(api):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["prepare", "execute", "observe", "import", "checkpoint"])
+    parser.add_argument("mode", choices=["prepare", "prepare-retry", "execute", "observe", "import", "checkpoint"])
+    parser.add_argument("--expected-task", help="Exact old terminal task; prepare-retry only")
     parser.add_argument("--item", type=Path, required=True, help="Trusted operator-owned control JSON")
     parser.add_argument("--approval", type=Path, help="Exact trusted cloud approval; execute only")
     parser.add_argument("--tracker", type=int, required=True)
@@ -598,6 +640,8 @@ def main(argv=None):
     parser.add_argument("--result", type=Path, help="Operator-attributed result; checkpoint only")
     parser.add_argument("--validation", type=Path, help="Independent host evidence; checkpoint only")
     args = parser.parse_args(argv)
+    if (args.mode == "prepare-retry") != (args.expected_task is not None):
+        parser.error("prepare-retry requires --expected-task; no other mode accepts it")
     if (args.mode == "execute") != (args.approval is not None):
         parser.error("execute requires --approval; no other mode accepts it")
     if (args.mode == "checkpoint") != (args.result is not None):
@@ -618,6 +662,8 @@ def main(argv=None):
             args.workdir.mkdir(mode=0o700, parents=True, exist_ok=False)
             if args.mode == "prepare":
                 receipt = prepare(api, read_control)
+            elif args.mode == "prepare-retry":
+                receipt = prepare_retry(api, read_control, args.expected_task)
             elif args.mode == "execute":
                 receipt = execute(api, read_control, lambda: contracts.read_json(args.approval))
             elif args.mode in {"observe", "import"}:

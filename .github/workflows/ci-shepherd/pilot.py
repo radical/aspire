@@ -230,8 +230,10 @@ def worker_prompt(api, chain, operation, packet):
     trial = ("Exact-head trial brief (ignore after head drift): "
              + json.dumps(bindings.brief(api.binding, observed["head"])) + "\n"
              if api.binding == bindings.UPSTREAM else "")
-    return github.CORRELATION + json.dumps(correlation, separators=(",", ":")) + "\n" + prompt_templates.load(
+    return prompt_templates.load(
         "repair-worker",
+        correlation=github.CORRELATION + json.dumps(correlation, separators=(",", ":")),
+        diagnose_repair=prompt_templates.load("diagnose-repair"),
         repository=str(api.repository),
         kind=str(observed['kind']),
         number=str(observed['number']),

@@ -136,7 +136,7 @@ class PilotTransport(live.HTTPTransport):
             return
         if (method == "POST" and endpoint == f"agents/repos/{self.binding.repository}/tasks"
                 and isinstance(body, dict) and isinstance(body.get("prompt"), str)
-                and body["prompt"].startswith("ci-shepherd-work-item: ")):
+                and any(line.startswith("ci-shepherd-work-item: ") for line in body["prompt"].splitlines())):
             if not self.write or self.approved_request is None or body != self.approved_request:
                 raise ValueError("exact canonical normal task capability required")
             return

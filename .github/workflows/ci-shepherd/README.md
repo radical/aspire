@@ -28,6 +28,7 @@ authority and task-correlation code:
 | --- | --- |
 | `prompts/cloud-work-item.md` | Historical issue-linked Cloud Agent requests |
 | `prompts/cloud-work-item-result.md` | Version 2 requests with correlated final JSON |
+| `prompts/diagnose-repair.md` | Shared cloud diagnosis, skills, reproduction and validation |
 | `prompts/failure-investigation.md` | Shared investigation for new workflow/test failure assignments |
 | `prompts/local-work-item.md` | Packet-only local worker |
 | `prompts/route-*.md` | Workflow failure, flaky test and product bug specialists |
@@ -55,12 +56,71 @@ preserving rendered spaces. Ordinary newlines remain part of the prompt; one
 final file newline is omitted. Task-correlation prefixes and JSON remain
 assembled in code, not editable template instructions.
 
+Cloud implementation, repair and initial-handoff prompts put reusable
+instructions first, followed by route/target guidance and a trailing
+`Assignment context` block containing correlation, authority, revisions,
+approvals, result bindings and quoted evidence. Dynamic context must not be
+inserted before the shared instructions. Prefix-equality tests exercise
+different assignments, routes, heads and feedback. This layout enables
+prefix reuse where the service supports caching; it does not guarantee cache
+hits or measurable billing savings.
+
+Task verification finds the unique correlation line anywhere in the prompt,
+so both historical correlation-first prompts and new context-last prompts
+remain attributable. Duplicate or mismatched correlation lines still fail.
+
 Instruction edits do not grant permissions or change runtime guards. Review
 changes against the corresponding result validator and authority checks, and
 run the behavioral prompt and affected launch tests. Absent `request_version`
 retains the historical request. New assignments store version 2; cloud
 correlation also includes that version. Editing new instructions does not
 retroactively require historical workers to have returned JSON.
+
+Cloud repair instructions aim for diagnose → reproduce → fix → validate, not
+classification alone. A selected route is an initial hypothesis: an approved
+product-bug task can repair a verified test defect without launching a second
+worker. Version 2 cloud assignments receive comparable-failure investigation
+instructions for all three routes. Suspected flaky tests use `fix-flaky-test`;
+missing skills fall back to checked-in guidance and repository-native tests.
+
+Issue tasks create one draft only for real, meaningfully validated changes.
+PR tasks, whether a first repair or follow-up, retain the verified existing
+head branch and never create a second PR. Follow-ups inspect prior attempts,
+fresh feedback and same-head CI before repeating a repair. Local tests must
+actually execute, and blocked CI validation stays explicit in the draft/result.
+
+Canonical `assignment.execution.approval` controls cloud branch writes and
+draft publication. `basis.authority` controls the separate packet-only local
+lane; its false flags do not revoke cloud approval or grant missing cloud
+permissions. Workers must resolve an authority-comment activation pointer to
+the current memory-branch ledger before writes and verify their saved task.
+Changed, unavailable or revoked authority stops new writes with an exact reason.
+
+New normal assignments permit focused `reproduce-flaky-tests.yml` dispatches
+on their assigned cloud branch, not reruns/cancellation of existing CI. This
+does not add a native controller dispatch capability or supply Actions/token
+permissions. Workers inspect the live workflow, temporarily configure only
+its test inputs when necessary, and restore that configuration in the final
+diff. Skill steps that create investigation branches/PRs, disable `ci.yml`,
+unquarantine tests or post diagnostic comments are explicitly overridden.
+Non-forced configuration and cleanup commits may remain in task history.
+Historical scopes denying CI mutation remain restrictive; permission failures
+require exact errors and manual validation commands, not credential changes.
+
+Before relying on a cloud repair, verify that the worker can read the
+controller's authority and current memory ledger, identify its task/session,
+and observe the controller's persisted task receipt. The
+`HOST_VERIFIED_SESSION_ID` result placeholder is not a substitute for
+pre-write identity verification. A worker starting before its receipt is
+persisted must not infer approval from a missing task identity.
+
+If a worker stops after pushing temporary reproduction settings, cleanup can
+require a person: revoked authority or a concurrent writer forbids further
+worker pushes, including restoration. Earlier-SHA reproduction results do not
+prove final-head CI readiness. Fork target policy can prohibit workflow edits
+even when shared reproduction guidance describes them; that restriction wins.
+Instructions cannot prevent a platform-created empty draft when the task
+request has `create_pull_request: true`; artifact checks still reject it as a fix.
 
 ## Explicit issue-linked Cloud Agent execution
 
@@ -872,6 +932,18 @@ response IDs, crashes and uncertain persistence never authorize a second POST.
 Re-entry reports uncertainty or the saved identity; a changed item ID/revision
 cannot bypass unresolved same-issue work. Human reconciliation is required;
 do not reset receipts or authority to retry.
+
+An operator can explicitly retry a single previous terminal task whose unique
+PR is closed, unmerged and has zero changed files. Use a new item ID for the
+same exact issue and `prepare-retry --expected-task OLD_TASK_ID` in place of
+`prepare`. The new record stores `retry_of` with the original item, assignment
+and task identity; old results, reports and billing remain intact. Preparation
+returns a new exact approval and never launches a task. Use `execute` with that
+approval to launch it once. Preparation and every dispatch guard re-read the
+original task and PR; resumed tasks, open/nonempty/merged PRs, imported ownership,
+unknown billing, hands-off labels or multiple previous attempts block retry.
+This narrow retry does not reset attempt records or authorize another worker
+after an ambiguous send.
 
 The API chooses the new head branch. It does not offer a fresh-branch naming
 guarantee, `draft` request field, runtime limit or hard credit cap. The prompt

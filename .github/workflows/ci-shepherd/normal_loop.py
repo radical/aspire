@@ -27,10 +27,13 @@ MAX_INTAKE_ISSUE_BODY = 800
 MAX_RUN_REFERENCES = 100
 MAX_FAILED_OCCURRENCES = 100
 MAX_ASSESSMENT_BYTES = 2500
-SCOPE = ("Investigate only the linked issue and the host-verified occurrence using the standard "
-         "repository investigation instructions. Establish the cause before changing code. "
-         "Do not rerun CI, change credentials or permissions, publish comments/issues, "
-         "merge or close issues. Report an evidence-backed no-fix result when appropriate.")
+SCOPE = ("Diagnose and repair the linked issue's host-verified failure, including a test defect "
+         "when evidence supports it. Reproduce, fix and validate using repository skills. "
+         "Cloud edits and draft publication require the separate exact execution approval; "
+         "packet-only local permissions do not authorize cloud work. Focused test reproduction "
+         "may use reproduce-flaky-tests.yml on the assigned cloud branch; do not rerun existing "
+         "CI, change credentials or permissions, publish diagnostic comments/issues, merge or "
+         "close issues. Report concrete blockers or an evidence-backed no-fix result.")
 
 
 def validate_feed(value, repository):

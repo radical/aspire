@@ -245,7 +245,15 @@ def new_record(control):
 
 
 def validate_record(record):
-    contracts.exact(record, {"id", "control", "assignments", "preview", "publication", "comment"}, "work-item record")
+    contracts.exact(record, {"id", "control", "assignments", "preview", "publication", "comment"}
+                    | ({"retry_of"} if "retry_of" in record else set()), "work-item record")
+    if "retry_of" in record:
+        receipt = record["retry_of"]
+        contracts.exact(receipt, {"item_id", "assignment_id", "task_id"}, "explicit retry")
+        for key, value in receipt.items():
+            identifier(value, "retry " + key)
+        if receipt["item_id"] == record["id"]:
+            raise ValueError("retry cannot replace its original item")
     validate_control(record["control"])
     if record["id"] != record["control"]["id"]:
         raise ValueError("work-item identity mismatch")
