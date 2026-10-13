@@ -45,8 +45,10 @@ MAX_API_JSON_BYTES = 8 * 1024 * 1024
 MAX_GET_WAIT_SECONDS = 180
 
 
-class _EmptyGetResponse(IncompleteInventory):
-    pass
+class _IncompleteGetResponse(IncompleteInventory):
+    def __init__(self, reason, diagnostic):
+        self.reason = reason
+        super().__init__(diagnostic)
 
 
 def clock():
@@ -189,11 +191,11 @@ class HTTPTransport:
         for attempt in range(1, 4):
             try:
                 return self._request_once(method, endpoint, body)
-            except _EmptyGetResponse as error:
+            except _IncompleteGetResponse as error:
                 if attempt == 3:
-                    raise IncompleteInventory(f"API JSON response empty after 3 attempts; {error}") from None
+                    raise IncompleteInventory(f"API JSON response {error.reason} after 3 attempts; {error}") from None
                 logging.getLogger(__name__).warning(
-                    "API JSON response empty; retrying GET after attempt %s/3; %s", attempt, error)
+                    "API JSON response %s; retrying GET after attempt %s/3; %s", error.reason, attempt, error)
                 self.sleep_fn(attempt)
                 self._admit_task_request(method, urlparse(endpoint).path)
 
@@ -235,15 +237,37 @@ class HTTPTransport:
                         f"API JSON response exceeds {MAX_API_JSON_BYTES}-byte limit; " +
                         self._diagnostic(method, path.path, response.status, response.headers))
                 self._observe_quota(response.headers)
+                length = response.headers.get("Content-Length")
+                if length is not None and re.fullmatch(r"[0-9]{1,20}", length) is None:
+                    raise ValueError("invalid HTTP content length")
+                expected = None if length is None else int(length)
+                framing = f"received={len(raw)} expected={expected if expected is not None else 'unknown'}"
+                # HTTPResponse.read(amt) does not raise on early EOF when Content-Length
+                # is unmet. Compare wire bytes before accepting even a valid JSON prefix.
+                # https://docs.python.org/3/library/http.client.html#http.client.HTTPResponse.read
+                if raw and expected is not None and len(raw) != expected:
+                    diagnostic = self._diagnostic(method, path.path, response.status, response.headers) + "; " + framing
+                    if method == "GET" and response.status == 200 and len(raw) < expected:
+                        raise _IncompleteGetResponse("incomplete", diagnostic)
+                    raise (IncompleteInventory if read else LostResponse)(
+                        "API JSON response incomplete; no retry; " + diagnostic)
                 if not raw:
                     diagnostic = self._diagnostic(method, path.path, response.status, response.headers)
                     # GitHub can return HTTP 200 with zero body bytes for a jobs page.
                     # Retry only that GET; an empty write receipt may hide a completed effect.
                     if method == "GET" and response.status == 200:
-                        raise _EmptyGetResponse(diagnostic)
+                        raise _IncompleteGetResponse("empty", diagnostic)
                     raise (IncompleteInventory if read else LostResponse)(
                         "API JSON response empty; no retry; " + diagnostic)
-                payload = contracts.loads(raw.decode("utf-8"), max_bytes=MAX_API_JSON_BYTES)
+                try:
+                    payload = contracts.loads(raw.decode("utf-8"), max_bytes=MAX_API_JSON_BYTES)
+                except (ValueError, UnicodeError) as error:
+                    cause = error.__cause__
+                    detail = (f"malformed JSON; offset={cause.pos}"
+                              if isinstance(cause, json.JSONDecodeError) else "invalid JSON encoding or structure")
+                    raise (IncompleteInventory if read else LostResponse)(
+                        f"API result unavailable or invalid; {detail}; {framing}; no retry; " +
+                        self._diagnostic(method, path.path, response.status, response.headers)) from None
                 return Response(payload, dict(response.headers), response.status)
         except (IncompleteInventory, LostResponse):
             raise

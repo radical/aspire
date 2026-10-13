@@ -225,7 +225,8 @@ class HTTPFixture:
                 self.send_response(result.status)
                 for key, value in result.headers.items():
                     self.send_header(key, value)
-                self.send_header("Content-Length", str(len(raw)))
+                if "Content-Length" not in result.headers:
+                    self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
 

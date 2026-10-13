@@ -538,11 +538,14 @@ Run artifacts are not reusable orchestration inputs or Git-tracked state.
 The prompt remains in `policies/normal.md` on this branch.
 
 The shared HTTP transport retries only HTTP-200 GET responses with an empty
-body, for at most three attempts with one- and two-second delays. Each retry
+body or fewer bytes than their declared `Content-Length`, for at most three
+attempts with one- and two-second delays. Each retry
 logs safe request metadata, closes the previous response and honors task quota
 admission. It retries the same inventory page, not the whole turn. Exhaustion
-fails closed with an explicit empty-response diagnostic. Nonempty malformed
-JSON, HTTP errors and uncertain write receipts are not retried; POST/PATCH
+fails closed with an explicit incomplete-response diagnostic. Complete malformed
+JSON reports its parser offset and received/declared byte counts without body
+contents. Malformed JSON without a proven length shortfall, HTTP errors and
+uncertain write receipts are not retried; POST/PATCH
 effects must never be replayed to recover a missing receipt.
 
 Budget values in `pilot_state.py` are **30 credits per native reservation**,
@@ -557,6 +560,11 @@ Later normal runs need neither the feed nor a local preview. They rediscover
 task and session IDs exclusively from canonical `workItems`, refresh platform
 state, and wait while a task remains active. Closed, paused, hands-off, or
 source-revision-changed items retain history without new effects.
+
+A repeated feed for an exactly matching canonical issue refreshes its source
+and follows existing ownership without rebuilding intake job candidates.
+The failed-occurrence bound still applies to new intake; historical failures
+must not prevent follow-up on an already dispatched task.
 
 Legacy manual assignments without settled normal intake receipts and items
 outside the authority repository remain status-only worklist rows, with a

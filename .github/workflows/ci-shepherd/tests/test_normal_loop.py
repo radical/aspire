@@ -303,6 +303,31 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual("in_progress",
                          self.saved()["workItems"][0]["assignments"][0]["execution"]["task_state"])
 
+    def test_repeated_owned_feed_does_not_reenumerate_intake_job_inventories(self):
+        self.launch()
+        with patch.object(normal_loop, "candidates", side_effect=ValueError("failed occurrence budget exhausted")):
+            self.assertIsNone(self.prepare(FEED))
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual("in_progress",
+                         self.saved()["workItems"][0]["assignments"][0]["execution"]["task_state"])
+
+    def test_repeated_owned_feed_still_assesses_completed_empty_pr(self):
+        self.terminal()
+        self.add_pr(0)
+        with patch.object(normal_loop, "candidates", side_effect=AssertionError("redundant intake scan")):
+            packet = self.prepare(FEED)
+        self.assertEqual("issue-assessment", packet["normal"])
+        self.assertEqual("PR mapping denied: empty PR with zero changes", packet["context"]["mapping"]["reason"])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual([], self.saved()["chains"])
+
+    def test_new_feed_retains_failed_occurrence_budget_guard(self):
+        with patch.object(normal_loop, "candidates", side_effect=ValueError("failed occurrence budget exhausted")):
+            with self.assertRaisesRegex(ValueError, "failed occurrence budget exhausted"):
+                self.prepare(FEED)
+        self.assertEqual([], self.posts)
+        self.assertEqual([], self.saved().get("workItems", []))
+
     def test_substantive_pr_import_precedes_transcript_and_does_not_repeat(self):
         self.launch()
         self.task("completed")

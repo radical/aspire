@@ -80,6 +80,99 @@ class WindowOpener:
 
 
 class RateLimitTests(unittest.TestCase):
+    def test_truncated_http_get_recovers_through_real_response_reader(self):
+        service = FakeService()
+        calls = []
+        value = {"jobs": [{"id": 20}]}
+        complete = json.dumps(value).encode()
+
+        def jobs(method, endpoint, body):
+            calls.append((method, endpoint, body))
+            raw = complete[:10] if len(calls) == 1 else complete
+            return live.Response(raw, {"Content-Length": str(len(complete))})
+
+        service.transport = jobs
+        fixture = HTTPFixture(service)
+        self.addCleanup(fixture.close)
+        sleeps = []
+        path = f"repos/{live.REPOSITORY}/actions/runs/10/attempts/1/jobs"
+        with self.assertLogs("live", level="WARNING") as logs:
+            response = live.HTTPTransport("credential", opener=fixture, sleep_fn=sleeps.append)(
+                "GET", path, None)
+        self.assertEqual(value, response.payload)
+        self.assertEqual([("GET", path, None)] * 2, calls)
+        self.assertEqual([1], sleeps)
+        self.assertIn(f"received=10 expected={len(complete)}", logs.output[0])
+
+    def test_valid_json_prefix_is_not_accepted_as_a_complete_http_body(self):
+        opener = WindowOpener()
+        responses = [WindowOpener.response(b"{}", {"Content-Length": "20"}) for _ in range(3)]
+        with patch.object(opener, "open", side_effect=responses) as opened:
+            with self.assertLogs("live", level="WARNING"):
+                with self.assertRaisesRegex(live.IncompleteInventory, "incomplete.*3 attempts.*received=2 expected=20"):
+                    live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                        "GET", f"repos/{live.REPOSITORY}", None)
+        self.assertEqual(3, opened.call_count)
+
+    def test_truncated_write_receipt_remains_uncertain(self):
+        for method, path in (
+                ("POST", f"agents/repos/{live.REPOSITORY}/tasks"),
+                ("PATCH", f"repos/{live.REPOSITORY}/issues/comments/501")):
+            with self.subTest(method=method):
+                opener = WindowOpener()
+                with patch.object(opener, "open", return_value=WindowOpener.response(
+                        b"{}", {"Content-Length": "20"})) as opened:
+                    with self.assertRaisesRegex(live.LostResponse, "incomplete.*no retry.*received=2 expected=20"):
+                        live.HTTPTransport("credential", write=True, opener=opener, sleep_fn=opener.sleep)(
+                            method, path, {})
+                self.assertEqual(1, opened.call_count)
+                self.assertEqual([], opener.sleeps)
+
+    def test_complete_malformed_json_reports_position_without_retry_or_body(self):
+        opener = WindowOpener()
+        raw = b'{"secret":"credential", "jobs":'
+        with patch.object(opener, "open", return_value=WindowOpener.response(
+                raw, {"Content-Length": str(len(raw))})) as opened:
+            with self.assertRaisesRegex(
+                    live.IncompleteInventory,
+                    f"malformed JSON.*offset={len(raw)}.*received={len(raw)} expected={len(raw)}") as error:
+                live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                    "GET", f"repos/{live.REPOSITORY}", None)
+        self.assertEqual(1, opened.call_count)
+        self.assertEqual([], opener.sleeps)
+        self.assertNotIn("credential", str(error.exception))
+
+    def test_malformed_body_without_length_is_not_assumed_to_be_truncated(self):
+        opener = WindowOpener()
+        with patch.object(opener, "open", return_value=WindowOpener.response(b'{"jobs":', {})) as opened:
+            with self.assertRaisesRegex(live.IncompleteInventory, "offset=8.*received=8 expected=unknown"):
+                live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                    "GET", f"repos/{live.REPOSITORY}", None)
+        self.assertEqual(1, opened.call_count)
+        self.assertEqual([], opener.sleeps)
+
+    def test_exact_length_valid_json_and_unframed_json_remain_supported(self):
+        for headers in ({}, {"Content-Length": "2"}):
+            with self.subTest(headers=headers):
+                opener = WindowOpener()
+                with patch.object(opener, "open", return_value=WindowOpener.response(b"{}", headers)) as opened:
+                    response = live.HTTPTransport("credential", opener=opener)(
+                        "GET", f"repos/{live.REPOSITORY}", None)
+                self.assertEqual({}, response.payload)
+                self.assertEqual(1, opened.call_count)
+
+    def test_invalid_or_overlong_framing_is_not_retried(self):
+        for length in ("invalid", "-1", "0", "1"):
+            with self.subTest(length=length):
+                opener = WindowOpener()
+                with patch.object(opener, "open", return_value=WindowOpener.response(
+                        b"{}", {"Content-Length": length})) as opened:
+                    with self.assertRaises(live.IncompleteInventory):
+                        live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                            "GET", f"repos/{live.REPOSITORY}", None)
+                self.assertEqual(1, opened.call_count)
+                self.assertEqual([], opener.sleeps)
+
     def test_empty_http_body_recovers_through_real_response_reader(self):
         service = FakeService()
         requests = []

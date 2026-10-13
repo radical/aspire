@@ -391,7 +391,12 @@ def prepare(api, run, now, feed=None):
         if number in incoming:
             raise ValueError("duplicate incoming issue")
         observed = source(api, number)
-        incoming[number] = (entry, observed, candidates(api, observed) if eligible(observed) else [])
+        # A repeated feed is not a new intake. Existing ownership is refreshed below;
+        # rescanning historical jobs can exhaust intake bounds and block task follow-up.
+        owned = any(record["control"]["issue"] == observed["identity"]
+                    for record in api.ledger.get("workItems", []))
+        incoming[number] = (entry, observed,
+                            candidates(api, observed) if eligible(observed) and not owned else [])
     # Refresh the complete worklist before dispatch/import/report actions. Active
     # tasks are observations, not a reason to stop intake or wait in this turn.
     observed_items = {}
