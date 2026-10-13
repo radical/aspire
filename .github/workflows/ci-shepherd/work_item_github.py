@@ -137,6 +137,37 @@ class WorkItemGitHub(pilot_github.PilotGitHub):
         return response.payload["id"]
 
 
+    def replace_comment(self, issue, identity, previous, body, before_send):
+        import work_item_receiver as receiver
+        if issue != self.control["issue"] or not receiver.comment_authorized(self, self.control):
+            raise ValueError("exact authorized issue required for replacement")
+        latest = self.read_authority()
+        record = next((entry for entry in latest.get("workItems", [])
+                       if entry["id"] == self.control["id"]), None)
+        comment = record["comment"] if record is not None else None
+        if (record is None or record["control"] != self.control or comment is None
+                or comment["assignment_id"] != record["assignments"][-1]["id"]
+                or comment.get("replacement_id") != identity or comment["delivery"] != "delivering"
+                or comment["body"] != body):
+            raise ValueError("canonical exact replacement intent required")
+        self.guard_work_item(self.control)
+        before_send()
+        matches = [entry for entry in self.issue_comments(issue) if entry["id"] == identity]
+        if (len(matches) != 1 or not matches[0]["owned"] or matches[0]["body"] != previous
+                or not receiver.comment_authorized(self, self.control)):
+            raise ValueError("report changed or permission revoked before replacement")
+        # GitHub comment PATCH has no conditional body update. Recheck ownership
+        # and exact old bytes immediately before sending; concurrent human edits
+        # after this read remain an API limitation, not an atomic-CAS guarantee.
+        response = self.transport("PATCH", f"repos/{issue['repository']}/issues/comments/{identity}",
+                                  {"body": body})
+        if (not isinstance(response, Response) or response.status != 200
+                or not isinstance(response.payload, dict) or response.payload.get("id") != identity
+                or response.payload.get("body") != body or not self.owned(response.payload)):
+            raise LostResponse("issue-report replacement uncertain; never blindly replay")
+        return identity
+
+
 class CloudWorkItemTransport(pilot_github.PilotTransport):
     """A task-creation capability separate from legacy upstream repair effects."""
 

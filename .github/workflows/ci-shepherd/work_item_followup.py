@@ -53,8 +53,12 @@ def parse_result(text, record, assignment, session):
 
 
 def validate(value, record, assignment):
-    contracts.exact(value, {"task_id", "session_id", "attempts", "status", "reason",
-                           "task_version", "log_excerpt", "pinned_evidence", "assessment"}, "cloud follow-up")
+    keys = {"task_id", "session_id", "attempts", "status", "reason",
+            "task_version", "log_excerpt", "pinned_evidence", "assessment"}
+    if "description" in value:
+        keys.add("description")
+        items.text(value["description"], "descriptive worker summary", 1500)
+    contracts.exact(value, keys, "cloud follow-up")
     for key in ("task_id", "session_id"):
         items.identifier(value[key], key)
         if value[key] != assignment["execution"][key]:
@@ -100,6 +104,43 @@ def redact_fields(value, token):
     if isinstance(value, list):
         return [redact_fields(entry, token) for entry in value]
     return redact(value, token) if isinstance(value, str) else value
+
+
+def descriptive_summary(text, record, assignment, session):
+    """Read correlated claims without accepting a result or granting an action."""
+    if not isinstance(text, str) or len(text.encode()) > MAX_LOG:
+        raise ValueError("bounded worker log unavailable")
+    claims = []
+    # gh repeats envelopes in tool stdout and final Markdown:
+    #   CSWORKITEMBEGIN <wrapped Base64 JSON> CSWORKITEMEND
+    # Quoted source such as print('CSWORKITEMBEGIN\n'+b64...) is not an envelope.
+    for match in re.finditer(BEGIN + r"\s*([A-Za-z0-9+/=\s]+?)" + END, text):
+        try:
+            encoded = re.sub(r"\s+", "", match.group(1))
+            decoded = base64.b64decode(encoded, validate=True)
+            if len(decoded) > 16000 or base64.b64encode(decoded).decode("ascii") != encoded:
+                raise ValueError("noncanonical/bounded descriptive result")
+            value = contracts.loads(decoded.decode("utf-8"), max_bytes=16000)
+            if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+                    or value["schema_version"] != 1 or value.get("item_id") != record["id"]
+                    or value.get("assignment_id") != assignment["id"]
+                    or type(value.get("evaluated_revision")) is not int
+                    or value["evaluated_revision"] != assignment["revision"]
+                    or value.get("worker_id") not in (session, "HOST_VERIFIED_SESSION_ID")):
+                raise ValueError("descriptive result attribution mismatch")
+            # A worker can use an unsupported classification or omit structured
+            # evidence while still explaining its outcome. Only the bounded,
+            # correlated prose is usable here; parse_result still rejects that
+            # object for checkpointing, routing and all downstream capabilities.
+            items.text(value.get("summary"), "descriptive summary", 1500)
+            claims.append(value)
+        except (ValueError, binascii.Error, UnicodeError):
+            raise ValueError("descriptive worker result is malformed or misattributed") from None
+    if not claims:
+        raise ValueError("No correlated worker explanation available.")
+    if any(claim != claims[0] for claim in claims[1:]):
+        raise ValueError("Conflicting worker explanations; diagnosis unavailable.")
+    return claims[0]["summary"]
 
 
 def version(task):
@@ -237,6 +278,11 @@ def collect(api, read_control, collector, *, assessment=None):
         excerpt = text if len(text) <= 1500 else (
             text[:500] + "\n[Middle of session excerpt omitted]\n" + text[-1000:])
         value["log_excerpt"] = safe(excerpt, api.token) or "Empty exact-session transcript."
+        try:
+            value["description"] = safe(
+                descriptive_summary(text, record, assignment, saved["session_id"]), api.token, 1500)
+        except ValueError as error:
+            value["description"] = safe(error, api.token, 1500)
         parsed = parse_result(text, record, assignment, saved["session_id"])
         parsed = redact_fields(parsed, api.token)
         items.validate_result(parsed)
@@ -342,19 +388,16 @@ def comment_body(control, assignment):
 def normal_comment_body(control, assignment, *, context=None):
     value = assignment["execution"]["followup"]
     lines = [
-        "[automated] CI Shepherd work-item result; human direction required.",
-        f"<!-- ci-shepherd:work-item:{control['id']}:{assignment['id']} -->",
-        f"Owned task `{value['task_id']}`; verified session `{value['session_id']}`.",
-        f"Platform task state: {assignment['execution']['task_state']}. "
-        "No usable PR was imported; task completion and empty drafts do not establish a fix.",
+        "[automated] **CI Shepherd: Copilot finished without a verified fix; the issue remains open.**",
     ]
     if context is not None:
         mapping = context["mapping"]
         observed = mapping.get("observation")
         if observed is not None:
-            lines.append(f"Observed PR #{observed['number']}: state {observed['state']}; "
-                         f"draft {str(observed['draft']).lower()}; merged {str(observed['merged']).lower()}; "
-                         f"changed files {observed['changedFiles']}.")
+            repository = control["issue"]["repository"]
+            lines.append(f"- **PR:** [#{observed['number']}](https://github.com/{repository}"
+                         f"/pull/{observed['number']}) is {observed['state']} with "
+                         f"**{observed['changedFiles']} changed files**.")
             if observed["changedFiles"] > 0:
                 lines.append("Substantive PR observation requires human reconciliation; not import authorization.")
         else:
@@ -364,34 +407,31 @@ def normal_comment_body(control, assignment, *, context=None):
             lines.append("The issue changed since this assignment was dispatched. Session claims describe "
                          "the original assignment, not validation of the current issue.")
     assessment = value["assessment"]
-    details = ["Result collection: " + safe(value["reason"], limit=400)]
-    if assessment is None:
-        lines.append("Assessment outcome unrecorded/unknown; no replacement inference was started.")
-        lines.append("Unknown: root cause and transience are not independently established.")
     result = assignment["result"]
-    if result is not None:
-        details.append(f"Worker-reported outcome (original assignment; untrusted): {result['outcome']}. "
-                       + safe(result["summary"], limit=350))
+    description = result["summary"] if result is not None else value.get("description")
+    if description:
+        lines.append("- **Agent's finding (not independently verified):** " + safe(description, limit=1500))
+    else:
+        lines.append("- **Agent's explanation unavailable:** " + safe(value["reason"], limit=400))
     if assessment is not None:
-        details.append("Shepherd assessment (not independent fix validation): "
-                       + safe(assessment["summary"], limit=800))
-        details.extend("Evidence: " + safe(entry, limit=250) for entry in assessment["evidence"])
-        details.extend("Unknown: " + safe(entry, limit=250) for entry in assessment["unknowns"])
-    details.extend(safe(entry, limit=250) for entry in value["pinned_evidence"])
-    details.append("Session excerpt (untrusted): " + safe(value["log_excerpt"], limit=500))
-    footer = "The source issue stays open. No merge or issue resolution is implied."
-    omitted = 0
-    for detail in details:
-        # Authority stores the body as JSON, where escapes can expand Unicode.
-        # Keep report capacity bounded in the same representation as admission.
-        candidate = "\n\n".join([*lines, detail, "Some descriptive excerpts omitted.", footer])
-        if len(json.dumps(candidate).encode()) <= 4000:
-            lines.append(detail)
-        else:
-            omitted += 1
-    if omitted:
-        lines.append("Some descriptive excerpts omitted.")
-    return "\n\n".join([*lines, footer])
+        lines.append("- **Shepherd assessment:** " + safe(assessment["summary"], limit=350))
+    else:
+        lines.append("- **Assessment:** unavailable; the cause is not independently established.")
+    repository = control["issue"]["repository"]
+    evidence = [f"[Copilot task](https://github.com/{repository}/tasks/{value['task_id']})"]
+    occurrence = control["occurrence"]
+    if occurrence is not None:
+        evidence.append(f"[failing CI job](https://github.com/{repository}/actions/runs/"
+                        f"{occurrence['run_id']}/attempts/{occurrence['run_attempt']}/job/"
+                        f"{occurrence['job_id']})")
+    lines.append("- **Evidence:** " + " | ".join(evidence) + ".")
+    lines.append("- **Next:** verify the reported cause before proposing a fix. "
+                 "No replacement coding task has been launched.")
+    lines.append(f"<!-- ci-shepherd:work-item:{control['id']}:{assignment['id']} -->")
+    body = "\n\n".join(lines)
+    if len(json.dumps(body).encode()) > 4000:
+        raise ValueError("compact follow-up report exceeds bounded comment size")
+    return body
 
 
 def report(api, read_control, *, publish=False, compact=False, render_body=None, freshness=None):

@@ -583,7 +583,7 @@ def check_api(api, number):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume", "confirm-handoff",
+    parser.add_argument("mode", choices=["observe", "check-api", "run", "watch", "resume", "refresh-report", "confirm-handoff",
                                         "pending-handoffs", "app-checkpoint", "confirm-app-handoff",
                                         "enroll-handoff"])
     parser.add_argument("--target", choices=[bindings.FORK.name, bindings.UPSTREAM.name, bindings.UPSTREAM_ALL.name,
@@ -616,7 +616,9 @@ def main(argv=None):
                         help="Explicit unattended result comments for this selected target; default is preview only")
     parser.add_argument("--issue-feed", type=Path, help="Minimal issue JSON object or array; run/watch only, no permission grant")
     parser.add_argument("--cloud-approval", type=Path, help="Exact separate task approval; run/watch only")
-    parser.add_argument("--normal-policy", type=Path, help="Trusted issue-bound policy object or array; run/watch only")
+    parser.add_argument("--normal-policy", type=Path, help="Trusted issue-bound policy; run/watch/refresh-report only")
+    parser.add_argument("--issue", type=int, help="Exact owned issue for report-only refresh")
+    parser.add_argument("--expected-comment", type=int, help="Exact existing report ID for replacement")
     args = parser.parse_args(argv)
     if args.mode == "enroll-handoff":
         if (args.target != bindings.FORK.name or args.pr is None
@@ -648,8 +650,14 @@ def main(argv=None):
     if args.mode not in {*app_modes, "enroll-handoff"} and args.pr_handoff is None:
         args.pr_handoff = os.environ.get("CI_SHEPHERD_PR_HANDOFF") or None
     if (args.issue_feed is not None or args.cloud_approval is not None
-            or args.normal_policy is not None) and args.mode not in {"run", "watch"}:
+            or args.normal_policy is not None) and args.mode not in {"run", "watch", "refresh-report"}:
         parser.error("issue feed, cloud approval and normal policy require normal run/watch mode")
+    if args.mode == "refresh-report":
+        if (args.issue is None or args.issue <= 0 or args.expected_comment is None
+                or args.expected_comment <= 0 or args.issue_feed is not None or args.cloud_approval is not None):
+            parser.error("refresh-report requires --issue/--expected-comment and prohibits task intake/approval")
+    elif args.issue is not None or args.expected_comment is not None:
+        parser.error("--issue/--expected-comment belong only to refresh-report")
     if args.interval < 30:
         parser.error("interval must be at least 30 seconds")
     if args.mode == "resume" and (not args.operation or not args.expected_head):
@@ -700,7 +708,7 @@ def main(argv=None):
             for chain in api.ledger["chains"]:
                 api.log_status(chain, observations[chain["child"] or chain["origin"]], live.clock())
             return 0
-        if args.mode not in {"resume", "confirm-handoff", "enroll-handoff", *app_modes} and not reasoning.copilot_version_supported(
+        if args.mode not in {"resume", "refresh-report", "confirm-handoff", "enroll-handoff", *app_modes} and not reasoning.copilot_version_supported(
                 command([reasoning.native_executable("copilot"), "--no-auto-update", "--version"])):
             raise ValueError("local decision engine requires Copilot CLI 1.0.92-3 or newer")
         lock_root = Path.home() / ".copilot" / "ci-shepherd" / "locks"
@@ -719,6 +727,11 @@ def main(argv=None):
                                             if args.normal_policy is not None else None)
                 if api.memory_authorized and api.enabled():
                     storage.initialize(api)
+                if args.mode == "refresh-report":
+                    import normal_loop
+                    result = normal_loop.refresh_report(api, args.issue, args.expected_comment)
+                    print(json.dumps(result), flush=True)
+                    return 1 if result["outcome"] == "comment_uncertain" else 0
                 if args.mode == "enroll-handoff":
                     print(json.dumps(enroll_handoff(api, args.pr, live.clock())), flush=True)
                     return 0

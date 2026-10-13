@@ -140,9 +140,11 @@ class PilotTransport(live.HTTPTransport):
             if not self.write or self.approved_request is None or body != self.approved_request:
                 raise ValueError("exact canonical normal task capability required")
             return
-        if (method == "POST" and isinstance(body, dict)
+        if (method in {"POST", "PATCH"} and isinstance(body, dict)
                 and isinstance(body.get("body"), str)
-                and body["body"].startswith("[automated] CI Shepherd work-item result; human direction required.")):
+                and body["body"].startswith((
+                    "[automated] CI Shepherd work-item result; human direction required.",
+                    "[automated] **CI Shepherd:"))):
             if not self.write or self.approved_report != {"endpoint": endpoint, "body": body}:
                 raise ValueError("exact canonical normal report capability required")
             return
@@ -537,6 +539,15 @@ class PilotGitHub:
         self.transport.approved_report = {"endpoint": endpoint, "body": {"body": body}}
         try:
             return WorkItemGitHub.post_comment(self, issue, body, before_send)
+        finally:
+            self.transport.approved_report = None
+
+    def replace_comment(self, issue, identity, previous, body, before_send):
+        from work_item_github import WorkItemGitHub
+        endpoint = f"repos/{issue['repository']}/issues/comments/{identity}"
+        self.transport.approved_report = {"endpoint": endpoint, "body": {"body": body}}
+        try:
+            return WorkItemGitHub.replace_comment(self, issue, identity, previous, body, before_send)
         finally:
             self.transport.approved_report = None
 

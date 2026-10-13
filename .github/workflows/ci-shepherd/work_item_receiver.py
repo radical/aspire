@@ -116,7 +116,8 @@ def recover_comment(api, read_control, control, record):
         if comment["delivery"] in {"delivering", "uncertain"}:
             fresh(api, read_control, control)
             matches = [entry for entry in api.issue_comments(control["issue"])
-                       if entry["body"] == comment["body"] and entry["owned"]]
+                       if entry["body"] == comment["body"] and entry["owned"]
+                       and ("replacement_id" not in comment or entry["id"] == comment["replacement_id"])]
             if len(matches) == 1:
                 fresh(api, read_control, control)
                 comment.update(delivery="delivered", comment_id=matches[0]["id"])
@@ -126,6 +127,37 @@ def recover_comment(api, read_control, control, record):
         if comment["delivery"] == "delivered":
             return {"outcome": "human_wait"}
     return None
+
+
+def replace_report(api, read_control, control, record, body, expected_id, before_send):
+    comment = record["comment"]
+    if comment is None or comment["assignment_id"] != record["assignments"][-1]["id"]:
+        raise ValueError("exact owned report required for replacement")
+    if comment["delivery"] != "delivered":
+        return recover_comment(api, read_control, control, record)
+    if comment["comment_id"] != expected_id:
+        raise ValueError("replacement report identity changed")
+    if not comment_authorized(api, control):
+        raise ValueError("explicit issue-comment permission required")
+    previous = comment["body"]
+    fresh(api, read_control, control)
+    before_send()
+    matches = [entry for entry in api.issue_comments(control["issue"]) if entry["id"] == expected_id]
+    if len(matches) != 1 or not matches[0]["owned"] or matches[0]["body"] != previous:
+        raise ValueError("owned report was edited or removed; replacement denied")
+    if previous == body:
+        return {"outcome": "unchanged", "comment_id": expected_id}
+    comment.update(body=body, delivery="delivering", comment_id=None, replacement_id=expected_id)
+    api.persist()
+    try:
+        api.replace_comment(control["issue"], expected_id, previous, body, before_send)
+    except LostResponse:
+        comment["delivery"] = "uncertain"
+        api.persist()
+        return {"outcome": "comment_uncertain"}
+    comment.update(delivery="delivered", comment_id=expected_id)
+    api.persist()
+    return {"outcome": "comment_replaced", "comment_id": expected_id}
 
 
 def report(api, read_control, control, record, *, render_body=comment_body, before_send=None, publish=True):

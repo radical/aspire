@@ -618,6 +618,35 @@ scope cannot dispatch or adopt a PR, even through direct execution entrypoints.
 freshness with exact task metadata at the final comment-send callback. Policy
 is checked again at the adapter's POST boundary.
 
+Compact issue reports lead with the outcome, observed PR state and file count,
+an attributed worker explanation, and host-constructed task/CI links. They do
+not dump setup logs or encoded JSON. Identical correlated result envelopes
+repeated in tool stdout and the final response can supply a descriptive summary;
+the strict checkpoint contract is unchanged. Conflicting or misattributed
+envelopes do not supply a diagnosis or authorize a task, fix or PR import.
+
+An operator can explicitly refresh an existing normal-loop report without new
+inference or coding work:
+
+```shell
+python3 -B .github/workflows/ci-shepherd/local.py refresh-report \
+  --target upstream --tracker TRACKER_NUMBER --authority AUTHORITY_COMMENT_ID \
+  --tracker-node TRACKER_NODE --issue ISSUE_NUMBER \
+  --expected-comment OWNED_REPORT_COMMENT_ID --normal-policy /absolute/policy.json \
+  --workdir /absolute/operator-controlled/refresh-directory
+```
+
+This command requires current issue-comment permission and the same source,
+enable, idle-host and authority-lock guards as normal execution. It verifies
+the saved task/session and observed PR, then replaces only the owned report
+whose ID and old body match the durable receipt. Human-edited or missing
+comments are not overwritten. A durable replacement intent precedes PATCH;
+uncertain replies are recovered only by reading the same comment ID with the
+exact new body, never by reposting or blindly repeating the update. Unchanged
+refreshes and subsequent normal sweeps do not create comments or tasks.
+GitHub comment PATCH has no atomic conditional-body update: a concurrent edit
+after the final ownership/body reread remains a platform limitation.
+
 `work_item_receiver.py` retains the escaped exact body and per-assignment marker.
 After a lost receipt, one owned exact-body match recovers the existing comment
 ID; missing, foreign, modified or ambiguous matches remain uncertain, with no

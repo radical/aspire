@@ -347,6 +347,55 @@ def prepare_followup(api, record, assignment, task, observed, prior, reserve_pac
         return packet
 
 
+def refresh_report(api, number, expected_id):
+    """Explicit report-only refresh; never reserves inference or dispatches work."""
+    api.ledger = api.read_authority()
+    storage.initialize(api)
+    record = next((entry for entry in api.ledger.get("workItems", [])
+                   if entry["control"]["issue"]["number"] == number
+                   and entry["control"]["issue"]["repository"] == api.repository), None)
+    if record is None or not record["assignments"]:
+        raise ValueError("owned normal work item required for report refresh")
+    control, assignment = record["control"], record["assignments"][-1]
+    saved = assignment.get("execution")
+    if (saved is None or saved["state"] != "sent" or saved["imported_chain_id"] is not None
+            or record["comment"] is None):
+        raise ValueError("unimported owned task with an existing report required")
+    observed = source(api, number)
+    read = read_control(api, record["id"])
+    with api.followup_scope(control, assignment, observed):
+        comment = record["comment"]
+        identity = comment.get("replacement_id") if comment["delivery"] != "delivered" else comment["comment_id"]
+        if identity != expected_id or not report_authorized(api, control):
+            raise ValueError("exact authorized report replacement required")
+        if record["comment"]["delivery"] != "delivered":
+            if comment["delivery"] not in {"delivering", "uncertain"}:
+                raise ValueError("existing delivered report or replacement intent required")
+            return receiver.recover_comment(api, read, control, record)
+        value = saved.get("followup")
+        if value is None or value["status"] == "collecting":
+            raise ValueError("completed task collection required")
+        task = followup.stable(api, read, control, record, assignment, value["task_version"])
+        mapping = task_mapping(api, record, assignment, task)
+        text = api.normal_collector(api.repository, saved["session_id"])
+        if hasattr(api, "normal_log_audit"):
+            api.normal_log_audit(saved["session_id"], followup.redact(text, api.token))
+        try:
+            description = followup.descriptive_summary(text, record, assignment, saved["session_id"])
+        except ValueError as error:
+            description = str(error)
+        followup.stable(api, read, control, record, assignment, value["task_version"])
+        value["description"] = followup.safe(description, api.token, 1500)
+        view = deepcopy(assignment)
+        view["execution"]["followup"]["assessment"] = None
+        body = followup.normal_comment_body(control, view, context={"mapping": mapping})
+        def before_send():
+            current = followup.stable(api, read, control, record, assignment, value["task_version"])
+            if task_mapping(api, record, assignment, current) != mapping:
+                raise ValueError("report PR evidence changed")
+        return receiver.replace_report(api, read, control, record, body, expected_id, before_send)
+
+
 def validate_receipts(values):
     if not isinstance(values, list) or len(values) > MAX_RUNS:
         raise ValueError("normal inference history bound exhausted")

@@ -343,7 +343,15 @@ def validate_record(record):
             raise ValueError("saved publication request mismatch")
     comment = record["comment"]
     if comment is not None:
-        contracts.exact(comment, {"assignment_id", "body", "delivery", "comment_id"}, "comment boundary")
+        keys = {"assignment_id", "body", "delivery", "comment_id"}
+        if "replacement_id" in comment:
+            keys.add("replacement_id")
+            issue_pr.positive(comment["replacement_id"], "replacement comment")
+            if comment["delivery"] == "reserved":
+                raise ValueError("replacement requires durable send intent")
+            if comment["comment_id"] not in {None, comment["replacement_id"]}:
+                raise ValueError("replacement comment identity changed")
+        contracts.exact(comment, keys, "comment boundary")
         assignment = next((entry for entry in assignments if entry["id"] == comment["assignment_id"]), None)
         followup = assignment.get("execution", {}).get("followup") if assignment else None
         if assignment is None or (assignment["result"] is None and (

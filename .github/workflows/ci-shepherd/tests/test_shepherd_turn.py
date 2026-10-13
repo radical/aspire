@@ -298,7 +298,7 @@ class ShepherdMultiItemTurnTests(unittest.TestCase):
         published = self.saved()["workItems"][1]["comment"]
         self.assertEqual("delivered", published["delivery"])
         self.assertEqual(8001, published["comment_id"])
-        self.assertIn("No usable PR was imported", self.issue_posts[0][0]["body"])
+        self.assertIn("without a verified fix", self.issue_posts[0][0]["body"])
         self.assertIn("Worker reported no fix", self.issue_posts[0][0]["body"])
         self.assertIsNone(self.prepare())
         self.assertEqual(1, len(self.issue_posts))

@@ -99,6 +99,8 @@ class NormalLoopTests(unittest.TestCase):
         }
         self.posts = []
         self.issue_posts = []
+        self.issue_patches = []
+        self.patch_lost = False
         self.lost = False
         self.logs = None
 
@@ -114,6 +116,13 @@ class NormalLoopTests(unittest.TestCase):
                 comment = {"id": 8000, "user": {"id": 1472, "login": "radical"}, "body": body["body"]}
                 self.remote.values.setdefault(endpoint, []).append(comment)
                 return Response(comment, {}, 201)
+            if method == "PATCH" and endpoint == self.prefix + "/issues/comments/8000":
+                self.issue_patches.append((deepcopy(body), self.saved()))
+                comment = self.remote.values[self.prefix + "/issues/20872/comments"][0]
+                comment["body"] = body["body"]
+                if self.patch_lost:
+                    raise LostResponse("lost replacement receipt")
+                return Response(deepcopy(comment), {}, 200)
             return self.remote(method, endpoint, body)
 
         def command(argv, environment, **kwargs):
@@ -322,13 +331,95 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual(1, len(self.issue_posts))
         body, authority = self.issue_posts[0]
         self.assertEqual("delivering", authority["workItems"][0]["comment"]["delivery"])
-        self.assertIn("Platform task state: failed.", body["body"])
+        self.assertIn("without a verified fix", body["body"])
         self.assertLessEqual(len(json.dumps(body["body"]).encode()), 4000)
         for _ in range(2):
             self.assertIsNone(self.prepare())
         self.assertEqual(1, len(self.issue_posts))
         self.assertEqual(1, len(self.posts))
         self.assertEqual("open", self.issue["state"])
+
+    def delivered_report(self):
+        self.terminal()
+        self.logs = "No structured result."
+        self.policy()
+        packet = self.prepare()
+        self.settle(packet, self.assessment(packet))
+        return pilot.hosted_api(RUN, os.environ)
+
+    def test_explicit_report_refresh_replaces_owned_body_once_without_new_task_or_inference(self):
+        api = self.delivered_report()
+        record = self.saved()["workItems"][0]
+        claimed = result(record["assignments"][0])
+        claimed.update(item_id=record["id"], worker_id=SESSION, outcome="no_fix",
+                       changed_files=[], pr_proposal=None, summary="A 500 ms budget expired before requests.")
+        self.logs = ("print('CSWORKITEMBEGIN\\n'+b64+'\\nCSWORKITEMEND')\n"
+                     + followup.BEGIN + base64.b64encode(json.dumps(claimed).encode()).decode()
+                     + followup.END) * 2
+        before = self.saved()
+        receipt = normal_loop.refresh_report(api, 20872, 8000)
+        self.assertEqual({"outcome": "comment_replaced", "comment_id": 8000}, receipt)
+        body = self.issue_patches[0][0]["body"]
+        self.assertIn("A 500 ms budget expired before requests.", body)
+        self.assertIn("/tasks/TASK1", body)
+        self.assertIn("/actions/runs/100/attempts/1/job/200", body)
+        self.assertEqual(before["normalRuns"], self.saved()["normalRuns"])
+        self.assertEqual(before["workItems"][0]["assignments"][0]["result"],
+                         self.saved()["workItems"][0]["assignments"][0]["result"])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(1, len(self.issue_posts))
+        self.assertEqual({"outcome": "unchanged", "comment_id": 8000},
+                         normal_loop.refresh_report(pilot.hosted_api(RUN, os.environ), 20872, 8000))
+        self.assertIsNone(self.prepare())
+        self.assertEqual(1, len(self.issue_patches))
+
+    def test_report_refresh_preserves_human_edits_and_denies_wrong_identity_or_revoked_policy(self):
+        self.delivered_report()
+        for change in ("body", "owner", "identity", "policy"):
+            with self.subTest(change=change):
+                comments = deepcopy(self.remote.values[self.prefix + "/issues/20872/comments"])
+                original_policy = os.environ["CI_SHEPHERD_NORMAL_POLICY"]
+                identity = 8000
+                if change == "body":
+                    self.remote.values[self.prefix + "/issues/20872/comments"][0]["body"] += " Human edit."
+                elif change == "owner":
+                    self.remote.values[self.prefix + "/issues/20872/comments"][0]["user"]["id"] = 999
+                elif change == "identity":
+                    identity = 9000
+                else:
+                    self.policy(issue_comment=False)
+                with self.assertRaises(ValueError):
+                    normal_loop.refresh_report(pilot.hosted_api(RUN, os.environ), 20872, identity)
+                self.remote.values[self.prefix + "/issues/20872/comments"] = comments
+                os.environ["CI_SHEPHERD_NORMAL_POLICY"] = original_policy
+        self.assertEqual([], self.issue_patches)
+        self.assertEqual(1, len(self.posts))
+
+    def test_lost_report_replacement_receipt_recovers_exact_id_without_repatch_or_post(self):
+        self.delivered_report()
+        self.patch_lost = True
+        self.assertEqual("comment_uncertain",
+                         normal_loop.refresh_report(pilot.hosted_api(RUN, os.environ), 20872, 8000)["outcome"])
+        self.assertEqual("human_wait",
+                         normal_loop.refresh_report(pilot.hosted_api(RUN, os.environ), 20872, 8000)["outcome"])
+        self.assertEqual("delivered", self.saved()["workItems"][0]["comment"]["delivery"])
+        self.assertEqual(1, len(self.issue_patches))
+        self.assertEqual(1, len(self.issue_posts))
+        self.assertEqual(1, len(self.posts))
+
+    def test_uncertain_replacement_cannot_recover_from_same_body_at_a_different_comment_id(self):
+        self.delivered_report()
+        previous = self.saved()["workItems"][0]["comment"]["body"]
+        self.patch_lost = True
+        normal_loop.refresh_report(pilot.hosted_api(RUN, os.environ), 20872, 8000)
+        comments = self.remote.values[self.prefix + "/issues/20872/comments"]
+        comments.append(dict(deepcopy(comments[0]), id=8001))
+        comments[0]["body"] = previous
+        self.assertEqual("comment_uncertain",
+                         normal_loop.refresh_report(pilot.hosted_api(RUN, os.environ), 20872, 8000)["outcome"])
+        self.assertEqual("uncertain", self.saved()["workItems"][0]["comment"]["delivery"])
+        self.assertEqual(1, len(self.issue_patches))
+        self.assertEqual(1, len(self.issue_posts))
 
     def test_unapproved_report_transport_cannot_post_arbitrary_normal_body(self):
         transport = pilot_github.PilotTransport("gho_fixture", write=True, binding=bindings.UPSTREAM_ALL,
@@ -990,7 +1081,7 @@ class NormalLoopTests(unittest.TestCase):
         self.assertIsNone(self.prepare())
         self.assertEqual(1, len(self.issue_posts))
         body = self.issue_posts[0][0]["body"]
-        self.assertIn("Assessment outcome unrecorded/unknown", body)
+        self.assertIn("the cause is not independently established", body)
         self.assertNotIn("Shepherd assessment", body)
         self.assertEqual(before, self.saved()["normalRuns"])
         self.assertIsNone(self.prepare())
@@ -1025,7 +1116,7 @@ class NormalLoopTests(unittest.TestCase):
                 self.assertEqual(8000, record["comment"]["comment_id"])
                 self.assertEqual(1, len(record["assignments"]))
                 self.assertFalse(record["control"]["authority"]["issue_comment"])
-                self.assertIn("state closed;", record["comment"]["body"])
+                self.assertIn("is closed with **0 changed files**", record["comment"]["body"])
 
     def test_independent_process_stale_assessment_interruption_reports_unknown(self):
         canonical = self.root / "stale-process.json"
@@ -1043,7 +1134,7 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual(before, saved["normalRuns"])
         self.assertEqual(1, len(journal["issue_posts"]))
         self.assertEqual(1, len(journal["posts"]))
-        self.assertIn("Assessment outcome unrecorded/unknown", journal["issue_posts"][0][0]["body"])
+        self.assertIn("the cause is not independently established", journal["issue_posts"][0][0]["body"])
         self.assertNotIn("Shepherd assessment", journal["issue_posts"][0][0]["body"])
 
     def test_source_changes_after_prepare_reject_without_new_task_or_assessment(self):
@@ -1216,8 +1307,8 @@ class NormalLoopTests(unittest.TestCase):
         self.assertIsNone(record["assignments"][0]["execution"]["followup"]["assessment"])
         self.assertEqual(receipts, self.saved()["normalRuns"])
         body = self.issue_posts[0][0]["body"]
-        self.assertIn("Assessment outcome unrecorded/unknown", body)
-        self.assertIn("Session excerpt (untrusted)", body)
+        self.assertIn("the cause is not independently established", body)
+        self.assertIn("No correlated worker explanation available.", body)
         self.assertIn("No PR artifact observed.", body)
         self.assertEqual(1, len(self.posts))
         self.assertEqual(1, len(self.issue_posts))

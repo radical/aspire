@@ -23,6 +23,32 @@ def envelope(value):
 
 
 class ResultContractTests(unittest.TestCase):
+    def test_duplicate_rendered_results_have_a_descriptive_summary_but_cannot_checkpoint(self):
+        assignment = {"id": "assignment", "revision": 1}
+        record = {"id": "example-item"}
+        claimed = result(assignment)
+        text = "print('CSWORKITEMBEGIN\\n'+b64+'\\nCSWORKITEMEND')\n" + envelope(claimed) * 2
+        self.assertEqual(claimed["summary"], followup.descriptive_summary(text, record, assignment, "session-1"))
+        with self.assertRaisesRegex(ValueError, "missing or conflicting"):
+            followup.parse_result(text, record, assignment, "session-1")
+        for bad in (envelope(claimed) + envelope(dict(claimed, summary="Different conclusion.")),
+                    envelope(dict(claimed, assignment_id="foreign")), "No final result."):
+            with self.subTest(text=bad), self.assertRaises(ValueError):
+                followup.descriptive_summary(bad, record, assignment, "session-1")
+
+    def test_unsupported_classification_can_explain_failure_without_accepting_a_worker_result(self):
+        assignment = {"id": "assignment", "revision": 1}
+        record = {"id": "example-item"}
+        claimed = dict(result(assignment), actual_classification="infrastructure/flaky_test_candidate")
+        text = envelope(claimed) * 2
+        self.assertEqual(claimed["summary"], followup.descriptive_summary(text, record, assignment, "session-1"))
+        with self.assertRaisesRegex(ValueError, "invalid actual classification"):
+            followup.parse_result(envelope(claimed), record, assignment, "session-1")
+        for fields in ({"evaluated_revision": True}, {"worker_id": ["session-1"]},
+                       {"schema_version": True}, {"summary": "x" * 1501}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                followup.descriptive_summary(envelope(dict(claimed, **fields)), record, assignment, "session-1")
+
     def test_new_request_requires_correlated_final_result_without_changing_historical_prompt(self):
         api = fixtures.CloudAuthority()
         value = control()
