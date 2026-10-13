@@ -6,6 +6,7 @@ from email.utils import format_datetime, parsedate_to_datetime
 from http.client import HTTPException
 import io
 import json
+import logging
 import re
 import time
 from urllib.error import HTTPError, URLError
@@ -42,6 +43,10 @@ MAX_BYTES = 256 * 1024
 # Full GitHub check pages must not share the smaller action-packet bound.
 MAX_API_JSON_BYTES = 8 * 1024 * 1024
 MAX_GET_WAIT_SECONDS = 180
+
+
+class _EmptyGetResponse(IncompleteInventory):
+    pass
 
 
 def clock():
@@ -181,6 +186,18 @@ class HTTPTransport:
         return method == "GET"
 
     def request(self, method, endpoint, body):
+        for attempt in range(1, 4):
+            try:
+                return self._request_once(method, endpoint, body)
+            except _EmptyGetResponse as error:
+                if attempt == 3:
+                    raise IncompleteInventory(f"API JSON response empty after 3 attempts; {error}") from None
+                logging.getLogger(__name__).warning(
+                    "API JSON response empty; retrying GET after attempt %s/3; %s", attempt, error)
+                self.sleep_fn(attempt)
+                self._admit_task_request(method, urlparse(endpoint).path)
+
+    def _request_once(self, method, endpoint, body):
         read = self.is_read(method, endpoint, body)
         path = urlparse(endpoint)
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
@@ -217,8 +234,16 @@ class HTTPTransport:
                     raise (IncompleteInventory if read else LostResponse)(
                         f"API JSON response exceeds {MAX_API_JSON_BYTES}-byte limit; " +
                         self._diagnostic(method, path.path, response.status, response.headers))
-                payload = contracts.loads(raw.decode("utf-8"), max_bytes=MAX_API_JSON_BYTES)
                 self._observe_quota(response.headers)
+                if not raw:
+                    diagnostic = self._diagnostic(method, path.path, response.status, response.headers)
+                    # GitHub can return HTTP 200 with zero body bytes for a jobs page.
+                    # Retry only that GET; an empty write receipt may hide a completed effect.
+                    if method == "GET" and response.status == 200:
+                        raise _EmptyGetResponse(diagnostic)
+                    raise (IncompleteInventory if read else LostResponse)(
+                        "API JSON response empty; no retry; " + diagnostic)
+                payload = contracts.loads(raw.decode("utf-8"), max_bytes=MAX_API_JSON_BYTES)
                 return Response(payload, dict(response.headers), response.status)
         except (IncompleteInventory, LostResponse):
             raise

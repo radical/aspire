@@ -537,6 +537,14 @@ and the existing local host credentials/authorization remain required.
 Run artifacts are not reusable orchestration inputs or Git-tracked state.
 The prompt remains in `policies/normal.md` on this branch.
 
+The shared HTTP transport retries only HTTP-200 GET responses with an empty
+body, for at most three attempts with one- and two-second delays. Each retry
+logs safe request metadata, closes the previous response and honors task quota
+admission. It retries the same inventory page, not the whole turn. Exhaustion
+fails closed with an explicit empty-response diagnostic. Nonempty malformed
+JSON, HTTP errors and uncertain write receipts are not retried; POST/PATCH
+effects must never be replayed to recover a missing receipt.
+
 Budget values in `pilot_state.py` are **30 credits per native reservation**,
 **1,000 credits per upstream item/chain lifetime**, **500 per fork chain
 lifetime**, and **3,000 repository credits per rolling 24 hours**. This admits

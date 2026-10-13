@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
 from helpers import reconciliation_decision, reconciliation_evidence
-from test_live import FakeService
+from test_live import FakeService, HTTPFixture
 import live
 import pilot_github
 import receipts
@@ -80,6 +80,123 @@ class WindowOpener:
 
 
 class RateLimitTests(unittest.TestCase):
+    def test_empty_http_body_recovers_through_real_response_reader(self):
+        service = FakeService()
+        requests = []
+        value = {"total_count": 1, "jobs": [{"id": 20}]}
+
+        def jobs(method, endpoint, body):
+            requests.append((method, endpoint, body))
+            return live.Response(b"" if len(requests) == 1 else value, {})
+
+        service.transport = jobs
+        fixture = HTTPFixture(service)
+        self.addCleanup(fixture.close)
+        sleeps = []
+        path = f"repos/{live.REPOSITORY}/actions/runs/10/attempts/1/jobs"
+        with self.assertLogs("live", level="WARNING"):
+            response = live.HTTPTransport("credential", opener=fixture, sleep_fn=sleeps.append)(
+                "GET", path, None)
+        self.assertEqual(value, response.payload)
+        self.assertEqual([("GET", path, None)] * 2, requests)
+        self.assertEqual([1], sleeps)
+
+    def test_empty_successful_get_retries_the_same_page_before_returning_jobs(self):
+        opener = WindowOpener()
+        endpoint = f"repos/{live.REPOSITORY}/actions/runs/10/attempts/1/jobs?per_page=100&page=2"
+        value = {"total_count": 1, "jobs": [{"id": 20, "conclusion": "failure"}]}
+        responses = [WindowOpener.response(b"", {"X-GitHub-Request-Id": "EMPTY:1",
+                                                "Location": "https://untrusted.example/credential"}),
+                     WindowOpener.response(b"", {"X-GitHub-Request-Id": "EMPTY:2"}),
+                     WindowOpener.response(json.dumps(value).encode(), {})]
+        with patch.object(opener, "open", side_effect=responses) as opened:
+            with self.assertLogs("live", level="WARNING") as logs:
+                response = live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                    "GET", endpoint, None)
+        self.assertEqual(value, response.payload)
+        self.assertEqual([1, 2], opener.sleeps)
+        self.assertEqual([("GET", "https://api.github.com/" + endpoint)] * 3,
+                         [(call.args[0].get_method(), call.args[0].full_url)
+                          for call in opened.call_args_list])
+        self.assertTrue(all(item.closed for item in responses))
+        self.assertEqual(2, len(logs.output))
+        self.assertIn("EMPTY:1", logs.output[0])
+        self.assertNotIn("credential", "\n".join(logs.output))
+
+    def test_empty_get_retry_rechecks_task_quota_before_resending(self):
+        opener = WindowOpener()
+        reset = opener.now + timedelta(seconds=5)
+        headers = {"X-RateLimit-Resource": "mission_control", "X-RateLimit-Limit": "60",
+                   "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(reset.timestamp()))}
+        responses = [WindowOpener.response(b"", headers),
+                     WindowOpener.response(b'{"tasks":[]}', {})]
+        transport = live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep, clock_fn=opener.clock)
+        with patch.object(opener, "open", side_effect=responses):
+            with self.assertLogs("live", level="WARNING"):
+                response = transport("GET", f"agents/repos/{live.REPOSITORY}/tasks", None)
+        self.assertEqual({"tasks": []}, response.payload)
+        self.assertEqual([1, 5], opener.sleeps)
+        self.assertGreater(opener.now, reset)
+        self.assertEqual(1, transport.quota_waits)
+
+    def test_empty_non_200_get_is_not_retried(self):
+        opener = WindowOpener()
+        with patch.object(opener, "open", return_value=WindowOpener.response(b"", {}, 204)) as opened:
+            with self.assertRaisesRegex(live.IncompleteInventory, "empty.*no retry"):
+                live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                    "GET", f"repos/{live.REPOSITORY}", None)
+        self.assertEqual(1, opened.call_count)
+        self.assertEqual([], opener.sleeps)
+
+    def test_persistently_empty_get_stops_after_three_attempts(self):
+        opener = WindowOpener()
+        responses = [WindowOpener.response(b"", {"X-GitHub-Request-Id": f"EMPTY:{index}"})
+                     for index in range(3)]
+        with patch.object(opener, "open", side_effect=responses) as opened:
+            with self.assertLogs("live", level="WARNING"):
+                with self.assertRaisesRegex(live.IncompleteInventory, "empty.*3 attempts.*EMPTY:2"):
+                    live.HTTPTransport("credential", opener=opener, sleep_fn=opener.sleep)(
+                        "GET", f"repos/{live.REPOSITORY}", None)
+        self.assertEqual(3, opened.call_count)
+        self.assertEqual([1, 2], opener.sleeps)
+        self.assertTrue(all(item.closed for item in responses))
+
+    def test_empty_write_response_remains_uncertain_without_retry(self):
+        for method, endpoint in (
+                ("POST", f"agents/repos/{live.REPOSITORY}/tasks"),
+                ("PATCH", f"repos/{live.REPOSITORY}/issues/comments/501")):
+            with self.subTest(method=method):
+                opener = WindowOpener()
+                response = WindowOpener.response(b"", {})
+                with patch.object(opener, "open", return_value=response) as opened:
+                    with self.assertRaisesRegex(live.LostResponse, "empty.*no retry"):
+                        live.HTTPTransport("credential", write=True, opener=opener, sleep_fn=opener.sleep)(
+                            method, endpoint, {})
+                self.assertEqual(1, opened.call_count)
+                self.assertEqual([], opener.sleeps)
+                self.assertTrue(response.closed)
+
+    def test_retry_does_not_skip_or_duplicate_inventory_pages(self):
+        opener = WindowOpener()
+        path = f"repos/{live.REPOSITORY}/actions/runs/10/attempts/1/jobs"
+        first = {"total_count": 2, "jobs": [{"id": 20}]}
+        second = {"total_count": 2, "jobs": [{"id": 21}]}
+        responses = [
+            WindowOpener.response(json.dumps(first).encode(), {
+                "Link": f'<https://api.github.com/{path}?per_page=100&page=2>; rel="next"'}),
+            WindowOpener.response(b"", {}),
+            WindowOpener.response(json.dumps(second).encode(), {}),
+        ]
+        with patch.object(opener, "open", side_effect=responses) as opened:
+            with self.assertLogs("live", level="WARNING"):
+                values = live.API(live.HTTPTransport(
+                    "credential", opener=opener, sleep_fn=opener.sleep)).pages(
+                        path, key="jobs", require_total_count=True)
+        self.assertEqual([{"id": 20}, {"id": 21}], values)
+        self.assertEqual([["1"], ["2"], ["2"]],
+                         [parse_qs(urlparse(call.args[0].full_url).query)["page"]
+                          for call in opened.call_args_list])
+
     def test_large_check_pages_are_complete_without_expanding_packet_limit(self):
         opener = WindowOpener()
         first_page = None
